@@ -312,10 +312,10 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 9.2 Type Registry
 
-- [ ] Create `eventcore/src/type_registry.rs`
-  - [ ] Map event type names to Rust types
-  - [ ] Support dynamic deserialization
-  - [ ] Handle unknown event types gracefully
+- [x] Create `eventcore/src/type_registry.rs`
+  - [x] Map event type names to Rust types
+  - [x] Support dynamic deserialization
+  - [x] Handle unknown event types gracefully
 
 ## Phase 10: Monitoring & Observability
 

@@ -31,6 +31,8 @@ pub mod serialization;
 pub mod state_reconstruction;
 /// Event subscription system for processing events from event streams
 pub mod subscription;
+/// Type registry for dynamic event type resolution and deserialization
+pub mod type_registry;
 pub mod types;
 
 /// Testing utilities for event sourcing applications
