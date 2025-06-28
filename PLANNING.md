@@ -15,46 +15,48 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 1.1 GitHub Actions Setup
 
-- [ ] Create `.github/workflows/ci.yml`
-  - [ ] Run tests on all commits
-  - [ ] Check formatting with `cargo fmt`
-  - [ ] Run clippy with strict settings
-  - [ ] Check for security vulnerabilities
-  - [ ] Generate test coverage reports
+- [x] Create `.github/workflows/ci.yml`
+  - [x] Run tests on all commits
+  - [x] Check formatting with `cargo fmt`
+  - [x] Run clippy with strict settings
+  - [x] Check for security vulnerabilities
+  - [x] Generate test coverage reports
 
 ### 1.2 Project Configuration
 
-- [ ] Create workspace `Cargo.toml` at root
-  - [ ] Define workspace members:
+- [x] Create workspace `Cargo.toml` at root
+  - [x] Define workspace members:
     - `eventcore` (core library)
     - `eventcore-postgres` (PostgreSQL adapter)
     - `eventcore-memory` (in-memory adapter for testing)
     - `eventcore-examples` (example implementations)
-  - [ ] Configure shared dependencies
-  - [ ] Configure linting rules
-  - [ ] Configure optimization profiles
-- [ ] Create `.gitignore` for Rust projects
-- [ ] Set up pre-commit hooks locally
+  - [x] Configure shared dependencies
+  - [x] Configure linting rules
+  - [x] Configure optimization profiles
+- [x] Create `.gitignore` for Rust projects
+- [x] Set up pre-commit hooks locally
+- [x] Configure cargo audit to ignore false positives (`.cargo/audit.toml`)
+- [x] Create README.md for workspace metadata requirements
 
 ### 1.3 Development Tooling
 
-- [ ] Configure `rust-toolchain.toml` (already exists)
+- [x] Configure `rust-toolchain.toml` (already exists)
 - [ ] Set up `cargo-nextest` for faster test runs
 - [ ] Configure `cargo-llvm-cov` for coverage
 - [ ] Add `justfile` for common commands
 
 ### 1.4 Workspace Structure Setup
 
-- [ ] Create crate directories:
-  - [ ] `eventcore/` - Core library with traits and types
-  - [ ] `eventcore-postgres/` - PostgreSQL adapter crate
-  - [ ] `eventcore-memory/` - In-memory adapter crate
-  - [ ] `eventcore-examples/` - Examples crate
-- [ ] Create individual `Cargo.toml` for each crate:
-  - [ ] `eventcore`: No database dependencies
-  - [ ] `eventcore-postgres`: Only PostgreSQL dependencies (sqlx)
-  - [ ] `eventcore-memory`: Minimal dependencies
-  - [ ] `eventcore-examples`: Depends on core and adapters
+- [x] Create crate directories:
+  - [x] `eventcore/` - Core library with traits and types
+  - [x] `eventcore-postgres/` - PostgreSQL adapter crate
+  - [x] `eventcore-memory/` - In-memory adapter crate
+  - [x] `eventcore-examples/` - Examples crate
+- [x] Create individual `Cargo.toml` for each crate:
+  - [x] `eventcore`: No database dependencies
+  - [x] `eventcore-postgres`: Only PostgreSQL dependencies (sqlx)
+  - [x] `eventcore-memory`: Minimal dependencies
+  - [x] `eventcore-examples`: Depends on core and adapters
 
 ## Phase 2: Core Type System Foundation
 
@@ -462,8 +464,9 @@ When working on this project, **ALWAYS** follow these rules:
 
 1. **Review @PLANNING.md** to discover the next task to work on.
 2. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
-3. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
-4. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
+3. **Update @PLANNING.md before any commit** - Mark completed tasks as complete and add any new tasks discovered. Include the updated PLANNING.md in the commit.
+4. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
+5. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
 
 ### CI Monitoring Rules
 

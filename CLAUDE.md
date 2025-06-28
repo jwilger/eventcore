@@ -299,6 +299,10 @@ gh run view
 
 ### Commit Rules
 
+**BEFORE MAKING ANY COMMIT**:
+1. **Update @PLANNING.md** - Mark completed tasks as complete and add any new tasks discovered
+2. **Include the updated PLANNING.md in the commit** - This keeps our task tracking in sync with code changes
+
 **NEVER** make a commit with the `--no-verify` flag. All pre-commit checks must be passing before proceeding. If pre-commit checks fail:
 - Fix the issues identified (formatting, linting, tests)
 - Run the checks again
