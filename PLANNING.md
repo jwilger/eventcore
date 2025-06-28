@@ -326,6 +326,7 @@ This document outlines the implementation plan for the EventCore multi-stream ev
   - [x] Add command execution metrics
   - [x] Add event store operation metrics
   - [x] Add projection lag metrics
+  - [x] Fix CI failures (formatting, clippy, documentation warnings)
 
 ### 10.2 Health Checks
 

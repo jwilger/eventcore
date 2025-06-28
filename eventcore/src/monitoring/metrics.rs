@@ -6,39 +6,53 @@ use std::time::{Duration, Instant};
 use crate::errors::CommandError;
 use crate::types::{EventId, StreamId};
 
-/// Core metric types for observability
+/// Core metric types for observability.
+///
+/// Provides a unified interface for different types of metrics used throughout
+/// the `EventCore` library for monitoring and observability.
 #[derive(Debug, Clone)]
 pub enum MetricValue {
+    /// A monotonically increasing counter value
     Counter(u64),
+    /// A gauge value that can increase or decrease
     Gauge(f64),
+    /// A timer measurement representing a duration
     Timer(Duration),
 }
 
-/// Counter metric for incrementing values
+/// Thread-safe counter metric for tracking incrementing values.
+///
+/// Provides atomic operations for incrementing values and is suitable
+/// for tracking counts like command executions, events processed, etc.
 #[derive(Debug)]
 pub struct Counter {
     value: AtomicU64,
 }
 
 impl Counter {
+    /// Creates a new counter initialized to zero.
     pub const fn new() -> Self {
         Self {
             value: AtomicU64::new(0),
         }
     }
 
+    /// Increments the counter by 1.
     pub fn increment(&self) {
         self.value.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Increments the counter by the specified amount.
     pub fn increment_by(&self, amount: u64) {
         self.value.fetch_add(amount, Ordering::Relaxed);
     }
 
+    /// Gets the current counter value.
     pub fn get(&self) -> u64 {
         self.value.load(Ordering::Relaxed)
     }
 
+    /// Resets the counter to zero.
     pub fn reset(&self) {
         self.value.store(0, Ordering::Relaxed);
     }
@@ -166,7 +180,11 @@ impl Timer {
         }
 
         samples.sort();
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
         let index = ((samples.len() as f64 - 1.0) * p / 100.0).round() as usize;
         samples.get(index).copied()
     }
@@ -417,7 +435,12 @@ impl ProjectionMetrics {
             lag_gauges
                 .entry(projection_name.to_string())
                 .or_insert_with(Gauge::new)
-                .set(lag_duration.as_millis() as f64);
+                .set({
+                    #[allow(clippy::cast_precision_loss)]
+                    {
+                        lag_duration.as_millis() as f64
+                    }
+                });
         }
     }
 
@@ -496,6 +519,7 @@ impl Default for MetricsRegistry {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use std::time::Duration;
