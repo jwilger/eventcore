@@ -302,8 +302,9 @@ When working on this project, **ALWAYS** follow these rules:
 
 1. **Review @PLANNING.md** to discover the next task to work on.
 2. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
-3. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
-4. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
+3. **Insert a task to "Update @PLANNING.md to mark completed tasks"** before any commit task. This ensures our planning document stays in sync with actual progress.
+4. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
+5. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
 
 ### CI Monitoring Rules
 
@@ -330,8 +331,9 @@ gh run view
 
 **BEFORE MAKING ANY COMMIT**:
 
-1. **Update @PLANNING.md** - Mark completed tasks as complete and add any new tasks discovered
-2. **Include the updated PLANNING.md in the commit** - This keeps our task tracking in sync with code changes
+1. **Ensure @PLANNING.md is updated** - All completed tasks must be marked with [x]
+2. **Include the updated PLANNING.md in the commit** - Use `git add PLANNING.md`
+3. **This keeps our task tracking in sync with code changes**
 
 **NEVER** make a commit with the `--no-verify` flag. All pre-commit checks must be passing before proceeding. If pre-commit checks fail:
 
@@ -340,3 +342,11 @@ gh run view
 - Only commit when all checks pass
 
 This ensures consistent code quality and maintains a clean commit history.
+
+### CRITICAL: Todo List Structure
+
+Your todo list should ALWAYS follow this pattern:
+1. Implementation tasks...
+2. "Update @PLANNING.md to mark completed tasks"
+3. "Run all tests and make a commit if they all pass"
+4. "Push changes to remote repository, monitor CI workflow..."

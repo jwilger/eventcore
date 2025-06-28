@@ -75,13 +75,13 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 2.2 Error Modeling
 
-- [ ] Create `eventcore/src/errors.rs`
-  - [ ] Define `CommandError` enum with all variants
-  - [ ] Define `EventStoreError` enum
-  - [ ] Define `ProjectionError` enum
-  - [ ] Define `ValidationError` for smart constructor failures
-  - [ ] Implement `From` traits for error conversions
-  - [ ] Write tests ensuring all errors are properly constructed
+- [x] Create `eventcore/src/errors.rs`
+  - [x] Define `CommandError` enum with all variants
+  - [x] Define `EventStoreError` enum
+  - [x] Define `ProjectionError` enum
+  - [x] Define `ValidationError` for smart constructor failures
+  - [x] Implement `From` traits for error conversions
+  - [x] Write tests ensuring all errors are properly constructed
 
 ### 2.3 Event Metadata Types
 
@@ -468,9 +468,17 @@ When working on this project, **ALWAYS** follow these rules:
 
 1. **Review @PLANNING.md** to discover the next task to work on.
 2. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
-3. **Update @PLANNING.md before any commit** - Mark completed tasks as complete and add any new tasks discovered. Include the updated PLANNING.md in the commit.
+3. **ALWAYS include "Update @PLANNING.md to mark completed tasks" in your todolist** - This task should come BEFORE the commit task to ensure completed work is tracked.
 4. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
 5. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
+
+### CRITICAL: Todo List Structure
+
+Your todo list should ALWAYS follow this pattern:
+1. Implementation tasks...
+2. "Update @PLANNING.md to mark completed tasks"
+3. "Run all tests and make a commit if they all pass"
+4. "Push changes to remote repository, monitor CI workflow..."
 
 ### CI Monitoring Rules
 
@@ -492,6 +500,10 @@ gh run view
 ```
 
 ### Commit Rules
+
+**BEFORE MAKING ANY COMMIT**:
+1. **Ensure @PLANNING.md is updated** - All completed tasks must be marked with [x]
+2. **Include the updated PLANNING.md in the commit** - Use `git add PLANNING.md`
 
 **NEVER** make a commit with the `--no-verify` flag. All pre-commit checks must be passing before proceeding. If pre-commit checks fail:
 - Fix the issues identified (formatting, linting, tests)
