@@ -236,11 +236,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 7.1 Projection Trait
 
-- [ ] Create `eventcore/src/projection.rs`
-  - [ ] Define `Projection` trait
-  - [ ] Add state management methods
-  - [ ] Add checkpointing support
-  - [ ] Define `ProjectionResult<T>` type alias
+- [x] Create `eventcore/src/projection.rs`
+  - [x] Define `Projection` trait
+  - [x] Add state management methods
+  - [x] Add checkpointing support
+  - [x] Define `ProjectionResult<T>` type alias
 
 ### 7.2 Projection Manager
 
