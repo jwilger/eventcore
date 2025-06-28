@@ -96,13 +96,13 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 3.1 Command Trait Definition
 
-- [ ] Create `eventcore/src/command.rs`
-  - [ ] Define `Command` trait with associated types
-  - [ ] Add `read_streams` method signature (stub with `todo!()`)
-  - [ ] Add `apply` method signature for event folding
-  - [ ] Add `handle` method signature for business logic
-  - [ ] Create `CommandResult<T>` type alias
-  - [ ] Note: No validate method - Input types must be self-validating
+- [x] Create `eventcore/src/command.rs`
+  - [x] Define `Command` trait with associated types
+  - [x] Add `read_streams` method signature (stub with `todo!()`)
+  - [x] Add `apply` method signature for event folding
+  - [x] Add `handle` method signature for business logic
+  - [x] Create `CommandResult<T>` type alias
+  - [x] Note: No validate method - Input types must be self-validating
 
 ### 3.2 Command Executor Design
 

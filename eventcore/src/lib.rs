@@ -7,6 +7,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// Command system for aggregate-per-command pattern event sourcing
+pub mod command;
 pub mod errors;
 pub mod metadata;
 pub mod types;
