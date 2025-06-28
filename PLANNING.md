@@ -115,12 +115,12 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 3.3 Command Infrastructure
 
-- [ ] Create `eventcore/src/command_executor.rs`
-  - [ ] Define retry configuration types
-  - [ ] Define command context types
-  - [ ] Create command builder utilities
-  - [ ] Define command metadata types
-  - [ ] Write tests for command infrastructure
+- [x] Create command infrastructure (implemented in `eventcore/src/executor.rs`)
+  - [x] Define retry configuration types
+  - [x] Define command context types
+  - [x] Create command builder utilities
+  - [x] Define command metadata types
+  - [x] Write tests for command infrastructure
 
 ## Phase 4: Event Store Abstraction
 

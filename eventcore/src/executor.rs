@@ -322,6 +322,87 @@ where
     }
 }
 
+/// Builder utilities for common command execution patterns.
+impl<ES> CommandExecutor<ES>
+where
+    ES: EventStore,
+{
+    /// Creates an execution context with a correlation ID and optional user ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `correlation_id` - The correlation ID for request tracing
+    /// * `user_id` - Optional user ID for auditing
+    ///
+    /// # Returns
+    ///
+    /// A new `ExecutionContext` with the specified values.
+    pub fn context(correlation_id: String, user_id: Option<String>) -> ExecutionContext {
+        ExecutionContext {
+            correlation_id,
+            user_id,
+            metadata: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Creates an execution context with additional metadata.
+    ///
+    /// # Arguments
+    ///
+    /// * `correlation_id` - The correlation ID for request tracing
+    /// * `user_id` - Optional user ID for auditing
+    /// * `metadata` - Additional metadata for the execution
+    ///
+    /// # Returns
+    ///
+    /// A new `ExecutionContext` with the specified values.
+    pub const fn context_with_metadata(
+        correlation_id: String,
+        user_id: Option<String>,
+        metadata: std::collections::HashMap<String, String>,
+    ) -> ExecutionContext {
+        ExecutionContext {
+            correlation_id,
+            user_id,
+            metadata,
+        }
+    }
+
+    /// Creates a retry configuration for high-throughput scenarios.
+    ///
+    /// This configuration reduces retry delays and attempts for scenarios
+    /// where fast failure is preferred over persistence.
+    ///
+    /// # Returns
+    ///
+    /// A `RetryConfig` optimized for high-throughput scenarios.
+    pub const fn fast_retry_config() -> RetryConfig {
+        RetryConfig {
+            max_attempts: 2,
+            base_delay: Duration::from_millis(50),
+            max_delay: Duration::from_secs(5),
+            backoff_multiplier: 1.5,
+        }
+    }
+
+    /// Creates a retry configuration for fault-tolerant scenarios.
+    ///
+    /// This configuration increases retry attempts and delays for scenarios
+    /// where eventual success is preferred over fast failure.
+    ///
+    /// # Returns
+    ///
+    /// A `RetryConfig` optimized for fault-tolerant scenarios.
+    pub const fn fault_tolerant_retry_config() -> RetryConfig {
+        RetryConfig {
+            max_attempts: 10,
+            base_delay: Duration::from_millis(200),
+            max_delay: Duration::from_secs(120),
+            backoff_multiplier: 2.5,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,6 +478,58 @@ mod tests {
         assert!(!context.correlation_id.is_empty());
         assert!(context.user_id.is_none());
         assert!(context.metadata.is_empty());
+    }
+
+    #[test]
+    fn command_executor_context_builder() {
+        let correlation_id = "test-correlation".to_string();
+        let user_id = Some("user123".to_string());
+
+        let context =
+            CommandExecutor::<MockEventStore>::context(correlation_id.clone(), user_id.clone());
+
+        assert_eq!(context.correlation_id, correlation_id);
+        assert_eq!(context.user_id, user_id);
+        assert!(context.metadata.is_empty());
+    }
+
+    #[test]
+    fn command_executor_context_with_metadata_builder() {
+        let correlation_id = "test-correlation".to_string();
+        let user_id = Some("user123".to_string());
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("key1".to_string(), "value1".to_string());
+        metadata.insert("key2".to_string(), "value2".to_string());
+
+        let context = CommandExecutor::<MockEventStore>::context_with_metadata(
+            correlation_id.clone(),
+            user_id.clone(),
+            metadata.clone(),
+        );
+
+        assert_eq!(context.correlation_id, correlation_id);
+        assert_eq!(context.user_id, user_id);
+        assert_eq!(context.metadata, metadata);
+    }
+
+    #[test]
+    fn fast_retry_config_has_reduced_values() {
+        let config = CommandExecutor::<MockEventStore>::fast_retry_config();
+
+        assert_eq!(config.max_attempts, 2);
+        assert_eq!(config.base_delay, Duration::from_millis(50));
+        assert_eq!(config.max_delay, Duration::from_secs(5));
+        assert!((config.backoff_multiplier - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn fault_tolerant_retry_config_has_increased_values() {
+        let config = CommandExecutor::<MockEventStore>::fault_tolerant_retry_config();
+
+        assert_eq!(config.max_attempts, 10);
+        assert_eq!(config.base_delay, Duration::from_millis(200));
+        assert_eq!(config.max_delay, Duration::from_secs(120));
+        assert!((config.backoff_multiplier - 2.5).abs() < f64::EPSILON);
     }
 
     proptest! {
