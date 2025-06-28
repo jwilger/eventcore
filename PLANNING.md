@@ -207,22 +207,14 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ## Phase 6: Command Implementation
 
-### 6.1 Command Input Type Design
-
-- [ ] Design command input types with built-in validation
-  - [ ] Use smart constructors that parse raw input into valid types
-  - [ ] Ensure all command inputs are self-validating through their types
-  - [ ] Write property tests that valid inputs can be constructed
-  - [ ] Write tests that invalid raw data is rejected at construction
-
-### 6.2 State Reconstruction
+### 6.1 State Reconstruction
 
 - [ ] Implement event folding logic
   - [ ] Create `apply` implementations for each command
   - [ ] Ensure state mutations are immutable
   - [ ] Write property tests for state consistency
 
-### 6.3 Command Execution Logic
+### 6.2 Command Execution Logic
 
 - [ ] Implement generic command execution flow
   - [ ] Stream reading and merging logic
@@ -231,7 +223,7 @@ This document outlines the implementation plan for the EventCore multi-stream ev
   - [ ] Error propagation and handling
   - [ ] Write comprehensive unit tests
 
-### 6.4 Command Executor Implementation
+### 6.3 Command Executor Implementation
 
 - [ ] Implement `CommandExecutor::execute`
   - [ ] Read streams specified by command
@@ -396,16 +388,21 @@ This document outlines the implementation plan for the EventCore multi-stream ev
   - [ ] Depend on `eventcore` core crate
   - [ ] Depend on `eventcore-postgres` for examples
   - [ ] Depend on `eventcore-memory` for tests
+- [ ] Design command input type patterns for examples
+  - [ ] Use smart constructors that parse raw input into valid types
+  - [ ] Ensure all command inputs are self-validating through their types
+  - [ ] Write property tests that valid inputs can be constructed
+  - [ ] Write tests that invalid raw data is rejected at construction
 - [ ] Create `eventcore-examples/src/` structure:
   - [ ] Banking transfer example (`banking/`)
     - [ ] Define `Money` type with validation
     - [ ] Define `AccountId` and `TransferId` types
-    - [ ] Implement `TransferMoney` command
-    - [ ] Implement `OpenAccount` command
+    - [ ] Implement `TransferMoney` command with validated input types
+    - [ ] Implement `OpenAccount` command with validated input types
     - [ ] Create account balance projection
   - [ ] E-commerce order example (`ecommerce/`)
-    - [ ] Define order-specific types
-    - [ ] Implement order workflow commands
+    - [ ] Define order-specific types with validation
+    - [ ] Implement order workflow commands with validated input types
     - [ ] Create inventory projection
   - [ ] Long-running saga example (`sagas/`)
   - [ ] Performance testing example (`benchmarks/`)
