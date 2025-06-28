@@ -278,11 +278,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 8.3 Database Schema
 
-- [ ] Create `eventcore-postgres/migrations/`
-  - [ ] Design event_streams table migration
-  - [ ] Design events table migration
-  - [ ] Add necessary indexes
-  - [ ] Create partitioning strategy
+- [x] Create `eventcore-postgres/migrations/`
+  - [x] Design event_streams table migration
+  - [x] Design events table migration
+  - [x] Add necessary indexes
+  - [x] Create partitioning strategy
 
 ### 8.4 PostgreSQL Event Store Implementation
 
