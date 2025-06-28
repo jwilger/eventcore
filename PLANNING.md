@@ -209,10 +209,10 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 6.1 State Reconstruction
 
-- [ ] Implement event folding logic
-  - [ ] Create `apply` implementations for each command
-  - [ ] Ensure state mutations are immutable
-  - [ ] Write property tests for state consistency
+- [x] Implement event folding logic
+  - [x] Create `apply` implementations for each command
+  - [x] Ensure state mutations are immutable
+  - [x] Write property tests for state consistency
 
 ### 6.2 Command Execution Logic
 

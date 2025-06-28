@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b2adab0541fdec6da6a6ddbe6a319904b60476e574fb9921ea97b8079a1679ce # shrinks to mut events = [StoredEvent { event_id: EventId(0197b7e3-4d8e-7062-b987-184731697283), stream_id: StreamId("a"), event_version: EventVersion(0), timestamp: Timestamp(2025-06-28T18:53:36.526722488Z), payload: Increment(-685383181), metadata: None }, StoredEvent { event_id: EventId(0197b7e3-4d8e-7062-b987-185336b73c20), stream_id: StreamId("a"), event_version: EventVersion(0), timestamp: Timestamp(2025-06-28T18:53:36.526726878Z), payload: Increment(-1462100468), metadata: None }]
+cc dd6ac19a49cff7d37a6faaddc5b67bb118627ca416c49a82936bd1aab28b0860 # shrinks to events = [StoredEvent { event_id: EventId(0197b7e3-4d93-72f2-a28b-58072bf14222), stream_id: StreamId("a"), event_version: EventVersion(0), timestamp: Timestamp(2025-06-28T18:53:36.531917764Z), payload: Increment(-3737617), metadata: None }, StoredEvent { event_id: EventId(0197b7e3-4d93-72f2-a28b-58226fad87ab), stream_id: StreamId("a"), event_version: EventVersion(0), timestamp: Timestamp(2025-06-28T18:53:36.531924641Z), payload: Increment(-2143746032), metadata: None }]

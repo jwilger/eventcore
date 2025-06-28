@@ -19,6 +19,8 @@ pub mod event_store_adapter;
 /// Command execution engine with retry logic and concurrency control
 pub mod executor;
 pub mod metadata;
+/// State reconstruction from event streams
+pub mod state_reconstruction;
 /// Event subscription system for processing events from event streams
 pub mod subscription;
 pub mod types;
