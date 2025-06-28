@@ -126,15 +126,15 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 4.1 Event Store Trait (Adapter Pattern)
 
-- [ ] Create `eventcore/src/event_store.rs`
-  - [ ] Define `EventStore` trait as the port interface
-  - [ ] Add `read_streams` method signature
-  - [ ] Add `write_events_multi` method signature
-  - [ ] Add `stream_exists` method signature
-  - [ ] Add `get_stream_version` method signature
-  - [ ] Define `StreamData<E>` type
-  - [ ] Make trait async and Send + Sync
-  - [ ] Design for backend independence
+- [x] Create `eventcore/src/event_store.rs`
+  - [x] Define `EventStore` trait as the port interface
+  - [x] Add `read_streams` method signature
+  - [x] Add `write_events_multi` method signature
+  - [x] Add `stream_exists` method signature
+  - [x] Add `get_stream_version` method signature
+  - [x] Define `StreamData<E>` type
+  - [x] Make trait async and Send + Sync
+  - [x] Design for backend independence
 
 ### 4.2 Event Types
 
