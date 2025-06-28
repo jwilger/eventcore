@@ -554,6 +554,7 @@ dependencies = [
  "chrono",
  "criterion",
  "derive_more",
+ "eventcore-memory",
  "futures",
  "insta",
  "nutype",

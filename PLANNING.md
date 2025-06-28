@@ -189,12 +189,21 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 5.3 Property Test Suite
 
-- [ ] Create `tests/properties/mod.rs`
-  - [ ] "Events are immutable" property
-  - [ ] "Stream versions monotonically increase" property
-  - [ ] "Event ordering is deterministic" property
-  - [ ] "Commands are idempotent" property
-  - [ ] "Concurrent commands maintain consistency" property
+- [x] Create `tests/properties/mod.rs`
+  - [x] "Events are immutable" property
+  - [x] "Stream versions monotonically increase" property
+  - [x] "Event ordering is deterministic" property
+  - [x] "Commands are idempotent" property
+  - [x] "Concurrent commands maintain consistency" property
+- [x] Implement comprehensive property test suite with 5 specialized modules:
+  - [x] `event_immutability.rs` - Tests that events cannot be modified after creation
+  - [x] `version_monotonicity.rs` - Tests that stream versions always increase monotonically
+  - [x] `event_ordering.rs` - Tests that event ordering is deterministic and consistent
+  - [x] `command_idempotency.rs` - Tests that commands produce same result when repeated
+  - [x] `concurrency_consistency.rs` - Tests that concurrent commands maintain system consistency
+- [x] Create integration test suite that verifies all property invariants work together
+- [x] Add property test configuration and utilities for consistent test execution
+- [x] Implement comprehensive unit tests for all property test scenarios
 
 ## Phase 6: Command Implementation
 
