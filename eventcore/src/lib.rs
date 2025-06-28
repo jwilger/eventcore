@@ -25,6 +25,8 @@ pub mod projection;
 pub mod projection_manager;
 /// Projection runner for managing event subscription and processing
 pub mod projection_runner;
+/// Event serialization and schema evolution support
+pub mod serialization;
 /// State reconstruction from event streams
 pub mod state_reconstruction;
 /// Event subscription system for processing events from event streams

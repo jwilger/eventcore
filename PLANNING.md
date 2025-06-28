@@ -304,11 +304,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 9.1 Event Serialization
 
-- [ ] Create `eventcore/src/serialization/mod.rs`
-  - [ ] Define `EventSerializer` trait
-  - [ ] Implement JSON serialization
-  - [ ] Support schema evolution
-  - [ ] Write round-trip property tests
+- [x] Create `eventcore/src/serialization/mod.rs`
+  - [x] Define `EventSerializer` trait
+  - [x] Implement JSON serialization
+  - [x] Support schema evolution
+  - [x] Write round-trip property tests
 
 ### 9.2 Type Registry
 

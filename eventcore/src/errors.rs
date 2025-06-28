@@ -86,6 +86,18 @@ pub enum EventStoreError {
     #[error("Deserialization failed: {0}")]
     DeserializationFailed(String),
 
+    /// Serialization error.
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+
+    /// Deserialization error.
+    #[error("Deserialization error: {0}")]
+    DeserializationError(String),
+
+    /// Schema evolution error.
+    #[error("Schema evolution error: {0}")]
+    SchemaEvolutionError(String),
+
     /// An I/O error occurred.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -122,6 +134,9 @@ impl Clone for EventStoreError {
             Self::TransactionRollback(msg) => Self::TransactionRollback(msg.clone()),
             Self::SerializationFailed(msg) => Self::SerializationFailed(msg.clone()),
             Self::DeserializationFailed(msg) => Self::DeserializationFailed(msg.clone()),
+            Self::SerializationError(msg) => Self::SerializationError(msg.clone()),
+            Self::DeserializationError(msg) => Self::DeserializationError(msg.clone()),
+            Self::SchemaEvolutionError(msg) => Self::SchemaEvolutionError(msg.clone()),
             Self::Io(err) => Self::Io(std::io::Error::new(err.kind(), err.to_string())),
             Self::Timeout(duration) => Self::Timeout(*duration),
             Self::Unavailable(msg) => Self::Unavailable(msg.clone()),
