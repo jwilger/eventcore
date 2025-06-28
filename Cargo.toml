@@ -20,28 +20,29 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Core dependencies
-tokio = { version = "1.41.1", features = ["full"] }
-async-trait = "0.1.83"
-uuid = { version = "1.11.0", features = ["v7", "serde"] }
-serde = { version = "1.0.216", features = ["derive"] }
-serde_json = "1.0.133"
-thiserror = "2.0.6"
+tokio = { version = "1.45.1", features = ["full"] }
+async-trait = "0.1.88"
+uuid = { version = "1.17.0", features = ["v7", "serde"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.12"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
-chrono = { version = "0.4.39", features = ["serde"] }
+chrono = { version = "0.4.41", features = ["serde"] }
 
 # Type safety dependencies
-nutype = { version = "0.5.0", features = ["serde"] }
-derive_more = { version = "1.0.0", features = ["full"] }
+nutype = { version = "0.6.1", features = ["serde"] }
+derive_more = { version = "2.0.1", features = ["full"] }
 
 # Testing dependencies
-proptest = "1.6.0"
+proptest = "1.7.0"
 tokio-test = "0.4.4"
-insta = { version = "1.41.1", features = ["json", "redactions"] }
-criterion = { version = "0.5.1", features = ["html_reports"] }
+insta = { version = "1.43.1", features = ["json", "redactions"] }
+criterion = { version = "0.6.0", features = ["html_reports"] }
 
 # Database dependencies (only for specific crates)
-sqlx = { version = "0.8.2", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "migrate"] }
+# Note: We disable default features to avoid pulling in sqlx-mysql and its vulnerable rsa dependency
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
