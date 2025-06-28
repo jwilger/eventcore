@@ -164,12 +164,12 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 5.1 In-Memory Event Store Adapter
 
-- [ ] Create `eventcore-memory/src/lib.rs`
-  - [ ] Implement `EventStore` trait for testing
-  - [ ] Add thread-safe storage using Arc<RwLock<\_>>
-  - [ ] Implement version tracking per stream
-  - [ ] No persistence (for testing only)
-  - [ ] Write comprehensive unit tests
+- [x] Create `eventcore-memory/src/lib.rs`
+  - [x] Implement `EventStore` trait for testing
+  - [x] Add thread-safe storage using Arc<RwLock<\_>>
+  - [x] Implement version tracking per stream
+  - [x] No persistence (for testing only)
+  - [x] Write comprehensive unit tests
 
 ### 5.2 Test Utilities
 
