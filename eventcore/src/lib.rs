@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 pub mod errors;
+pub mod metadata;
 pub mod types;
 
 #[cfg(test)]

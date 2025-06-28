@@ -85,12 +85,12 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 2.3 Event Metadata Types
 
-- [ ] Create `eventcore/src/metadata.rs`
-  - [ ] Define `EventMetadata` struct
-  - [ ] Define `CausationId` and `CorrelationId` types
-  - [ ] Define `UserId` type for actor information
-  - [ ] Implement builders for metadata construction
-  - [ ] Write property tests for metadata serialization
+- [x] Create `eventcore/src/metadata.rs`
+  - [x] Define `EventMetadata` struct
+  - [x] Define `CausationId` and `CorrelationId` types
+  - [x] Define `UserId` type for actor information
+  - [x] Implement builders for metadata construction
+  - [x] Write property tests for metadata serialization
 
 ## Phase 3: Command System Design
 
