@@ -19,6 +19,8 @@ pub mod event_store_adapter;
 /// Command execution engine with retry logic and concurrency control
 pub mod executor;
 pub mod metadata;
+/// Monitoring and observability infrastructure
+pub mod monitoring;
 /// Projection system for building read models from event streams
 pub mod projection;
 /// Projection management system for handling projection lifecycles

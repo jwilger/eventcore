@@ -321,11 +321,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 10.1 Metrics Collection
 
-- [ ] Create `eventcore/src/monitoring/metrics.rs`
-  - [ ] Define metrics types (Counter, Gauge, Timer)
-  - [ ] Add command execution metrics
-  - [ ] Add event store operation metrics
-  - [ ] Add projection lag metrics
+- [x] Create `eventcore/src/monitoring/metrics.rs`
+  - [x] Define metrics types (Counter, Gauge, Timer)
+  - [x] Add command execution metrics
+  - [x] Add event store operation metrics
+  - [x] Add projection lag metrics
 
 ### 10.2 Health Checks
 
