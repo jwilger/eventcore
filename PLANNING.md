@@ -216,21 +216,21 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 6.2 Command Execution Logic
 
-- [ ] Implement generic command execution flow
-  - [ ] Stream reading and merging logic
-  - [ ] State reconstruction from events
-  - [ ] Version tracking for concurrency control
-  - [ ] Error propagation and handling
-  - [ ] Write comprehensive unit tests
+- [x] Implement generic command execution flow
+  - [x] Stream reading and merging logic
+  - [x] State reconstruction from events
+  - [x] Version tracking for concurrency control
+  - [x] Error propagation and handling
+  - [x] Write comprehensive unit tests
 
 ### 6.3 Command Executor Implementation
 
-- [ ] Implement `CommandExecutor::execute`
-  - [ ] Read streams specified by command
-  - [ ] Reconstruct state by folding events
-  - [ ] Execute command business logic
-  - [ ] Handle optimistic concurrency control
-  - [ ] Write integration tests with in-memory store
+- [x] Implement `CommandExecutor::execute`
+  - [x] Read streams specified by command
+  - [x] Reconstruct state by folding events
+  - [x] Execute command business logic
+  - [x] Handle optimistic concurrency control
+  - [x] Write integration tests with in-memory store
 
 ## Phase 7: Projection System
 

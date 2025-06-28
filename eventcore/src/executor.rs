@@ -1,8 +1,12 @@
 use crate::command::{Command, CommandResult};
 use crate::errors::CommandError;
-use crate::types::{EventVersion, StreamId};
-use async_trait::async_trait;
+use crate::event_store::{EventToWrite, ExpectedVersion, ReadOptions, StreamEvents};
+use crate::types::{EventId, EventVersion, StreamId};
+use std::collections::HashMap;
 use std::time::Duration;
+
+#[cfg(test)]
+use async_trait::async_trait;
 
 /// Configuration for command execution retry behavior.
 #[derive(Debug, Clone)]
@@ -95,18 +99,11 @@ pub struct StreamState {
     pub current_version: EventVersion,
 }
 
-/// Trait representing an event store for command execution.
+/// Type alias for the event store trait used by command executor.
 ///
-/// This trait will be fully defined in Phase 4, but we need a placeholder
-/// for the CommandExecutor to be generic over different event store implementations.
-#[async_trait]
-pub trait EventStore: Send + Sync {
-    /// Placeholder for event store operations.
-    /// This will be expanded in Phase 4: Event Store Abstraction.
-    async fn placeholder(&self) -> CommandResult<()> {
-        todo!("EventStore trait will be fully implemented in Phase 4")
-    }
-}
+/// This re-exports the `EventStore` trait from the `event_store` module
+/// to maintain a clean interface for the executor.
+pub use crate::event_store::EventStore;
 
 /// Command executor responsible for orchestrating command execution.
 ///
@@ -228,17 +225,119 @@ where
     /// - Business rule violations
     /// - Concurrency conflicts
     /// - Event store errors
-    #[allow(clippy::unused_async)]
     pub async fn execute<C>(
         &self,
-        _command: &C,
-        _input: C::Input,
-        _context: ExecutionContext,
-    ) -> CommandResult<()>
+        command: &C,
+        input: C::Input,
+        context: ExecutionContext,
+    ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
+        C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
+        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
+        ES::Event: From<C::Event>,
     {
-        todo!("Implement command execution flow")
+        // Step 1: Determine which streams to read
+        let stream_ids = command.read_streams(&input);
+
+        // Step 2: Read events from those streams
+        let stream_data = self
+            .event_store
+            .read_streams(&stream_ids, &ReadOptions::new())
+            .await
+            .map_err(CommandError::from)?;
+
+        // Step 3: Reconstruct state by folding events
+        let mut state = C::State::default();
+        for event in stream_data.events() {
+            // Convert event payload from event store type to command event type
+            // This requires the command event type to be convertible from the store event type
+            if let Ok(command_event) = Self::try_convert_event::<C>(&event.payload) {
+                command.apply(&mut state, &command_event);
+            }
+        }
+
+        // Step 4: Execute command business logic
+        let events_to_write = command.handle(state, input).await?;
+
+        // Step 5: Write resulting events atomically with optimistic concurrency control
+        let stream_events =
+            Self::prepare_stream_events::<C>(events_to_write, &stream_data, &context);
+
+        let result_versions = self
+            .event_store
+            .write_events_multi(stream_events)
+            .await
+            .map_err(CommandError::from)?;
+
+        Ok(result_versions)
+    }
+
+    /// Attempts to convert an event store event to a command event.
+    ///
+    /// This is a helper method that tries to convert between event types.
+    /// In practice, this conversion logic will depend on the specific event
+    /// serialization strategy used by the application.
+    fn try_convert_event<C>(event: &ES::Event) -> Result<C::Event, CommandError>
+    where
+        C: Command,
+        C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
+        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
+    {
+        C::Event::try_from(event)
+            .map_err(|e| CommandError::ValidationFailed(format!("Event conversion failed: {e}")))
+    }
+
+    /// Prepares stream events for writing with proper version control.
+    fn prepare_stream_events<C>(
+        events_to_write: Vec<(StreamId, C::Event)>,
+        stream_data: &crate::event_store::StreamData<ES::Event>,
+        context: &ExecutionContext,
+    ) -> Vec<StreamEvents<ES::Event>>
+    where
+        C: Command,
+        ES::Event: From<C::Event>,
+    {
+        // Group events by stream
+        let mut streams: HashMap<StreamId, Vec<C::Event>> = HashMap::new();
+        for (stream_id, event) in events_to_write {
+            streams.entry(stream_id).or_default().push(event);
+        }
+
+        let mut stream_events = Vec::new();
+
+        for (stream_id, events) in streams {
+            // Get current version for optimistic concurrency control
+            let current_version = stream_data
+                .stream_version(&stream_id)
+                .unwrap_or_else(EventVersion::initial);
+            let expected_version = if current_version == EventVersion::initial() {
+                ExpectedVersion::New
+            } else {
+                ExpectedVersion::Exact(current_version)
+            };
+
+            // Convert events to EventToWrite instances
+            let events_to_write: Vec<EventToWrite<ES::Event>> = events
+                .into_iter()
+                .map(|event| {
+                    let event_id = EventId::new();
+                    let metadata = crate::event_store::EventMetadata::new()
+                        .with_correlation_id(context.correlation_id.clone())
+                        .with_user_id(context.user_id.clone().unwrap_or_default());
+
+                    EventToWrite::with_metadata(event_id, ES::Event::from(event), metadata)
+                })
+                .collect();
+
+            stream_events.push(StreamEvents::new(
+                stream_id,
+                expected_version,
+                events_to_write,
+            ));
+        }
+
+        stream_events
     }
 
     /// Executes a command with automatic retry logic.
@@ -272,17 +371,45 @@ where
     /// - The error is not retryable according to the retry policy
     /// - All retry attempts have been exhausted
     /// - A non-retryable error occurs during any attempt
-    #[allow(clippy::unused_async)]
     pub async fn execute_with_retry<C>(
         &self,
-        _command: &C,
-        _input: C::Input,
-        _context: ExecutionContext,
-    ) -> CommandResult<()>
+        command: &C,
+        input: C::Input,
+        context: ExecutionContext,
+    ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
+        C::Input: Clone,
+        C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
+        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
+        ES::Event: From<C::Event>,
     {
-        todo!("Implement command execution with retry logic")
+        let mut last_error = None;
+
+        for attempt in 0..self.retry_config.max_attempts {
+            match self.execute(command, input.clone(), context.clone()).await {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    // Check if this error should trigger a retry
+                    if !self.retry_policy.should_retry(&error) {
+                        return Err(error);
+                    }
+
+                    last_error = Some(error);
+
+                    // If this is not the last attempt, wait before retrying
+                    if attempt < self.retry_config.max_attempts - 1 {
+                        let delay = self.calculate_retry_delay(attempt);
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
+
+        // All retries exhausted, return the last error
+        Err(last_error.unwrap_or_else(|| {
+            CommandError::ValidationFailed("Retry exhausted with no error".to_string())
+        }))
     }
 
     /// Calculates the delay for the next retry attempt.
@@ -406,16 +533,360 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event_store::StoredEvent;
+    use crate::types::Timestamp;
     use proptest::prelude::*;
+    use std::sync::{Arc, Mutex};
 
-    /// Mock event store for testing.
-    struct MockEventStore;
+    /// Mock event store for testing with configurable behavior.
+    #[derive(Clone)]
+    #[allow(dead_code)]
+    struct MockEventStore {
+        streams: Arc<Mutex<HashMap<StreamId, Vec<StoredEvent<String>>>>>,
+        versions: Arc<Mutex<HashMap<StreamId, EventVersion>>>,
+        fail_reads: Arc<Mutex<bool>>,
+        fail_writes: Arc<Mutex<bool>>,
+    }
+
+    #[allow(dead_code, clippy::significant_drop_tightening)]
+    impl MockEventStore {
+        fn new() -> Self {
+            Self {
+                streams: Arc::new(Mutex::new(HashMap::new())),
+                versions: Arc::new(Mutex::new(HashMap::new())),
+                fail_reads: Arc::new(Mutex::new(false)),
+                fail_writes: Arc::new(Mutex::new(false)),
+            }
+        }
+
+        fn add_event(&self, stream_id: StreamId, event: String) {
+            let mut streams = self.streams.lock().unwrap();
+            let mut versions = self.versions.lock().unwrap();
+
+            let current_version = versions
+                .get(&stream_id)
+                .copied()
+                .unwrap_or_else(EventVersion::initial);
+            let new_version = current_version.next();
+
+            let stored_event = StoredEvent::new(
+                EventId::new(),
+                stream_id.clone(),
+                new_version,
+                Timestamp::now(),
+                event,
+                None,
+            );
+
+            streams
+                .entry(stream_id.clone())
+                .or_default()
+                .push(stored_event);
+            versions.insert(stream_id, new_version);
+        }
+
+        fn set_fail_reads(&self, fail: bool) {
+            *self.fail_reads.lock().unwrap() = fail;
+        }
+
+        fn set_fail_writes(&self, fail: bool) {
+            *self.fail_writes.lock().unwrap() = fail;
+        }
+    }
 
     #[async_trait]
+    #[allow(clippy::significant_drop_tightening)]
     impl EventStore for MockEventStore {
-        async fn placeholder(&self) -> CommandResult<()> {
-            Ok(())
+        type Event = String;
+
+        async fn read_streams(
+            &self,
+            stream_ids: &[StreamId],
+            _options: &ReadOptions,
+        ) -> crate::errors::EventStoreResult<crate::event_store::StreamData<Self::Event>> {
+            if *self.fail_reads.lock().unwrap() {
+                return Err(crate::errors::EventStoreError::ConnectionFailed(
+                    "Mock read failure".to_string(),
+                ));
+            }
+
+            let streams = self.streams.lock().unwrap();
+            let versions = self.versions.lock().unwrap();
+
+            let mut all_events = Vec::new();
+            let mut stream_versions = HashMap::new();
+
+            for stream_id in stream_ids {
+                let version = versions
+                    .get(stream_id)
+                    .copied()
+                    .unwrap_or_else(EventVersion::initial);
+                stream_versions.insert(stream_id.clone(), version);
+
+                if let Some(stream_events) = streams.get(stream_id) {
+                    all_events.extend(stream_events.clone());
+                }
+            }
+
+            all_events.sort_by_key(|e| e.event_id);
+            Ok(crate::event_store::StreamData::new(
+                all_events,
+                stream_versions,
+            ))
         }
+
+        async fn write_events_multi(
+            &self,
+            stream_events: Vec<StreamEvents<Self::Event>>,
+        ) -> crate::errors::EventStoreResult<HashMap<StreamId, EventVersion>> {
+            if *self.fail_writes.lock().unwrap() {
+                return Err(crate::errors::EventStoreError::ConnectionFailed(
+                    "Mock write failure".to_string(),
+                ));
+            }
+
+            let mut streams = self.streams.lock().unwrap();
+            let mut versions = self.versions.lock().unwrap();
+            let mut result_versions = HashMap::new();
+
+            for stream_event in stream_events {
+                let current_version = versions
+                    .get(&stream_event.stream_id)
+                    .copied()
+                    .unwrap_or_else(EventVersion::initial);
+
+                // Check expected version
+                match stream_event.expected_version {
+                    ExpectedVersion::New => {
+                        if versions.contains_key(&stream_event.stream_id) {
+                            return Err(crate::errors::EventStoreError::VersionConflict {
+                                stream: stream_event.stream_id,
+                                expected: EventVersion::initial(),
+                                current: current_version,
+                            });
+                        }
+                    }
+                    ExpectedVersion::Exact(expected) => {
+                        if current_version != expected {
+                            return Err(crate::errors::EventStoreError::VersionConflict {
+                                stream: stream_event.stream_id,
+                                expected,
+                                current: current_version,
+                            });
+                        }
+                    }
+                    ExpectedVersion::Any => {}
+                }
+
+                let mut new_version = current_version;
+                for event_to_write in stream_event.events {
+                    new_version = new_version.next();
+                    let stored_event = StoredEvent::new(
+                        event_to_write.event_id,
+                        stream_event.stream_id.clone(),
+                        new_version,
+                        Timestamp::now(),
+                        event_to_write.payload,
+                        event_to_write.metadata,
+                    );
+
+                    streams
+                        .entry(stream_event.stream_id.clone())
+                        .or_default()
+                        .push(stored_event);
+                }
+
+                versions.insert(stream_event.stream_id.clone(), new_version);
+                result_versions.insert(stream_event.stream_id, new_version);
+            }
+
+            Ok(result_versions)
+        }
+
+        async fn stream_exists(
+            &self,
+            stream_id: &StreamId,
+        ) -> crate::errors::EventStoreResult<bool> {
+            let streams = self.streams.lock().unwrap();
+            Ok(streams.contains_key(stream_id))
+        }
+
+        async fn get_stream_version(
+            &self,
+            stream_id: &StreamId,
+        ) -> crate::errors::EventStoreResult<Option<EventVersion>> {
+            let versions = self.versions.lock().unwrap();
+            Ok(versions.get(stream_id).copied())
+        }
+    }
+
+    /// Mock command for testing.
+    struct MockCommand {
+        streams_to_read: Vec<StreamId>,
+        events_to_write: Vec<(StreamId, String)>,
+        should_fail: bool,
+    }
+
+    impl MockCommand {
+        fn new(streams_to_read: Vec<StreamId>, events_to_write: Vec<(StreamId, String)>) -> Self {
+            Self {
+                streams_to_read,
+                events_to_write,
+                should_fail: false,
+            }
+        }
+
+        fn with_failure(mut self) -> Self {
+            self.should_fail = true;
+            self
+        }
+    }
+
+    #[derive(Default, Clone)]
+    struct MockState {
+        applied_events: Vec<String>,
+    }
+
+    #[derive(Clone)]
+    #[allow(dead_code)]
+    struct MockInput {
+        value: String,
+    }
+
+    // Create a simple mock event type for testing
+    #[derive(Debug, Clone, PartialEq)]
+    struct MockEvent(String);
+
+    // Custom error type for testing that implements Display
+    #[derive(Debug)]
+    struct MockConversionError;
+
+    impl std::fmt::Display for MockConversionError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "Mock conversion error")
+        }
+    }
+
+    impl std::error::Error for MockConversionError {}
+
+    // Implement conversion for testing - our mock event to String
+    impl TryFrom<&String> for MockEvent {
+        type Error = MockConversionError;
+
+        fn try_from(value: &String) -> Result<Self, Self::Error> {
+            Ok(Self(value.clone()))
+        }
+    }
+
+    // Allow conversion from MockEvent to String for event store
+    impl From<MockEvent> for String {
+        fn from(event: MockEvent) -> Self {
+            event.0
+        }
+    }
+
+    #[async_trait]
+    impl Command for MockCommand {
+        type Input = MockInput;
+        type State = MockState;
+        type Event = MockEvent;
+
+        fn read_streams(&self, _input: &Self::Input) -> Vec<StreamId> {
+            self.streams_to_read.clone()
+        }
+
+        fn apply(&self, state: &mut Self::State, event: &Self::Event) {
+            state.applied_events.push(event.0.clone());
+        }
+
+        async fn handle(
+            &self,
+            _state: Self::State,
+            _input: Self::Input,
+        ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+            if self.should_fail {
+                Err(CommandError::BusinessRuleViolation(
+                    "Mock failure".to_string(),
+                ))
+            } else {
+                Ok(self
+                    .events_to_write
+                    .clone()
+                    .into_iter()
+                    .map(|(stream_id, event_str)| (stream_id, MockEvent(event_str)))
+                    .collect())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_command_handles_business_rule_violation() {
+        let event_store = MockEventStore::new();
+        let executor = CommandExecutor::new(event_store);
+
+        let stream_id = StreamId::try_new("test-stream").unwrap();
+        let command = MockCommand::new(
+            vec![stream_id.clone()],
+            vec![(stream_id.clone(), "test-event".to_string())],
+        )
+        .with_failure();
+        let input = MockInput {
+            value: "test".to_string(),
+        };
+        let context = ExecutionContext::default();
+
+        let result = executor.execute(&command, input, context).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            CommandError::BusinessRuleViolation(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn execute_command_handles_event_store_read_failure() {
+        let event_store = MockEventStore::new();
+        event_store.set_fail_reads(true);
+        let executor = CommandExecutor::new(event_store);
+
+        let stream_id = StreamId::try_new("test-stream").unwrap();
+        let command = MockCommand::new(
+            vec![stream_id.clone()],
+            vec![(stream_id.clone(), "test-event".to_string())],
+        );
+        let input = MockInput {
+            value: "test".to_string(),
+        };
+        let context = ExecutionContext::default();
+
+        let result = executor.execute(&command, input, context).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), CommandError::EventStore(_)));
+    }
+
+    #[tokio::test]
+    async fn retry_policy_respects_non_retryable_errors() {
+        let event_store = MockEventStore::new();
+        let executor = CommandExecutor::new(event_store)
+            .with_retry_policy(RetryPolicy::ConcurrencyConflictsOnly);
+
+        let stream_id = StreamId::try_new("test-stream").unwrap();
+        let command = MockCommand::new(
+            vec![stream_id.clone()],
+            vec![(stream_id.clone(), "test-event".to_string())],
+        )
+        .with_failure(); // This creates a BusinessRuleViolation which shouldn't retry
+        let input = MockInput {
+            value: "test".to_string(),
+        };
+        let context = ExecutionContext::default();
+
+        let result = executor.execute_with_retry(&command, input, context).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            CommandError::BusinessRuleViolation(_)
+        ));
     }
 
     #[test]
@@ -458,7 +929,7 @@ mod tests {
 
     #[test]
     fn command_executor_builder_pattern() {
-        let event_store = MockEventStore;
+        let event_store = MockEventStore::new();
         let config = RetryConfig {
             max_attempts: 5,
             ..Default::default()
@@ -535,7 +1006,7 @@ mod tests {
     proptest! {
         #[test]
         fn retry_delay_calculation_respects_bounds(attempt in 0u32..10) {
-            let executor = CommandExecutor::new(MockEventStore)
+            let executor = CommandExecutor::new(MockEventStore::new())
                 .with_retry_config(RetryConfig {
                     base_delay: Duration::from_millis(100),
                     max_delay: Duration::from_secs(5),
@@ -558,7 +1029,7 @@ mod tests {
         ) {
             prop_assume!(attempt1 < attempt2);
 
-            let executor = CommandExecutor::new(MockEventStore);
+            let executor = CommandExecutor::new(MockEventStore::new());
 
             // Run multiple times to account for jitter
             let mut delay1_less_than_delay2 = 0;

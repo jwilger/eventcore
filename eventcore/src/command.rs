@@ -84,9 +84,7 @@ pub trait Command: Send + Sync {
     /// # Returns
     ///
     /// A vector of stream IDs that must be read to execute this command.
-    fn read_streams(&self, _input: &Self::Input) -> Vec<StreamId> {
-        todo!("Implement read_streams method")
-    }
+    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId>;
 
     /// Applies an event to the command's state model.
     ///
@@ -98,9 +96,7 @@ pub trait Command: Send + Sync {
     ///
     /// * `state` - Mutable reference to the current state
     /// * `event` - The event to apply to the state
-    fn apply(&self, _state: &mut Self::State, _event: &Self::Event) {
-        todo!("Implement apply method")
-    }
+    fn apply(&self, state: &mut Self::State, event: &Self::Event);
 
     /// Executes the command business logic.
     ///
@@ -122,9 +118,7 @@ pub trait Command: Send + Sync {
     /// or a CommandError if the command cannot be executed.
     async fn handle(
         &self,
-        _state: Self::State,
-        _input: Self::Input,
-    ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
-        todo!("Implement handle method")
-    }
+        state: Self::State,
+        input: Self::Input,
+    ) -> CommandResult<Vec<(StreamId, Self::Event)>>;
 }
