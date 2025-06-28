@@ -1,0 +1,5 @@
+[advisories]
+# Ignore RUSTSEC-2023-0071 (rsa vulnerability in sqlx-mysql)
+# We don't use MySQL features, so this doesn't affect us
+# The dependency is included in the lock file but not in our active dependency tree
+ignore = ["RUSTSEC-2023-0071"]
