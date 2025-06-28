@@ -7,7 +7,7 @@ use crate::types::{EventId, EventVersion, StreamId};
 use thiserror::Error;
 
 /// Errors that can occur during command execution.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum CommandError {
     /// The command input validation failed.
     /// This should be rare as validation should happen at type construction.
@@ -103,8 +103,35 @@ pub enum EventStoreError {
     Internal(String),
 }
 
+impl Clone for EventStoreError {
+    fn clone(&self) -> Self {
+        match self {
+            Self::StreamNotFound(stream_id) => Self::StreamNotFound(stream_id.clone()),
+            Self::VersionConflict {
+                stream,
+                expected,
+                current,
+            } => Self::VersionConflict {
+                stream: stream.clone(),
+                expected: *expected,
+                current: *current,
+            },
+            Self::DuplicateEventId(event_id) => Self::DuplicateEventId(*event_id),
+            Self::ConnectionFailed(msg) => Self::ConnectionFailed(msg.clone()),
+            Self::Configuration(msg) => Self::Configuration(msg.clone()),
+            Self::TransactionRollback(msg) => Self::TransactionRollback(msg.clone()),
+            Self::SerializationFailed(msg) => Self::SerializationFailed(msg.clone()),
+            Self::DeserializationFailed(msg) => Self::DeserializationFailed(msg.clone()),
+            Self::Io(err) => Self::Io(std::io::Error::new(err.kind(), err.to_string())),
+            Self::Timeout(duration) => Self::Timeout(*duration),
+            Self::Unavailable(msg) => Self::Unavailable(msg.clone()),
+            Self::Internal(msg) => Self::Internal(msg.clone()),
+        }
+    }
+}
+
 /// Errors that can occur in the projection system.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum ProjectionError {
     /// The projection failed to process an event.
     #[error("Failed to process event {event_id}: {reason}")]
@@ -148,7 +175,7 @@ pub enum ProjectionError {
 ///
 /// These errors are typically returned by the `nutype` generated constructors
 /// for our domain types.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum ValidationError {
     /// The input was empty when a non-empty value was required.
     #[error("Value cannot be empty")]

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 94b97f038aa1d532c2dd2f3ffed1275b0abfc689aa58be8aee81100d75e84902 # shrinks to metadata = EventMetadata { timestamp: Timestamp(2025-06-28T18:02:28Z), correlation_id: CorrelationId(0197b7b4-79a8-74e2-8184-6f86c3e01b7c), causation_id: None, user_id: None, custom: {} }

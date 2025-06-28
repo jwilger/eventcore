@@ -23,6 +23,10 @@ pub mod metadata;
 pub mod subscription;
 pub mod types;
 
+/// Testing utilities for event sourcing applications
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
 #[cfg(test)]
 mod tests {
     #[test]

@@ -173,11 +173,19 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 5.2 Test Utilities
 
-- [ ] Create `eventcore/src/testing/mod.rs`
-  - [ ] Command test harness builder
-  - [ ] Event builder utilities
-  - [ ] Assertion helpers for domain types
-  - [ ] Property test generators using `proptest`
+- [x] Create `eventcore/src/testing/mod.rs`
+  - [x] Command test harness builder
+  - [x] Event builder utilities
+  - [x] Assertion helpers for domain types
+  - [x] Property test generators using `proptest`
+- [x] Implement comprehensive test utilities modules:
+  - [x] `generators.rs` with property test generators for all domain types
+  - [x] `builders.rs` with fluent builders for events and commands  
+  - [x] `assertions.rs` with domain-specific assertions for event sourcing
+  - [x] `fixtures.rs` with common test data and mock implementations
+  - [x] `harness.rs` with command test harness for end-to-end testing
+- [x] Write comprehensive tests for all test utilities
+- [x] Fix compilation issues including lifetime bounds and Clone trait implementations
 
 ### 5.3 Property Test Suite
 

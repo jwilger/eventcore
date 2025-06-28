@@ -32,6 +32,9 @@ rand = { workspace = true }
 # Async stream utilities (for event subscriptions)
 futures = { workspace = true }
 
+# Optional dependencies for testing utilities
+proptest = { workspace = true, optional = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 tokio-test = { workspace = true }
@@ -39,6 +42,10 @@ insta = { workspace = true }
 criterion = { workspace = true }
 tracing-subscriber = { workspace = true }
 rand = { workspace = true }
+
+[features]
+default = []
+testing = ["dep:proptest"]
 
 [lints]
 workspace = true
