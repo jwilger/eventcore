@@ -33,8 +33,11 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
       
-      - name: Run tests
-        run: cargo test --workspace --all-features --verbose
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      
+      - name: Run tests with nextest
+        run: cargo nextest run --workspace --all-features --profile ci
         
       - name: Run doctests
         run: cargo test --doc --workspace --all-features

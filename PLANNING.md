@@ -41,9 +41,9 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 ### 1.3 Development Tooling
 
 - [x] Configure `rust-toolchain.toml` (already exists)
-- [ ] Set up `cargo-nextest` for faster test runs
-- [ ] Configure `cargo-llvm-cov` for coverage
-- [ ] Add `justfile` for common commands
+- [x] Set up `cargo-nextest` for faster test runs
+- [x] Configure `cargo-llvm-cov` for coverage
+- [x] Add `justfile` for common commands
 
 ### 1.4 Workspace Structure Setup
 

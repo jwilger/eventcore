@@ -32,6 +32,10 @@ docker-compose up -d
 # Initialize Rust project (if not done)
 cargo init --lib
 
+# Install development tools
+cargo install cargo-nextest --locked  # Fast test runner
+cargo install cargo-llvm-cov --locked # Code coverage
+
 # IMPORTANT: Always check for latest versions before adding dependencies
 # Use: cargo search <crate_name> to find latest version
 
@@ -60,14 +64,19 @@ cargo fmt
 # Run linter
 cargo clippy --workspace --all-targets -- -D warnings
 
-# Run tests
+# Run tests with nextest (recommended - faster and better output)
+cargo nextest run --workspace
+
+# Run tests with cargo test (fallback)
 cargo test --workspace
 
 # Run tests with output
-cargo test --workspace -- --nocapture
+cargo nextest run --workspace --nocapture
+# Or with cargo test: cargo test --workspace -- --nocapture
 
 # Run a specific test
-cargo test test_name -- --nocapture
+cargo nextest run test_name
+# Or with cargo test: cargo test test_name -- --nocapture
 
 # Type check
 cargo check --all-targets
