@@ -146,11 +146,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 4.3 Subscription System
 
-- [ ] Create `eventcore/src/subscription.rs`
-  - [ ] Define `Subscription` trait
-  - [ ] Define `SubscriptionOptions` enum
-  - [ ] Add subscription position tracking types
-  - [ ] Stub subscription implementation
+- [x] Create `eventcore/src/subscription.rs`
+  - [x] Define `Subscription` trait
+  - [x] Define `SubscriptionOptions` enum
+  - [x] Add subscription position tracking types
+  - [x] Stub subscription implementation
 
 ### 4.4 Event Store Adapter Interface
 

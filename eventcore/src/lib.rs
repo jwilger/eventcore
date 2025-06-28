@@ -17,6 +17,8 @@ pub mod event_store;
 /// Command execution engine with retry logic and concurrency control
 pub mod executor;
 pub mod metadata;
+/// Event subscription system for processing events from event streams
+pub mod subscription;
 pub mod types;
 
 #[cfg(test)]

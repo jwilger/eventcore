@@ -21,6 +21,8 @@ use uuid::Uuid;
         Clone,
         PartialEq,
         Eq,
+        PartialOrd,
+        Ord,
         Hash,
         AsRef,
         Deref,
