@@ -7,21 +7,16 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::collections::HashMap;
+mod event_store;
+
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use eventcore::{
-    errors::{EventStoreError, EventStoreResult},
-    event_store::{EventStore, ReadOptions, StreamData, StreamEvents},
-    subscription::{Subscription, SubscriptionOptions},
-    types::{EventVersion, StreamId},
-};
+use eventcore::errors::EventStoreError;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use thiserror::Error;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, instrument};
 
 /// Configuration for `PostgreSQL` connection
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,66 +169,7 @@ impl PostgresEventStore {
     }
 }
 
-#[async_trait]
-impl EventStore for PostgresEventStore {
-    type Event = serde_json::Value;
-
-    #[instrument(skip(self))]
-    async fn read_streams(
-        &self,
-        stream_ids: &[StreamId],
-        _options: &ReadOptions,
-    ) -> EventStoreResult<StreamData<Self::Event>> {
-        // TODO: Implement in Phase 8.4
-        warn!("PostgreSQL read_streams not yet implemented - returning empty streams");
-
-        let mut stream_versions = HashMap::new();
-        for stream_id in stream_ids {
-            stream_versions.insert(stream_id.clone(), EventVersion::initial());
-        }
-
-        Ok(StreamData::new(Vec::new(), stream_versions))
-    }
-
-    #[instrument(skip(self))]
-    async fn write_events_multi(
-        &self,
-        _stream_events: Vec<StreamEvents<Self::Event>>,
-    ) -> EventStoreResult<HashMap<StreamId, EventVersion>> {
-        // TODO: Implement in Phase 8.4
-        warn!("PostgreSQL write_events_multi not yet implemented");
-        Ok(HashMap::new())
-    }
-
-    #[instrument(skip(self))]
-    async fn stream_exists(&self, _stream_id: &StreamId) -> EventStoreResult<bool> {
-        // TODO: Implement in Phase 8.4
-        warn!("PostgreSQL stream_exists not yet implemented - returning false");
-        Ok(false)
-    }
-
-    #[instrument(skip(self))]
-    async fn get_stream_version(
-        &self,
-        _stream_id: &StreamId,
-    ) -> EventStoreResult<Option<EventVersion>> {
-        // TODO: Implement in Phase 8.4
-        warn!("PostgreSQL get_stream_version not yet implemented - returning None");
-        Ok(None)
-    }
-
-    #[instrument(skip(self))]
-    async fn subscribe(
-        &self,
-        _options: SubscriptionOptions,
-    ) -> EventStoreResult<Box<dyn Subscription<Event = Self::Event>>> {
-        // TODO: Implement in Phase 8.4
-        warn!("PostgreSQL subscribe not yet implemented");
-        Err(EventStoreError::Configuration(
-            "Subscriptions not yet implemented".to_string(),
-        ))
-    }
-}
+// EventStore implementation is now in the event_store module
 
 /// Builder for `PostgreSQL` event store configuration
 #[derive(Debug, Default)]

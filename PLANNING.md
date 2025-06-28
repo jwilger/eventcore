@@ -286,11 +286,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 8.4 PostgreSQL Event Store Implementation
 
-- [ ] Create `eventcore-postgres/src/event_store.rs`
-  - [ ] Implement `EventStore` trait for PostgreSQL
-  - [ ] Use `sqlx` for database operations
-  - [ ] Implement optimistic concurrency with transactions
-  - [ ] Map PostgreSQL errors to EventStoreError
+- [x] Create `eventcore-postgres/src/event_store.rs`
+  - [x] Implement `EventStore` trait for PostgreSQL
+  - [x] Use `sqlx` for database operations
+  - [x] Implement optimistic concurrency with transactions
+  - [x] Map PostgreSQL errors to EventStoreError
 
 ### 8.5 PostgreSQL Adapter Tests
 
