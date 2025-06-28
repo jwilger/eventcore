@@ -212,6 +212,7 @@ pub trait Command: Send + Sync {
 4. **Benchmark Suite**: Track performance regressions
 
 Follow the testing principles from the global Claude.md:
+
 - Test behavior, not implementation
 - Focus on edge cases that types can't prevent
 - Use test names that describe business requirements
@@ -259,6 +260,7 @@ These ensure code quality before commits.
 ### Code Review Focus
 
 Before submitting code, ensure:
+
 - [ ] All domain types use `nutype` with appropriate validation
 - [ ] No primitive obsession - all domain concepts have their own types
 - [ ] All functions are total (handle all cases)
@@ -269,6 +271,7 @@ Before submitting code, ensure:
 ### Library Version Management
 
 **IMPORTANT**: Always check for the latest version of dependencies before adding them:
+
 ```bash
 # Search for latest version
 cargo search <crate_name>
@@ -290,11 +293,13 @@ When working on this project, **ALWAYS** follow these rules:
 ### CI Monitoring Rules
 
 After pushing changes:
+
 1. **Use `gh` CLI to monitor the CI workflow** - Watch for the workflow to complete
 2. **If the workflow fails** - Address the failures immediately before moving to the next task
 3. **If the workflow passes** - Only then proceed to review @PLANNING.md for the next task
 
 Example commands:
+
 ```bash
 # List recent workflow runs
 gh run list --limit 5
@@ -309,10 +314,12 @@ gh run view
 ### Commit Rules
 
 **BEFORE MAKING ANY COMMIT**:
+
 1. **Update @PLANNING.md** - Mark completed tasks as complete and add any new tasks discovered
 2. **Include the updated PLANNING.md in the commit** - This keeps our task tracking in sync with code changes
 
 **NEVER** make a commit with the `--no-verify` flag. All pre-commit checks must be passing before proceeding. If pre-commit checks fail:
+
 - Fix the issues identified (formatting, linting, tests)
 - Run the checks again
 - Only commit when all checks pass
