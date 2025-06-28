@@ -7,10 +7,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-/// Core module documentation placeholder
-pub mod core {
-    // TODO: Implementation will be added in Phase 2
-}
+pub mod types;
 
 #[cfg(test)]
 mod tests {

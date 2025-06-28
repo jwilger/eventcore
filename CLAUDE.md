@@ -11,7 +11,11 @@ EventCore is a multi-stream aggregateless event sourcing library implementing th
 This project follows strict type-driven development principles as outlined in the global Claude.md. Key principles:
 
 1. **Types come first**: Model the domain, make illegal states unrepresentable, then implement
-2. **Parse, don't validate**: Use smart constructors that return `Result<T, E>`
+2. **Parse, don't validate**: Transform unstructured data into structured data at system boundaries ONLY
+   - Validation should be encoded in the type system to the maximum extent possible
+   - Use smart constructors with `nutype` validation only at the library's input boundaries
+   - Once data is parsed into domain types, those types guarantee validity throughout the system
+   - Library users should be encouraged to follow the same pattern in their application code
 3. **No primitive obsession**: Use newtypes for all domain concepts
 4. **Functional Core, Imperative Shell**: Pure functions at the heart, side effects at the edges
 5. **Total functions**: Every function should handle all cases explicitly
@@ -132,7 +136,11 @@ src/
 ```rust
 use nutype::nutype;
 
-// Use nutype for domain identifiers with validation
+// IMPORTANT: nutype validation should ONLY be used at library input boundaries
+// Once parsed, these types guarantee validity throughout the system
+
+// StreamId: validation at parse time ensures non-empty, max 255 chars
+// After construction, StreamId is ALWAYS valid - no need to re-validate
 #[nutype(
     sanitize(trim),
     validate(not_empty, len_char_max = 255),
@@ -140,26 +148,30 @@ use nutype::nutype;
 )]
 pub struct StreamId(String);
 
-// EventId using UUIDv7 for time-ordering
+// EventId: ensures UUIDv7 format at construction
+// The type itself guarantees this constraint - no runtime checks needed
 #[nutype(
     validate(predicate = |id: &uuid::Uuid| id.get_version() == Some(uuid::Version::SortRand)),
     derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, AsRef, Deref, Serialize, Deserialize)
 )]
 pub struct EventId(uuid::Uuid);
 
-// EventVersion must be non-negative
+// EventVersion: non-negative by construction
+// Type system ensures this invariant - impossible to create negative version
 #[nutype(
     validate(greater_or_equal = 0),
     derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Into, Serialize, Deserialize)
 )]
 pub struct EventVersion(u64);
 
-// Money type ensuring positive values
-#[nutype(
-    validate(greater = 0),
-    derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)
-)]
-pub struct Money(i64); // Store as cents to avoid floating point
+// Example of encoding business rules in types rather than runtime validation:
+// Instead of validating transfer amounts, use types that make invalid states impossible
+pub enum TransferAmount {
+    // Each variant encodes different business rules
+    Standard(Money),              // Normal transfers with standard limits
+    HighValue(HighValueMoney),    // Requires additional authorization
+    Recurring(RecurringAmount),   // Has different validation rules
+}
 
 // Use Result types for all fallible operations
 pub type CommandResult<T> = Result<T, CommandError>;
@@ -186,6 +198,8 @@ pub enum CommandError {
 ```rust
 #[async_trait]
 pub trait Command: Send + Sync {
+    // Input type should already be validated through its type construction
+    // No need for a separate validate method - if you have an Input, it's valid
     type Input: Send + Sync;
     type State: Default + Send + Sync;
     type Event: Send + Sync;
@@ -200,7 +214,8 @@ pub trait Command: Send + Sync {
         input: Self::Input,
     ) -> CommandResult<Vec<(StreamId, Self::Event)>>;
 
-    fn validate(&self, input: &Self::Input) -> CommandResult<()>;
+    // Note: No validate method! Input types should be self-validating
+    // If you need validation, it should happen when constructing Input
 }
 ```
 

@@ -5,7 +5,10 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 ## Implementation Philosophy
 
 1. **CI/CD First**: Set up continuous integration before any code
-2. **Type-First**: Define all types with `nutype` validation before any implementation
+2. **Type-First**: Define all types that make illegal states unrepresentable
+   - Use `nutype` validation ONLY at library input boundaries
+   - Once parsed into domain types, validity is guaranteed by the type system
+   - No runtime validation needed within the library - types ensure correctness
 3. **Stub Functions**: Create all function signatures with `todo!()` bodies
 4. **Property Tests First**: Write property-based tests to verify invariants
 5. **Test-Driven Implementation**: Replace `todo!()` with implementations guided by tests
@@ -62,13 +65,13 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 2.1 Core Event Sourcing Types
 
-- [ ] Create `eventcore/src/types.rs`
-  - [ ] Define `StreamId` with validation (non-empty, max 255 chars)
-  - [ ] Define `EventId` ensuring UUIDv7 format
-  - [ ] Define `EventVersion` (non-negative integer)
-  - [ ] Define `Timestamp` wrapper around chrono::DateTime
-  - [ ] Write property tests for all type constructors
-  - [ ] Verify smart constructors reject invalid inputs
+- [x] Create `eventcore/src/types.rs`
+  - [x] Define `StreamId` with validation (non-empty, max 255 chars)
+  - [x] Define `EventId` ensuring UUIDv7 format
+  - [x] Define `EventVersion` (non-negative integer)
+  - [x] Define `Timestamp` wrapper around chrono::DateTime
+  - [x] Write property tests for all type constructors
+  - [x] Verify smart constructors reject invalid inputs
 
 ### 2.2 Error Modeling
 
@@ -98,8 +101,8 @@ This document outlines the implementation plan for the EventCore multi-stream ev
   - [ ] Add `read_streams` method signature (stub with `todo!()`)
   - [ ] Add `apply` method signature for event folding
   - [ ] Add `handle` method signature for business logic
-  - [ ] Add `validate` method signature
   - [ ] Create `CommandResult<T>` type alias
+  - [ ] Note: No validate method - Input types must be self-validating
 
 ### 3.2 Command Executor Design
 
@@ -187,12 +190,13 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ## Phase 6: Command Implementation
 
-### 6.1 Command Validation Infrastructure
+### 6.1 Command Input Type Design
 
-- [ ] Implement `validate` methods for all commands
-  - [ ] Use smart constructors for input validation
-  - [ ] Return detailed validation errors
-  - [ ] Write unit tests for all validation paths
+- [ ] Design command input types with built-in validation
+  - [ ] Use smart constructors that parse raw input into valid types
+  - [ ] Ensure all command inputs are self-validating through their types
+  - [ ] Write property tests that valid inputs can be constructed
+  - [ ] Write tests that invalid raw data is rejected at construction
 
 ### 6.2 State Reconstruction
 
