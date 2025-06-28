@@ -285,7 +285,16 @@ where
             // Convert event payload from event store type to command event type
             // This requires the command event type to be convertible from the store event type
             if let Ok(command_event) = Self::try_convert_event::<C>(&event.payload) {
-                command.apply(&mut state, &command_event);
+                // Create a StoredEvent with the command's event type
+                let stored_event = crate::event_store::StoredEvent::new(
+                    event.event_id,
+                    event.stream_id.clone(),
+                    event.event_version,
+                    event.timestamp,
+                    command_event,
+                    event.metadata.clone(),
+                );
+                command.apply(&mut state, &stored_event);
             }
         }
 
@@ -852,8 +861,12 @@ mod tests {
             self.streams_to_read.clone()
         }
 
-        fn apply(&self, state: &mut Self::State, event: &Self::Event) {
-            state.applied_events.push(event.0.clone());
+        fn apply(
+            &self,
+            state: &mut Self::State,
+            stored_event: &crate::event_store::StoredEvent<Self::Event>,
+        ) {
+            state.applied_events.push(stored_event.payload.0.clone());
         }
 
         async fn handle(

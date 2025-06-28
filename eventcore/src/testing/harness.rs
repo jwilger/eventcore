@@ -133,8 +133,8 @@ where
 
         // Reconstruct state by folding events
         let mut state = C::State::default();
-        for event in stream_data.events {
-            command.apply(&mut state, &event.payload);
+        for event in &stream_data.events {
+            command.apply(&mut state, event);
         }
 
         // Execute the command
@@ -175,8 +175,8 @@ where
 
                 // Reconstruct state by folding events
                 let mut state = C::State::default();
-                for event in stream_data.events {
-                    command.apply(&mut state, &event.payload);
+                for event in &stream_data.events {
+                    command.apply(&mut state, event);
                 }
 
                 // Execute the command

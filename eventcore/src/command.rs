@@ -95,8 +95,12 @@ pub trait Command: Send + Sync {
     /// # Arguments
     ///
     /// * `state` - Mutable reference to the current state
-    /// * `event` - The event to apply to the state
-    fn apply(&self, state: &mut Self::State, event: &Self::Event);
+    /// * `stored_event` - The stored event containing the event payload and metadata including stream_id
+    fn apply(
+        &self,
+        state: &mut Self::State,
+        stored_event: &crate::event_store::StoredEvent<Self::Event>,
+    );
 
     /// Executes the command business logic.
     ///

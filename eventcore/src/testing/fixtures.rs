@@ -114,8 +114,12 @@ impl Command for TestCommand {
         vec![input.stream_id.clone()]
     }
 
-    fn apply(&self, state: &mut Self::State, event: &Self::Event) {
-        match event {
+    fn apply(
+        &self,
+        state: &mut Self::State,
+        stored_event: &crate::event_store::StoredEvent<Self::Event>,
+    ) {
+        match &stored_event.payload {
             TestEvent::Created { id, name } | TestEvent::Updated { id, name } => {
                 state.items.insert(id.clone(), name.clone());
             }

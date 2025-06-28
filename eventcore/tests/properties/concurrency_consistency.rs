@@ -67,8 +67,8 @@ impl Command for ConcurrencyTestCommand {
         vec![input.stream_id.clone()]
     }
 
-    fn apply(&self, state: &mut Self::State, event: &Self::Event) {
-        match event {
+    fn apply(&self, state: &mut Self::State, stored_event: &eventcore::event_store::StoredEvent<Self::Event>) {
+        match &stored_event.payload {
             ConcurrencyTestEvent::CounterIncremented { amount } => {
                 state.counter += amount;
             }
@@ -200,7 +200,7 @@ fn prop_concurrent_counter_consistency() {
                         let stream_data = store_clone.read_streams(&[stream_id_clone.clone()], &ReadOptions::new()).await.unwrap();
                         let mut state = ConcurrencyTestState::default();
                         for event in &stream_data.events {
-                            command_clone.apply(&mut state, &event.payload);
+                            command_clone.apply(&mut state, event);
                         }
                         
                         // Execute command
@@ -246,7 +246,7 @@ fn prop_concurrent_counter_consistency() {
                 let final_data = store.read_streams(&[stream_id.clone()], &ReadOptions::new()).await.unwrap();
                 let mut final_state = ConcurrencyTestState::default();
                 for event in &final_data.events {
-                    command.apply(&mut final_state, &event.payload);
+                    command.apply(&mut final_state, event);
                 }
                 
                 // Verify consistency
@@ -311,7 +311,7 @@ fn prop_concurrent_unique_creation_consistency() {
                         let stream_data = store_clone.read_streams(&[stream_id_clone.clone()], &ReadOptions::new()).await.unwrap();
                         let mut state = ConcurrencyTestState::default();
                         for event in &stream_data.events {
-                            command_clone.apply(&mut state, &event.payload);
+                            command_clone.apply(&mut state, event);
                         }
                         
                         // Execute command
@@ -357,7 +357,7 @@ fn prop_concurrent_unique_creation_consistency() {
                 let final_data = store.read_streams(&[stream_id.clone()], &ReadOptions::new()).await.unwrap();
                 let mut final_state = ConcurrencyTestState::default();
                 for event in &final_data.events {
-                    command.apply(&mut final_state, &event.payload);
+                    command.apply(&mut final_state, event);
                 }
                 
                 // Verify uniqueness constraint

@@ -90,8 +90,12 @@ impl Command for IncrementCounterCommand {
         vec![input.stream_id.clone()]
     }
 
-    fn apply(&self, state: &mut Self::State, event: &Self::Event) {
-        match event {
+    fn apply(
+        &self,
+        state: &mut Self::State,
+        stored_event: &eventcore::event_store::StoredEvent<Self::Event>,
+    ) {
+        match &stored_event.payload {
             TestEvent::CounterIncremented { amount } => state.value += amount,
             TestEvent::CounterDecremented { amount } => {
                 state.value = state.value.saturating_sub(*amount);
@@ -133,31 +137,32 @@ struct TransferBetweenCountersInput {
 #[async_trait]
 impl Command for TransferBetweenCountersCommand {
     type Input = TransferBetweenCountersInput;
-    type State = (CounterState, CounterState);
+    type State = std::collections::HashMap<StreamId, CounterState>;
     type Event = TestEvent;
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         vec![input.from_stream.clone(), input.to_stream.clone()]
     }
 
-    fn apply(&self, state: &mut Self::State, event: &Self::Event) {
-        // This is a simplified apply - in real implementation we'd track which stream
-        // For testing purposes, we'll apply decrements to the first state and increments to the second
-        match event {
+    fn apply(
+        &self,
+        state: &mut Self::State,
+        stored_event: &eventcore::event_store::StoredEvent<Self::Event>,
+    ) {
+        // Apply events to the appropriate stream's state
+        let counter_state = state.entry(stored_event.stream_id.clone()).or_default();
+        match &stored_event.payload {
+            TestEvent::CounterIncremented { amount } => counter_state.value += amount,
             TestEvent::CounterDecremented { amount } => {
-                state.0.value = state.0.value.saturating_sub(*amount);
+                counter_state.value = counter_state.value.saturating_sub(*amount);
             }
-            TestEvent::CounterIncremented { amount } => state.1.value += amount,
-            TestEvent::CounterReset => {
-                state.0.value = 0;
-                state.1.value = 0;
-            }
+            TestEvent::CounterReset => counter_state.value = 0,
         }
     }
 
     async fn handle(
         &self,
-        state: Self::State,
+        mut state: Self::State,
         input: Self::Input,
     ) -> Result<Vec<(StreamId, Self::Event)>, CommandError> {
         if input.amount == 0 {
@@ -166,10 +171,16 @@ impl Command for TransferBetweenCountersCommand {
             ));
         }
 
-        if state.0.value < input.amount {
+        // Ensure we have entries for both streams
+        state.entry(input.from_stream.clone()).or_default();
+        state.entry(input.to_stream.clone()).or_default();
+
+        let from_balance = state.get(&input.from_stream).unwrap().value;
+
+        if from_balance < input.amount {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Insufficient balance: {} < {}",
-                state.0.value, input.amount
+                from_balance, input.amount
             )));
         }
 
@@ -494,11 +505,8 @@ async fn test_transaction_isolation() {
             .unwrap();
 
         // Each event should have a unique event ID
-        let event_ids: std::collections::HashSet<_> = stream_data
-            .events
-            .iter()
-            .map(|e| e.event_id)
-            .collect();
+        let event_ids: std::collections::HashSet<_> =
+            stream_data.events.iter().map(|e| e.event_id).collect();
 
         assert_eq!(
             event_ids.len(),

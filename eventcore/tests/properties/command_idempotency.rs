@@ -63,8 +63,8 @@ impl Command for IdempotentTestCommand {
         vec![input.stream_id.clone()]
     }
 
-    fn apply(&self, state: &mut Self::State, event: &Self::Event) {
-        match event {
+    fn apply(&self, state: &mut Self::State, stored_event: &eventcore::event_store::StoredEvent<Self::Event>) {
+        match &stored_event.payload {
             IdempotentTestEvent::ItemCreated { id, name } => {
                 state.items.insert(id.clone(), name.clone());
             }
@@ -152,7 +152,7 @@ fn prop_idempotent_commands_same_result() {
                     let stream_data = store.read_streams(&[stream_id.clone()], &ReadOptions::new()).await.unwrap();
                     let mut state = IdempotentTestState::default();
                     for event in &stream_data.events {
-                        command.apply(&mut state, &event.payload);
+                        command.apply(&mut state, event);
                     }
                     
                     // Execute command

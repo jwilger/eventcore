@@ -35,7 +35,7 @@ pub enum CommandError {
 
     /// An error occurred in the event store while executing the command.
     #[error("Event store error: {0}")]
-    EventStore(#[from] EventStoreError),
+    EventStore(EventStoreError),
 
     /// An unexpected internal error occurred.
     #[error("Internal error: {0}")]
@@ -234,6 +234,17 @@ pub type EventStoreResult<T> = Result<T, EventStoreError>;
 /// Type alias for projection results.
 pub type ProjectionResult<T> = Result<T, ProjectionError>;
 
+impl From<EventStoreError> for CommandError {
+    fn from(err: EventStoreError) -> Self {
+        match err {
+            EventStoreError::VersionConflict { stream, .. } => Self::ConcurrencyConflict {
+                streams: vec![stream],
+            },
+            other => Self::EventStore(other),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +338,25 @@ mod tests {
         match command_err {
             CommandError::EventStore(EventStoreError::StreamNotFound(_)) => {}
             _ => panic!("Expected CommandError::EventStore variant"),
+        }
+    }
+
+    #[test]
+    fn error_conversion_version_conflict_to_concurrency_conflict() {
+        let stream_id = StreamId::try_new("test").unwrap();
+        let event_store_err = EventStoreError::VersionConflict {
+            stream: stream_id.clone(),
+            expected: EventVersion::try_new(1).unwrap(),
+            current: EventVersion::try_new(2).unwrap(),
+        };
+        let command_err: CommandError = event_store_err.into();
+
+        match command_err {
+            CommandError::ConcurrencyConflict { streams } => {
+                assert_eq!(streams.len(), 1);
+                assert_eq!(streams[0], stream_id);
+            }
+            _ => panic!("Expected CommandError::ConcurrencyConflict variant"),
         }
     }
 

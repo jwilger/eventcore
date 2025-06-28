@@ -91,7 +91,7 @@ where
 
     // Apply each event to the state in chronological order
     for stored_event in events {
-        command.apply(&mut state, &stored_event.payload);
+        command.apply(&mut state, stored_event);
     }
 
     state
@@ -292,8 +292,12 @@ mod tests {
             vec![StreamId::try_new("test-stream").unwrap()]
         }
 
-        fn apply(&self, state: &mut Self::State, event: &Self::Event) {
-            match event {
+        fn apply(
+            &self,
+            state: &mut Self::State,
+            stored_event: &crate::event_store::StoredEvent<Self::Event>,
+        ) {
+            match &stored_event.payload {
                 TestEvent::Increment(value) => state.counter = state.counter.saturating_add(*value),
                 TestEvent::AddValue(value) => state.values.push(value.clone()),
                 TestEvent::Reset => {
@@ -606,9 +610,20 @@ mod tests {
             let mut state1 = TestState::default();
             let mut state2 = TestState::default();
 
+            // Create a stored event wrapper
+            let stream_id = StreamId::try_new("test-stream").unwrap();
+            let stored_event = StoredEvent::new(
+                EventId::new(),
+                stream_id,
+                EventVersion::initial(),
+                Timestamp::now(),
+                event,
+                None,
+            );
+
             // Apply the same event to two identical states
-            command.apply(&mut state1, &event);
-            command.apply(&mut state2, &event);
+            command.apply(&mut state1, &stored_event);
+            command.apply(&mut state2, &stored_event);
 
             // Results should be identical
             prop_assert_eq!(state1, state2);

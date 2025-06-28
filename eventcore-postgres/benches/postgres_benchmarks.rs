@@ -68,8 +68,12 @@ impl Command for IncrementCounterCommand {
         vec![input.stream_id.clone()]
     }
 
-    fn apply(&self, state: &mut Self::State, event: &Self::Event) {
-        match event {
+    fn apply(
+        &self,
+        state: &mut Self::State,
+        stored_event: &eventcore::event_store::StoredEvent<Self::Event>,
+    ) {
+        match &stored_event.payload {
             TestEvent::CounterIncremented { amount } => state.value += amount,
             TestEvent::CounterDecremented { amount } => {
                 state.value = state.value.saturating_sub(*amount);
@@ -112,8 +116,12 @@ impl Command for TransferBetweenCountersCommand {
         vec![input.from_stream.clone(), input.to_stream.clone()]
     }
 
-    fn apply(&self, state: &mut Self::State, event: &Self::Event) {
-        match event {
+    fn apply(
+        &self,
+        state: &mut Self::State,
+        stored_event: &eventcore::event_store::StoredEvent<Self::Event>,
+    ) {
+        match &stored_event.payload {
             TestEvent::CounterDecremented { amount } => {
                 state.0.value = state.0.value.saturating_sub(*amount);
             }
