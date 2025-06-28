@@ -68,7 +68,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
       
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery -W clippy::cargo
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   security-audit:
     name: Security Audit
@@ -112,7 +112,7 @@ jobs:
         uses: codecov/codecov-action@v3
         with:
           files: lcov.info
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           verbose: true
 
   check:

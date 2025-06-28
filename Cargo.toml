@@ -41,7 +41,7 @@ insta = { version = "1.41.1", features = ["json", "redactions"] }
 criterion = { version = "0.5.1", features = ["html_reports"] }
 
 # Database dependencies (only for specific crates)
-sqlx = { version = "0.8.2", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "migrate"] }
+sqlx = { version = "0.8.2", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "migrate"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
