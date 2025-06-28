@@ -276,7 +276,26 @@ When working on this project, **ALWAYS** follow these rules:
 1. **Review @PLANNING.md** to discover the next task to work on.
 2. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
 3. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
-4. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository and review @PLANNING.md to discover the next task and review our process rules."
+4. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
+
+### CI Monitoring Rules
+
+After pushing changes:
+1. **Use `gh` CLI to monitor the CI workflow** - Watch for the workflow to complete
+2. **If the workflow fails** - Address the failures immediately before moving to the next task
+3. **If the workflow passes** - Only then proceed to review @PLANNING.md for the next task
+
+Example commands:
+```bash
+# List recent workflow runs
+gh run list --limit 5
+
+# Watch a specific workflow run
+gh run watch
+
+# View workflow run details if it fails
+gh run view
+```
 
 ### Commit Rules
 
