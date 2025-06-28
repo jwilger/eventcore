@@ -330,11 +330,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 10.2 Health Checks
 
-- [ ] Create `eventcore/src/monitoring/health.rs`
-  - [ ] Event store connectivity check
-  - [ ] Projection status checks
-  - [ ] Memory usage monitoring
-  - [ ] Define health check API
+- [x] Create `eventcore/src/monitoring/health.rs`
+  - [x] Event store connectivity check
+  - [x] Projection status checks
+  - [x] Memory usage monitoring
+  - [x] Define health check API
 
 ### 10.3 Structured Logging
 
