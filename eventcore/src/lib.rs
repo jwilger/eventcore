@@ -10,6 +10,8 @@
 /// Command system for aggregate-per-command pattern event sourcing
 pub mod command;
 pub mod errors;
+/// Event types for the event sourcing system
+pub mod event;
 /// Event store abstraction for backend-independent storage
 pub mod event_store;
 /// Command execution engine with retry logic and concurrency control

@@ -138,11 +138,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 4.2 Event Types
 
-- [ ] Create `eventcore/src/event.rs`
-  - [ ] Define `Event<E>` struct with generic payload
-  - [ ] Define `StoredEvent` for persistence
-  - [ ] Implement event ordering using EventId
-  - [ ] Write property tests for event ordering invariants
+- [x] Create `eventcore/src/event.rs`
+  - [x] Define `Event<E>` struct with generic payload
+  - [x] Define `StoredEvent` for persistence
+  - [x] Implement event ordering using EventId
+  - [x] Write property tests for event ordering invariants
 
 ### 4.3 Subscription System
 
