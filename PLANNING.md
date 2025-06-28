@@ -294,11 +294,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 8.5 PostgreSQL Adapter Tests
 
-- [ ] Create integration tests with real PostgreSQL
-  - [ ] Test concurrent command execution
-  - [ ] Test multi-stream atomicity
-  - [ ] Verify transaction isolation
-  - [ ] Performance benchmarks
+- [x] Create integration tests with real PostgreSQL
+  - [x] Test concurrent command execution
+  - [x] Test multi-stream atomicity
+  - [x] Verify transaction isolation
+  - [x] Performance benchmarks
 
 ## Phase 9: Serialization & Persistence
 

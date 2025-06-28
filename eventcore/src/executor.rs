@@ -131,10 +131,9 @@ pub use crate::event_store::EventStore;
 ///     .execute(&transfer_command, transfer_input, context)
 ///     .await?;
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CommandExecutor<ES> {
     /// The event store implementation.
-    #[allow(dead_code)] // Will be used when execute methods are implemented
     event_store: ES,
     /// Configuration for retry behavior.
     retry_config: RetryConfig,
@@ -195,6 +194,39 @@ where
         self
     }
 
+    /// Executes a command without retry logic using a default execution context.
+    ///
+    /// This is a convenience method that creates a default execution context.
+    /// For production use, consider using `execute_with_context` to provide
+    /// proper correlation and user IDs.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `C` - The command type to execute
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - The command instance to execute
+    /// * `input` - The validated command input
+    ///
+    /// # Returns
+    ///
+    /// A result containing the success outcome or a `CommandError`.
+    pub async fn execute<C>(
+        &self,
+        command: &C,
+        input: C::Input,
+    ) -> CommandResult<HashMap<StreamId, EventVersion>>
+    where
+        C: Command,
+        C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
+        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
+        ES::Event: From<C::Event>,
+    {
+        self.execute_with_context(command, input, ExecutionContext::default())
+            .await
+    }
+
     /// Executes a command without retry logic.
     ///
     /// This method orchestrates the complete command execution flow:
@@ -225,7 +257,7 @@ where
     /// - Business rule violations
     /// - Concurrency conflicts
     /// - Event store errors
-    pub async fn execute<C>(
+    pub async fn execute_with_context<C>(
         &self,
         command: &C,
         input: C::Input,
@@ -387,7 +419,10 @@ where
         let mut last_error = None;
 
         for attempt in 0..self.retry_config.max_attempts {
-            match self.execute(command, input.clone(), context.clone()).await {
+            match self
+                .execute_with_context(command, input.clone(), context.clone())
+                .await
+            {
                 Ok(result) => return Ok(result),
                 Err(error) => {
                     // Check if this error should trigger a retry
@@ -446,6 +481,18 @@ where
         let final_delay = (delay + jitter).max(0.0).min(max_delay_ms) as u64;
 
         Duration::from_millis(final_delay)
+    }
+
+    /// Returns a reference to the event store.
+    ///
+    /// This accessor is useful for direct access to the event store
+    /// when needed for advanced operations or testing.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the underlying event store implementation.
+    pub const fn event_store(&self) -> &ES {
+        &self.event_store
     }
 }
 
@@ -843,9 +890,8 @@ mod tests {
         let input = MockInput {
             value: "test".to_string(),
         };
-        let context = ExecutionContext::default();
 
-        let result = executor.execute(&command, input, context).await;
+        let result = executor.execute(&command, input).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -867,9 +913,8 @@ mod tests {
         let input = MockInput {
             value: "test".to_string(),
         };
-        let context = ExecutionContext::default();
 
-        let result = executor.execute(&command, input, context).await;
+        let result = executor.execute(&command, input).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), CommandError::EventStore(_)));
     }

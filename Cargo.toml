@@ -40,6 +40,7 @@ tokio-test = "0.4.4"
 insta = { version = "1.43.1", features = ["json", "redactions"] }
 criterion = { version = "0.6.0", features = ["html_reports"] }
 rand = "0.8.5"
+testcontainers = "0.24.0"
 
 # Database dependencies (only for specific crates)
 # Note: We disable default features to avoid pulling in sqlx-mysql and its vulnerable rsa dependency

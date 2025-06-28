@@ -43,6 +43,16 @@ pub struct PostgresConfig {
     pub test_before_acquire: bool,
 }
 
+impl PostgresConfig {
+    /// Create a new configuration with just a database URL, using defaults for other settings
+    pub fn new(database_url: impl Into<String>) -> Self {
+        Self {
+            database_url: database_url.into(),
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for PostgresConfig {
     fn default() -> Self {
         Self {
@@ -153,6 +163,70 @@ impl PostgresEventStore {
     pub async fn migrate(&self) -> Result<(), PostgresError> {
         // TODO: Implement migrations in Phase 8.3
         info!("Database migrations will be implemented in Phase 8.3");
+        Ok(())
+    }
+
+    /// Initialize the database schema
+    ///
+    /// This method creates the necessary tables and indexes for the event store.
+    /// It is idempotent and can be called multiple times safely.
+    pub async fn initialize(&self) -> Result<(), PostgresError> {
+        // Create events table
+        sqlx::query(
+            r"
+            CREATE TABLE IF NOT EXISTS events (
+                event_id UUID PRIMARY KEY,
+                stream_id VARCHAR(255) NOT NULL,
+                event_version BIGINT NOT NULL,
+                event_type VARCHAR(255) NOT NULL,
+                event_data JSONB NOT NULL,
+                metadata JSONB,
+                causation_id UUID,
+                correlation_id VARCHAR(255),
+                user_id VARCHAR(255),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(stream_id, event_version)
+            )
+            ",
+        )
+        .execute(self.pool.as_ref())
+        .await
+        .map_err(PostgresError::Connection)?;
+
+        // Create indexes - must be separate queries
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_stream_id ON events(stream_id)")
+            .execute(self.pool.as_ref())
+            .await
+            .map_err(PostgresError::Connection)?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)")
+            .execute(self.pool.as_ref())
+            .await
+            .map_err(PostgresError::Connection)?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_events_correlation_id ON events(correlation_id)",
+        )
+        .execute(self.pool.as_ref())
+        .await
+        .map_err(PostgresError::Connection)?;
+
+        // Create event_streams table for tracking stream metadata
+        sqlx::query(
+            r"
+            CREATE TABLE IF NOT EXISTS event_streams (
+                stream_id VARCHAR(255) PRIMARY KEY,
+                current_version BIGINT NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            ",
+        )
+        .execute(self.pool.as_ref())
+        .await
+        .map_err(PostgresError::Connection)?;
+
+        info!("Database schema initialized successfully");
         Ok(())
     }
 

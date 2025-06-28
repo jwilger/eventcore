@@ -257,7 +257,7 @@ impl EventStore for PostgresEventStore {
         stream_id: &StreamId,
     ) -> EventStoreResult<Option<EventVersion>> {
         let version: Option<i64> =
-            sqlx::query_scalar("SELECT stream_version FROM event_streams WHERE stream_id = $1")
+            sqlx::query_scalar("SELECT current_version FROM event_streams WHERE stream_id = $1")
                 .bind(stream_id.as_ref())
                 .fetch_optional(self.pool.as_ref())
                 .await
@@ -307,7 +307,7 @@ impl PostgresEventStore {
             stream_ids.iter().map(|s| s.as_ref().to_string()).collect();
 
         let rows = sqlx::query(
-            "SELECT stream_id, stream_version FROM event_streams WHERE stream_id = ANY($1)",
+            "SELECT stream_id, current_version FROM event_streams WHERE stream_id = ANY($1)",
         )
         .bind(&stream_id_strings)
         .fetch_all(self.pool.as_ref())
@@ -321,7 +321,7 @@ impl PostgresEventStore {
                 .try_get("stream_id")
                 .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
             let version_raw: i64 = row
-                .try_get("stream_version")
+                .try_get("current_version")
                 .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
 
             let stream_id = StreamId::try_new(stream_id_str)
@@ -394,6 +394,7 @@ impl PostgresEventStore {
     }
 
     /// Check stream version and lock for optimistic concurrency control
+    #[allow(clippy::too_many_lines)]
     async fn check_and_lock_stream(
         &self,
         tx: &mut Transaction<'_, sqlx::Postgres>,
@@ -402,7 +403,7 @@ impl PostgresEventStore {
     ) -> EventStoreResult<EventVersion> {
         // Get current version with row lock
         let current_version: Option<i64> = sqlx::query_scalar(
-            "SELECT stream_version FROM event_streams WHERE stream_id = $1 FOR UPDATE",
+            "SELECT current_version FROM event_streams WHERE stream_id = $1 FOR UPDATE",
         )
         .bind(stream_id.as_ref())
         .fetch_optional(tx.as_mut())
@@ -412,13 +413,30 @@ impl PostgresEventStore {
         match (current_version, expected_version) {
             (None, ExpectedVersion::New) => {
                 // Stream doesn't exist and we expect it to be new - create it
-                sqlx::query("INSERT INTO event_streams (stream_id, stream_version) VALUES ($1, 0)")
-                    .bind(stream_id.as_ref())
-                    .execute(tx.as_mut())
-                    .await
-                    .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
+                let result = sqlx::query(
+                    "INSERT INTO event_streams (stream_id, current_version) VALUES ($1, 0)",
+                )
+                .bind(stream_id.as_ref())
+                .execute(tx.as_mut())
+                .await;
 
-                Ok(EventVersion::initial())
+                match result {
+                    Ok(_) => Ok(EventVersion::initial()),
+                    Err(sqlx::Error::Database(db_err)) => {
+                        // Check if it's a unique constraint violation (PostgreSQL error code 23505)
+                        if db_err.code().as_deref() == Some("23505") {
+                            // Another concurrent operation created the stream
+                            Err(EventStoreError::VersionConflict {
+                                stream: stream_id.clone(),
+                                expected: EventVersion::initial(),
+                                current: EventVersion::initial(),
+                            })
+                        } else {
+                            Err(EventStoreError::ConnectionFailed(db_err.to_string()))
+                        }
+                    }
+                    Err(e) => Err(EventStoreError::ConnectionFailed(e.to_string())),
+                }
             }
             (None, ExpectedVersion::Exact(expected)) => Err(EventStoreError::VersionConflict {
                 stream: stream_id.clone(),
@@ -426,14 +444,46 @@ impl PostgresEventStore {
                 current: EventVersion::initial(),
             }),
             (None, ExpectedVersion::Any) => {
-                // Create new stream
-                sqlx::query("INSERT INTO event_streams (stream_id, stream_version) VALUES ($1, 0)")
-                    .bind(stream_id.as_ref())
-                    .execute(tx.as_mut())
-                    .await
-                    .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
+                // Try to create new stream, but if it already exists due to concurrent creation, that's OK
+                let result = sqlx::query(
+                    "INSERT INTO event_streams (stream_id, current_version) VALUES ($1, 0)",
+                )
+                .bind(stream_id.as_ref())
+                .execute(tx.as_mut())
+                .await;
 
-                Ok(EventVersion::initial())
+                match result {
+                    Ok(_) => Ok(EventVersion::initial()),
+                    Err(sqlx::Error::Database(db_err)) => {
+                        // Check if it's a unique constraint violation (PostgreSQL error code 23505)
+                        if db_err.code().as_deref() == Some("23505") {
+                            // Stream was created concurrently, get its current version
+                            let current: i64 = sqlx::query_scalar(
+                                "SELECT current_version FROM event_streams WHERE stream_id = $1",
+                            )
+                            .bind(stream_id.as_ref())
+                            .fetch_one(tx.as_mut())
+                            .await
+                            .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
+
+                            if current >= 0 {
+                                let current_u64 = u64::try_from(current).map_err(|_| {
+                                    EventStoreError::SerializationFailed(
+                                        "Invalid version".to_string(),
+                                    )
+                                })?;
+                                EventVersion::try_new(current_u64).map_err(|e| {
+                                    EventStoreError::SerializationFailed(e.to_string())
+                                })
+                            } else {
+                                Ok(EventVersion::initial())
+                            }
+                        } else {
+                            Err(EventStoreError::ConnectionFailed(db_err.to_string()))
+                        }
+                    }
+                    Err(e) => Err(EventStoreError::ConnectionFailed(e.to_string())),
+                }
             }
             (Some(actual), ExpectedVersion::New) => {
                 let actual_version = if actual >= 0 {
@@ -568,7 +618,7 @@ impl PostgresEventStore {
         new_version: EventVersion,
     ) -> EventStoreResult<()> {
         sqlx::query(
-            "UPDATE event_streams SET stream_version = $1, updated_at = NOW() WHERE stream_id = $2",
+            "UPDATE event_streams SET current_version = $1, updated_at = NOW() WHERE stream_id = $2",
         )
         .bind({
             let version_value: u64 = new_version.into();

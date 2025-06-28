@@ -32,6 +32,13 @@ tokio-test = { workspace = true }
 insta = { workspace = true }
 criterion = { workspace = true }
 tracing-subscriber = { workspace = true }
+testcontainers = { workspace = true }
+eventcore-memory = { path = "../eventcore-memory" }
+futures = { workspace = true }
+
+[[bench]]
+name = "postgres_benchmarks"
+harness = false
 
 [lints]
 workspace = true

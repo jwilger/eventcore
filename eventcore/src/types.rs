@@ -99,6 +99,14 @@ impl Default for EventId {
 pub struct EventVersion(u64);
 
 impl EventVersion {
+    /// The minimum possible event version (0).
+    ///
+    /// Note: This is implemented as a function rather than a const
+    /// because nutype prevents direct construction.
+    pub fn min() -> Self {
+        Self::try_new(0).expect("0 is always a valid version")
+    }
+
     /// Creates the initial version (0) for a new stream.
     pub fn initial() -> Self {
         Self::try_new(0).expect("0 is always a valid version")
