@@ -1,0 +1,37 @@
+[package]
+name = "eventcore"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+categories.workspace = true
+keywords.workspace = true
+readme.workspace = true
+description = "Multi-stream aggregateless event sourcing library with type-driven development"
+
+[dependencies]
+# Core dependencies
+tokio = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+# Type safety dependencies
+nutype = { workspace = true }
+derive_more = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tokio-test = { workspace = true }
+insta = { workspace = true }
+criterion = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

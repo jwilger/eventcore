@@ -1,0 +1,38 @@
+[package]
+name = "eventcore-examples"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Example implementations using EventCore event sourcing library"
+publish = false
+
+[dependencies]
+# Core dependencies
+eventcore = { path = "../eventcore" }
+eventcore-postgres = { path = "../eventcore-postgres" }
+eventcore-memory = { path = "../eventcore-memory" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+
+# Type safety dependencies
+nutype = { workspace = true }
+derive_more = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tokio-test = { workspace = true }
+insta = { workspace = true }
+criterion = { workspace = true }
+
+[lints]
+workspace = true

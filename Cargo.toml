@@ -16,6 +16,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jwilger/eventcore"
 categories = ["database", "data-structures", "asynchronous"]
 keywords = ["event-sourcing", "cqrs", "ddd", "event-store", "aggregate"]
+readme = "README.md"
 
 [workspace.dependencies]
 # Core dependencies
@@ -57,6 +58,7 @@ module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+multiple_crate_versions = "allow"
 
 [profile.dev]
 opt-level = 0
