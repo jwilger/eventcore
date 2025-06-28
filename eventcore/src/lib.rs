@@ -21,6 +21,8 @@ pub mod executor;
 pub mod metadata;
 /// Projection system for building read models from event streams
 pub mod projection;
+/// Projection management system for handling projection lifecycles
+pub mod projection_manager;
 /// State reconstruction from event streams
 pub mod state_reconstruction;
 /// Event subscription system for processing events from event streams

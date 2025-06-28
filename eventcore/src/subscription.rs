@@ -27,6 +27,18 @@ pub enum SubscriptionOptions {
     SpecificStreamsFromBeginning(SpecificStreamsMode),
     /// Subscribe to specific streams only, starting from a position.
     SpecificStreamsFromPosition(SpecificStreamsMode, SubscriptionPosition),
+    /// Subscribe to all streams from a specific event position.
+    AllStreams {
+        /// Starting position for the subscription.
+        from_position: Option<EventId>,
+    },
+    /// Subscribe to specific streams from a position.
+    SpecificStreams {
+        /// The streams to subscribe to.
+        streams: Vec<StreamId>,
+        /// Starting position for the subscription.
+        from_position: Option<EventId>,
+    },
 }
 
 /// Mode for subscribing to specific streams.
@@ -152,18 +164,23 @@ pub trait Subscription: Send + Sync {
     type Event: Send + Sync;
 
     /// Starts the subscription with the given processor.
-    async fn start<P>(
+    async fn start(
         &mut self,
         name: SubscriptionName,
         options: SubscriptionOptions,
-        processor: P,
+        processor: Box<dyn EventProcessor<Event = Self::Event>>,
     ) -> SubscriptionResult<()>
     where
-        P: EventProcessor<Event = Self::Event>,
         Self::Event: PartialEq + Eq;
 
     /// Stops the subscription.
     async fn stop(&mut self) -> SubscriptionResult<()>;
+
+    /// Pauses the subscription.
+    async fn pause(&mut self) -> SubscriptionResult<()>;
+
+    /// Resumes the subscription.
+    async fn resume(&mut self) -> SubscriptionResult<()>;
 
     /// Gets the current position of the subscription.
     async fn get_position(&self) -> SubscriptionResult<Option<SubscriptionPosition>>;
@@ -207,14 +224,13 @@ where
 {
     type Event = E;
 
-    async fn start<P>(
+    async fn start(
         &mut self,
         _name: SubscriptionName,
         _options: SubscriptionOptions,
-        _processor: P,
+        _processor: Box<dyn EventProcessor<Event = Self::Event>>,
     ) -> SubscriptionResult<()>
     where
-        P: EventProcessor<Event = Self::Event>,
         Self::Event: PartialEq + Eq,
     {
         todo!("Implement subscription start")
@@ -222,6 +238,14 @@ where
 
     async fn stop(&mut self) -> SubscriptionResult<()> {
         todo!("Implement subscription stop")
+    }
+
+    async fn pause(&mut self) -> SubscriptionResult<()> {
+        todo!("Implement subscription pause")
+    }
+
+    async fn resume(&mut self) -> SubscriptionResult<()> {
+        todo!("Implement subscription resume")
     }
 
     async fn get_position(&self) -> SubscriptionResult<Option<SubscriptionPosition>> {

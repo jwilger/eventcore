@@ -718,6 +718,16 @@ mod tests {
             let versions = self.versions.lock().unwrap();
             Ok(versions.get(stream_id).copied())
         }
+
+        async fn subscribe(
+            &self,
+            _options: crate::subscription::SubscriptionOptions,
+        ) -> crate::errors::EventStoreResult<
+            Box<dyn crate::subscription::Subscription<Event = Self::Event>>,
+        > {
+            let subscription = crate::subscription::SubscriptionImpl::new();
+            Ok(Box::new(subscription))
+        }
     }
 
     /// Mock command for testing.

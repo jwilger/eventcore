@@ -239,6 +239,17 @@ where
             "Event store is failing".to_string(),
         ))
     }
+
+    async fn subscribe(
+        &self,
+        _options: crate::subscription::SubscriptionOptions,
+    ) -> crate::errors::EventStoreResult<
+        Box<dyn crate::subscription::Subscription<Event = Self::Event>>,
+    > {
+        Err(crate::errors::EventStoreError::Unavailable(
+            "Event store is failing".to_string(),
+        ))
+    }
 }
 
 /// A counting event store that tracks operation calls.
@@ -324,6 +335,16 @@ where
         _stream_id: &StreamId,
     ) -> crate::errors::EventStoreResult<Option<EventVersion>> {
         Ok(None)
+    }
+
+    async fn subscribe(
+        &self,
+        _options: crate::subscription::SubscriptionOptions,
+    ) -> crate::errors::EventStoreResult<
+        Box<dyn crate::subscription::Subscription<Event = Self::Event>>,
+    > {
+        let subscription = crate::subscription::SubscriptionImpl::new();
+        Ok(Box::new(subscription))
     }
 }
 

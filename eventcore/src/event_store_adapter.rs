@@ -190,6 +190,15 @@ mod tests {
         ) -> Result<Option<EventVersion>, EventStoreError> {
             Ok(None)
         }
+
+        async fn subscribe(
+            &self,
+            _options: crate::subscription::SubscriptionOptions,
+        ) -> Result<Box<dyn crate::subscription::Subscription<Event = Self::Event>>, EventStoreError>
+        {
+            let subscription = crate::subscription::SubscriptionImpl::new();
+            Ok(Box::new(subscription))
+        }
     }
 
     // Mock configuration for testing

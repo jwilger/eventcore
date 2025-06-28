@@ -197,6 +197,15 @@ where
 
         Ok(versions.get(stream_id).copied())
     }
+
+    async fn subscribe(
+        &self,
+        _options: eventcore::subscription::SubscriptionOptions,
+    ) -> EventStoreResult<Box<dyn eventcore::subscription::Subscription<Event = Self::Event>>> {
+        // Return a basic subscription implementation for now
+        let subscription = eventcore::subscription::SubscriptionImpl::new();
+        Ok(Box::new(subscription))
+    }
 }
 
 #[cfg(test)]

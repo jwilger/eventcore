@@ -154,6 +154,19 @@ pub enum ProjectionError {
     #[error("Subscription failed: {0}")]
     SubscriptionFailed(String),
 
+    /// The projection was not found.
+    #[error("Projection not found: {0}")]
+    NotFound(String),
+
+    /// Invalid state transition for projection.
+    #[error("Invalid state transition from {from:?} to {to:?}")]
+    InvalidStateTransition {
+        /// The current state
+        from: crate::projection::ProjectionStatus,
+        /// The attempted state
+        to: crate::projection::ProjectionStatus,
+    },
+
     /// The projection was already running.
     #[error("Projection '{0}' is already running")]
     AlreadyRunning(String),

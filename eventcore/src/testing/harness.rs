@@ -426,6 +426,16 @@ where
     ) -> crate::errors::EventStoreResult<Option<EventVersion>> {
         Ok(Some(EventVersion::initial()))
     }
+
+    async fn subscribe(
+        &self,
+        _options: crate::subscription::SubscriptionOptions,
+    ) -> crate::errors::EventStoreResult<
+        Box<dyn crate::subscription::Subscription<Event = Self::Event>>,
+    > {
+        let subscription = crate::subscription::SubscriptionImpl::new();
+        Ok(Box::new(subscription))
+    }
 }
 
 #[cfg(test)]

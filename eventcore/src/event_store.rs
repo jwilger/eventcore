@@ -356,6 +356,22 @@ pub trait EventStore: Send + Sync {
         &self,
         stream_id: &StreamId,
     ) -> EventStoreResult<Option<EventVersion>>;
+
+    /// Creates a subscription to events.
+    ///
+    /// This method creates a subscription that can be used to receive events
+    /// as they are written to the store. The subscription behavior is controlled
+    /// by the provided options.
+    ///
+    /// # Arguments
+    /// * `options` - Configuration for the subscription
+    ///
+    /// # Returns
+    /// A subscription instance that can be used to receive events.
+    async fn subscribe(
+        &self,
+        options: crate::subscription::SubscriptionOptions,
+    ) -> EventStoreResult<Box<dyn crate::subscription::Subscription<Event = Self::Event>>>;
 }
 
 #[cfg(test)]
