@@ -4,6 +4,8 @@
 //! projections including starting, stopping, pausing, resuming, and rebuilding
 //! projections while monitoring their health and performance.
 
+#![allow(clippy::significant_drop_tightening)]
+
 use crate::errors::{ProjectionError, ProjectionResult};
 use crate::event_store::EventStore;
 use crate::projection::{Projection, ProjectionCheckpoint, ProjectionStatus};
@@ -16,30 +18,58 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument};
 
+/// Type alias for the projection wrapper storage.
+type ProjectionMap<E> = Arc<RwLock<HashMap<String, Box<dyn ProjectionWrapper<E>>>>>;
+
+/// Type alias for the subscription storage.
+type SubscriptionMap<E> = Arc<Mutex<HashMap<String, Box<dyn Subscription<Event = E>>>>>;
+
 /// A wrapper trait to make Projection trait object-safe by erasing the State type.
 #[async_trait::async_trait]
 pub trait ProjectionWrapper<E>: Send + Sync + Debug {
+    /// Gets the current status of the projection.
     async fn get_status(&self) -> ProjectionResult<ProjectionStatus>;
+
+    /// Loads the projection's checkpoint from storage.
     async fn load_checkpoint(&self) -> ProjectionResult<ProjectionCheckpoint>;
+
+    /// Saves the projection's checkpoint to storage.
     async fn save_checkpoint(&self, checkpoint: ProjectionCheckpoint) -> ProjectionResult<()>;
+
+    /// Initializes the projection's state.
     async fn initialize_state(&self) -> ProjectionResult<()>;
+
+    /// Called when the projection is started.
     async fn on_start(&self) -> ProjectionResult<()>;
+
+    /// Called when the projection is stopped.
     async fn on_stop(&self) -> ProjectionResult<()>;
+
+    /// Called when the projection is paused.
     async fn on_pause(&self) -> ProjectionResult<()>;
+
+    /// Called when the projection is resumed.
     async fn on_resume(&self) -> ProjectionResult<()>;
+
+    /// Called when the projection encounters an error.
     async fn on_error(&self, error: &ProjectionError) -> ProjectionResult<()>;
+
+    /// Gets the name of the projection configuration.
     fn config_name(&self) -> &str;
+
+    /// Gets the list of streams this projection is interested in.
     fn interested_streams(&self) -> Vec<crate::types::StreamId>;
 }
 
-/// Implementation of ProjectionWrapper for any Projection.
+/// Implementation of `ProjectionWrapper` for any Projection.
 #[derive(Debug)]
 pub struct ProjectionWrapperImpl<P> {
     projection: P,
 }
 
 impl<P> ProjectionWrapperImpl<P> {
-    pub fn new(projection: P) -> Self {
+    /// Creates a new projection wrapper.
+    pub const fn new(projection: P) -> Self {
         Self { projection }
     }
 }
@@ -118,7 +148,7 @@ pub struct ProjectionHealth {
 
 impl ProjectionHealth {
     /// Creates initial health state for a projection.
-    pub fn initial(checkpoint: ProjectionCheckpoint) -> Self {
+    pub const fn initial(checkpoint: ProjectionCheckpoint) -> Self {
         Self {
             status: ProjectionStatus::Stopped,
             last_activity: None,
@@ -186,10 +216,10 @@ impl Default for ProjectionManagerConfig {
 /// - Managing subscription lifecycles
 pub struct ProjectionManager<E> {
     event_store: Arc<dyn EventStore<Event = E>>,
-    projections: Arc<RwLock<HashMap<String, Box<dyn ProjectionWrapper<E>>>>>,
+    projections: ProjectionMap<E>,
     health_status: Arc<RwLock<HashMap<String, ProjectionHealth>>>,
     running_tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
-    subscriptions: Arc<Mutex<HashMap<String, Box<dyn Subscription<Event = E>>>>>,
+    subscriptions: SubscriptionMap<E>,
     config: ProjectionManagerConfig,
 }
 
@@ -556,8 +586,7 @@ where
     }
 
     /// Starts health monitoring for all projections.
-    #[instrument(skip(self))]
-    pub async fn start_health_monitoring(&self) -> JoinHandle<()> {
+    pub fn start_health_monitoring(&self) -> JoinHandle<()> {
         let health_check_interval = self.config.health_check_interval;
 
         // Create shared references
@@ -613,7 +642,6 @@ where
 
         // Start processing task
         let task_name = name.clone();
-        let health_status = Arc::clone(&self.health_status);
 
         let task = tokio::spawn(async move {
             debug!("Projection task started for: {}", task_name);
