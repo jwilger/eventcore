@@ -150,7 +150,6 @@ jobs:
       
       - name: Check for outdated dependencies
         run: cargo outdated --workspace --exit-code 1
-        continue-on-error: true
 
   msrv:
     name: Minimum Supported Rust Version
