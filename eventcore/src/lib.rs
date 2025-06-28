@@ -10,6 +10,8 @@
 /// Command system for aggregate-per-command pattern event sourcing
 pub mod command;
 pub mod errors;
+/// Command execution engine with retry logic and concurrency control
+pub mod executor;
 pub mod metadata;
 pub mod types;
 

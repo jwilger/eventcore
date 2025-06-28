@@ -106,12 +106,12 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 3.2 Command Executor Design
 
-- [ ] Create `eventcore/src/executor.rs`
-  - [ ] Define `CommandExecutor` struct
-  - [ ] Add `execute` method signature (stub with `todo!()`)
-  - [ ] Add `execute_with_retry` method signature
-  - [ ] Define retry configuration types
-  - [ ] Write property tests for retry logic invariants
+- [x] Create `eventcore/src/executor.rs`
+  - [x] Define `CommandExecutor` struct
+  - [x] Add `execute` method signature (stub with `todo!()`)
+  - [x] Add `execute_with_retry` method signature
+  - [x] Define retry configuration types
+  - [x] Write property tests for retry logic invariants
 
 ### 3.3 Command Infrastructure
 
