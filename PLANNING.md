@@ -262,19 +262,19 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 8.1 PostgreSQL Crate Setup
 
-- [ ] Create `eventcore-postgres/Cargo.toml`
-  - [ ] Depend on `eventcore` crate
-  - [ ] Add `sqlx` with PostgreSQL features
-  - [ ] Add `tokio` for async runtime
-  - [ ] Configure as separate publishable crate
+- [x] Create `eventcore-postgres/Cargo.toml`
+  - [x] Depend on `eventcore` crate
+  - [x] Add `sqlx` with PostgreSQL features
+  - [x] Add `tokio` for async runtime
+  - [x] Configure as separate publishable crate
 
 ### 8.2 PostgreSQL Adapter Structure
 
-- [ ] Create `eventcore-postgres/src/lib.rs`
-  - [ ] PostgreSQL-specific configuration types
-  - [ ] Connection pool management
-  - [ ] Error mapping from sqlx to EventStoreError
-  - [ ] Public API exports
+- [x] Create `eventcore-postgres/src/lib.rs`
+  - [x] PostgreSQL-specific configuration types
+  - [x] Connection pool management
+  - [x] Error mapping from sqlx to EventStoreError
+  - [x] Public API exports
 
 ### 8.3 Database Schema
 
