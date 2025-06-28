@@ -252,11 +252,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 7.3 Projection Infrastructure
 
-- [ ] Create `eventcore/src/projection_runner.rs`
-  - [ ] Implement event subscription handling
-  - [ ] Add checkpoint management
-  - [ ] Implement error recovery
-  - [ ] Write tests for projection reliability
+- [x] Create `eventcore/src/projection_runner.rs`
+  - [x] Implement event subscription handling
+  - [x] Add checkpoint management
+  - [x] Implement error recovery
+  - [x] Write tests for projection reliability
 
 ## Phase 8: PostgreSQL Adapter Crate
 

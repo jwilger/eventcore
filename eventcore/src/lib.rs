@@ -23,6 +23,8 @@ pub mod metadata;
 pub mod projection;
 /// Projection management system for handling projection lifecycles
 pub mod projection_manager;
+/// Projection runner for managing event subscription and processing
+pub mod projection_runner;
 /// State reconstruction from event streams
 pub mod state_reconstruction;
 /// Event subscription system for processing events from event streams
