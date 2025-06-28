@@ -29,6 +29,9 @@ derive_more = { workspace = true }
 # Random number generation for jitter
 rand = { workspace = true }
 
+# Async stream utilities (for event subscriptions)
+futures = { workspace = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 tokio-test = { workspace = true }

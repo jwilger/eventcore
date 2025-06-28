@@ -70,6 +70,10 @@ pub enum EventStoreError {
     #[error("Connection failed: {0}")]
     ConnectionFailed(String),
 
+    /// Configuration error.
+    #[error("Configuration error: {0}")]
+    Configuration(String),
+
     /// A transaction was rolled back.
     #[error("Transaction rolled back: {0}")]
     TransactionRollback(String),

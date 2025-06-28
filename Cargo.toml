@@ -45,6 +45,9 @@ rand = "0.8.5"
 # Note: We disable default features to avoid pulling in sqlx-mysql and its vulnerable rsa dependency
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
 
+# Async stream utilities
+futures = "0.3.31"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

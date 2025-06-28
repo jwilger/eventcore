@@ -14,6 +14,8 @@ pub mod errors;
 pub mod event;
 /// Event store abstraction for backend-independent storage
 pub mod event_store;
+/// Event store adapter infrastructure for backend configuration
+pub mod event_store_adapter;
 /// Command execution engine with retry logic and concurrency control
 pub mod executor;
 pub mod metadata;

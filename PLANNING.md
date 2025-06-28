@@ -154,11 +154,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 4.4 Event Store Adapter Interface
 
-- [ ] Create `eventcore/src/event_store_adapter.rs`
-  - [ ] Define connection configuration traits
-  - [ ] Define backend-specific error mapping
-  - [ ] Create adapter lifecycle management
-  - [ ] Design feature flags for optional backends
+- [x] Create `eventcore/src/event_store_adapter.rs`
+  - [x] Define connection configuration traits
+  - [x] Define backend-specific error mapping
+  - [x] Create adapter lifecycle management
+  - [x] Design feature flags for optional backends
 
 ## Phase 5: Test Infrastructure
 
