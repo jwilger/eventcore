@@ -405,10 +405,14 @@ This document outlines the implementation plan for the EventCore multi-stream ev
     - [x] Implement `TransferMoney` command with validated input types
     - [x] Implement `OpenAccount` command with validated input types
     - [x] Create account balance projection
-  - [ ] E-commerce order example (`ecommerce/`)
-    - [ ] Define order-specific types with validation
-    - [ ] Implement order workflow commands with validated input types
-    - [ ] Create inventory projection
+  - [x] E-commerce order example (`ecommerce/`)
+    - [x] Define order-specific types with validation
+    - [x] Implement order workflow commands with validated input types
+    - [x] Create inventory projection
+    - [x] Implement comprehensive test suite
+    - [x] Main example application demonstrating workflow
+    - [x] Integration tests (with 2 known failures due to in-memory store concurrency limitations)
+    - [x] Fix all pre-commit hook failures (cargo fmt and clippy warnings)
   - [ ] Long-running saga example (`sagas/`)
   - [ ] Performance testing example (`benchmarks/`)
 

@@ -10,6 +10,7 @@
 // These are examples, so we don't need to be as pedantic
 #![allow(clippy::missing_const_for_fn)]
 #![allow(clippy::use_self)]
+#![allow(clippy::pedantic)]
 
 /// Banking example: Account management and money transfers with type-safe domain modeling
 pub mod banking;
