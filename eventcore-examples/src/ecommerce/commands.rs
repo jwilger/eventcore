@@ -1,8 +1,8 @@
 //! E-commerce command implementations
 //!
 //! This module implements commands for the e-commerce order system,
-//! following the aggregate-per-command pattern where each command
-//! defines its own consistency boundaries.
+//! using multi-stream event sourcing where each command defines
+//! its own consistency boundaries across multiple streams.
 
 use crate::ecommerce::{
     events::{

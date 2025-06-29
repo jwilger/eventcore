@@ -1,18 +1,18 @@
 //! # EventCore
 //!
-//! A revolutionary event sourcing library that implements the **aggregate-per-command pattern**,
-//! enabling atomic operations across multiple event streams without traditional aggregate boundaries.
+//! An event sourcing library that implements **multi-stream event sourcing** with dynamic
+//! consistency boundaries, enabling atomic operations across multiple event streams.
 //!
 //! ## What is EventCore?
 //!
-//! EventCore rethinks event sourcing by eliminating the need for predefined aggregate boundaries.
-//! Instead, each command defines its own consistency boundary, reading from and writing to
-//! multiple streams atomically. This approach provides unprecedented flexibility while maintaining
-//! strong consistency guarantees.
+//! EventCore builds on established event sourcing patterns by eliminating the need for
+//! predefined aggregate boundaries. Instead, each command defines its own consistency
+//! boundary, reading from and writing to multiple streams atomically. This approach
+//! provides flexibility while maintaining strong consistency guarantees.
 //!
 //! ## Key Features
 //!
-//! - **🎯 Aggregate-Per-Command Pattern**: Commands define their own consistency boundaries
+//! - **🎯 Multi-Stream Event Sourcing**: Commands define their own consistency boundaries
 //! - **⚛️ Multi-Stream Atomicity**: Read and write to multiple streams in a single transaction
 //! - **🦀 Type-Driven Development**: Leverage Rust's type system for domain modeling
 //! - **🔌 Pluggable Storage**: PostgreSQL, in-memory, and custom adapters
@@ -104,12 +104,12 @@
 //! # }
 //! ```
 //!
-//! ## The Aggregate-Per-Command Pattern
+//! ## Multi-Stream Event Sourcing
 //!
 //! Traditional event sourcing forces you to define aggregate boundaries upfront, which can
 //! become a limitation when business operations span multiple aggregates. EventCore's
-//! aggregate-per-command pattern solves this by letting each command define exactly what
-//! data it needs.
+//! multi-stream event sourcing approach solves this by letting each command define exactly
+//! what data it needs.
 //!
 //! ### Traditional Event Sourcing Challenges
 //!

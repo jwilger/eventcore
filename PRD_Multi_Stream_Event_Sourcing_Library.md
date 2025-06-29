@@ -16,9 +16,9 @@
 
 ## Executive Summary
 
-This PRD defines the requirements for a revolutionary event sourcing library that implements the **aggregate-per-command pattern** with **multi-stream support**. The library fundamentally reimagines traditional CQRS/ES architecture by eliminating long-lived aggregates in favor of self-contained commands that can read from and write to multiple streams atomically.
+This PRD defines the requirements for an event sourcing library that implements **multi-stream event sourcing** with **dynamic consistency boundaries**. Building on concepts from the event sourcing community, the library eliminates traditional aggregate boundaries in favor of self-contained commands that can read from and write to multiple streams atomically.
 
-### Key Innovation: Command-Centric Architecture
+### Key Approach: Dynamic Consistency Boundaries
 
 **Traditional Event Sourcing:**
 
@@ -74,11 +74,11 @@ Self-Contained Commands → Events
 
 ## Core Architecture
 
-### 1. Command-Centric Design Philosophy
+### 1. Multi-Stream Design Philosophy
 
-#### Aggregate-Per-Command Pattern
+#### Multi-Stream Pattern
 
-Each command defines its own aggregate state and processing logic:
+Each command defines its own state model and processing logic:
 
 ```typescript
 interface Command<Input, State, Event> {
@@ -1046,7 +1046,7 @@ This PRD defines a revolutionary approach to event sourcing that eliminates trad
 4. **Production Performance**: Enterprise-grade scalability and reliability
 5. **Developer Experience**: Intuitive APIs with comprehensive tooling
 
-The aggregate-per-command pattern with multi-stream support represents a fundamental advancement in event sourcing architecture, enabling developers to build more sophisticated, maintainable, and performant event-driven systems.
+Multi-stream event sourcing with dynamic consistency boundaries provides a flexible approach to event sourcing, enabling developers to build more sophisticated, maintainable, and performant event-driven systems.
 
 ---
 

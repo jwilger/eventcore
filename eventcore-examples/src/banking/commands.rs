@@ -1,6 +1,6 @@
 //! Commands for the banking domain
 //!
-//! This module demonstrates the aggregate-per-command pattern where each command
+//! This module demonstrates multi-stream event sourcing where each command
 //! owns its state model and can read from/write to multiple streams atomically.
 
 use crate::banking::{

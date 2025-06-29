@@ -492,24 +492,79 @@ This document outlines the implementation plan for the EventCore multi-stream ev
   - [ ] Long-running saga example (`sagas/`)
   - [ ] Performance testing example (`benchmarks/`)
 
-## Phase 13: Additional Event Store Adapters (Future)
+## Phase 13: Developer Experience Improvements
 
-### 13.1 EventStoreDB Adapter Crate
+### 13.1 Command Definition Macros
 
-- [ ] Create `eventcore-eventstoredb/` crate
-  - [ ] Separate `Cargo.toml` with EventStoreDB client
-  - [ ] Implement EventStore trait for EventStoreDB
-  - [ ] Map EventStoreDB-specific features
-  - [ ] Integration tests
-  - [ ] Publish as separate crate
+- [ ] Create `eventcore-macros` crate for procedural macros
+  - [ ] Implement `#[derive(Command)]` procedural macro
+  - [ ] Support automatic trait implementation generation
+  - [ ] Handle `#[stream]` field attributes for automatic stream detection
+  - [ ] Generate type-safe StreamSet types
+- [ ] Create declarative `command!` macro in core crate
+  - [ ] Support unified command/input structure (no separate Input type)
+  - [ ] Generate Command trait implementation
+  - [ ] Support `reads:` field for declaring stream dependencies
+  - [ ] Support `state:` block for state type definition
+  - [ ] Support `apply:` block for event folding logic
+  - [ ] Support `handle:` block with `require!` and `emit!` helpers
+  - [ ] Add `read_only: true` option for query commands (if applicable)
+- [ ] Write comprehensive tests for both macro types
+- [ ] Document macro usage with examples
 
-### 13.2 Other Potential Adapters
+### 13.2 Simplified Command Traits
 
-- [ ] Document adapter implementation guide
-  - [ ] Required trait implementations
-  - [ ] Testing requirements
-  - [ ] Performance benchmarks
-  - [ ] Example adapter skeleton
+- [ ] Create `SimpleCommand` trait for common single-stream patterns
+  - [ ] Define trait with `Input`, `Event` associated types only
+  - [ ] Add `stream()` method for single stream identification
+  - [ ] Add `execute()` method for stateless command logic
+  - [ ] Implement automatic `Command` trait for all `SimpleCommand` implementors
+- [ ] Write tests demonstrating simplified usage
+- [ ] Add documentation comparing SimpleCommand vs full Command trait
+
+### 13.3 Type Inference Improvements
+
+- [ ] Improve `CommandExecutor::new()` to infer store type
+- [ ] Create type aliases for common result types:
+  - [ ] `WriteResult<E>` for command results
+  - [ ] `ExecutorResult<T>` for executor operations
+- [ ] Update all examples to use improved inference
+- [ ] Document type inference patterns
+
+### 13.4 Fluent Configuration API
+
+- [ ] Create `CommandExecutorBuilder` for executor configuration
+  - [ ] `.with_store()` method
+  - [ ] `.with_retry()` method accepting `RetryPolicy`
+  - [ ] `.with_timeout()` method for default timeout
+  - [ ] `.with_tracing()` method for enabling tracing
+  - [ ] `.build()` method returning configured executor
+- [ ] Keep execution simple: `executor.execute(command).await?`
+- [ ] Write tests for builder pattern
+- [ ] Document configuration options
+
+### 13.5 Better Error Messages
+
+- [ ] Add `miette` or similar crate for diagnostic derives
+- [ ] Create custom diagnostics for common errors:
+  - [ ] `InvalidStreamAccess` with helpful hints
+  - [ ] `StreamNotDeclared` suggesting adding to reads
+  - [ ] `TypeMismatch` with clear type expectations
+  - [ ] `ConcurrencyConflict` with retry suggestions
+- [ ] Implement `Diagnostic` trait for all error types
+- [ ] Write tests verifying error message quality
+- [ ] Document error handling patterns
+
+### 13.6 Interactive Documentation
+
+- [ ] Add playground-compatible examples to all major types
+- [ ] Create interactive tutorials for:
+  - [ ] Writing your first command
+  - [ ] Using the macro DSL
+  - [ ] Implementing projections
+  - [ ] Handling errors properly
+- [ ] Set up doc tests to run in CI
+- [ ] Consider using `doc_comment` crate for external example files
 
 ## Phase 14: Integration & Polish
 

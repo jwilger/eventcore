@@ -1,8 +1,8 @@
 //! Event store abstraction for EventCore.
 //!
 //! This module provides the core `EventStore` trait and related types that define
-//! how events are persisted and retrieved. The design supports the aggregate-per-command
-//! pattern with multi-stream atomic operations.
+//! how events are persisted and retrieved. The design supports multi-stream event
+//! sourcing with atomic operations across multiple streams.
 //!
 //! # Architecture
 //!
@@ -421,8 +421,8 @@ impl<E> EventToWrite<E> {
 /// The core trait for event store implementations.
 ///
 /// `EventStore` defines the contract that all event store backends must implement.
-/// It's designed to support the aggregate-per-command pattern with multi-stream
-/// atomic operations, while remaining backend-agnostic.
+/// It's designed to support multi-stream event sourcing with atomic operations
+/// across multiple streams, while remaining backend-agnostic.
 ///
 /// # Implementation Requirements
 ///
@@ -494,7 +494,7 @@ pub trait EventStore: Send + Sync {
 
     /// Writes events to multiple streams atomically.
     ///
-    /// This is the core operation that enables the aggregate-per-command pattern.
+    /// This is the core operation that enables multi-stream event sourcing.
     /// All writes either succeed completely or fail completely, ensuring atomicity
     /// across multiple streams.
     ///

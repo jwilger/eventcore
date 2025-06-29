@@ -1,7 +1,7 @@
 -- Migration: Additional performance indexes for optimized event sourcing operations
 -- These indexes support common query patterns in multi-stream event sourcing
 
--- Composite index for multi-stream reads (aggregate-per-command pattern)
+-- Composite index for multi-stream reads (multi-stream event sourcing)
 -- Optimizes reading multiple streams simultaneously
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_multistream_read 
 ON events (stream_id, event_version, created_at);
@@ -42,7 +42,7 @@ ON events (event_type, created_at DESC, stream_id)
 WHERE created_at > NOW() - INTERVAL '1 hour';
 
 -- Comments for documentation
-COMMENT ON INDEX idx_events_multistream_read IS 'Optimizes reading multiple streams simultaneously for aggregate-per-command pattern';
+COMMENT ON INDEX idx_events_multistream_read IS 'Optimizes reading multiple streams simultaneously for multi-stream event sourcing';
 COMMENT ON INDEX idx_events_projection_catchup IS 'Optimizes projection catchup by reading recent events by type';
 COMMENT ON INDEX idx_events_saga_correlation IS 'Supports saga coordination by correlation ID across streams';
 COMMENT ON INDEX idx_events_causation_chain IS 'Enables efficient causation chain analysis for debugging';

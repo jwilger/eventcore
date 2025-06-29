@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![License: Apache](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Revolutionary event sourcing library implementing the **aggregate-per-command pattern** - commands that can atomically read from and write to multiple event streams.
+A type-safe event sourcing library implementing **multi-stream event sourcing** with dynamic consistency boundaries - commands that can atomically read from and write to multiple event streams.
 
 ## Why EventCore?
 

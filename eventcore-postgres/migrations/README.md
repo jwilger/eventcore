@@ -62,7 +62,7 @@ This creates a monthly-partitioned `events` table optimized for high-throughput 
 The schema includes optimized indexes for:
 
 - **Stream reading**: Fast retrieval of events by stream
-- **Multi-stream operations**: Efficient aggregate-per-command pattern support
+- **Multi-stream operations**: Efficient multi-stream event sourcing support
 - **Projections**: Event type and temporal queries
 - **Sagas**: Correlation and causation tracking
 - **Monitoring**: Recent event analysis

@@ -1,14 +1,14 @@
 //! Command pattern implementation for EventCore.
 //!
-//! This module provides the core `Command` trait that implements the aggregate-per-command
-//! pattern, a revolutionary approach to event sourcing that eliminates traditional aggregate
-//! boundaries in favor of self-contained commands.
+//! This module provides the core `Command` trait that implements multi-stream
+//! event sourcing with dynamic consistency boundaries, eliminating traditional
+//! aggregate boundaries in favor of self-contained commands.
 //!
-//! # The Aggregate-Per-Command Pattern
+//! # Multi-Stream Event Sourcing
 //!
 //! Traditional event sourcing uses aggregates as consistency boundaries, where each aggregate
-//! owns a single stream. The aggregate-per-command pattern inverts this: each command defines
-//! its own consistency boundary and can atomically read from and write to multiple streams.
+//! owns a single stream. Multi-stream event sourcing allows each command to define
+//! its own consistency boundary and atomically read from and write to multiple streams.
 //!
 //! ## Benefits
 //!
@@ -273,7 +273,7 @@ impl<S, E> StreamWrite<S, E> {
 
 /// Core trait for implementing type-safe event sourcing commands.
 ///
-/// The `Command` trait is the heart of EventCore's aggregate-per-command pattern.
+/// The `Command` trait is the heart of EventCore's multi-stream event sourcing.
 /// Each command implementation defines its own consistency boundary and can work
 /// with multiple event streams atomically.
 ///

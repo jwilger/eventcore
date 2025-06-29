@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-EventCore is a multi-stream aggregateless event sourcing library implementing the **aggregate-per-command pattern**. This revolutionary approach eliminates traditional aggregate boundaries in favor of self-contained commands that can read from and write to multiple streams atomically.
+EventCore is a multi-stream event sourcing library that implements dynamic consistency boundaries. This approach, building on established event sourcing patterns, eliminates traditional aggregate boundaries in favor of self-contained commands that can read from and write to multiple streams atomically.
 
 ## Type-Driven Development Philosophy
 
@@ -109,8 +109,8 @@ sqlx migrate run
 
 ### Core Design Principles
 
-1. **Aggregate-Per-Command Pattern**: Each command owns its state model and processing logic
-2. **Multi-Stream Support**: Commands can atomically read from and write to multiple event streams
+1. **Multi-Stream Event Sourcing**: Commands can atomically read from and write to multiple event streams
+2. **Dynamic Consistency Boundaries**: Each command defines its own consistency boundary
 3. **Type-Driven Development**: Use Rust's type system to make illegal states unrepresentable
 4. **Functional Core, Imperative Shell**: Pure business logic with side effects at boundaries
 

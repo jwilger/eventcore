@@ -189,9 +189,9 @@ async fn concurrent_orders_respect_inventory() {
 
 ## Architecture Decisions
 
-### Why Aggregate-Per-Command?
+### Why Multi-Stream Event Sourcing?
 
-Traditional aggregates create artificial boundaries:
+Traditional event sourcing often limits atomic operations to single aggregates:
 ```rust
 // Traditional: Aggregate limits what you can do atomically
 class Order {
@@ -199,7 +199,7 @@ class Order {
 }
 ```
 
-EventCore: Commands define their own boundaries:
+EventCore enables multi-stream atomic operations:
 ```rust
 // EventCore: Atomically update order AND inventory
 impl Command for PlaceOrder {

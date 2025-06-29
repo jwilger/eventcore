@@ -1,7 +1,7 @@
 //! E-commerce order workflow example
 //!
 //! This module demonstrates a complete e-commerce order system using EventCore's
-//! aggregate-per-command pattern. It includes:
+//! multi-stream event sourcing. It includes:
 //!
 //! - Type-safe domain modeling with validation
 //! - Product catalog management
