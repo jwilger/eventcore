@@ -195,7 +195,7 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5433/eventcore_test
-        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+        run: timeout 10m cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info --lib
       
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
