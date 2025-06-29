@@ -4,7 +4,7 @@
 //! with various scenarios including success cases, error cases, and
 //! concurrent execution.
 
-use crate::command::{Command, CommandResult};
+use crate::command::{Command, CommandResult, ReadStreams};
 use crate::errors::{CommandError, EventStoreError};
 use crate::event_store::{
     EventStore, EventToWrite, ExpectedVersion, ReadOptions, StreamData, StreamEvents,
@@ -138,7 +138,14 @@ where
         }
 
         // Execute the command
-        command.handle(state, input).await
+        let read_streams = ReadStreams::new(stream_ids.clone());
+        let stream_writes = command.handle(read_streams, state, input).await?;
+
+        // Convert StreamWrite instances back to (StreamId, Event) pairs for compatibility
+        Ok(stream_writes
+            .into_iter()
+            .map(super::super::command::StreamWrite::into_parts)
+            .collect())
     }
 
     /// Executes the command multiple times concurrently.
@@ -180,7 +187,14 @@ where
                 }
 
                 // Execute the command
-                command.handle(state, input).await
+                let read_streams = ReadStreams::new(stream_ids.clone());
+                let stream_writes = command.handle(read_streams, state, input).await?;
+
+                // Convert StreamWrite instances back to (StreamId, Event) pairs for compatibility
+                Ok(stream_writes
+                    .into_iter()
+                    .map(super::super::command::StreamWrite::into_parts)
+                    .collect())
             });
 
             handles.push(handle);

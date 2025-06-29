@@ -11,14 +11,14 @@
 #![allow(clippy::uninlined_format_args)]
 
 use anyhow::Result;
-use eventcore::{CommandExecutor, Event, EventStore, Projection, ReadOptions};
+use eventcore::{CommandExecutor, Event, EventStore, ExecutionOptions, Projection, ReadOptions};
 use eventcore_examples::ecommerce::{
     commands::*,
     events::EcommerceEvent,
     projections::{InventoryProjectionImpl, OrderSummaryProjectionImpl},
     types::*,
 };
-use eventcore_memory::InMemoryEventStore;
+use eventcore_postgres::PostgresEventStore;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -32,8 +32,14 @@ async fn main() -> Result<()> {
 
     info!("Starting e-commerce example");
 
-    // Create an in-memory event store
-    let event_store: InMemoryEventStore<EcommerceEvent> = InMemoryEventStore::new();
+    // Create a PostgreSQL event store
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/eventcore".to_string());
+    let config = eventcore_postgres::PostgresConfig::new(database_url);
+    let event_store: PostgresEventStore<EcommerceEvent> = PostgresEventStore::new(config).await?;
+
+    // Initialize the database schema
+    event_store.initialize().await?;
 
     // Create command executor
     let executor = CommandExecutor::new(event_store.clone());
@@ -66,23 +72,29 @@ async fn main() -> Result<()> {
         Some("Mechanical keyboard with blue switches".to_string()),
     );
 
+    // Create a catalog stream for this example
+    let catalog_stream = eventcore::StreamId::try_new("product-catalog".to_string())?;
+
     // Add products to catalog
     executor
         .execute(
             &AddProductCommand,
-            AddProductInput::new(laptop.clone(), Quantity::new(5)?),
+            AddProductInput::new(laptop.clone(), Quantity::new(5)?, catalog_stream.clone()),
+            ExecutionOptions::default(),
         )
         .await?;
     executor
         .execute(
             &AddProductCommand,
-            AddProductInput::new(mouse.clone(), Quantity::new(25)?),
+            AddProductInput::new(mouse.clone(), Quantity::new(25)?, catalog_stream.clone()),
+            ExecutionOptions::default(),
         )
         .await?;
     executor
         .execute(
             &AddProductCommand,
-            AddProductInput::new(keyboard.clone(), Quantity::new(15)?),
+            AddProductInput::new(keyboard.clone(), Quantity::new(15)?, catalog_stream.clone()),
+            ExecutionOptions::default(),
         )
         .await?;
 
@@ -106,6 +118,7 @@ async fn main() -> Result<()> {
         .execute(
             &CreateOrderCommand,
             CreateOrderInput::new(order_id.clone(), customer.clone()),
+            ExecutionOptions::default(),
         )
         .await?;
 
@@ -119,20 +132,26 @@ async fn main() -> Result<()> {
     executor
         .execute(
             &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id.clone(), laptop_item),
+            AddItemToOrderInput::new(order_id.clone(), laptop_item, catalog_stream.clone()),
+            ExecutionOptions::default(),
         )
         .await?;
     executor
         .execute(
             &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id.clone(), mouse_item),
+            AddItemToOrderInput::new(order_id.clone(), mouse_item, catalog_stream.clone()),
+            ExecutionOptions::default(),
         )
         .await?;
 
     // Place the order
     info!("Placing order {}", order_id);
     executor
-        .execute(&PlaceOrderCommand, PlaceOrderInput::new(order_id.clone()))
+        .execute(
+            &PlaceOrderCommand,
+            PlaceOrderInput::new(order_id.clone(), catalog_stream.clone()),
+            ExecutionOptions::default(),
+        )
         .await?;
 
     // === Second Order (Different Customer) ===
@@ -149,6 +168,7 @@ async fn main() -> Result<()> {
         .execute(
             &CreateOrderCommand,
             CreateOrderInput::new(order_id2.clone(), customer2),
+            ExecutionOptions::default(),
         )
         .await?;
 
@@ -157,11 +177,16 @@ async fn main() -> Result<()> {
     executor
         .execute(
             &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id2.clone(), keyboard_item),
+            AddItemToOrderInput::new(order_id2.clone(), keyboard_item, catalog_stream.clone()),
+            ExecutionOptions::default(),
         )
         .await?;
     executor
-        .execute(&PlaceOrderCommand, PlaceOrderInput::new(order_id2.clone()))
+        .execute(
+            &PlaceOrderCommand,
+            PlaceOrderInput::new(order_id2.clone(), catalog_stream.clone()),
+            ExecutionOptions::default(),
+        )
         .await?;
 
     // === Third Order (Test Cancellation) ===
@@ -178,6 +203,7 @@ async fn main() -> Result<()> {
         .execute(
             &CreateOrderCommand,
             CreateOrderInput::new(order_id3.clone(), customer3),
+            ExecutionOptions::default(),
         )
         .await?;
 
@@ -186,7 +212,8 @@ async fn main() -> Result<()> {
     executor
         .execute(
             &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id3.clone(), laptop_item3),
+            AddItemToOrderInput::new(order_id3.clone(), laptop_item3, catalog_stream.clone()),
+            ExecutionOptions::default(),
         )
         .await?;
 
@@ -195,7 +222,12 @@ async fn main() -> Result<()> {
     executor
         .execute(
             &CancelOrderCommand,
-            CancelOrderInput::new(order_id3, "Customer changed mind".to_string()),
+            CancelOrderInput::new(
+                order_id3,
+                "Customer changed mind".to_string(),
+                catalog_stream.clone(),
+            ),
+            ExecutionOptions::default(),
         )
         .await?;
 
@@ -211,7 +243,7 @@ async fn main() -> Result<()> {
 
     // Read all events and apply to projections
     let all_streams = vec![
-        eventcore::StreamId::try_new("product-catalog".to_string())?,
+        catalog_stream.clone(),
         eventcore::StreamId::try_new(format!("product-{}", laptop.id))?,
         eventcore::StreamId::try_new(format!("product-{}", mouse.id))?,
         eventcore::StreamId::try_new(format!("product-{}", keyboard.id))?,
@@ -302,7 +334,8 @@ async fn main() -> Result<()> {
     if let Err(e) = executor
         .execute(
             &AddProductCommand,
-            AddProductInput::new(laptop.clone(), Quantity::new(5)?),
+            AddProductInput::new(laptop.clone(), Quantity::new(5)?, catalog_stream.clone()),
+            ExecutionOptions::default(),
         )
         .await
     {
@@ -324,6 +357,7 @@ async fn main() -> Result<()> {
         .execute(
             &CreateOrderCommand,
             CreateOrderInput::new(big_order_id.clone(), big_customer),
+            ExecutionOptions::default(),
         )
         .await?;
 
@@ -336,7 +370,8 @@ async fn main() -> Result<()> {
     if let Err(e) = executor
         .execute(
             &AddItemToOrderCommand,
-            AddItemToOrderInput::new(big_order_id, big_laptop_item),
+            AddItemToOrderInput::new(big_order_id, big_laptop_item, catalog_stream.clone()),
+            ExecutionOptions::default(),
         )
         .await
     {
@@ -358,11 +393,16 @@ async fn main() -> Result<()> {
         .execute(
             &CreateOrderCommand,
             CreateOrderInput::new(empty_order_id.clone(), empty_customer),
+            ExecutionOptions::default(),
         )
         .await?;
 
     if let Err(e) = executor
-        .execute(&PlaceOrderCommand, PlaceOrderInput::new(empty_order_id))
+        .execute(
+            &PlaceOrderCommand,
+            PlaceOrderInput::new(empty_order_id, catalog_stream.clone()),
+            ExecutionOptions::default(),
+        )
         .await
     {
         info!("✓ Correctly rejected empty order: {}", e);

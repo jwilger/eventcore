@@ -6,7 +6,7 @@
 //! - Balance tracking via projections
 
 use anyhow::Result;
-use eventcore::{CommandExecutor, Event, EventStore, Projection, ReadOptions};
+use eventcore::{CommandExecutor, Event, EventStore, ExecutionOptions, Projection, ReadOptions};
 use eventcore_examples::banking::{
     commands::{OpenAccountCommand, OpenAccountInput, TransferMoneyCommand, TransferMoneyInput},
     events::BankingEvent,
@@ -48,7 +48,9 @@ async fn main() -> Result<()> {
         Money::from_cents(100_000)?, // $1,000
     );
 
-    executor.execute(&OpenAccountCommand, open_alice).await?;
+    executor
+        .execute(&OpenAccountCommand, open_alice, ExecutionOptions::default())
+        .await?;
 
     // Open Bob's account with $500
     info!("Opening Bob's account with $500");
@@ -61,7 +63,9 @@ async fn main() -> Result<()> {
         Money::from_cents(50_000)?, // $500
     );
 
-    executor.execute(&OpenAccountCommand, open_bob).await?;
+    executor
+        .execute(&OpenAccountCommand, open_bob, ExecutionOptions::default())
+        .await?;
 
     // Transfer $200 from Alice to Bob
     info!("Transferring $200 from Alice to Bob");
@@ -73,7 +77,9 @@ async fn main() -> Result<()> {
         Some("Payment for services".to_string()),
     )?;
 
-    executor.execute(&TransferMoneyCommand, transfer).await?;
+    executor
+        .execute(&TransferMoneyCommand, transfer, ExecutionOptions::default())
+        .await?;
 
     // Create and update projection
     let mut projection = AccountBalanceProjectionImpl::new();
@@ -120,7 +126,11 @@ async fn main() -> Result<()> {
     )?;
 
     match executor
-        .execute(&TransferMoneyCommand, invalid_transfer)
+        .execute(
+            &TransferMoneyCommand,
+            invalid_transfer,
+            ExecutionOptions::default(),
+        )
         .await
     {
         Ok(_) => panic!("Transfer should have failed"),

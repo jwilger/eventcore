@@ -6,7 +6,7 @@ use criterion::{
     async_executor::FuturesExecutor, criterion_group, criterion_main, BenchmarkId, Criterion,
     Throughput,
 };
-use eventcore::{Command, CommandExecutor, CommandResult, StoredEvent, StreamId};
+use eventcore::{Command, CommandExecutor, CommandResult, ReadStreams, StoredEvent, StreamId, StreamWrite};
 use eventcore_memory::InMemoryEventStore;
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -61,6 +61,7 @@ impl Command for BenchmarkCommand {
     type Input = BenchmarkInput;
     type State = BenchmarkState;
     type Event = BenchmarkEvent;
+    type StreamSet = ();
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         vec![input.target_stream.clone()]
@@ -73,9 +74,10 @@ impl Command for BenchmarkCommand {
 
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
-    ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Simulate computation work
         let mut result = 0i64;
         for i in 0..self.computation_cycles {
@@ -89,7 +91,7 @@ impl Command for BenchmarkCommand {
             timestamp: chrono::Utc::now(),
         };
 
-        Ok(vec![(input.target_stream, event)])
+        Ok(vec![StreamWrite::new(&read_streams, input.target_stream, event)?])
     }
 }
 
@@ -115,7 +117,7 @@ fn bench_single_stream_commands(c: &mut Criterion) {
                         value: black_box(42),
                     };
 
-                    black_box(executor.execute(&command, input).await.unwrap())
+                    black_box(executor.execute(&command, input, eventcore::ExecutionOptions::default()).await.unwrap())
                 });
             },
         );
@@ -149,6 +151,7 @@ impl Command for MultiStreamBenchmarkCommand {
     type Input = MultiStreamInput;
     type State = MultiStreamState;
     type Event = BenchmarkEvent;
+    type StreamSet = ();
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         input.streams.clone()
@@ -166,9 +169,10 @@ impl Command for MultiStreamBenchmarkCommand {
 
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
-    ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         let total: i64 = state.stream_totals.values().sum();
 
         let event = BenchmarkEvent {
@@ -180,8 +184,8 @@ impl Command for MultiStreamBenchmarkCommand {
         let results = input
             .streams
             .into_iter()
-            .map(|stream| (stream, event.clone()))
-            .collect();
+            .map(|stream| StreamWrite::new(&read_streams, stream, event.clone()))
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(results)
     }
@@ -212,7 +216,7 @@ fn bench_multi_stream_commands(c: &mut Criterion) {
                         value: black_box(42),
                     };
 
-                    black_box(executor.execute(&command, input).await.unwrap())
+                    black_box(executor.execute(&command, input, eventcore::ExecutionOptions::default()).await.unwrap())
                 });
             },
         );

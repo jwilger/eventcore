@@ -8,7 +8,9 @@ use crate::banking::{
     types::{AccountHolder, AccountId, Money, TransferId},
 };
 use async_trait::async_trait;
-use eventcore::{Command, CommandError, CommandResult, StoredEvent, StreamId};
+use eventcore::{
+    Command, CommandError, CommandResult, ReadStreams, StoredEvent, StreamId, StreamWrite,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -82,6 +84,7 @@ impl Command for OpenAccountCommand {
     type Input = OpenAccountInput;
     type State = OpenAccountState;
     type Event = BankingEvent;
+    type StreamSet = ();
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         // Read from the account's stream to check if it exists
@@ -96,9 +99,10 @@ impl Command for OpenAccountCommand {
 
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
-    ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check if account already exists
         if state.existing_accounts.contains_key(&input.account_id) {
             return Err(CommandError::BusinessRuleViolation(
@@ -116,7 +120,11 @@ impl Command for OpenAccountCommand {
         // Write to the account's stream
         let stream_id = StreamId::try_new(format!("account-{}", input.account_id)).unwrap();
 
-        Ok(vec![(stream_id, BankingEvent::from(event))])
+        Ok(vec![StreamWrite::new(
+            &read_streams,
+            stream_id,
+            BankingEvent::from(event),
+        )?])
     }
 }
 
@@ -184,6 +192,7 @@ impl Command for TransferMoneyCommand {
     type Input = TransferMoneyInput;
     type State = TransferMoneyState;
     type Event = BankingEvent;
+    type StreamSet = ();
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         // Read from both account streams and the transfer log
@@ -233,9 +242,10 @@ impl Command for TransferMoneyCommand {
 
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
-    ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check for idempotency - if transfer already completed, return success
         if state.completed_transfers.contains_key(&input.transfer_id) {
             return Ok(vec![]); // Already processed, no new events
@@ -277,18 +287,21 @@ impl Command for TransferMoneyCommand {
 
         // Write to all affected streams for atomicity
         let events = vec![
-            (
+            StreamWrite::new(
+                &read_streams,
                 StreamId::try_new(format!("account-{}", input.from_account)).unwrap(),
                 BankingEvent::from(event.clone()),
-            ),
-            (
+            )?,
+            StreamWrite::new(
+                &read_streams,
                 StreamId::try_new(format!("account-{}", input.to_account)).unwrap(),
                 BankingEvent::from(event.clone()),
-            ),
-            (
+            )?,
+            StreamWrite::new(
+                &read_streams,
                 StreamId::try_new("transfers".to_string()).unwrap(),
                 BankingEvent::from(event),
-            ),
+            )?,
         ];
 
         Ok(events)

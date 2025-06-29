@@ -8,7 +8,7 @@ use criterion::{
 };
 use eventcore::{
     Command, CommandExecutor, CommandResult, Event, EventId, EventMetadata, EventStore,
-    EventToWrite, ExpectedVersion, StoredEvent, StreamEvents, StreamId,
+    EventToWrite, ExpectedVersion, ReadStreams, StoredEvent, StreamEvents, StreamId, StreamWrite,
 };
 use eventcore_memory::InMemoryEventStore;
 use std::collections::HashMap;
@@ -88,6 +88,7 @@ impl Command for MemoryIntensiveCommand {
     type Input = MemoryIntensiveInput;
     type State = MemoryIntensiveState;
     type Event = LargeEvent;
+    type StreamSet = ();
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         vec![input.target_stream.clone()]
@@ -112,19 +113,21 @@ impl Command for MemoryIntensiveCommand {
 
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
         input: Self::Input,
-    ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
-        let events: Vec<(StreamId, Self::Event)> = (0..self.event_count)
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+        let events: Result<Vec<_>, _> = (0..self.event_count)
             .map(|_| {
-                (
+                StreamWrite::new(
+                    &read_streams,
                     input.target_stream.clone(),
                     LargeEvent::new(self.event_size_kb),
                 )
             })
             .collect();
 
-        Ok(events)
+        events
     }
 }
 
@@ -201,7 +204,7 @@ fn bench_command_execution_allocations(c: &mut Criterion) {
                         target_stream: stream_id,
                     };
 
-                    let result = executor.execute(&command, input).await.unwrap();
+                    let result = executor.execute(&command, input, eventcore::ExecutionOptions::default()).await.unwrap();
                     black_box(result)
                 });
             },

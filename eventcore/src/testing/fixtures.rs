@@ -3,7 +3,7 @@
 //! This module provides pre-configured test data and scenarios commonly needed
 //! in event sourcing tests.
 
-use crate::command::{Command, CommandResult};
+use crate::command::{Command, CommandResult, ReadStreams, StreamWrite};
 use crate::errors::CommandError;
 use crate::event_store::{
     EventStore, EventToWrite, ReadOptions, StoredEvent as StoreStoredEvent, StreamData,
@@ -109,6 +109,7 @@ impl Command for TestCommand {
     type Input = TestCommandInput;
     type State = TestState;
     type Event = TestEvent;
+    type StreamSet = ();
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         vec![input.stream_id.clone()]
@@ -137,9 +138,10 @@ impl Command for TestCommand {
 
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
-    ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         let event = match input.action {
             TestAction::Create { id, name } => {
                 if state.items.contains_key(&id) {
@@ -176,7 +178,11 @@ impl Command for TestCommand {
             }
         };
 
-        Ok(vec![(input.stream_id, event)])
+        Ok(vec![StreamWrite::new(
+            &read_streams,
+            input.stream_id,
+            event,
+        )?])
     }
 }
 
@@ -492,7 +498,15 @@ mod tests {
         let input = create_test_command_input("create");
         let state = TestState::default();
 
-        let result = command.handle(state, input.clone()).await.unwrap();
+        let read_streams = ReadStreams::new(vec![input.stream_id.clone()]);
+        let stream_writes = command
+            .handle(read_streams, state, input.clone())
+            .await
+            .unwrap();
+        let result: Vec<(StreamId, TestEvent)> = stream_writes
+            .into_iter()
+            .map(|sw| sw.into_parts())
+            .collect();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, input.stream_id);
@@ -508,7 +522,8 @@ mod tests {
             .items
             .insert("item-1".to_string(), "Existing".to_string());
 
-        let result = command.handle(state, input).await;
+        let read_streams = ReadStreams::new(vec![input.stream_id.clone()]);
+        let result = command.handle(read_streams, state, input).await;
 
         assert!(matches!(
             result,
@@ -522,7 +537,8 @@ mod tests {
         let input = create_test_command_input("decrement");
         let state = TestState::default(); // Counter starts at 0
 
-        let result = command.handle(state, input).await;
+        let read_streams = ReadStreams::new(vec![input.stream_id.clone()]);
+        let result = command.handle(read_streams, state, input).await;
 
         assert!(matches!(
             result,

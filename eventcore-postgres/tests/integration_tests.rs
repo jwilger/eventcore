@@ -4,7 +4,10 @@
 #![allow(missing_docs)]
 
 use async_trait::async_trait;
-use eventcore::{Command, CommandError, CommandExecutor, EventStore, StreamId};
+use eventcore::{
+    Command, CommandError, CommandExecutor, CommandResult, EventStore, ExecutionOptions,
+    ReadStreams, StreamId, StreamWrite,
+};
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
 use serde::{Deserialize, Serialize};
 use testcontainers::{core::WaitFor, runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt};
@@ -79,6 +82,7 @@ impl Command for IncrementCounterCommand {
     type Input = IncrementCounterInput;
     type State = CounterState;
     type Event = TestEvent;
+    type StreamSet = ();
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         vec![input.stream_id.clone()]
@@ -96,21 +100,23 @@ impl Command for IncrementCounterCommand {
 
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
         input: Self::Input,
-    ) -> Result<Vec<(StreamId, Self::Event)>, CommandError> {
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         if input.amount == 0 {
             return Err(CommandError::ValidationFailed(
                 "Amount must be greater than 0".to_string(),
             ));
         }
 
-        Ok(vec![(
+        Ok(vec![StreamWrite::new(
+            &read_streams,
             input.stream_id,
             TestEvent::CounterIncremented {
                 amount: input.amount,
             },
-        )])
+        )?])
     }
 }
 
@@ -129,6 +135,7 @@ impl Command for TransferBetweenCountersCommand {
     type Input = TransferBetweenCountersInput;
     type State = std::collections::HashMap<StreamId, CounterState>;
     type Event = TestEvent;
+    type StreamSet = ();
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         vec![input.from_stream.clone(), input.to_stream.clone()]
@@ -148,9 +155,10 @@ impl Command for TransferBetweenCountersCommand {
 
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         mut state: Self::State,
         input: Self::Input,
-    ) -> Result<Vec<(StreamId, Self::Event)>, CommandError> {
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         if input.amount == 0 {
             return Err(CommandError::ValidationFailed(
                 "Amount must be greater than 0".to_string(),
@@ -171,18 +179,20 @@ impl Command for TransferBetweenCountersCommand {
         }
 
         Ok(vec![
-            (
+            StreamWrite::new(
+                &read_streams,
                 input.from_stream,
                 TestEvent::CounterDecremented {
                     amount: input.amount,
                 },
-            ),
-            (
+            )?,
+            StreamWrite::new(
+                &read_streams,
                 input.to_stream,
                 TestEvent::CounterIncremented {
                     amount: input.amount,
                 },
-            ),
+            )?,
         ])
     }
 }
@@ -217,6 +227,7 @@ async fn test_concurrent_command_execution() {
                         stream_id,
                         amount: i,
                     },
+                    ExecutionOptions::default(),
                 )
                 .await
         });
@@ -289,6 +300,7 @@ async fn test_multi_stream_atomicity() {
                 stream_id: counter1_id.clone(),
                 amount: 100,
             },
+            ExecutionOptions::default(),
         )
         .await
         .unwrap();
@@ -303,6 +315,7 @@ async fn test_multi_stream_atomicity() {
                 to_stream: counter2_id.clone(),
                 amount: 50,
             },
+            ExecutionOptions::default(),
         )
         .await;
 
@@ -345,6 +358,7 @@ async fn test_multi_stream_atomicity() {
                 to_stream: counter2_id.clone(),
                 amount: 100, // More than available
             },
+            ExecutionOptions::default(),
         )
         .await;
 
@@ -412,7 +426,11 @@ async fn test_transaction_isolation() {
         let handle = tokio::spawn(async move {
             let command = IncrementCounterCommand;
             executor
-                .execute(&command, IncrementCounterInput { stream_id, amount })
+                .execute(
+                    &command,
+                    IncrementCounterInput { stream_id, amount },
+                    ExecutionOptions::default(),
+                )
                 .await
         });
 
@@ -439,6 +457,7 @@ async fn test_transaction_isolation() {
                         stream_id,
                         amount: 5,
                     },
+                    ExecutionOptions::default(),
                 )
                 .await
         });
@@ -462,6 +481,7 @@ async fn test_transaction_isolation() {
                         to_stream,
                         amount: 5,
                     },
+                    ExecutionOptions::default(),
                 )
                 .await
         });
@@ -535,6 +555,7 @@ async fn test_basic_performance() {
                     stream_id: stream_id.clone(),
                     amount: i,
                 },
+                ExecutionOptions::default(),
             )
             .await
             .unwrap();

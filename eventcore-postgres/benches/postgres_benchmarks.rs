@@ -6,7 +6,8 @@
 use async_trait::async_trait;
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use eventcore::{
-    Command, CommandError, CommandExecutor, EventStore, ReadOptions, StoredEvent, StreamId,
+    Command, CommandExecutor, CommandResult, EventStore, ExecutionOptions, ReadOptions, ReadStreams, StoredEvent,
+    StreamId, StreamWrite,
 };
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,7 @@ impl Command for IncrementCounterCommand {
     type Input = IncrementCounterInput;
     type State = CounterState;
     type Event = TestEvent;
+    type StreamSet = ();
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         vec![input.stream_id.clone()]
@@ -76,15 +78,17 @@ impl Command for IncrementCounterCommand {
 
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
         input: Self::Input,
-    ) -> Result<Vec<(StreamId, Self::Event)>, CommandError> {
-        Ok(vec![(
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+        Ok(vec![StreamWrite::new(
+            &read_streams,
             input.stream_id,
             TestEvent::CounterIncremented {
                 amount: input.amount,
             },
-        )])
+        )?])
     }
 }
 
@@ -103,6 +107,7 @@ impl Command for TransferBetweenCountersCommand {
     type Input = TransferBetweenCountersInput;
     type State = (CounterState, CounterState);
     type Event = TestEvent;
+    type StreamSet = ();
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         vec![input.from_stream.clone(), input.to_stream.clone()]
@@ -123,22 +128,25 @@ impl Command for TransferBetweenCountersCommand {
 
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
         input: Self::Input,
-    ) -> Result<Vec<(StreamId, Self::Event)>, CommandError> {
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         Ok(vec![
-            (
+            StreamWrite::new(
+                &read_streams,
                 input.from_stream,
                 TestEvent::CounterDecremented {
                     amount: input.amount,
                 },
-            ),
-            (
+            )?,
+            StreamWrite::new(
+                &read_streams,
                 input.to_stream,
                 TestEvent::CounterIncremented {
                     amount: input.amount,
                 },
-            ),
+            )?,
         ])
     }
 }
@@ -222,7 +230,10 @@ fn bench_single_stream_commands(c: &mut Criterion) {
                         context.runtime.block_on(async move {
                             let command = IncrementCounterCommand;
                             for input in commands {
-                                executor_clone.execute(&command, input).await.unwrap();
+                                executor_clone
+                                    .execute(&command, input, ExecutionOptions::default())
+                                    .await
+                                    .unwrap();
                             }
                         });
                     },
@@ -252,6 +263,7 @@ fn bench_multi_stream_commands(c: &mut Criterion) {
                         stream_id,
                         amount: 1000,
                     },
+                    ExecutionOptions::default(),
                 )
                 .await
                 .unwrap();
@@ -278,7 +290,10 @@ fn bench_multi_stream_commands(c: &mut Criterion) {
                 let executor_clone = context.executor.clone();
                 context.runtime.block_on(async move {
                     let command = TransferBetweenCountersCommand;
-                    executor_clone.execute(&command, input).await.unwrap();
+                    executor_clone
+                        .execute(&command, input, ExecutionOptions::default())
+                        .await
+                        .unwrap();
                 });
             },
             BatchSize::SmallInput,
@@ -323,7 +338,11 @@ fn bench_concurrent_operations(c: &mut Criterion) {
                                 .map(|input| {
                                     let executor = executor_clone.clone();
                                     let command = IncrementCounterCommand;
-                                    async move { executor.execute(&command, input).await }
+                                    async move {
+                                        executor
+                                            .execute(&command, input, ExecutionOptions::default())
+                                            .await
+                                    }
                                 })
                                 .collect();
 
@@ -357,6 +376,7 @@ fn bench_event_store_operations(c: &mut Criterion) {
                             stream_id: stream_id.clone(),
                             amount: u32::try_from(i).unwrap() + 1,
                         },
+                        ExecutionOptions::default(),
                     )
                     .await
                     .unwrap();

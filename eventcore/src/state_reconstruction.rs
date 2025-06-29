@@ -287,6 +287,7 @@ mod tests {
         type Input = ();
         type State = TestState;
         type Event = TestEvent;
+        type StreamSet = ();
 
         fn read_streams(&self, _input: &Self::Input) -> Vec<StreamId> {
             vec![StreamId::try_new("test-stream").unwrap()]
@@ -309,9 +310,12 @@ mod tests {
 
         async fn handle(
             &self,
+            _read_streams: crate::command::ReadStreams<Self::StreamSet>,
             _state: Self::State,
             _input: Self::Input,
-        ) -> crate::command::CommandResult<Vec<(StreamId, Self::Event)>> {
+        ) -> crate::command::CommandResult<
+            Vec<crate::command::StreamWrite<Self::StreamSet, Self::Event>>,
+        > {
             // Not needed for these tests
             unimplemented!()
         }

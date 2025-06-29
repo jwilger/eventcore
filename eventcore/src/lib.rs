@@ -487,7 +487,7 @@ mod type_registry;
 mod types;
 
 // Public API exports
-pub use command::{Command, CommandResult};
+pub use command::{Command, CommandResult, ReadStreams, StreamWrite};
 pub use errors::{
     CommandError, EventStoreError, ProjectionError, ProjectionResult, ValidationError,
 };
@@ -495,7 +495,7 @@ pub use event::Event;
 pub use event_store::{
     EventStore, EventToWrite, ExpectedVersion, ReadOptions, StoredEvent, StreamData, StreamEvents,
 };
-pub use executor::{CommandExecutor, ExecutionContext, RetryConfig, RetryPolicy};
+pub use executor::{CommandExecutor, ExecutionContext, ExecutionOptions, RetryConfig, RetryPolicy};
 pub use metadata::{CausationId, CorrelationId, EventMetadata, UserId};
 pub use projection::{Projection, ProjectionCheckpoint, ProjectionConfig, ProjectionStatus};
 pub use projection_manager::ProjectionManager;
@@ -518,8 +518,8 @@ pub mod prelude {
 
     pub use crate::{
         Command, CommandError, CommandExecutor, CommandResult, Event, EventId, EventMetadata,
-        EventStore, EventToWrite, EventVersion, ExpectedVersion, ProjectionResult, ReadOptions,
-        StoredEvent, StreamData, StreamEvents, StreamId, Timestamp,
+        EventStore, EventToWrite, EventVersion, ExecutionOptions, ExpectedVersion,
+        ProjectionResult, ReadOptions, StoredEvent, StreamData, StreamEvents, StreamId, Timestamp,
     };
 
     #[cfg(any(test, feature = "testing"))]

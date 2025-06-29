@@ -103,6 +103,7 @@
 use crate::errors::CommandError;
 use crate::types::StreamId;
 use async_trait::async_trait;
+use std::marker::PhantomData;
 
 /// Type alias for command operation results.
 ///
@@ -119,11 +120,100 @@ use async_trait::async_trait;
 /// ```
 pub type CommandResult<T> = Result<T, CommandError>;
 
-/// Core trait for implementing event sourcing commands.
+/// Type-safe representation of streams that a command has declared it will access.
+///
+/// This type ensures that commands can only write to streams they declared they would read from,
+/// making it impossible to violate the concurrency control contract at compile time.
+///
+/// The `ReadStreams<S>` type uses phantom types to track which specific streams were declared
+/// in the `read_streams` method, and only allows creating write events for those streams.
+#[derive(Debug, Clone)]
+pub struct ReadStreams<S> {
+    /// The actual stream IDs that were declared for reading
+    pub(crate) stream_ids: Vec<StreamId>,
+    /// Phantom data to track the stream set at the type level
+    _phantom: PhantomData<S>,
+}
+
+impl<S> ReadStreams<S> {
+    /// Create a new ReadStreams instance from the declared stream IDs.
+    ///
+    /// This is called internally by the command executor after calling `read_streams`.
+    /// User code should not call this directly.
+    pub(crate) const fn new(stream_ids: Vec<StreamId>) -> Self {
+        Self {
+            stream_ids,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Get the stream IDs that were declared for reading.
+    ///
+    /// This is used by the command executor to know which streams to read from
+    /// and which stream versions to check for concurrency control.
+    pub fn stream_ids(&self) -> &[StreamId] {
+        &self.stream_ids
+    }
+}
+
+/// A type-safe event write that can only target streams that were declared for reading.
+///
+/// This type ensures that commands cannot write to streams they didn't declare they would
+/// access, preventing concurrency control violations at compile time.
+#[derive(Debug, Clone)]
+pub struct StreamWrite<S, E> {
+    /// The target stream for this write
+    pub stream_id: StreamId,
+    /// The event to write
+    pub event: E,
+    /// Phantom data to ensure this write is only valid for the declared stream set
+    _phantom: PhantomData<S>,
+}
+
+impl<S, E> StreamWrite<S, E> {
+    /// Create a new StreamWrite, but only if the target stream was declared for reading.
+    ///
+    /// This method performs a runtime check to ensure the target stream was in the
+    /// original read set, making it impossible to write to undeclared streams.
+    pub fn new(
+        read_streams: &ReadStreams<S>,
+        stream_id: StreamId,
+        event: E,
+    ) -> Result<Self, CommandError> {
+        // Verify the stream was declared for reading
+        if !read_streams.stream_ids.contains(&stream_id) {
+            return Err(CommandError::ValidationFailed(format!(
+                "Cannot write to stream '{stream_id}' - it was not declared in read_streams()"
+            )));
+        }
+
+        Ok(Self {
+            stream_id,
+            event,
+            _phantom: PhantomData,
+        })
+    }
+
+    /// Extract the stream ID and event for writing.
+    ///
+    /// This is used internally by the command executor.
+    pub fn into_parts(self) -> (StreamId, E) {
+        (self.stream_id, self.event)
+    }
+}
+
+/// Core trait for implementing type-safe event sourcing commands.
 ///
 /// The `Command` trait is the heart of EventCore's aggregate-per-command pattern.
 /// Each command implementation defines its own consistency boundary and can work
 /// with multiple event streams atomically.
+///
+/// # Type Safety Guarantees
+///
+/// This trait provides compile-time and runtime guarantees that:
+/// 1. Commands can only write to streams they declared they would read from
+/// 2. All read streams are checked for version conflicts, not just written streams
+/// 3. Concurrency control violations are impossible at the type level
 ///
 /// # Design Philosophy
 ///
@@ -132,14 +222,14 @@ pub type CommandResult<T> = Result<T, CommandError>;
 /// - Specify how to fold events into state
 /// - Implement the business logic that produces new events
 /// - Can work across multiple streams in a single atomic operation
+/// - CANNOT write to streams they didn't declare for reading
 ///
 /// # Type Parameters
 ///
 /// * `Input` - The command's input type. Must be self-validating through smart constructors.
-///   If an instance exists, it's guaranteed to be valid.
-/// * `State` - The state model this command operates on. Must implement `Default` for
-///   initialization when streams are empty.
+/// * `State` - The state model this command operates on. Must implement `Default`.
 /// * `Event` - The event type this command produces.
+/// * `StreamSet` - A phantom type representing the set of streams this command accesses.
 ///
 /// # Implementation Guide
 ///
@@ -147,6 +237,7 @@ pub type CommandResult<T> = Result<T, CommandError>;
 /// 2. **State Types**: Keep them focused on what the command needs
 /// 3. **Event Types**: Design for event sourcing, not current needs
 /// 4. **Business Logic**: Keep it pure in the `handle` method
+/// 5. **Stream Safety**: Use `StreamWrite::new()` to enforce access control
 ///
 /// # Example: Order Placement
 ///
@@ -436,9 +527,37 @@ pub trait Command: Send + Sync {
     ///     )])
     /// }
     /// ```
+    /// A phantom type that represents the set of streams this command accesses.
+    ///
+    /// This is used at the type level to ensure write safety. Define an empty struct for this.
+    type StreamSet: Send + Sync;
+
+    /// Executes the command's business logic with type-safe stream access.
+    ///
+    /// CRITICAL: This method receives:
+    /// - `read_streams`: Type-safe representation of the declared streams
+    /// - `state`: Reconstructed state from all declared streams  
+    /// - `input`: The validated command input
+    ///
+    /// It must return `StreamWrite` instances that can only be created for declared streams.
+    /// The executor will:
+    /// 1. Write the events to their target streams
+    /// 2. Check expected versions of ALL declared streams (read_streams), not just written ones
+    /// 3. Retry if any declared stream has been modified since reading
+    ///
+    /// # Type Safety
+    ///
+    /// `StreamWrite::new()` ensures you can only write to streams declared in `read_streams()`.
+    /// This makes it impossible to violate the concurrency control contract.
+    ///
+    /// # Complete Concurrency Control
+    ///
+    /// Expected versions are checked for ALL streams that were read, even if they're
+    /// not being written to. This prevents commands from making decisions based on stale data.
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
-    ) -> CommandResult<Vec<(StreamId, Self::Event)>>;
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>>;
 }

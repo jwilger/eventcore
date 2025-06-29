@@ -1,4 +1,4 @@
-use crate::command::{Command, CommandResult};
+use crate::command::{Command, CommandResult, ReadStreams, StreamWrite};
 use crate::errors::CommandError;
 use crate::event_store::{EventToWrite, ExpectedVersion, ReadOptions, StreamEvents};
 use crate::types::{EventId, EventVersion, StreamId};
@@ -86,6 +86,98 @@ impl Default for ExecutionContext {
             user_id: None,
             metadata: std::collections::HashMap::new(),
         }
+    }
+}
+
+/// Execution options for command execution with sensible defaults.
+///
+/// By default, commands are executed with retry logic enabled for concurrency conflicts.
+/// This provides automatic handling of transient failures without requiring explicit
+/// configuration in the common case.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Execute with default retry behavior
+/// executor.execute(&command, input, ExecutionOptions::default()).await?;
+///
+/// // Execute without retry
+/// executor.execute(&command, input, ExecutionOptions::new().without_retry()).await?;
+///
+/// // Execute with custom retry configuration
+/// executor.execute(
+///     &command,
+///     input,
+///     ExecutionOptions::new()
+///         .with_retry_config(RetryConfig { max_attempts: 10, ..Default::default() })
+/// ).await?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct ExecutionOptions {
+    /// Execution context for tracing and auditing.
+    pub context: ExecutionContext,
+    /// Retry configuration. None disables retries entirely.
+    pub retry_config: Option<RetryConfig>,
+    /// Policy for determining which errors should trigger a retry.
+    pub retry_policy: RetryPolicy,
+}
+
+impl Default for ExecutionOptions {
+    fn default() -> Self {
+        Self {
+            context: ExecutionContext::default(),
+            retry_config: Some(RetryConfig::default()), // Retry enabled by default
+            retry_policy: RetryPolicy::default(),
+        }
+    }
+}
+
+impl ExecutionOptions {
+    /// Creates new execution options with default settings.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the execution context.
+    #[must_use]
+    pub fn with_context(mut self, context: ExecutionContext) -> Self {
+        self.context = context;
+        self
+    }
+
+    /// Disables retry logic entirely.
+    #[must_use]
+    pub const fn without_retry(mut self) -> Self {
+        self.retry_config = None;
+        self
+    }
+
+    /// Sets a custom retry configuration.
+    #[must_use]
+    pub const fn with_retry_config(mut self, config: RetryConfig) -> Self {
+        self.retry_config = Some(config);
+        self
+    }
+
+    /// Sets the retry policy.
+    #[must_use]
+    pub const fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry_policy = policy;
+        self
+    }
+
+    /// Sets the correlation ID in the execution context.
+    #[must_use]
+    pub fn with_correlation_id(mut self, correlation_id: String) -> Self {
+        self.context.correlation_id = correlation_id;
+        self
+    }
+
+    /// Sets the user ID in the execution context.
+    #[must_use]
+    pub fn with_user_id(mut self, user_id: Option<String>) -> Self {
+        self.context.user_id = user_id;
+        self
     }
 }
 
@@ -195,11 +287,11 @@ where
         self
     }
 
-    /// Executes a command without retry logic using a default execution context.
+    /// Executes a command with automatic retry logic based on the provided options.
     ///
-    /// This is a convenience method that creates a default execution context.
-    /// For production use, consider using `execute_with_context` to provide
-    /// proper correlation and user IDs.
+    /// By default, this method will retry on concurrency conflicts using exponential
+    /// backoff. The retry behavior can be customized or disabled through the
+    /// `ExecutionOptions` parameter.
     ///
     /// # Type Parameters
     ///
@@ -209,29 +301,70 @@ where
     ///
     /// * `command` - The command instance to execute
     /// * `input` - The validated command input
+    /// * `options` - Execution options including retry configuration and context
     ///
     /// # Returns
     ///
     /// A result containing the success outcome or a `CommandError`.
-    #[instrument(skip(self, command, input), fields(command_type = std::any::type_name::<C>()))]
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Execute with default retry behavior
+    /// let result = executor.execute(
+    ///     &command,
+    ///     input,
+    ///     ExecutionOptions::default()
+    /// ).await?;
+    ///
+    /// // Execute without retry
+    /// let result = executor.execute(
+    ///     &command,
+    ///     input,
+    ///     ExecutionOptions::new().without_retry()
+    /// ).await?;
+    /// ```
+    #[instrument(skip(self, command, input), fields(
+        command_type = std::any::type_name::<C>(),
+        correlation_id = %options.context.correlation_id,
+        user_id = options.context.user_id.as_deref().unwrap_or("anonymous"),
+        retry_enabled = options.retry_config.is_some()
+    ))]
     pub async fn execute<C>(
         &self,
         command: &C,
         input: C::Input,
+        options: ExecutionOptions,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
+        C::Input: Clone,
         C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event>,
     {
-        self.execute_with_context(command, input, ExecutionContext::default())
-            .await
+        match options.retry_config {
+            Some(retry_config) => {
+                // Execute with retry logic
+                self.execute_with_retry_internal(
+                    command,
+                    input,
+                    options.context,
+                    retry_config,
+                    options.retry_policy,
+                )
+                .await
+            }
+            None => {
+                // Execute without retry
+                self.execute_once(command, input, options.context).await
+            }
+        }
     }
 
-    /// Executes a command without retry logic.
+    /// Executes a command once without retry logic.
     ///
-    /// This method orchestrates the complete command execution flow:
+    /// This internal method orchestrates the complete command execution flow:
     /// 1. Determines which streams to read using `command.read_streams()`
     /// 2. Reads events from those streams
     /// 3. Reconstructs state by folding events using `command.apply()`
@@ -267,7 +400,7 @@ where
             user_id = context.user_id.as_deref().unwrap_or("anonymous")
         )
     )]
-    pub async fn execute_with_context<C>(
+    async fn execute_once<C>(
         &self,
         command: &C,
         input: C::Input,
@@ -332,21 +465,36 @@ where
         }
         info!(applied_events, "Applied events to reconstruct state");
 
-        // Step 4: Execute command business logic
-        let events_to_write = command.handle(state, input).await.map_err(|err| {
-            warn!(error = %err, "Command business logic failed");
-            err
-        })?;
+        // Step 4: Execute command business logic with type-safe stream access
+        let read_streams = ReadStreams::new(stream_ids.clone());
+        let stream_writes = command
+            .handle(read_streams, state, input)
+            .await
+            .map_err(|err| {
+                warn!(error = %err, "Command business logic failed");
+                err
+            })?;
 
-        let events_to_write_count = events_to_write.len();
+        let stream_writes_count = stream_writes.len();
         info!(
-            events_to_write = events_to_write_count,
+            events_to_write = stream_writes_count,
             "Command produced events for writing"
         );
 
+        // Convert StreamWrite instances to (StreamId, Event) pairs
+        let events_to_write: Vec<(StreamId, C::Event)> = stream_writes
+            .into_iter()
+            .map(super::command::StreamWrite::into_parts)
+            .collect();
+
         // Step 5: Write resulting events atomically with optimistic concurrency control
-        let stream_events =
-            Self::prepare_stream_events::<C>(events_to_write, &stream_data, &context);
+        // CRITICAL: Check expected versions of ALL streams that were read, not just written streams
+        let stream_events = Self::prepare_stream_events_with_complete_concurrency_control::<C>(
+            events_to_write,
+            &stream_data,
+            &stream_ids, // Pass ALL read streams for version checking
+            &context,
+        );
 
         let result_versions = self
             .event_store
@@ -448,10 +596,114 @@ where
         stream_events
     }
 
-    /// Executes a command with automatic retry logic.
+    /// Prepares stream events with COMPLETE concurrency control.
     ///
-    /// This method wraps the execute method with retry logic based on the
-    /// configured `RetryConfig` and `RetryPolicy`. It will retry the operation
+    /// This method ensures that ALL streams that were read are checked for version conflicts,
+    /// not just the streams being written to. This prevents commands from making decisions
+    /// based on stale data from ANY of the streams they read.
+    fn prepare_stream_events_with_complete_concurrency_control<C>(
+        events_to_write: Vec<(StreamId, C::Event)>,
+        stream_data: &crate::event_store::StreamData<ES::Event>,
+        all_read_streams: &[StreamId], // ALL streams that were read
+        context: &ExecutionContext,
+    ) -> Vec<StreamEvents<ES::Event>>
+    where
+        C: Command,
+        ES::Event: From<C::Event>,
+    {
+        use crate::metadata::{CorrelationId, UserId};
+
+        // Group events by stream for writing
+        let mut streams_with_writes: HashMap<StreamId, Vec<C::Event>> = HashMap::with_capacity(4);
+        for (stream_id, event) in events_to_write {
+            streams_with_writes
+                .entry(stream_id)
+                .or_insert_with(|| Vec::with_capacity(1))
+                .push(event);
+        }
+
+        let mut stream_events =
+            Vec::with_capacity(all_read_streams.len().max(streams_with_writes.len()));
+
+        // Process streams that have writes (same as before)
+        for (stream_id, events) in streams_with_writes {
+            let current_version = stream_data
+                .stream_version(&stream_id)
+                .unwrap_or_else(EventVersion::initial);
+            let expected_version = if current_version == EventVersion::initial() {
+                ExpectedVersion::New
+            } else {
+                ExpectedVersion::Exact(current_version)
+            };
+
+            // Convert events to EventToWrite instances
+            let events_to_write: Vec<EventToWrite<ES::Event>> = events
+                .into_iter()
+                .map(|event| {
+                    let event_id = EventId::new();
+
+                    let correlation_id = uuid::Uuid::parse_str(&context.correlation_id)
+                        .ok()
+                        .and_then(|uuid| CorrelationId::try_new(uuid).ok())
+                        .unwrap_or_default();
+
+                    let user_id = context
+                        .user_id
+                        .as_ref()
+                        .and_then(|uid| UserId::try_new(uid.clone()).ok());
+
+                    let metadata = crate::metadata::EventMetadata::new()
+                        .with_correlation_id(correlation_id)
+                        .with_user_id(user_id);
+
+                    EventToWrite::with_metadata(event_id, ES::Event::from(event), metadata)
+                })
+                .collect();
+
+            stream_events.push(StreamEvents::new(
+                stream_id,
+                expected_version,
+                events_to_write,
+            ));
+        }
+
+        // CRITICAL: Also add version checks for streams that were READ but NOT written to
+        // This ensures complete concurrency control - any change to ANY read stream will
+        // cause the command to be retried with fresh data
+        for read_stream_id in all_read_streams {
+            // Skip streams we're already writing to (handled above)
+            if stream_events
+                .iter()
+                .any(|se| &se.stream_id == read_stream_id)
+            {
+                continue;
+            }
+
+            // Add a version check for this read-only stream
+            let current_version = stream_data
+                .stream_version(read_stream_id)
+                .unwrap_or_else(EventVersion::initial);
+            let expected_version = if current_version == EventVersion::initial() {
+                ExpectedVersion::New
+            } else {
+                ExpectedVersion::Exact(current_version)
+            };
+
+            // Create a StreamEvents with no writes, just the version check
+            stream_events.push(StreamEvents::new(
+                read_stream_id.clone(),
+                expected_version,
+                Vec::new(), // No events to write, just checking version
+            ));
+        }
+
+        stream_events
+    }
+
+    /// Internal method that executes a command with automatic retry logic.
+    ///
+    /// This method wraps the execute_once method with retry logic based on the
+    /// provided `RetryConfig` and `RetryPolicy`. It will retry the operation
     /// if the error matches the retry policy, up to the maximum number of
     /// attempts specified in the retry configuration.
     ///
@@ -467,6 +719,8 @@ where
     /// * `command` - The command instance to execute
     /// * `input` - The validated command input  
     /// * `context` - Execution context for tracing and auditing
+    /// * `retry_config` - Configuration for retry behavior
+    /// * `retry_policy` - Policy for determining which errors should trigger a retry
     ///
     /// # Returns
     ///
@@ -485,14 +739,16 @@ where
             command_type = std::any::type_name::<C>(),
             correlation_id = %context.correlation_id,
             user_id = context.user_id.as_deref().unwrap_or("anonymous"),
-            max_attempts = self.retry_config.max_attempts
+            max_attempts = retry_config.max_attempts
         )
     )]
-    pub async fn execute_with_retry<C>(
+    async fn execute_with_retry_internal<C>(
         &self,
         command: &C,
         input: C::Input,
         context: ExecutionContext,
+        retry_config: RetryConfig,
+        retry_policy: RetryPolicy,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
@@ -503,11 +759,11 @@ where
     {
         let mut last_error = None;
 
-        for attempt in 0..self.retry_config.max_attempts {
+        for attempt in 0..retry_config.max_attempts {
             info!(attempt = attempt + 1, "Attempting command execution");
 
             match self
-                .execute_with_context(command, input.clone(), context.clone())
+                .execute_once(command, input.clone(), context.clone())
                 .await
             {
                 Ok(result) => {
@@ -524,7 +780,7 @@ where
                     );
 
                     // Check if this error should trigger a retry
-                    if !self.retry_policy.should_retry(&error) {
+                    if !retry_policy.should_retry(&error) {
                         warn!("Error is not retryable, failing immediately");
                         return Err(error);
                     }
@@ -532,8 +788,8 @@ where
                     last_error = Some(error);
 
                     // If this is not the last attempt, wait before retrying
-                    if attempt < self.retry_config.max_attempts - 1 {
-                        let delay = self.calculate_retry_delay(attempt);
+                    if attempt < retry_config.max_attempts - 1 {
+                        let delay = Self::calculate_retry_delay(attempt, &retry_config);
                         info!(
                             retry_delay_ms = delay.as_millis(),
                             next_attempt = attempt + 2,
@@ -559,6 +815,7 @@ where
     /// # Arguments
     ///
     /// * `attempt` - The current attempt number (0-based)
+    /// * `retry_config` - The retry configuration to use
     ///
     /// # Returns
     ///
@@ -568,16 +825,15 @@ where
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         clippy::cast_possible_wrap,
-        clippy::items_after_statements,
-        dead_code // Will be used when execute_with_retry is implemented
+        clippy::items_after_statements
     )]
-    fn calculate_retry_delay(&self, attempt: u32) -> Duration {
+    fn calculate_retry_delay(attempt: u32, retry_config: &RetryConfig) -> Duration {
         use rand::Rng;
 
-        let base_delay_ms = self.retry_config.base_delay.as_millis() as f64;
-        let max_delay_ms = self.retry_config.max_delay.as_millis() as f64;
+        let base_delay_ms = retry_config.base_delay.as_millis() as f64;
+        let max_delay_ms = retry_config.max_delay.as_millis() as f64;
 
-        let delay = base_delay_ms * self.retry_config.backoff_multiplier.powi(attempt as i32);
+        let delay = base_delay_ms * retry_config.backoff_multiplier.powi(attempt as i32);
         let delay = delay.min(max_delay_ms);
 
         // Add jitter (±25% of the delay)
@@ -952,6 +1208,7 @@ mod tests {
         type Input = MockInput;
         type State = MockState;
         type Event = MockEvent;
+        type StreamSet = ();
 
         fn read_streams(&self, _input: &Self::Input) -> Vec<StreamId> {
             self.streams_to_read.clone()
@@ -967,9 +1224,10 @@ mod tests {
 
         async fn handle(
             &self,
+            _read_streams: ReadStreams<Self::StreamSet>,
             _state: Self::State,
             _input: Self::Input,
-        ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+        ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
             if self.should_fail {
                 Err(CommandError::BusinessRuleViolation(
                     "Mock failure".to_string(),
@@ -979,7 +1237,9 @@ mod tests {
                     .events_to_write
                     .clone()
                     .into_iter()
-                    .map(|(stream_id, event_str)| (stream_id, MockEvent(event_str)))
+                    .map(|(stream_id, event_str)| {
+                        StreamWrite::new(&_read_streams, stream_id, MockEvent(event_str)).unwrap()
+                    })
                     .collect())
             }
         }
@@ -1000,7 +1260,9 @@ mod tests {
             value: "test".to_string(),
         };
 
-        let result = executor.execute(&command, input).await;
+        let result = executor
+            .execute(&command, input, ExecutionOptions::default())
+            .await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1023,7 +1285,9 @@ mod tests {
             value: "test".to_string(),
         };
 
-        let result = executor.execute(&command, input).await;
+        let result = executor
+            .execute(&command, input, ExecutionOptions::default())
+            .await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), CommandError::EventStore(_)));
     }
@@ -1045,7 +1309,13 @@ mod tests {
         };
         let context = ExecutionContext::default();
 
-        let result = executor.execute_with_retry(&command, input, context).await;
+        let result = executor
+            .execute(
+                &command,
+                input,
+                ExecutionOptions::new().with_context(context),
+            )
+            .await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1178,7 +1448,7 @@ mod tests {
                     ..Default::default()
                 });
 
-            let delay = executor.calculate_retry_delay(attempt);
+            let delay = calculate_retry_delay(attempt, &executor.retry_config);
 
             // Delay should never exceed max_delay (plus some tolerance for jitter)
             prop_assert!(delay <= Duration::from_secs(6));
@@ -1200,8 +1470,8 @@ mod tests {
             let trials = 10;
 
             for _ in 0..trials {
-                let delay1 = executor.calculate_retry_delay(attempt1);
-                let delay2 = executor.calculate_retry_delay(attempt2);
+                let delay1 = calculate_retry_delay(attempt1, &executor.retry_config);
+                let delay2 = calculate_retry_delay(attempt2, &executor.retry_config);
 
                 if delay1 < delay2 {
                     delay1_less_than_delay2 += 1;
