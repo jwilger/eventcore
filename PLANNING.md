@@ -554,13 +554,13 @@ This document outlines the implementation plan for the EventCore multi-stream ev
   - [x] `eventcore-postgres` - PostgreSQL adapter docs
   - [x] `eventcore-memory` - Testing adapter docs
   - [x] `eventcore-examples` - Example usage docs
-- [ ] Add comprehensive CHANGELOG.md
-- [ ] Define semantic versioning strategy
-- [ ] Create migration guides
-- [ ] Publishing strategy:
-  - [ ] Publish `eventcore` core crate first
-  - [ ] Publish adapter crates with version alignment
-  - [ ] Use workspace versioning for consistency
+- [x] Add comprehensive CHANGELOG.md
+- [x] Define semantic versioning strategy
+- [x] Create migration guides
+- [x] Publishing strategy:
+  - [x] Publish `eventcore` core crate first
+  - [x] Publish adapter crates with version alignment
+  - [x] Use workspace versioning for consistency
 
 ### 14.2 Final Testing
 
