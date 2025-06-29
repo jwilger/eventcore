@@ -524,15 +524,15 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 13.3 Better Error Messages
 
-- [ ] Add `miette` or similar crate for diagnostic derives
-- [ ] Create custom diagnostics for common errors:
-  - [ ] `InvalidStreamAccess` with helpful hints
-  - [ ] `StreamNotDeclared` suggesting adding to reads
-  - [ ] `TypeMismatch` with clear type expectations
-  - [ ] `ConcurrencyConflict` with retry suggestions
-- [ ] Implement `Diagnostic` trait for all error types
-- [ ] Write tests verifying error message quality
-- [ ] Document error handling patterns
+- [x] Add `miette` or similar crate for diagnostic derives
+- [x] Create custom diagnostics for common errors:
+  - [x] `InvalidStreamAccess` with helpful hints
+  - [x] `StreamNotDeclared` suggesting adding to reads
+  - [x] `TypeMismatch` with clear type expectations
+  - [x] `ConcurrencyConflict` with retry suggestions
+- [x] Implement `Diagnostic` trait for all error types
+- [x] Write tests verifying error message quality
+- [x] Document error handling patterns
 
 ### 13.4 Interactive Documentation
 

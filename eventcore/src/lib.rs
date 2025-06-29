@@ -649,6 +649,9 @@ pub use projection_manager::ProjectionManager;
 pub use subscription::{Subscription, SubscriptionImpl, SubscriptionOptions};
 pub use types::{EventId, EventVersion, StreamId, Timestamp};
 
+// Re-export miette for enhanced error diagnostics
+pub use miette;
+
 /// Testing utilities for event sourcing applications
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

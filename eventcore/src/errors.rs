@@ -7,6 +7,7 @@
 //! - **Type safety**: Different error types for different subsystems
 //! - **Actionable**: Users can determine how to handle each error
 //! - **Composable**: Errors can be converted between layers
+//! - **Enhanced Diagnostics**: Uses [`miette`] for rich error reporting with helpful hints
 //!
 //! # Error Categories
 //!
@@ -15,7 +16,32 @@
 //! - **ProjectionError**: Event processing and projection failures
 //! - **ValidationError**: Input validation failures (rare due to type-driven design)
 //!
-//! # Example Usage
+//! # Enhanced Error Reporting
+//!
+//! EventCore uses the [`miette`] crate to provide rich, user-friendly error messages
+//! with actionable help text, error codes, and links to documentation.
+//!
+//! ```rust,ignore
+//! use eventcore::errors::{CommandError, CommandResult};
+//! use eventcore::miette::{Diagnostic, Report};
+//!
+//! async fn handle_command_with_diagnostics() -> Result<(), Box<dyn std::error::Error>> {
+//!     match execute_command().await {
+//!         Ok(result) => Ok(()),
+//!         Err(CommandError::ConcurrencyConflict { streams }) => {
+//!             // Enhanced error with helpful suggestions
+//!             let report = Report::new(CommandError::ConcurrencyConflict { streams });
+//!             eprintln!("{:?}", report);
+//!             Err(report.into())
+//!         }
+//!         Err(e) => Err(e.into())
+//!     }
+//! }
+//! ```
+//!
+//! # Error Handling Patterns
+//!
+//! ## Command Error Handling
 //!
 //! ```rust,ignore
 //! use eventcore::errors::{CommandError, CommandResult};
@@ -29,9 +55,168 @@
 //!     // ... transfer logic
 //!     Ok(())
 //! }
+//!
+//! // Handling errors with retry logic
+//! async fn transfer_with_retry(amount: Money) -> CommandResult<()> {
+//!     let mut attempts = 0;
+//!     let max_attempts = 3;
+//!     
+//!     loop {
+//!         match transfer_money(amount).await {
+//!             Ok(result) => return Ok(result),
+//!             Err(CommandError::ConcurrencyConflict { .. }) if attempts < max_attempts => {
+//!                 attempts += 1;
+//!                 let delay = std::time::Duration::from_millis(100 * 2_u64.pow(attempts));
+//!                 tokio::time::sleep(delay).await;
+//!                 continue;
+//!             }
+//!             Err(e) => return Err(e),
+//!         }
+//!     }
+//! }
 //! ```
+//!
+//! ## Stream Access Error Handling
+//!
+//! ```rust,ignore
+//! use eventcore::errors::CommandError;
+//!
+//! // Handle stream access violations
+//! match command_result {
+//!     Err(CommandError::InvalidStreamAccess { stream, declared_streams }) => {
+//!         eprintln!("Error: Attempted to access stream '{}' which was not declared", stream);
+//!         eprintln!("Declared streams: {:?}", declared_streams);
+//!         eprintln!("Fix: Add '{}' to your command's read_streams() method", stream);
+//!     }
+//!     Err(CommandError::StreamNotDeclared { stream, command_type }) => {
+//!         eprintln!("Error: Stream '{}' not declared in {}", stream, command_type);
+//!         eprintln!("Fix: Add stream to read_streams() method to enable write access");
+//!     }
+//!     _ => {}
+//! }
+//! ```
+//!
+//! ## Type Mismatch Error Handling
+//!
+//! ```rust,ignore
+//! use eventcore::errors::CommandError;
+//!
+//! match event_processing_result {
+//!     Err(CommandError::TypeMismatch { expected, actual, context }) => {
+//!         eprintln!("Type mismatch: expected {}, found {}", expected, actual);
+//!         if let Some(ctx) = context {
+//!             eprintln!("Context: {}", ctx);
+//!         }
+//!         eprintln!("This may indicate a schema migration is needed");
+//!     }
+//!     _ => {}
+//! }
+//! ```
+//!
+//! ## Event Store Error Patterns
+//!
+//! ```rust,ignore
+//! use eventcore::errors::{EventStoreError, EventStoreResult};
+//! use std::time::Duration;
+//!
+//! async fn write_events_with_retry<E>(
+//!     store: &impl EventStore<Event = E>,
+//!     events: Vec<StreamEvents<E>>,
+//! ) -> EventStoreResult<()> {
+//!     let mut retries = 3;
+//!     
+//!     loop {
+//!         match store.write_events_multi(events.clone()).await {
+//!             Ok(_) => return Ok(()),
+//!             Err(EventStoreError::VersionConflict { stream, expected, current }) => {
+//!                 if retries > 0 {
+//!                     retries -= 1;
+//!                     eprintln!("Version conflict on stream '{}': expected {}, found {}",
+//!                              stream, expected, current);
+//!                     eprintln!("Retrying in 100ms... ({} attempts remaining)", retries);
+//!                     tokio::time::sleep(Duration::from_millis(100)).await;
+//!                     continue;
+//!                 } else {
+//!                     return Err(EventStoreError::VersionConflict { stream, expected, current });
+//!                 }
+//!             }
+//!             Err(EventStoreError::ConnectionFailed(msg)) => {
+//!                 eprintln!("Connection failed: {}", msg);
+//!                 eprintln!("Consider checking network connectivity and database health");
+//!                 return Err(EventStoreError::ConnectionFailed(msg));
+//!             }
+//!             Err(e) => return Err(e),
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! ## Projection Error Recovery
+//!
+//! ```rust,ignore
+//! use eventcore::errors::{ProjectionError, ProjectionResult};
+//!
+//! async fn start_projection_with_recovery(
+//!     projection: &mut impl Projection
+//! ) -> ProjectionResult<()> {
+//!     match projection.start().await {
+//!         Ok(_) => {
+//!             println!("Projection started successfully");
+//!             Ok(())
+//!         }
+//!         Err(ProjectionError::AlreadyRunning(name)) => {
+//!             println!("Projection '{}' is already running", name);
+//!             Ok(()) // This is often acceptable
+//!         }
+//!         Err(ProjectionError::CheckpointLoadFailed(reason)) => {
+//!             println!("Failed to load checkpoint: {}", reason);
+//!             println!("Starting projection from beginning...");
+//!             projection.reset().await?;
+//!             projection.start().await
+//!         }
+//!         Err(e) => {
+//!             eprintln!("Projection start failed: {}", e);
+//!             Err(e)
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! ## Error Conversion and Propagation
+//!
+//! ```rust,ignore
+//! use eventcore::errors::{CommandError, EventStoreError};
+//!
+//! // EventStoreError automatically converts to CommandError
+//! fn handle_event_store_error() -> Result<(), CommandError> {
+//!     let event_store_error = EventStoreError::ConnectionFailed("timeout".to_string());
+//!     Err(event_store_error.into()) // Converts to CommandError::EventStore
+//! }
+//!
+//! // Version conflicts become concurrency conflicts
+//! fn handle_version_conflict() -> Result<(), CommandError> {
+//!     let stream_id = StreamId::try_new("test").unwrap();
+//!     let version_conflict = EventStoreError::VersionConflict {
+//!         stream: stream_id.clone(),
+//!         expected: EventVersion::try_new(1).unwrap(),
+//!         current: EventVersion::try_new(2).unwrap(),
+//!     };
+//!     Err(version_conflict.into()) // Becomes CommandError::ConcurrencyConflict
+//! }
+//! ```
+//!
+//! ## Best Practices
+//!
+//! 1. **Use Specific Error Types**: Choose the most specific error variant that describes the failure
+//! 2. **Include Context**: Provide relevant information like stream IDs, expected vs actual values
+//! 3. **Handle Retryable Errors**: Implement retry logic for `ConcurrencyConflict` and transient failures
+//! 4. **Log with Correlation**: Include correlation IDs in error messages for tracing
+//! 5. **Use Diagnostics**: Leverage `miette` features for user-friendly error reporting
+//! 6. **Fail Fast**: Don't retry business rule violations or validation errors
+//! 7. **Graceful Degradation**: Handle projection failures without stopping the entire system
 
 use crate::types::{EventId, EventVersion, StreamId};
+use miette::Diagnostic;
 use thiserror::Error;
 
 /// Errors that can occur during command execution.
@@ -66,7 +251,7 @@ use thiserror::Error;
 ///     Err(e) => return Err(e),
 /// }
 /// ```
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, Diagnostic)]
 pub enum CommandError {
     /// The command input validation failed.
     /// This should be rare as validation should happen at type construction.
@@ -79,6 +264,11 @@ pub enum CommandError {
 
     /// Optimistic concurrency control detected conflicting updates.
     #[error("Concurrency conflict on streams: {streams:?}")]
+    #[diagnostic(
+        code(eventcore::concurrency_conflict),
+        help("This error occurs when multiple commands modify the same streams simultaneously. Consider implementing retry logic with exponential backoff."),
+        url("https://docs.rs/eventcore/latest/eventcore/errors/enum.CommandError.html#variant.ConcurrencyConflict")
+    )]
     ConcurrencyConflict {
         /// The streams that had version conflicts
         streams: Vec<StreamId>,
@@ -87,6 +277,50 @@ pub enum CommandError {
     /// One or more required streams were not found.
     #[error("Stream not found: {0}")]
     StreamNotFound(StreamId),
+
+    /// Attempted to access a stream that wasn't declared in the command's read_streams().
+    #[error("Invalid stream access: stream '{stream}' was not declared in read_streams()")]
+    #[diagnostic(
+        code(eventcore::invalid_stream_access),
+        help("Commands can only write to streams they declare in their read_streams() method. Add '{stream}' to your command's read_streams() method."),
+        url("https://docs.rs/eventcore/latest/eventcore/errors/enum.CommandError.html#variant.InvalidStreamAccess")
+    )]
+    InvalidStreamAccess {
+        /// The stream that was accessed without being declared
+        stream: StreamId,
+        /// The streams that were actually declared
+        declared_streams: Vec<StreamId>,
+    },
+
+    /// Attempted to write to a stream that wasn't declared for read access.
+    #[error("Stream not declared: stream '{stream}' must be added to read_streams()")]
+    #[diagnostic(
+        code(eventcore::stream_not_declared),
+        help("Add '{stream}' to your command's read_streams() method to enable write access. Commands must declare all streams they intend to modify."),
+        url("https://docs.rs/eventcore/latest/eventcore/errors/enum.CommandError.html#variant.StreamNotDeclared")
+    )]
+    StreamNotDeclared {
+        /// The stream that wasn't declared
+        stream: StreamId,
+        /// The command type that attempted the access
+        command_type: String,
+    },
+
+    /// A type mismatch occurred during event processing.
+    #[error("Type mismatch: expected {expected}, found {actual}")]
+    #[diagnostic(
+        code(eventcore::type_mismatch),
+        help("Ensure your event types match the expected schema. Consider implementing proper event migration if schema has changed."),
+        url("https://docs.rs/eventcore/latest/eventcore/errors/enum.CommandError.html#variant.TypeMismatch")
+    )]
+    TypeMismatch {
+        /// The expected type
+        expected: String,
+        /// The actual type found
+        actual: String,
+        /// Context about where the mismatch occurred
+        context: Option<String>,
+    },
 
     /// The command requires authorization that was not provided.
     #[error("Unauthorized: missing permission {0}")]
@@ -135,7 +369,7 @@ pub enum CommandError {
 ///     }
 /// }
 /// ```
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Diagnostic)]
 pub enum EventStoreError {
     /// The requested stream was not found.
     #[error("Stream '{0}' not found")]
@@ -144,6 +378,11 @@ pub enum EventStoreError {
     /// A version conflict occurred when writing events.
     #[error(
         "Version conflict on stream '{stream}': expected {expected}, but current is {current}"
+    )]
+    #[diagnostic(
+        code(eventcore::version_conflict),
+        help("Another process has modified this stream since you read it. Re-read the stream and retry your operation with the latest version."),
+        url("https://docs.rs/eventcore/latest/eventcore/errors/enum.EventStoreError.html#variant.VersionConflict")
     )]
     VersionConflict {
         /// The stream with the version conflict
@@ -268,7 +507,7 @@ impl Clone for EventStoreError {
 ///     Err(e) => return Err(e),
 /// }
 /// ```
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, Diagnostic)]
 pub enum ProjectionError {
     /// The projection failed to process an event.
     #[error("Failed to process event {event_id}: {reason}")]
@@ -358,7 +597,7 @@ pub enum ProjectionError {
 ///     }
 /// }
 /// ```
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, Diagnostic)]
 pub enum ValidationError {
     /// The input was empty when a non-empty value was required.
     #[error("Value cannot be empty")]
@@ -435,9 +674,32 @@ mod tests {
         assert_eq!(err.to_string(), "Stream not found: test-stream");
 
         let err = CommandError::ConcurrencyConflict {
-            streams: vec![stream_id],
+            streams: vec![stream_id.clone()],
         };
         assert!(err.to_string().contains("Concurrency conflict"));
+
+        let err = CommandError::InvalidStreamAccess {
+            stream: stream_id.clone(),
+            declared_streams: vec![StreamId::try_new("other-stream").unwrap()],
+        };
+        assert!(err.to_string().contains("Invalid stream access"));
+        assert!(err.to_string().contains("test-stream"));
+
+        let err = CommandError::StreamNotDeclared {
+            stream: stream_id,
+            command_type: "TestCommand".to_string(),
+        };
+        assert!(err.to_string().contains("Stream not declared"));
+        assert!(err.to_string().contains("test-stream"));
+
+        let err = CommandError::TypeMismatch {
+            expected: "AccountEvent".to_string(),
+            actual: "OrderEvent".to_string(),
+            context: Some("event deserialization".to_string()),
+        };
+        assert!(err.to_string().contains("Type mismatch"));
+        assert!(err.to_string().contains("AccountEvent"));
+        assert!(err.to_string().contains("OrderEvent"));
     }
 
     #[test]
@@ -573,5 +835,98 @@ mod tests {
         assert!(command_fn().is_err());
         assert!(event_store_fn().is_ok());
         assert!(projection_fn().is_err());
+    }
+
+    #[test]
+    fn diagnostic_attributes_are_present() {
+        use miette::Diagnostic;
+
+        let stream_id = StreamId::try_new("test-stream").unwrap();
+
+        // Test ConcurrencyConflict diagnostic
+        let err = CommandError::ConcurrencyConflict {
+            streams: vec![stream_id.clone()],
+        };
+        assert_eq!(
+            err.code().unwrap().to_string(),
+            "eventcore::concurrency_conflict"
+        );
+        assert!(err.help().is_some());
+        assert!(err.url().is_some());
+
+        // Test InvalidStreamAccess diagnostic
+        let err = CommandError::InvalidStreamAccess {
+            stream: stream_id.clone(),
+            declared_streams: vec![],
+        };
+        assert_eq!(
+            err.code().unwrap().to_string(),
+            "eventcore::invalid_stream_access"
+        );
+        assert!(err.help().is_some());
+
+        // Test StreamNotDeclared diagnostic
+        let err = CommandError::StreamNotDeclared {
+            stream: stream_id.clone(),
+            command_type: "TestCommand".to_string(),
+        };
+        assert_eq!(
+            err.code().unwrap().to_string(),
+            "eventcore::stream_not_declared"
+        );
+        assert!(err.help().is_some());
+
+        // Test TypeMismatch diagnostic
+        let err = CommandError::TypeMismatch {
+            expected: "String".to_string(),
+            actual: "Integer".to_string(),
+            context: None,
+        };
+        assert_eq!(err.code().unwrap().to_string(), "eventcore::type_mismatch");
+        assert!(err.help().is_some());
+
+        // Test VersionConflict diagnostic
+        let err = EventStoreError::VersionConflict {
+            stream: stream_id,
+            expected: EventVersion::try_new(1).unwrap(),
+            current: EventVersion::try_new(2).unwrap(),
+        };
+        assert_eq!(
+            err.code().unwrap().to_string(),
+            "eventcore::version_conflict"
+        );
+        assert!(err.help().is_some());
+    }
+
+    #[test]
+    fn diagnostic_help_messages_are_useful() {
+        use miette::Diagnostic;
+
+        let stream_id1 = StreamId::try_new("test-stream-1").unwrap();
+        let stream_id2 = StreamId::try_new("test-stream-2").unwrap();
+        let stream_id3 = StreamId::try_new("test-stream-3").unwrap();
+
+        let err = CommandError::ConcurrencyConflict {
+            streams: vec![stream_id1],
+        };
+        let help = err.help().unwrap();
+        assert!(help.to_string().contains("retry"));
+        assert!(help.to_string().contains("exponential backoff"));
+
+        let err = CommandError::InvalidStreamAccess {
+            stream: stream_id2,
+            declared_streams: vec![],
+        };
+        let help = err.help().unwrap();
+        assert!(help.to_string().contains("read_streams"));
+        assert!(help.to_string().contains("declare"));
+
+        let err = CommandError::StreamNotDeclared {
+            stream: stream_id3,
+            command_type: "TestCommand".to_string(),
+        };
+        let help = err.help().unwrap();
+        assert!(help.to_string().contains("read_streams"));
+        assert!(help.to_string().contains("Add"));
     }
 }
