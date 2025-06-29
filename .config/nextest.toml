@@ -31,4 +31,13 @@ fail-fast = true
 [test-groups]
 # Define test groups for better organization
 unit = { max-threads = 8 }
-integration = { max-threads = 4 }
+integration = { max-threads = 1 }  # Run integration tests sequentially to avoid database conflicts
+
+# Automatically assign integration tests to the integration group
+[[profile.default.overrides]]
+filter = "test(~integration)"
+test-group = "integration"
+
+[[profile.default.overrides]]
+filter = "package(eventcore-examples)"
+test-group = "integration"

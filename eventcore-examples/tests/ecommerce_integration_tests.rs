@@ -46,11 +46,21 @@ async fn setup_test_environment() -> (
 
 /// Create a unique stream ID for test isolation
 fn unique_stream_id(prefix: &str) -> eventcore::StreamId {
+    // Include thread ID and additional randomness for true uniqueness across concurrent tests
+    let thread_id = std::thread::current().id();
     let uuid_part = uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))
         .simple()
         .to_string()
         .to_uppercase();
-    let stream_name = format!("{}-{}", prefix, &uuid_part[..12]);
+    // Hash the thread ID to get a short unique identifier
+    let thread_hash = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        thread_id.hash(&mut hasher);
+        hasher.finish() % 10000 // Keep it short but unique per thread
+    };
+    let stream_name = format!("{}-{}-{}", prefix, thread_hash, &uuid_part[..8]);
     eventcore::StreamId::try_new(stream_name).unwrap()
 }
 

@@ -483,6 +483,12 @@ This document outlines the implementation plan for the EventCore multi-stream ev
           - [x] Made coverage job more efficient with proper dependencies and faster tooling
           - [x] Coverage job now waits for tests to pass first (fail fast)
           - [x] Used taiki-e/install-action for faster cargo-llvm-cov installation
+        - [x] **FIXED POSTGRESQL SCHEMA INITIALIZATION CONCURRENCY**: Resolved CI test failures due to concurrent schema creation
+          - [x] Implemented PostgreSQL advisory locks in the initialize() method to prevent concurrent schema creation
+          - [x] Added graceful handling when another process is already initializing the schema
+          - [x] Fixed integration test stream ID generation to be truly unique across concurrent test threads
+          - [x] Updated nextest configuration to run integration tests sequentially for better database isolation
+          - [x] All integration tests now pass consistently in CI environment with PostgreSQL
   - [ ] Long-running saga example (`sagas/`)
   - [ ] Performance testing example (`benchmarks/`)
 

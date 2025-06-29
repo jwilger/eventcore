@@ -207,64 +207,115 @@ where
     ///
     /// This method creates the necessary tables and indexes for the event store.
     /// It is idempotent and can be called multiple times safely.
+    /// Uses `PostgreSQL` advisory locks to prevent concurrent initialization conflicts.
     pub async fn initialize(&self) -> Result<(), PostgresError> {
-        // Create events table
-        sqlx::query(
-            r"
-            CREATE TABLE IF NOT EXISTS events (
-                event_id UUID PRIMARY KEY,
-                stream_id VARCHAR(255) NOT NULL,
-                event_version BIGINT NOT NULL,
-                event_type VARCHAR(255) NOT NULL,
-                event_data JSONB NOT NULL,
-                metadata JSONB,
-                causation_id UUID,
-                correlation_id VARCHAR(255),
-                user_id VARCHAR(255),
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE(stream_id, event_version)
-            )
-            ",
-        )
-        .execute(self.pool.as_ref())
-        .await
-        .map_err(PostgresError::Connection)?;
+        // Use PostgreSQL advisory lock to prevent concurrent schema initialization
+        // Lock ID 123456789 is arbitrary but consistent for schema initialization
+        const SCHEMA_LOCK_ID: i64 = 123_456_789;
 
-        // Create indexes - must be separate queries
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_stream_id ON events(stream_id)")
+        // Acquire advisory lock with timeout to prevent deadlocks
+        let lock_acquired = sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock($1)")
+            .bind(SCHEMA_LOCK_ID)
+            .fetch_one(self.pool.as_ref())
+            .await
+            .map_err(PostgresError::Connection)?;
+
+        if !lock_acquired {
+            // Another process is initializing the schema, wait briefly and check if schema exists
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // Check if tables exist - if they do, initialization was completed by another process
+            let tables_exist = sqlx::query_scalar::<_, i64>(
+                r"
+                SELECT COUNT(*) FROM information_schema.tables 
+                WHERE table_name IN ('events', 'event_streams')
+                AND table_schema = 'public'
+                ",
+            )
+            .fetch_one(self.pool.as_ref())
+            .await
+            .map_err(PostgresError::Connection)?;
+
+            let tables_exist = tables_exist >= 2;
+
+            if tables_exist {
+                debug!("Database schema already initialized by another process");
+                return Ok(());
+            }
+            return Err(PostgresError::Migration(
+                "Failed to acquire schema initialization lock".to_string(),
+            ));
+        }
+
+        // We have the lock, proceed with initialization
+        let result = async {
+            // Create events table
+            sqlx::query(
+                r"
+                CREATE TABLE IF NOT EXISTS events (
+                    event_id UUID PRIMARY KEY,
+                    stream_id VARCHAR(255) NOT NULL,
+                    event_version BIGINT NOT NULL,
+                    event_type VARCHAR(255) NOT NULL,
+                    event_data JSONB NOT NULL,
+                    metadata JSONB,
+                    causation_id UUID,
+                    correlation_id VARCHAR(255),
+                    user_id VARCHAR(255),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE(stream_id, event_version)
+                )
+                ",
+            )
             .execute(self.pool.as_ref())
             .await
             .map_err(PostgresError::Connection)?;
 
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)")
+            // Create indexes - must be separate queries
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_stream_id ON events(stream_id)")
+                .execute(self.pool.as_ref())
+                .await
+                .map_err(PostgresError::Connection)?;
+
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)")
+                .execute(self.pool.as_ref())
+                .await
+                .map_err(PostgresError::Connection)?;
+
+            sqlx::query(
+                "CREATE INDEX IF NOT EXISTS idx_events_correlation_id ON events(correlation_id)",
+            )
             .execute(self.pool.as_ref())
             .await
             .map_err(PostgresError::Connection)?;
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_events_correlation_id ON events(correlation_id)",
-        )
-        .execute(self.pool.as_ref())
-        .await
-        .map_err(PostgresError::Connection)?;
-
-        // Create event_streams table for tracking stream metadata
-        sqlx::query(
-            r"
-            CREATE TABLE IF NOT EXISTS event_streams (
-                stream_id VARCHAR(255) PRIMARY KEY,
-                current_version BIGINT NOT NULL DEFAULT 0,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            // Create event_streams table for tracking stream metadata
+            sqlx::query(
+                r"
+                CREATE TABLE IF NOT EXISTS event_streams (
+                    stream_id VARCHAR(255) PRIMARY KEY,
+                    current_version BIGINT NOT NULL DEFAULT 0,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                ",
             )
-            ",
-        )
-        .execute(self.pool.as_ref())
-        .await
-        .map_err(PostgresError::Connection)?;
+            .execute(self.pool.as_ref())
+            .await
+            .map_err(PostgresError::Connection)?;
 
-        info!("Database schema initialized successfully");
-        Ok(())
+            info!("Database schema initialized successfully");
+            Ok::<(), PostgresError>(())
+        }
+        .await;
+
+        // Always release the advisory lock, regardless of success or failure
+        let _unlock_result = sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(SCHEMA_LOCK_ID)
+            .execute(self.pool.as_ref())
+            .await;
+
+        result
     }
 
     /// Check database connectivity
