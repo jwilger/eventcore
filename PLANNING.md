@@ -515,11 +515,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 14.1 Release Preparation
 
-- [ ] Create README.md for each crate:
-  - [ ] `eventcore` - Core library documentation
-  - [ ] `eventcore-postgres` - PostgreSQL adapter docs
-  - [ ] `eventcore-memory` - Testing adapter docs
-  - [ ] `eventcore-examples` - Example usage docs
+- [x] Create README.md for each crate:
+  - [x] `eventcore` - Core library documentation
+  - [x] `eventcore-postgres` - PostgreSQL adapter docs
+  - [x] `eventcore-memory` - Testing adapter docs
+  - [x] `eventcore-examples` - Example usage docs
 - [ ] Add comprehensive CHANGELOG.md
 - [ ] Define semantic versioning strategy
 - [ ] Create migration guides
