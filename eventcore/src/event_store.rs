@@ -1,8 +1,52 @@
-//! Event store abstraction for the `EventCore` event sourcing library.
+//! Event store abstraction for EventCore.
 //!
-//! This module defines the core `EventStore` trait that serves as the port interface
-//! for different event store implementations. The trait is designed to be backend-independent
-//! and support multi-stream atomic operations.
+//! This module provides the core `EventStore` trait and related types that define
+//! how events are persisted and retrieved. The design supports the aggregate-per-command
+//! pattern with multi-stream atomic operations.
+//!
+//! # Architecture
+//!
+//! The event store follows the Adapter pattern (from Hexagonal Architecture):
+//! - The `EventStore` trait is the port (interface)
+//! - Implementations like PostgreSQL or in-memory stores are adapters
+//! - Commands interact only with the trait, not specific implementations
+//!
+//! # Key Features
+//!
+//! - **Multi-stream reads**: Read from multiple streams in a single operation
+//! - **Atomic writes**: Write to multiple streams atomically
+//! - **Optimistic concurrency**: Version-based conflict detection
+//! - **Global ordering**: Events use UUIDv7 for timestamp-based ordering
+//! - **Backend independence**: Easy to swap storage implementations
+//!
+//! # Example Usage
+//!
+//! ```rust,ignore
+//! use eventcore::event_store::{EventStore, StreamEvents, EventToWrite, ExpectedVersion};
+//! use eventcore::types::{StreamId, EventId};
+//!
+//! // Reading from multiple streams
+//! let streams = vec![
+//!     StreamId::try_new("account-123").unwrap(),
+//!     StreamId::try_new("account-456").unwrap(),
+//! ];
+//! let data = store.read_streams(&streams, &ReadOptions::default()).await?;
+//!
+//! // Writing to multiple streams atomically
+//! let writes = vec![
+//!     StreamEvents::new(
+//!         StreamId::try_new("account-123").unwrap(),
+//!         ExpectedVersion::Exact(data.stream_version(&streams[0]).unwrap()),
+//!         vec![EventToWrite::new(EventId::new(), AccountEvent::Debited { amount: 100 })],
+//!     ),
+//!     StreamEvents::new(
+//!         StreamId::try_new("account-456").unwrap(),
+//!         ExpectedVersion::Exact(data.stream_version(&streams[1]).unwrap()),
+//!         vec![EventToWrite::new(EventId::new(), AccountEvent::Credited { amount: 100 })],
+//!     ),
+//! ];
+//! let new_versions = store.write_events_multi(writes).await?;
+//! ```
 
 use crate::errors::EventStoreResult;
 use crate::metadata::EventMetadata;
@@ -11,10 +55,34 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Data returned when reading from one or more streams.
+/// Container for events read from one or more streams.
 ///
-/// This type contains all events from the requested streams along with
-/// metadata needed for version tracking and ordering.
+/// `StreamData` is returned by `EventStore::read_streams` and contains all events
+/// from the requested streams in chronological order, along with version information
+/// needed for optimistic concurrency control.
+///
+/// # Ordering Guarantees
+///
+/// Events are ordered by their `EventId` (UUIDv7), which provides:
+/// - Global chronological ordering across all streams
+/// - Deterministic ordering for event replay
+/// - Efficient range queries by time
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let data = store.read_streams(&[stream1, stream2], &ReadOptions::default()).await?;
+///
+/// // Process all events in chronological order
+/// for event in data.events() {
+///     println!("Event {} from stream {}", event.event_id, event.stream_id);
+/// }
+///
+/// // Check version for concurrency control
+/// if let Some(version) = data.stream_version(&stream1) {
+///     println!("Stream {} is at version {}", stream1, version);
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamData<E> {
     /// The events from all requested streams, ordered by `EventId` (timestamp-based)
@@ -67,10 +135,38 @@ impl<E> StreamData<E> {
     }
 }
 
-/// A stored event with full metadata.
+/// An event as stored in the event store with full metadata.
 ///
-/// This represents an event as it exists in the event store, including
-/// all metadata required for ordering, causation tracking, and version control.
+/// `StoredEvent` represents a persisted event with all the metadata needed for
+/// event sourcing, including versioning, ordering, and causation tracking.
+///
+/// # Fields
+///
+/// - `event_id`: Globally unique identifier (UUIDv7 for time-based ordering)
+/// - `stream_id`: The stream this event belongs to
+/// - `event_version`: Position within the stream (0-based, monotonic)
+/// - `timestamp`: When the event was stored
+/// - `payload`: The actual event data (your domain event)
+/// - `metadata`: Optional causation, correlation, and custom metadata
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[derive(Serialize, Deserialize)]
+/// enum AccountEvent {
+///     Opened { owner: String },
+///     Deposited { amount: u64 },
+/// }
+///
+/// let event: StoredEvent<AccountEvent> = StoredEvent::new(
+///     EventId::new(),
+///     StreamId::try_new("account-123").unwrap(),
+///     EventVersion::initial(),
+///     Timestamp::now(),
+///     AccountEvent::Opened { owner: "Alice".to_string() },
+///     Some(metadata),
+/// );
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredEvent<E> {
     /// Unique identifier for this event
@@ -108,7 +204,28 @@ impl<E> StoredEvent<E> {
     }
 }
 
-/// Configuration for reading streams.
+/// Configuration options for reading events from streams.
+///
+/// `ReadOptions` allows you to control how events are read from the store,
+/// including limiting the number of events and specifying version ranges.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use eventcore::event_store::ReadOptions;
+/// use eventcore::types::EventVersion;
+///
+/// // Read all events (default)
+/// let all_events = ReadOptions::default();
+///
+/// // Read only the last 100 events
+/// let recent = ReadOptions::new().with_max_events(100);
+///
+/// // Read events from version 10 to 20
+/// let range = ReadOptions::new()
+///     .from_version(EventVersion::try_new(10).unwrap())
+///     .to_version(EventVersion::try_new(20).unwrap());
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadOptions {
     /// Maximum number of events to read (None = no limit)
@@ -158,6 +275,31 @@ impl Default for ReadOptions {
 }
 
 /// Expected version for optimistic concurrency control.
+///
+/// `ExpectedVersion` is used when writing events to ensure that streams haven't
+/// been modified concurrently. This prevents lost updates in distributed systems.
+///
+/// # Variants
+///
+/// - `New`: The stream must not exist yet (for creating new streams)
+/// - `Exact(version)`: The stream must be at exactly this version
+/// - `Any`: No version check (use with caution - can cause lost updates)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use eventcore::event_store::{ExpectedVersion, EventVersion};
+///
+/// // Creating a new stream
+/// let new_stream = ExpectedVersion::New;
+///
+/// // Updating an existing stream with concurrency control
+/// let current_version = EventVersion::try_new(42).unwrap();
+/// let exact = ExpectedVersion::Exact(current_version);
+///
+/// // Dangerous: bypassing concurrency control
+/// let any = ExpectedVersion::Any;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpectedVersion {
     /// The stream must not exist
@@ -168,7 +310,29 @@ pub enum ExpectedVersion {
     Any,
 }
 
-/// Events to write to a specific stream.
+/// A batch of events to write to a specific stream.
+///
+/// `StreamEvents` groups events that should be written to the same stream,
+/// along with the expected version for concurrency control. This is used
+/// with `EventStore::write_events_multi` for atomic multi-stream writes.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use eventcore::event_store::{StreamEvents, EventToWrite, ExpectedVersion};
+/// use eventcore::types::{StreamId, EventId};
+///
+/// let events = vec![
+///     EventToWrite::new(EventId::new(), AccountEvent::Deposited { amount: 100 }),
+///     EventToWrite::new(EventId::new(), AccountEvent::WithdrawalRequested { amount: 50 }),
+/// ];
+///
+/// let stream_write = StreamEvents::new(
+///     StreamId::try_new("account-123").unwrap(),
+///     ExpectedVersion::Exact(current_version),
+///     events,
+/// );
+/// ```
 #[derive(Debug, Clone)]
 pub struct StreamEvents<E> {
     /// The target stream
@@ -195,6 +359,35 @@ impl<E> StreamEvents<E> {
 }
 
 /// An event to be written to the event store.
+///
+/// `EventToWrite` represents an event before it's persisted. It contains
+/// the event payload and optional metadata, but not the version or timestamp
+/// (which are assigned by the event store).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use eventcore::event_store::EventToWrite;
+/// use eventcore::types::EventId;
+/// use eventcore::metadata::{EventMetadata, UserId};
+///
+/// // Simple event without metadata
+/// let event = EventToWrite::new(
+///     EventId::new(),
+///     OrderEvent::Placed { items: vec!["ABC123"] }
+/// );
+///
+/// // Event with metadata for tracking causation
+/// let metadata = EventMetadata::new()
+///     .with_user_id(Some(UserId::try_new("user-456").unwrap()))
+///     .with_custom("source", serde_json::json!("web"));
+///
+/// let event_with_meta = EventToWrite::with_metadata(
+///     EventId::new(),
+///     OrderEvent::Shipped { tracking: "XYZ789".to_string() },
+///     metadata,
+/// );
+/// ```
 #[derive(Debug, Clone)]
 pub struct EventToWrite<E> {
     /// Unique identifier for this event (must be `UUIDv7`)
@@ -225,10 +418,52 @@ impl<E> EventToWrite<E> {
     }
 }
 
-/// The core event store trait that all implementations must satisfy.
+/// The core trait for event store implementations.
 ///
-/// This trait is designed to be backend-independent and support the
-/// aggregate-per-command pattern with multi-stream atomic operations.
+/// `EventStore` defines the contract that all event store backends must implement.
+/// It's designed to support the aggregate-per-command pattern with multi-stream
+/// atomic operations, while remaining backend-agnostic.
+///
+/// # Implementation Requirements
+///
+/// Implementations must ensure:
+/// - **Atomicity**: All events in a write batch succeed or fail together
+/// - **Consistency**: Version checks prevent concurrent modifications
+/// - **Durability**: Successfully written events are permanently stored
+/// - **Ordering**: Events maintain chronological order via UUIDv7
+///
+/// # Backend Examples
+///
+/// - **PostgreSQL**: Full ACID compliance with transactions
+/// - **EventStoreDB**: Purpose-built event store with projections
+/// - **In-Memory**: For testing, with HashMap-based storage
+///
+/// # Example Implementation
+///
+/// ```rust,ignore
+/// use async_trait::async_trait;
+/// use eventcore::event_store::{EventStore, EventStoreResult, StreamData};
+///
+/// struct MyEventStore {
+///     // Backend-specific fields
+/// }
+///
+/// #[async_trait]
+/// impl EventStore for MyEventStore {
+///     type Event = MyDomainEvent;
+///
+///     async fn read_streams(
+///         &self,
+///         stream_ids: &[StreamId],
+///         options: &ReadOptions,
+///     ) -> EventStoreResult<StreamData<Self::Event>> {
+///         // Implementation details
+///         todo!()
+///     }
+///
+///     // ... other methods
+/// }
+/// ```
 #[async_trait]
 pub trait EventStore: Send + Sync {
     /// The event type this store handles.

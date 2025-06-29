@@ -381,10 +381,10 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 12.2 Documentation
 
-- [ ] Write comprehensive rustdoc comments
-  - [ ] Document all public types and traits
-  - [ ] Add usage examples in doc comments
-  - [ ] Create module-level documentation
+- [x] Write comprehensive rustdoc comments
+  - [x] Document all public types and traits
+  - [x] Add usage examples in doc comments
+  - [x] Create module-level documentation
   - [ ] Generate and review HTML docs
 
 ### 12.3 Examples Crate

@@ -1,18 +1,73 @@
-//! Core types for the `EventCore` event sourcing library.
+//! Core types for the EventCore event sourcing library.
 //!
-//! This module defines the fundamental types used throughout the library.
-//! All types use smart constructors to ensure validity at construction time,
-//! following the "parse, don't validate" principle.
+//! This module provides the fundamental types used throughout EventCore for event sourcing.
+//! All types follow the "parse, don't validate" principle, using smart constructors to ensure
+//! validity at construction time. Once a value is successfully parsed into one of these types,
+//! it is guaranteed to be valid for the lifetime of the program.
+//!
+//! # Design Philosophy
+//!
+//! The types in this module are designed to make illegal states unrepresentable:
+//!
+//! - **StreamId**: Guaranteed to be non-empty and at most 255 characters
+//! - **EventId**: Always a valid UUIDv7, providing time-based ordering
+//! - **EventVersion**: Always non-negative, preventing invalid version numbers
+//! - **Timestamp**: Consistent UTC timestamp handling across the system
+//!
+//! # Examples
+//!
+//! ```
+//! use eventcore::{StreamId, EventId, EventVersion, Timestamp};
+//!
+//! // Create a stream identifier
+//! let stream_id = StreamId::try_new("user-123").expect("valid stream id");
+//!
+//! // EventIds are automatically generated with proper ordering
+//! let event_id = EventId::new();
+//!
+//! // Version numbers start at zero and increment
+//! let version = EventVersion::initial();
+//! let next_version = version.next();
+//!
+//! // Timestamps capture the current moment
+//! let timestamp = Timestamp::now();
+//! ```
 
 use chrono::{DateTime, Utc};
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// A stream identifier that uniquely identifies an event stream.
+/// A unique identifier for an event stream.
 ///
-/// `StreamId` values are guaranteed to be non-empty and at most 255 characters.
-/// Once constructed, a `StreamId` is always valid - no further validation needed.
+/// `StreamId` represents a logical stream of events in the event store. Each stream
+/// contains an ordered sequence of events that typically represent the state changes
+/// of a single entity or aggregate.
+///
+/// # Guarantees
+///
+/// Once constructed, a `StreamId` is guaranteed to be:
+/// - Non-empty (after trimming whitespace)
+/// - At most 255 characters in length
+/// - Valid for the lifetime of the program
+///
+/// # Examples
+///
+/// ```
+/// use eventcore::StreamId;
+///
+/// // Create a stream ID for a user entity
+/// let user_stream = StreamId::try_new("user-123").expect("valid stream id");
+///
+/// // Stream IDs are automatically trimmed
+/// let trimmed = StreamId::try_new("  order-456  ").expect("valid stream id");
+/// assert_eq!(trimmed.as_ref(), "order-456");
+///
+/// // Invalid stream IDs are rejected at construction
+/// assert!(StreamId::try_new("").is_err()); // empty string
+/// assert!(StreamId::try_new("   ").is_err()); // only whitespace
+/// assert!(StreamId::try_new("a".repeat(256)).is_err()); // too long
+/// ```
 #[nutype(
     sanitize(trim),
     validate(not_empty, len_char_max = 255),
@@ -35,10 +90,44 @@ pub struct StreamId(String);
 
 /// A globally unique event identifier using UUIDv7 format.
 ///
-/// `EventId` values are guaranteed to be UUIDv7, which provides:
-/// - Time-based ordering capability
-/// - Globally unique identification
-/// - Monotonic sort order for events created in sequence
+/// `EventId` provides globally unique identification for events while maintaining
+/// chronological ordering properties. This enables efficient sorting and querying
+/// of events across the entire event store.
+///
+/// # Guarantees
+///
+/// Every `EventId` is guaranteed to be:
+/// - A valid UUIDv7 (RFC 9562)
+/// - Globally unique with extremely high probability
+/// - Time-ordered when compared with other EventIds
+/// - Suitable for distributed systems without coordination
+///
+/// # Ordering Properties
+///
+/// UUIDv7 includes a timestamp component, making EventIds naturally ordered by
+/// creation time. Events created later will have lexicographically greater IDs,
+/// enabling efficient range queries and event replay.
+///
+/// # Examples
+///
+/// ```
+/// use eventcore::EventId;
+/// use std::thread;
+/// use std::time::Duration;
+///
+/// // Create a new event ID
+/// let event1 = EventId::new();
+///
+/// // IDs created later are greater
+/// thread::sleep(Duration::from_millis(1));
+/// let event2 = EventId::new();
+/// assert!(event2 > event1);
+///
+/// // Only UUIDv7 values are accepted
+/// use uuid::Uuid;
+/// let nil_uuid = Uuid::nil();  // Not a v7 UUID
+/// assert!(EventId::try_new(nil_uuid).is_err());
+/// ```
 #[nutype(
     validate(predicate = |id: &Uuid| id.get_version() == Some(uuid::Version::SortRand)),
     derive(
@@ -62,7 +151,19 @@ pub struct EventId(Uuid);
 impl EventId {
     /// Creates a new `EventId` with the current timestamp.
     ///
-    /// This is a convenience method that generates a new `UUIDv7`.
+    /// This generates a new UUIDv7 which includes the current timestamp
+    /// and random data, ensuring both uniqueness and chronological ordering.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use eventcore::EventId;
+    ///
+    /// let id = EventId::new();
+    /// // Each call creates a unique ID
+    /// let another_id = EventId::new();
+    /// assert_ne!(id, another_id);
+    /// ```
     pub fn new() -> Self {
         // This will always succeed as Uuid::now_v7() always returns a valid v7 UUID
         Self::try_new(Uuid::now_v7()).expect("Uuid::now_v7() should always return a valid v7 UUID")
@@ -75,10 +176,45 @@ impl Default for EventId {
     }
 }
 
-/// The version of an event within a stream.
+/// The version number of an event within its stream.
 ///
-/// Versions start at 0 and increment monotonically with each event.
-/// The type system ensures versions can never be negative.
+/// `EventVersion` tracks the position of events within a stream, enabling
+/// optimistic concurrency control and ensuring events are processed in order.
+/// Version numbers are crucial for detecting concurrent modifications and
+/// maintaining consistency in distributed systems.
+///
+/// # Guarantees
+///
+/// - Versions are always non-negative (≥ 0)
+/// - The first event in a stream has version 0
+/// - Versions increment monotonically by 1 for each new event
+/// - Once assigned, a version number is immutable
+///
+/// # Concurrency Control
+///
+/// Event versions enable optimistic concurrency control. When writing events,
+/// you can specify the expected current version of the stream. If the actual
+/// version doesn't match, the write fails, preventing lost updates.
+///
+/// # Examples
+///
+/// ```
+/// use eventcore::EventVersion;
+///
+/// // New streams start at version 0
+/// let initial = EventVersion::initial();
+/// assert_eq!(u64::from(initial), 0);
+///
+/// // Versions increment monotonically
+/// let v1 = initial.next();
+/// let v2 = v1.next();
+/// assert_eq!(u64::from(v1), 1);
+/// assert_eq!(u64::from(v2), 2);
+///
+/// // Versions can be compared
+/// assert!(v2 > v1);
+/// assert!(v1 > initial);
+/// ```
 #[nutype(
     validate(greater_or_equal = 0),
     derive(
@@ -101,6 +237,9 @@ pub struct EventVersion(u64);
 impl EventVersion {
     /// The minimum possible event version (0).
     ///
+    /// This is equivalent to `initial()` and represents the version of the
+    /// first event in any stream.
+    ///
     /// Note: This is implemented as a function rather than a const
     /// because nutype prevents direct construction.
     pub fn min() -> Self {
@@ -108,11 +247,39 @@ impl EventVersion {
     }
 
     /// Creates the initial version (0) for a new stream.
+    ///
+    /// Use this when creating the first event in a new stream.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use eventcore::EventVersion;
+    ///
+    /// let version = EventVersion::initial();
+    /// assert_eq!(u64::from(version), 0);
+    /// ```
     pub fn initial() -> Self {
         Self::try_new(0).expect("0 is always a valid version")
     }
 
     /// Returns the next version after this one.
+    ///
+    /// This method is used to calculate the version number for the next event
+    /// in a stream. It increments the current version by exactly 1.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use eventcore::EventVersion;
+    ///
+    /// let v0 = EventVersion::initial();
+    /// let v1 = v0.next();
+    /// let v2 = v1.next();
+    ///
+    /// assert_eq!(u64::from(v0), 0);
+    /// assert_eq!(u64::from(v1), 1);
+    /// assert_eq!(u64::from(v2), 2);
+    /// ```
     #[must_use]
     pub fn next(self) -> Self {
         let current: u64 = self.into();
@@ -122,31 +289,107 @@ impl EventVersion {
     }
 }
 
-/// A timestamp for when an event occurred.
+/// A UTC timestamp for event sourcing operations.
 ///
-/// This wrapper ensures consistent timestamp handling throughout the system
-/// and enables future enhancements like custom serialization formats.
+/// `Timestamp` provides a consistent representation of time throughout the
+/// event sourcing system. All timestamps are stored in UTC to avoid timezone
+/// ambiguities and ensure reliable event ordering across distributed systems.
+///
+/// # Design Rationale
+///
+/// This wrapper type exists to:
+/// - Enforce UTC timezone usage throughout the system
+/// - Provide a clear domain type for event timestamps
+/// - Enable future enhancements without breaking changes
+/// - Ensure consistent serialization across different storage backends
+///
+/// # Examples
+///
+/// ```
+/// use eventcore::Timestamp;
+/// use chrono::{DateTime, Utc, TimeZone};
+///
+/// // Create a timestamp for the current moment
+/// let now = Timestamp::now();
+///
+/// // Create from a specific DateTime
+/// let dt = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
+/// let timestamp = Timestamp::new(dt);
+///
+/// // Convert back to DateTime for manipulation
+/// let datetime: DateTime<Utc> = timestamp.into();
+///
+/// // Timestamps are comparable
+/// let later = Timestamp::now();
+/// assert!(later >= now);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Timestamp(DateTime<Utc>);
 
 impl Timestamp {
     /// Creates a new timestamp from a UTC `DateTime`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use eventcore::Timestamp;
+    /// use chrono::{Utc, TimeZone};
+    ///
+    /// let dt = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
+    /// let timestamp = Timestamp::new(dt);
+    /// ```
     pub const fn new(datetime: DateTime<Utc>) -> Self {
         Self(datetime)
     }
 
     /// Creates a timestamp representing the current moment.
+    ///
+    /// This is the most common way to create timestamps for new events.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use eventcore::Timestamp;
+    ///
+    /// let timestamp = Timestamp::now();
+    /// println!("Event occurred at: {}", timestamp);
+    /// ```
     pub fn now() -> Self {
         Self(Utc::now())
     }
 
-    /// Returns the underlying `DateTime`.
+    /// Returns a reference to the underlying `DateTime`.
+    ///
+    /// Use this when you need to perform date/time calculations
+    /// without consuming the timestamp.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use eventcore::Timestamp;
+    /// use chrono::Duration;
+    ///
+    /// let timestamp = Timestamp::now();
+    /// let one_hour_ago = *timestamp.as_datetime() - Duration::hours(1);
+    /// ```
     pub const fn as_datetime(&self) -> &DateTime<Utc> {
         &self.0
     }
 
     /// Converts the timestamp into the underlying `DateTime`.
+    ///
+    /// This consumes the timestamp and returns the inner `DateTime<Utc>`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use eventcore::Timestamp;
+    /// use chrono::DateTime;
+    ///
+    /// let timestamp = Timestamp::now();
+    /// let datetime: DateTime<_> = timestamp.into_datetime();
+    /// ```
     pub const fn into_datetime(self) -> DateTime<Utc> {
         self.0
     }

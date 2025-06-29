@@ -1,12 +1,71 @@
-//! Error types for the `EventCore` event sourcing library.
+//! Error types for EventCore.
 //!
-//! This module defines all error types used throughout the library,
-//! following the principle of making illegal states unrepresentable.
+//! This module provides comprehensive error types for all failure scenarios in the
+//! event sourcing system. The error design follows these principles:
+//!
+//! - **Rich error information**: Include context to help diagnose issues
+//! - **Type safety**: Different error types for different subsystems
+//! - **Actionable**: Users can determine how to handle each error
+//! - **Composable**: Errors can be converted between layers
+//!
+//! # Error Categories
+//!
+//! - **CommandError**: Business logic and command execution failures
+//! - **EventStoreError**: Storage and persistence layer failures
+//! - **ProjectionError**: Event processing and projection failures
+//! - **ValidationError**: Input validation failures (rare due to type-driven design)
+//!
+//! # Example Usage
+//!
+//! ```rust,ignore
+//! use eventcore::errors::{CommandError, CommandResult};
+//!
+//! async fn transfer_money(amount: Money) -> CommandResult<()> {
+//!     if amount > available_balance {
+//!         return Err(CommandError::BusinessRuleViolation(
+//!             "Insufficient funds".to_string()
+//!         ));
+//!     }
+//!     // ... transfer logic
+//!     Ok(())
+//! }
+//! ```
 
 use crate::types::{EventId, EventVersion, StreamId};
 use thiserror::Error;
 
 /// Errors that can occur during command execution.
+///
+/// `CommandError` represents failures at the business logic layer. These errors
+/// help distinguish between different failure scenarios so that callers can
+/// handle them appropriately.
+///
+/// # Error Handling Strategy
+///
+/// - **ValidationFailed**: Retry with corrected input
+/// - **BusinessRuleViolation**: Show user-friendly error message
+/// - **ConcurrencyConflict**: Retry the command with fresh state
+/// - **StreamNotFound**: Check if streams need to be created first
+/// - **Unauthorized**: Check permissions and authentication
+/// - **EventStore**: Handle based on specific store error
+/// - **Internal**: Log and investigate - indicates a bug
+///
+/// # Example
+///
+/// ```rust,ignore
+/// match command.execute(input).await {
+///     Ok(result) => process_result(result),
+///     Err(CommandError::BusinessRuleViolation(msg)) => {
+///         // Show error to user
+///         display_error(&msg);
+///     }
+///     Err(CommandError::ConcurrencyConflict { streams }) => {
+///         // Retry with exponential backoff
+///         retry_command(command, input).await?;
+///     }
+///     Err(e) => return Err(e),
+/// }
+/// ```
 #[derive(Debug, Clone, Error)]
 pub enum CommandError {
     /// The command input validation failed.
@@ -43,6 +102,39 @@ pub enum CommandError {
 }
 
 /// Errors that can occur when interacting with the event store.
+///
+/// `EventStoreError` represents failures at the persistence layer. These errors
+/// indicate issues with storing, retrieving, or managing events.
+///
+/// # Common Scenarios
+///
+/// - **StreamNotFound**: Normal for new streams, create with `ExpectedVersion::New`
+/// - **VersionConflict**: Another process modified the stream, retry needed
+/// - **DuplicateEventId**: EventId collision (extremely rare with UUIDv7)
+/// - **ConnectionFailed**: Network or database issues
+/// - **Timeout**: Operation took too long, may need to retry
+///
+/// # Retry Strategy
+///
+/// ```rust,ignore
+/// async fn write_with_retry(
+///     store: &impl EventStore,
+///     events: Vec<StreamEvents>,
+/// ) -> Result<(), EventStoreError> {
+///     let mut retries = 3;
+///     loop {
+///         match store.write_events_multi(events.clone()).await {
+///             Ok(_) => return Ok(()),
+///             Err(EventStoreError::VersionConflict { .. }) if retries > 0 => {
+///                 retries -= 1;
+///                 tokio::time::sleep(Duration::from_millis(100)).await;
+///                 continue;
+///             }
+///             Err(e) => return Err(e),
+///         }
+///     }
+/// }
+/// ```
 #[derive(Debug, Error)]
 pub enum EventStoreError {
     /// The requested stream was not found.
@@ -146,6 +238,36 @@ impl Clone for EventStoreError {
 }
 
 /// Errors that can occur in the projection system.
+///
+/// `ProjectionError` represents failures when processing events to build
+/// read models or derive state from the event stream.
+///
+/// # Error Scenarios
+///
+/// - **EventProcessingFailed**: A specific event couldn't be processed
+/// - **CheckpointLoadFailed**: Can't resume from last position
+/// - **SubscriptionFailed**: Lost connection to event stream
+/// - **InvalidStateTransition**: Projection in wrong state for operation
+/// - **AlreadyRunning/NotRunning**: State management errors
+///
+/// # Recovery Strategies
+///
+/// ```rust,ignore
+/// match projection.start().await {
+///     Ok(_) => info!("Projection started"),
+///     Err(ProjectionError::AlreadyRunning(_)) => {
+///         // Already running is often OK
+///         debug!("Projection was already running");
+///     }
+///     Err(ProjectionError::CheckpointLoadFailed(_)) => {
+///         // May need to rebuild from beginning
+///         warn!("Starting projection from beginning");
+///         projection.reset().await?;
+///         projection.start().await?;
+///     }
+///     Err(e) => return Err(e),
+/// }
+/// ```
 #[derive(Debug, Clone, Error)]
 pub enum ProjectionError {
     /// The projection failed to process an event.
@@ -201,8 +323,41 @@ pub enum ProjectionError {
 
 /// Errors that can occur during validation of smart constructor inputs.
 ///
-/// These errors are typically returned by the `nutype` generated constructors
-/// for our domain types.
+/// `ValidationError` represents failures when constructing domain types from
+/// raw input. These should be rare in practice because validation happens at
+/// system boundaries when parsing user input into domain types.
+///
+/// # Design Philosophy
+///
+/// In a type-driven system, validation errors only occur at the edges where
+/// unstructured data enters the system. Once data is parsed into domain types,
+/// those types guarantee validity throughout the program.
+///
+/// # Example Usage
+///
+/// ```rust,ignore
+/// use eventcore::types::StreamId;
+/// use eventcore::errors::ValidationError;
+///
+/// match StreamId::try_new(user_input) {
+///     Ok(stream_id) => {
+///         // stream_id is guaranteed valid from here on
+///         process_stream(stream_id).await?;
+///     }
+///     Err(validation_error) => {
+///         // Show error to user and ask for corrected input
+///         match validation_error {
+///             ValidationError::Empty => {
+///                 println!("Stream ID cannot be empty");
+///             }
+///             ValidationError::TooLong { max, actual } => {
+///                 println!("Stream ID too long: {actual} chars (max: {max})");
+///             }
+///             _ => println!("Invalid stream ID: {}", validation_error),
+///         }
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, Error)]
 pub enum ValidationError {
     /// The input was empty when a non-empty value was required.

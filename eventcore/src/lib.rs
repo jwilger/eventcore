@@ -1,30 +1,144 @@
 //! # EventCore
 //!
-//! A multi-stream aggregateless event sourcing library implementing the **aggregate-per-command pattern**.
+//! A revolutionary event sourcing library that implements the **aggregate-per-command pattern**,
+//! enabling atomic operations across multiple event streams without traditional aggregate boundaries.
 //!
-//! This revolutionary approach eliminates traditional aggregate boundaries in favor of self-contained
-//! commands that can read from and write to multiple streams atomically.
+//! ## What is EventCore?
+//!
+//! EventCore rethinks event sourcing by eliminating the need for predefined aggregate boundaries.
+//! Instead, each command defines its own consistency boundary, reading from and writing to
+//! multiple streams atomically. This approach provides unprecedented flexibility while maintaining
+//! strong consistency guarantees.
 //!
 //! ## Key Features
 //!
-//! - **Aggregate-Per-Command Pattern**: Commands define their own state model and processing logic
-//! - **Multi-Stream Atomicity**: Commands can atomically read from and write to multiple event streams
-//! - **Type-Driven Development**: Uses Rust's type system to make illegal states unrepresentable
-//! - **Pluggable Storage**: Support for multiple event store implementations
-//! - **Optimistic Concurrency**: Built-in version control and conflict detection
-//! - **Performance**: Designed for high-throughput event processing
+//! - **🎯 Aggregate-Per-Command Pattern**: Commands define their own consistency boundaries
+//! - **⚛️ Multi-Stream Atomicity**: Read and write to multiple streams in a single transaction
+//! - **🦀 Type-Driven Development**: Leverage Rust's type system for domain modeling
+//! - **🔌 Pluggable Storage**: PostgreSQL, in-memory, and custom adapters
+//! - **🔄 Optimistic Concurrency**: Version-based conflict detection and resolution
+//! - **⚡ High Performance**: Designed for 10,000+ commands/second
+//! - **📊 Projections**: Build read models from event streams
+//! - **🔍 Event Metadata**: Track causation, correlation, and custom metadata
 //!
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use eventcore::{CommandExecutor, Command};
+//! use eventcore::prelude::*;
 //! use eventcore_memory::InMemoryEventStore;
+//! use async_trait::async_trait;
+//! use serde::{Serialize, Deserialize};
+//!
+//! // Define your events (must derive or implement TryFrom for executor)
+//! #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+//! enum BankEvent {
+//!     AccountOpened { owner: String, initial_balance: u64 },
+//!     MoneyDeposited { amount: u64 },
+//!     MoneyWithdrawn { amount: u64 },
+//! }
+//!
+//! // Required for type conversion in executor
+//! impl TryFrom<&BankEvent> for BankEvent {
+//!     type Error = std::convert::Infallible;
+//!
+//!     fn try_from(value: &BankEvent) -> Result<Self, Self::Error> {
+//!         Ok(value.clone())
+//!     }
+//! }
+//!
+//! // Define a command
+//! struct OpenAccount;
+//!
+//! #[async_trait]
+//! impl Command for OpenAccount {
+//!     type Input = OpenAccountInput;
+//!     type State = ();  // No pre-existing state needed
+//!     type Event = BankEvent;
+//!
+//!     fn read_streams(&self, _input: &Self::Input) -> Vec<StreamId> {
+//!         vec![]  // New account, no streams to read
+//!     }
+//!
+//!     fn apply(&self, _state: &mut Self::State, _event: &StoredEvent<Self::Event>) {
+//!         // No state to update for account opening
+//!     }
+//!
+//!     async fn handle(
+//!         &self,
+//!         _state: Self::State,
+//!         input: Self::Input,
+//!     ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+//!         Ok(vec![(
+//!             input.account_id,
+//!             BankEvent::AccountOpened {
+//!                 owner: input.owner,
+//!                 initial_balance: input.initial_balance,
+//!             }
+//!         )])
+//!     }
+//! }
 //!
 //! #[tokio::main]
-//! async fn main() {
-//!     let event_store = InMemoryEventStore::<String>::new();
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Set up the event store and executor
+//!     let event_store = InMemoryEventStore::<BankEvent>::new();
 //!     let executor = CommandExecutor::new(event_store);
-//!     // Define and execute your commands...
+//!
+//!     // Execute a command
+//!     let input = OpenAccountInput {
+//!         account_id: StreamId::try_new("account-123")?,
+//!         owner: "Alice".to_string(),
+//!         initial_balance: 1000,
+//!     };
+//!     
+//!     executor.execute(&OpenAccount, input).await?;
+//!     
+//!     Ok(())
+//! }
+//!
+//! # struct OpenAccountInput {
+//! #     account_id: StreamId,
+//! #     owner: String,
+//! #     initial_balance: u64,
+//! # }
+//! ```
+//!
+//! ## The Aggregate-Per-Command Pattern
+//!
+//! Traditional event sourcing forces you to define aggregate boundaries upfront, which can
+//! become a limitation when business operations span multiple aggregates. EventCore's
+//! aggregate-per-command pattern solves this by letting each command define exactly what
+//! data it needs.
+//!
+//! ### Traditional Event Sourcing Challenges
+//!
+//! ```rust,ignore
+//! // Traditional: Forced to use sagas or process managers
+//! // for cross-aggregate operations
+//! struct TransferMoneySaga {
+//!     // Complex coordination logic
+//!     // Multiple round trips
+//!     // Eventual consistency issues
+//! }
+//! ```
+//!
+//! ### EventCore Solution
+//!
+//! ```rust,ignore
+//! // EventCore: Direct, atomic operations across streams
+//! impl Command for TransferMoney {
+//!     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+//!         // Read from both accounts atomically
+//!         vec![input.from_account, input.to_account]
+//!     }
+//!
+//!     async fn handle(...) -> CommandResult<Vec<(StreamId, Event)>> {
+//!         // Write to both accounts atomically
+//!         Ok(vec![
+//!             (from_account, MoneyDebited { amount }),
+//!             (to_account, MoneyCredited { amount }),
+//!         ])
+//!     }
 //! }
 //! ```
 //!
@@ -191,16 +305,163 @@
 //! }
 //! ```
 //!
-//! ## Architecture
+//! ## Core Concepts
 //!
-//! `EventCore` is built around a few key abstractions:
+//! ### Commands
 //!
-//! - [`command::Command`] - Defines the business logic and state model for a specific operation
-//! - [`event_store::EventStore`] - Provides storage and retrieval of events
-//! - [`executor::CommandExecutor`] - Orchestrates command execution with concurrency control
-//! - [`projection::Projection`] - Builds read models from event streams
+//! Commands are the heart of EventCore. Each command:
+//! - Defines what streams it needs to read
+//! - Specifies how to fold events into state
+//! - Implements business logic that produces new events
 //!
-//! For detailed examples and patterns, see the `eventcore-examples` crate.
+//! ```rust,ignore
+//! #[async_trait]
+//! impl Command for YourCommand {
+//!     type Input = YourInput;    // Self-validating input types
+//!     type State = YourState;    // Command-specific state model
+//!     type Event = YourEvent;    // Domain events
+//!
+//!     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+//!         // Define consistency boundary
+//!     }
+//!
+//!     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+//!         // Fold events into state
+//!     }
+//!
+//!     async fn handle(
+//!         &self,
+//!         state: Self::State,
+//!         input: Self::Input,
+//!     ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+//!         // Pure business logic
+//!     }
+//! }
+//! ```
+//!
+//! ### Event Stores
+//!
+//! Event stores provide durable storage with:
+//! - Multi-stream atomic writes
+//! - Optimistic concurrency control
+//! - Global event ordering via UUIDv7
+//! - Subscription support for projections
+//!
+//! ### Type-Driven Design
+//!
+//! EventCore uses Rust's type system to make illegal states unrepresentable:
+//!
+//! ```rust,ignore
+//! use nutype::nutype;
+//!
+//! // StreamId is guaranteed non-empty and ≤255 chars
+//! #[nutype(sanitize(trim), validate(not_empty, len_char_max = 255))]
+//! struct StreamId(String);
+//!
+//! // EventVersion is guaranteed non-negative
+//! #[nutype(validate(greater_or_equal = 0))]
+//! struct EventVersion(u64);
+//!
+//! // Your domain types should follow the same pattern
+//! #[nutype(validate(greater = 0))]
+//! struct Money(u64);
+//! ```
+//!
+//! ## Architecture Overview
+//!
+//! ```text
+//! ┌─────────────┐     ┌──────────────┐     ┌────────────┐
+//! │   Command   │────▶│   Executor   │────▶│ Event Store│
+//! └─────────────┘     └──────────────┘     └────────────┘
+//!        │                    │                     │
+//!        │                    │                     ▼
+//!        │                    │              ┌────────────┐
+//!        │                    │              │   Events   │
+//!        │                    │              └────────────┘
+//!        │                    │                     │
+//!        ▼                    ▼                     ▼
+//! ┌─────────────┐     ┌──────────────┐     ┌────────────┐
+//! │    Input    │     │ Concurrency  │     │ Projection │
+//! │ Validation  │     │   Control    │     │   System   │
+//! └─────────────┘     └──────────────┘     └────────────┘
+//! ```
+//!
+//! ## Advanced Features
+//!
+//! ### Projections
+//!
+//! Build read models from event streams:
+//!
+//! ```rust,ignore
+//! #[async_trait]
+//! impl Projection for AccountBalanceProjection {
+//!     async fn handle_event(&mut self, event: &StoredEvent<BankEvent>) -> ProjectionResult<()> {
+//!         match &event.payload {
+//!             BankEvent::MoneyDeposited { amount } => {
+//!                 self.balance += amount;
+//!             }
+//!             BankEvent::MoneyWithdrawn { amount } => {
+//!                 self.balance -= amount;
+//!             }
+//!             _ => {}
+//!         }
+//!         Ok(())
+//!     }
+//! }
+//! ```
+//!
+//! ### Event Metadata
+//!
+//! Track causation, correlation, and custom metadata:
+//!
+//! ```rust,ignore
+//! let metadata = EventMetadata::new()
+//!     .with_causation_id(previous_event_id)
+//!     .with_correlation_id(correlation_id)
+//!     .with_user_id(current_user)
+//!     .with_custom("source", json!("web"))
+//!     .with_custom("ip_address", json!("192.168.1.1"));
+//! ```
+//!
+//! ### Retry Policies
+//!
+//! Configure retry behavior for transient failures:
+//!
+//! ```rust,ignore
+//! let retry_config = RetryConfig::default()
+//!     .with_max_attempts(3)
+//!     .with_initial_delay(Duration::from_millis(100))
+//!     .with_policy(RetryPolicy::ExponentialBackoff { factor: 2.0 });
+//!
+//! executor.execute_with_retry(&command, input, retry_config).await?;
+//! ```
+//!
+//! ## Performance Considerations
+//!
+//! - **Event Ordering**: UUIDv7 provides chronological ordering without coordination
+//! - **Batching**: Write multiple events to multiple streams in one transaction
+//! - **Caching**: Commands can cache frequently accessed reference data
+//! - **Indexing**: Create indexes on `stream_id` and `event_id` for fast queries
+//!
+//! ## Error Handling
+//!
+//! EventCore provides rich error types for different failure scenarios:
+//!
+//! - `CommandError`: Business logic violations, validation failures
+//! - `EventStoreError`: Storage layer issues, version conflicts
+//! - `ProjectionError`: Event processing failures
+//!
+//! ## Getting Help
+//!
+//! - **Examples**: See the `eventcore-examples` crate
+//! - **API Docs**: Run `cargo doc --open`
+//! - **GitHub**: <https://github.com/your-org/eventcore>
+//!
+//! ## Feature Flags
+//!
+//! - `testing`: Enables test utilities and fixtures
+//! - `metrics`: Enables performance metrics collection
+//! - `tracing`: Enables distributed tracing support
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
