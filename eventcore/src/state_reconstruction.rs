@@ -313,6 +313,7 @@ mod tests {
             _read_streams: crate::command::ReadStreams<Self::StreamSet>,
             _state: Self::State,
             _input: Self::Input,
+            _stream_resolver: &mut crate::command::StreamResolver,
         ) -> crate::command::CommandResult<
             Vec<crate::command::StreamWrite<Self::StreamSet, Self::Event>>,
         > {

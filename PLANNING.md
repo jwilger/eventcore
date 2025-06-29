@@ -456,6 +456,26 @@ This document outlines the implementation plan for the EventCore multi-stream ev
         - [x] Fixed all benchmark commands to use type-safe interface
         - [x] Updated test harness and fixtures for new Command trait
         - [x] Test failures now demonstrate correct type safety enforcement
+      - [x] **FLEXIBLE COMMAND-CONTROLLED STREAM DISCOVERY**: Revolutionized stream discovery with complete command control
+        - [x] Replaced rigid two-phase approach with flexible StreamResolver pattern
+        - [x] Added `StreamResolver` struct allowing commands to dynamically request additional streams any number of times
+        - [x] Updated CommandExecutor to support flexible loop-based execution:
+          - Commands can call `stream_resolver.add_streams()` at any point during execution
+          - Executor automatically re-reads expanded stream set and rebuilds state
+          - Loop continues until no additional streams are requested
+          - Maximum iteration limit prevents infinite loops
+        - [x] Updated CancelOrderCommand to use intelligent stream discovery:
+          - Checks if product streams are already in read_streams to avoid infinite loops
+          - Only requests missing product streams, not all product streams
+          - First reads order and catalog streams to discover products in the order
+          - Then dynamically adds individual product streams for those specific products
+          - Can now properly write to both product streams and catalog streams
+        - [x] Fixed all test failures - flexible discovery enables proper stream access control
+        - [x] All 7 ecommerce integration tests now pass including order cancellation
+        - [x] Fixed projection logic to properly handle cancelled order revenue subtraction
+        - [x] Updated all Command trait implementations across entire codebase for new signature
+        - [x] Fixed all benchmark commands, test fixtures, and property tests
+        - [x] Updated documentation examples to include StreamResolver parameter
   - [ ] Long-running saga example (`sagas/`)
   - [ ] Performance testing example (`benchmarks/`)
 

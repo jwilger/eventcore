@@ -105,6 +105,70 @@ use crate::types::StreamId;
 use async_trait::async_trait;
 use std::marker::PhantomData;
 
+/// A resolver that allows commands to dynamically request additional streams.
+///
+/// Commands receive this as a parameter and can call `add_streams()` to
+/// dynamically expand their stream set. The executor will automatically
+/// re-read streams when new ones are added.
+pub struct StreamResolver {
+    pub(crate) additional_streams: Vec<StreamId>,
+}
+
+impl StreamResolver {
+    /// Create a new stream resolver
+    pub const fn new() -> Self {
+        Self {
+            additional_streams: Vec::new(),
+        }
+    }
+
+    /// Request additional streams to be read
+    ///
+    /// The command can call this method any number of times to dynamically
+    /// discover and request additional streams. The executor will automatically
+    /// re-read all streams (initial + additional) and rebuild the state.
+    ///
+    /// # Arguments
+    ///
+    /// * `streams` - Additional stream IDs to read
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // In command.handle():
+    /// // After analyzing the current state, request product streams
+    /// let product_streams: Vec<StreamId> = state.order.items.keys()
+    ///     .map(|id| StreamId::try_new(format!("product-{}", id)).unwrap())
+    ///     .collect();
+    /// stream_resolver.add_streams(product_streams);
+    ///
+    /// // The executor will automatically re-read and rebuild state
+    /// ```
+    pub fn add_streams(&mut self, streams: Vec<StreamId>) {
+        for stream in streams {
+            if !self.additional_streams.contains(&stream) {
+                self.additional_streams.push(stream);
+            }
+        }
+    }
+
+    /// Get all additional streams that have been requested
+    pub fn additional_streams(&self) -> &[StreamId] {
+        &self.additional_streams
+    }
+
+    /// Check if any additional streams have been requested
+    pub fn has_additional_streams(&self) -> bool {
+        !self.additional_streams.is_empty()
+    }
+}
+
+impl Default for StreamResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Type alias for command operation results.
 ///
 /// All command methods return this result type, which either contains the success value
@@ -342,7 +406,7 @@ pub trait Command: Send + Sync {
     ///     email: EmailAddress, // Another validated type
     /// }
     /// ```
-    type Input: Send + Sync;
+    type Input: Send + Sync + Clone;
 
     /// The state model that this command operates on.
     ///
@@ -559,5 +623,6 @@ pub trait Command: Send + Sync {
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
+        stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>>;
 }

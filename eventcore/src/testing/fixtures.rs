@@ -141,6 +141,7 @@ impl Command for TestCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut crate::command::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         let event = match input.action {
             TestAction::Create { id, name } => {
@@ -499,13 +500,14 @@ mod tests {
         let state = TestState::default();
 
         let read_streams = ReadStreams::new(vec![input.stream_id.clone()]);
+        let mut stream_resolver = crate::command::StreamResolver::new();
         let stream_writes = command
-            .handle(read_streams, state, input.clone())
+            .handle(read_streams, state, input.clone(), &mut stream_resolver)
             .await
             .unwrap();
         let result: Vec<(StreamId, TestEvent)> = stream_writes
             .into_iter()
-            .map(|sw| sw.into_parts())
+            .map(crate::command::StreamWrite::into_parts)
             .collect();
 
         assert_eq!(result.len(), 1);
@@ -523,7 +525,10 @@ mod tests {
             .insert("item-1".to_string(), "Existing".to_string());
 
         let read_streams = ReadStreams::new(vec![input.stream_id.clone()]);
-        let result = command.handle(read_streams, state, input).await;
+        let mut stream_resolver = crate::command::StreamResolver::new();
+        let result = command
+            .handle(read_streams, state, input, &mut stream_resolver)
+            .await;
 
         assert!(matches!(
             result,
@@ -538,7 +543,10 @@ mod tests {
         let state = TestState::default(); // Counter starts at 0
 
         let read_streams = ReadStreams::new(vec![input.stream_id.clone()]);
-        let result = command.handle(read_streams, state, input).await;
+        let mut stream_resolver = crate::command::StreamResolver::new();
+        let result = command
+            .handle(read_streams, state, input, &mut stream_resolver)
+            .await;
 
         assert!(matches!(
             result,

@@ -25,7 +25,7 @@
 //!     types::*,
 //!     projections::*,
 //! };
-//! use eventcore::{CommandExecutor, EventStore};
+//! use eventcore::{CommandExecutor, EventStore, ExecutionOptions, StreamId};
 //! use eventcore_memory::InMemoryEventStore;
 //!
 //! # #[tokio::main]
@@ -33,6 +33,9 @@
 //! // Create event store and executor
 //! let event_store = InMemoryEventStore::new();
 //! let executor = CommandExecutor::new(event_store.clone());
+//!
+//! // Create catalog stream
+//! let catalog_stream = StreamId::try_new("product-catalog".to_string())?;
 //!
 //! // Add a product to the catalog
 //! let product = Product::new(
@@ -46,9 +49,10 @@
 //! let add_product_input = AddProductInput::new(
 //!     product,
 //!     Quantity::new(10)?,
+//!     catalog_stream.clone(),
 //! );
 //!
-//! executor.execute(&AddProductCommand, add_product_input).await?;
+//! executor.execute(&AddProductCommand, add_product_input, ExecutionOptions::default()).await?;
 //!
 //! // Create an order
 //! let order_id = OrderId::generate();
@@ -59,7 +63,7 @@
 //! );
 //!
 //! let create_order_input = CreateOrderInput::new(order_id.clone(), customer);
-//! executor.execute(&CreateOrderCommand, create_order_input).await?;
+//! executor.execute(&CreateOrderCommand, create_order_input, ExecutionOptions::default()).await?;
 //!
 //! // Add item to order
 //! let item = OrderItem::new(
@@ -68,12 +72,12 @@
 //!     Money::from_cents(99999)?,
 //! );
 //!
-//! let add_item_input = AddItemToOrderInput::new(order_id.clone(), item);
-//! executor.execute(&AddItemToOrderCommand, add_item_input).await?;
+//! let add_item_input = AddItemToOrderInput::new(order_id.clone(), item, catalog_stream.clone());
+//! executor.execute(&AddItemToOrderCommand, add_item_input, ExecutionOptions::default()).await?;
 //!
 //! // Place the order
-//! let place_order_input = PlaceOrderInput::new(order_id);
-//! executor.execute(&PlaceOrderCommand, place_order_input).await?;
+//! let place_order_input = PlaceOrderInput::new(order_id, catalog_stream);
+//! executor.execute(&PlaceOrderCommand, place_order_input, ExecutionOptions::default()).await?;
 //! # Ok(())
 //! # }
 //! ```

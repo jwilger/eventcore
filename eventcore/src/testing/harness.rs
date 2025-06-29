@@ -139,7 +139,10 @@ where
 
         // Execute the command
         let read_streams = ReadStreams::new(stream_ids.clone());
-        let stream_writes = command.handle(read_streams, state, input).await?;
+        let mut stream_resolver = crate::command::StreamResolver::new();
+        let stream_writes = command
+            .handle(read_streams, state, input, &mut stream_resolver)
+            .await?;
 
         // Convert StreamWrite instances back to (StreamId, Event) pairs for compatibility
         Ok(stream_writes
@@ -188,7 +191,10 @@ where
 
                 // Execute the command
                 let read_streams = ReadStreams::new(stream_ids.clone());
-                let stream_writes = command.handle(read_streams, state, input).await?;
+                let mut stream_resolver = crate::command::StreamResolver::new();
+                let stream_writes = command
+                    .handle(read_streams, state, input, &mut stream_resolver)
+                    .await?;
 
                 // Convert StreamWrite instances back to (StreamId, Event) pairs for compatibility
                 Ok(stream_writes

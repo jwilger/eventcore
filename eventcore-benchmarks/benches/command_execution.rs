@@ -6,7 +6,9 @@ use criterion::{
     async_executor::FuturesExecutor, criterion_group, criterion_main, BenchmarkId, Criterion,
     Throughput,
 };
-use eventcore::{Command, CommandExecutor, CommandResult, ReadStreams, StoredEvent, StreamId, StreamWrite};
+use eventcore::{
+    Command, CommandExecutor, CommandResult, ReadStreams, StoredEvent, StreamId, StreamWrite,
+};
 use eventcore_memory::InMemoryEventStore;
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -77,6 +79,7 @@ impl Command for BenchmarkCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Simulate computation work
         let mut result = 0i64;
@@ -91,7 +94,11 @@ impl Command for BenchmarkCommand {
             timestamp: chrono::Utc::now(),
         };
 
-        Ok(vec![StreamWrite::new(&read_streams, input.target_stream, event)?])
+        Ok(vec![StreamWrite::new(
+            &read_streams,
+            input.target_stream,
+            event,
+        )?])
     }
 }
 
@@ -117,7 +124,12 @@ fn bench_single_stream_commands(c: &mut Criterion) {
                         value: black_box(42),
                     };
 
-                    black_box(executor.execute(&command, input, eventcore::ExecutionOptions::default()).await.unwrap())
+                    black_box(
+                        executor
+                            .execute(&command, input, eventcore::ExecutionOptions::default())
+                            .await
+                            .unwrap(),
+                    )
                 });
             },
         );
@@ -172,6 +184,7 @@ impl Command for MultiStreamBenchmarkCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         let total: i64 = state.stream_totals.values().sum();
 
@@ -216,7 +229,12 @@ fn bench_multi_stream_commands(c: &mut Criterion) {
                         value: black_box(42),
                     };
 
-                    black_box(executor.execute(&command, input, eventcore::ExecutionOptions::default()).await.unwrap())
+                    black_box(
+                        executor
+                            .execute(&command, input, eventcore::ExecutionOptions::default())
+                            .await
+                            .unwrap(),
+                    )
                 });
             },
         );

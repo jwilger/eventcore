@@ -103,6 +103,7 @@ impl Command for IncrementCounterCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         if input.amount == 0 {
             return Err(CommandError::ValidationFailed(
@@ -158,6 +159,7 @@ impl Command for TransferBetweenCountersCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         mut state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         if input.amount == 0 {
             return Err(CommandError::ValidationFailed(

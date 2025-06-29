@@ -178,6 +178,8 @@ pub struct OrderSummaryProjectionState {
     pub orders_by_customer: HashMap<CustomerEmail, Vec<OrderId>>,
     /// Average order value
     pub average_order_value: Money,
+    /// Track order values by order ID for revenue calculations
+    pub order_values: HashMap<OrderId, Money>,
 }
 
 impl OrderSummaryProjectionState {
@@ -302,6 +304,11 @@ impl Projection for OrderSummaryProjectionImpl {
                     .entry(OrderStatus::Placed)
                     .or_insert(0) += 1;
 
+                // Track order value for potential cancellation
+                state
+                    .order_values
+                    .insert(e.order_id.clone(), e.total_amount);
+
                 // Update revenue
                 state.total_revenue =
                     state
@@ -317,13 +324,30 @@ impl Projection for OrderSummaryProjectionImpl {
                 let new_placed_count = state.get_orders_count_by_status(&OrderStatus::Placed);
                 Self::recalculate_average_order_value(state, new_placed_count)?;
             }
-            EcommerceEvent::OrderCancelled(_) => {
-                // Update status counts - we don't know which status it came from,
-                // so we'll just increment cancelled count
+            EcommerceEvent::OrderCancelled(e) => {
+                // Update status counts - decrement placed count and increment cancelled count
+                if let Some(placed_count) = state.orders_by_status.get_mut(&OrderStatus::Placed) {
+                    *placed_count = placed_count.saturating_sub(1);
+                }
                 *state
                     .orders_by_status
                     .entry(OrderStatus::Cancelled)
                     .or_insert(0) += 1;
+
+                // Subtract cancelled order value from revenue if it was previously placed
+                if let Some(order_value) = state.order_values.get(&e.order_id) {
+                    state.total_revenue =
+                        state.total_revenue.subtract(*order_value).map_err(|e| {
+                            ProjectionError::Internal(format!(
+                                "Failed to subtract cancelled order revenue: {}",
+                                e
+                            ))
+                        })?;
+                }
+
+                // Recalculate average since placed count changed
+                let new_placed_count = state.get_orders_count_by_status(&OrderStatus::Placed);
+                Self::recalculate_average_order_value(state, new_placed_count)?;
             }
             EcommerceEvent::OrderShipped(_) => {
                 // Update status counts

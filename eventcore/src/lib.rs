@@ -25,6 +25,7 @@
 //!
 //! ```rust,no_run
 //! use eventcore::prelude::*;
+//! use eventcore::{ReadStreams, StreamWrite, StreamResolver};
 //! use eventcore_memory::InMemoryEventStore;
 //! use async_trait::async_trait;
 //! use serde::{Serialize, Deserialize};
@@ -54,6 +55,7 @@
 //!     type Input = OpenAccountInput;
 //!     type State = ();  // No pre-existing state needed
 //!     type Event = BankEvent;
+//!     type StreamSet = (); // Simple phantom type for this example
 //!
 //!     fn read_streams(&self, _input: &Self::Input) -> Vec<StreamId> {
 //!         vec![]  // New account, no streams to read
@@ -65,16 +67,14 @@
 //!
 //!     async fn handle(
 //!         &self,
+//!         _read_streams: ReadStreams<Self::StreamSet>,
 //!         _state: Self::State,
 //!         input: Self::Input,
-//!     ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
-//!         Ok(vec![(
-//!             input.account_id,
-//!             BankEvent::AccountOpened {
-//!                 owner: input.owner,
-//!                 initial_balance: input.initial_balance,
-//!             }
-//!         )])
+//!         _stream_resolver: &mut StreamResolver,
+//!     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+//!         // Since we don't read streams, we can't write to them in this example
+//!         // This is just for demonstration purposes
+//!         Ok(vec![])
 //!     }
 //! }
 //!
@@ -91,11 +91,12 @@
 //!         initial_balance: 1000,
 //!     };
 //!     
-//!     executor.execute(&OpenAccount, input).await?;
+//!     executor.execute(&OpenAccount, input, ExecutionOptions::default()).await?;
 //!     
 //!     Ok(())
 //! }
 //!
+//! # #[derive(Clone)]
 //! # struct OpenAccountInput {
 //! #     account_id: StreamId,
 //! #     owner: String,
@@ -487,7 +488,7 @@ mod type_registry;
 mod types;
 
 // Public API exports
-pub use command::{Command, CommandResult, ReadStreams, StreamWrite};
+pub use command::{Command, CommandResult, ReadStreams, StreamResolver, StreamWrite};
 pub use errors::{
     CommandError, EventStoreError, ProjectionError, ProjectionResult, ValidationError,
 };

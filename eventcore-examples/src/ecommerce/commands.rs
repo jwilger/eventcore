@@ -91,6 +91,7 @@ impl Command for AddProductCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check if product already exists
         if state.products.contains_key(&input.product.id) {
@@ -111,7 +112,7 @@ impl Command for AddProductCommand {
                 StreamId::try_new(format!("product-{}", input.product.id)).unwrap(),
                 event.clone(),
             )?,
-            StreamWrite::new(&read_streams, input.catalog_stream.clone(), event)?,
+            StreamWrite::new(&read_streams, input.catalog_stream, event)?,
         ])
     }
 }
@@ -201,6 +202,7 @@ impl Command for CreateOrderCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check if order already exists
         if state.order_exists {
@@ -337,6 +339,7 @@ impl Command for AddItemToOrderCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check if order exists and is in draft status
         if !state.order.order_exists {
@@ -418,7 +421,7 @@ impl Command for AddItemToOrderCommand {
                 StreamId::try_new(format!("product-{}", input.item.product_id)).unwrap(),
                 inventory_event.clone(),
             )?,
-            StreamWrite::new(&read_streams, input.catalog_stream.clone(), inventory_event)?,
+            StreamWrite::new(&read_streams, input.catalog_stream, inventory_event)?,
         ])
     }
 }
@@ -466,6 +469,7 @@ impl Command for PlaceOrderCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check if order exists and is in draft status
         if !state.order_exists {
@@ -549,6 +553,7 @@ impl Command for CancelOrderCommand {
     type StreamSet = ();
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+        // Initial streams: order and catalog
         vec![
             StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
             input.catalog_stream.clone(),
@@ -619,7 +624,26 @@ impl Command for CancelOrderCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
+        stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+        // Dynamically discover and request product streams for items in the order
+        if !state.order.items.is_empty() {
+            // Check if we already have all the product streams in our read_streams
+            let missing_streams: Vec<_> = state
+                .order
+                .items
+                .keys()
+                .map(|product_id| StreamId::try_new(format!("product-{}", product_id)).unwrap())
+                .filter(|stream| !read_streams.stream_ids().contains(stream))
+                .collect();
+
+            if !missing_streams.is_empty() {
+                // Request additional product streams - executor will re-read and rebuild state
+                stream_resolver.add_streams(missing_streams);
+                return Ok(vec![]); // Return early to trigger re-read
+            }
+        }
+
         // Check if order exists
         if !state.order.order_exists {
             return Err(CommandError::BusinessRuleViolation(format!(
@@ -674,6 +698,7 @@ impl Command for CancelOrderCommand {
                     reason: format!("Released from cancelled order {}", input.order_id),
                 });
 
+                // Write to both product stream and catalog stream since we now declare both
                 events.push(StreamWrite::new(
                     &read_streams,
                     StreamId::try_new(format!("product-{}", item.product_id)).unwrap(),

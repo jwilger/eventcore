@@ -116,6 +116,7 @@ impl Command for MemoryIntensiveCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         let events: Result<Vec<_>, _> = (0..self.event_count)
             .map(|_| {
@@ -204,7 +205,10 @@ fn bench_command_execution_allocations(c: &mut Criterion) {
                         target_stream: stream_id,
                     };
 
-                    let result = executor.execute(&command, input, eventcore::ExecutionOptions::default()).await.unwrap();
+                    let result = executor
+                        .execute(&command, input, eventcore::ExecutionOptions::default())
+                        .await
+                        .unwrap();
                     black_box(result)
                 });
             },

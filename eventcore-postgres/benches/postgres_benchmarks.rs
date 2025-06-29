@@ -6,8 +6,8 @@
 use async_trait::async_trait;
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use eventcore::{
-    Command, CommandExecutor, CommandResult, EventStore, ExecutionOptions, ReadOptions, ReadStreams, StoredEvent,
-    StreamId, StreamWrite,
+    Command, CommandExecutor, CommandResult, EventStore, ExecutionOptions, ReadOptions,
+    ReadStreams, StoredEvent, StreamId, StreamWrite,
 };
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
 use serde::{Deserialize, Serialize};
@@ -81,6 +81,7 @@ impl Command for IncrementCounterCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         Ok(vec![StreamWrite::new(
             &read_streams,
@@ -131,6 +132,7 @@ impl Command for TransferBetweenCountersCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         Ok(vec![
             StreamWrite::new(

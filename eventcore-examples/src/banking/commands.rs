@@ -102,6 +102,7 @@ impl Command for OpenAccountCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check if account already exists
         if state.existing_accounts.contains_key(&input.account_id) {
@@ -245,6 +246,7 @@ impl Command for TransferMoneyCommand {
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
+        _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check for idempotency - if transfer already completed, return success
         if state.completed_transfers.contains_key(&input.transfer_id) {
