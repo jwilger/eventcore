@@ -796,6 +796,7 @@ dependencies = [
  "criterion",
  "derive_more",
  "eventcore-memory",
+ "eventcore-postgres",
  "futures",
  "insta",
  "miette",

@@ -44,6 +44,7 @@ criterion = { workspace = true }
 tracing-subscriber = { workspace = true }
 rand = { workspace = true }
 eventcore-memory = { path = "../eventcore-memory" }
+eventcore-postgres = { path = "../eventcore-postgres" }
 
 [features]
 default = []
