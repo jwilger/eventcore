@@ -385,7 +385,7 @@ This document outlines the implementation plan for the EventCore multi-stream ev
   - [x] Document all public types and traits
   - [x] Add usage examples in doc comments
   - [x] Create module-level documentation
-  - [ ] Generate and review HTML docs
+  - [x] Generate and review HTML docs
 
 ### 12.3 Examples Crate
 
