@@ -1,0 +1,246 @@
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use eventcore::{
+    command::{Command, CommandResult},
+    event::Event,
+    event_store::EventStore,
+    executor::CommandExecutor,
+    metadata::EventMetadata,
+    types::{EventId, EventVersion, StreamId},
+};
+use eventcore_memory::InMemoryEventStore;
+use std::hint::black_box;
+use std::{collections::HashMap, sync::Arc};
+use tokio::runtime::Runtime;
+
+/// Memory-heavy event for allocation testing
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct LargeEvent {
+    id: String,
+    data: Vec<u8>,
+    metadata: HashMap<String, String>,
+    nested_data: Vec<Vec<String>>,
+}
+
+impl LargeEvent {
+    fn new(size_kb: usize) -> Self {
+        let data_size = size_kb * 1024;
+        let string_count = size_kb * 10; // Approximate
+
+        Self {
+            id: EventId::new().to_string(),
+            data: vec![0u8; data_size],
+            metadata: (0..string_count)
+                .map(|i| (format!("key_{}", i), format!("value_{}", i)))
+                .collect(),
+            nested_data: (0..string_count)
+                .map(|i| (0..10).map(|j| format!("nested_{}_{}", i, j)).collect())
+                .collect(),
+        }
+    }
+}
+
+/// Command that creates memory-intensive events
+#[derive(Clone)]
+struct MemoryIntensiveCommand {
+    event_size_kb: usize,
+    event_count: usize,
+}
+
+impl MemoryIntensiveCommand {
+    fn new(event_size_kb: usize, event_count: usize) -> Self {
+        Self {
+            event_size_kb,
+            event_count,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct MemoryIntensiveInput {
+    target_stream: StreamId,
+}
+
+#[derive(Default, Clone)]
+struct MemoryIntensiveState {
+    total_events: usize,
+    total_size_bytes: usize,
+}
+
+#[async_trait::async_trait]
+impl Command for MemoryIntensiveCommand {
+    type Input = MemoryIntensiveInput;
+    type State = MemoryIntensiveState;
+    type Event = LargeEvent;
+
+    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+        vec![input.target_stream.clone()]
+    }
+
+    fn apply(&self, state: &mut Self::State, event: &Self::Event) {
+        state.total_events += 1;
+        state.total_size_bytes += event.data.len()
+            + event
+                .metadata
+                .iter()
+                .map(|(k, v)| k.len() + v.len())
+                .sum::<usize>()
+            + event
+                .nested_data
+                .iter()
+                .map(|v| v.iter().map(|s| s.len()).sum::<usize>())
+                .sum::<usize>();
+    }
+
+    async fn handle(
+        &self,
+        _state: Self::State,
+        input: Self::Input,
+    ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+        let events: Vec<(StreamId, Self::Event)> = (0..self.event_count)
+            .map(|_| {
+                (
+                    input.target_stream.clone(),
+                    LargeEvent::new(self.event_size_kb),
+                )
+            })
+            .collect();
+
+        Ok(events)
+    }
+}
+
+/// Benchmark memory allocation patterns during event creation
+fn bench_event_creation_allocations(c: &mut Criterion) {
+    let mut group = c.benchmark_group("event_creation_allocations");
+
+    for size_kb in [1, 10, 100] {
+        group.throughput(Throughput::Bytes((size_kb * 1024) as u64));
+
+        group.bench_with_input(
+            BenchmarkId::new("create_large_event", size_kb),
+            &size_kb,
+            |b, &size| {
+                b.iter(|| {
+                    let event = LargeEvent::new(size);
+                    black_box(event)
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark memory allocation during event serialization
+fn bench_event_serialization_allocations(c: &mut Criterion) {
+    let mut group = c.benchmark_group("event_serialization_allocations");
+
+    for size_kb in [1, 10, 100] {
+        group.throughput(Throughput::Bytes((size_kb * 1024) as u64));
+
+        group.bench_with_input(
+            BenchmarkId::new("serialize_large_event", size_kb),
+            &size_kb,
+            |b, &size| {
+                let stream_id = StreamId::new("test-stream").unwrap();
+                let event = Event::new(stream_id, LargeEvent::new(size), EventMetadata::new());
+
+                b.iter(|| {
+                    let serialized = serde_json::to_vec(&event).unwrap();
+                    black_box(serialized)
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark memory allocation during command execution
+fn bench_command_execution_allocations(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let event_store = Arc::new(InMemoryEventStore::new());
+    let executor = CommandExecutor::new(event_store);
+
+    let mut group = c.benchmark_group("command_execution_allocations");
+
+    for (event_size, event_count) in [(1, 10), (10, 5), (100, 1)] {
+        group.throughput(Throughput::Bytes((event_size * event_count * 1024) as u64));
+
+        group.bench_with_input(
+            BenchmarkId::new(
+                "execute_memory_command",
+                format!("{}kb_x{}", event_size, event_count),
+            ),
+            &(event_size, event_count),
+            |b, &(size, count)| {
+                b.to_async(&rt).iter(|| async {
+                    let command = MemoryIntensiveCommand::new(size, count);
+                    let stream_id =
+                        StreamId::new(&format!("mem-stream-{}", EventId::new())).unwrap();
+
+                    let input = MemoryIntensiveInput {
+                        target_stream: stream_id,
+                    };
+
+                    let metadata = EventMetadata::new();
+
+                    let result = executor.execute(&command, input, metadata).await.unwrap();
+                    black_box(result)
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+/// Benchmark memory allocation during event store operations
+fn bench_event_store_allocations(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    let mut group = c.benchmark_group("event_store_allocations");
+
+    for batch_size in [10, 50, 100] {
+        group.throughput(Throughput::Elements(batch_size));
+
+        group.bench_with_input(
+            BenchmarkId::new("store_large_events", batch_size),
+            &batch_size,
+            |b, &size| {
+                b.to_async(&rt).iter(|| async {
+                    let event_store = InMemoryEventStore::new();
+                    let stream_id =
+                        StreamId::new(&format!("alloc-stream-{}", EventId::new())).unwrap();
+
+                    let events: Vec<Event<LargeEvent>> = (0..size)
+                        .map(|_| {
+                            Event::new(
+                                stream_id.clone(),
+                                LargeEvent::new(5), // 5KB events
+                                EventMetadata::new(),
+                            )
+                        })
+                        .collect();
+
+                    let result = event_store
+                        .write_events(&stream_id, EventVersion::new(0).unwrap(), events)
+                        .await
+                        .unwrap();
+
+                    black_box(result)
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_event_creation_allocations,
+    bench_event_serialization_allocations,
+    bench_command_execution_allocations,
+    bench_event_store_allocations,
+);
+criterion_main!(benches);

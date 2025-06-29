@@ -347,11 +347,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 11.1 Benchmark Suite
 
-- [ ] Create `benches/` directory
-  - [ ] Command execution benchmarks
-  - [ ] Event store read/write benchmarks
-  - [ ] Projection processing benchmarks
-  - [ ] Memory allocation profiling
+- [x] Create `benches/` directory
+  - [x] Command execution benchmarks
+  - [x] Event store read/write benchmarks
+  - [x] Projection processing benchmarks
+  - [x] Memory allocation profiling
 
 ### 11.2 Performance Optimization
 

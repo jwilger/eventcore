@@ -5,6 +5,7 @@ members = [
     "eventcore-postgres", 
     "eventcore-memory",
     "eventcore-examples",
+    "eventcore-benchmarks",
 ]
 
 [workspace.package]
@@ -48,6 +49,7 @@ sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio
 
 # Async stream utilities
 futures = "0.3.31"
+
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

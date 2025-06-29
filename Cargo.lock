@@ -716,6 +716,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "eventcore-benchmarks"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "criterion",
+ "eventcore",
+ "eventcore-memory",
+ "eventcore-postgres",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "eventcore-examples"
 version = "0.1.0"
 dependencies = [
