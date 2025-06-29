@@ -496,21 +496,21 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 13.1 Command Definition Macros
 
-- [ ] Create `eventcore-macros` crate for procedural macros
-  - [ ] Implement `#[derive(Command)]` procedural macro
-  - [ ] Support automatic trait implementation generation
-  - [ ] Handle `#[stream]` field attributes for automatic stream detection
-  - [ ] Generate type-safe StreamSet types
-- [ ] Create declarative `command!` macro in core crate
-  - [ ] Support unified command/input structure (no separate Input type)
-  - [ ] Generate Command trait implementation
-  - [ ] Support `reads:` field for declaring stream dependencies
-  - [ ] Support `state:` block for state type definition
-  - [ ] Support `apply:` block for event folding logic
-  - [ ] Support `handle:` block with `require!` and `emit!` helpers
-  - [ ] Add `read_only: true` option for query commands (if applicable)
-- [ ] Write comprehensive tests for both macro types
-- [ ] Document macro usage with examples
+- [x] Create `eventcore-macros` crate for procedural macros
+  - [x] Implement `#[derive(Command)]` procedural macro
+  - [x] Support automatic trait implementation generation
+  - [x] Handle `#[stream]` field attributes for automatic stream detection
+  - [x] Generate type-safe StreamSet types
+- [x] Create declarative `command!` macro in core crate
+  - [x] Support unified command/input structure (no separate Input type)
+  - [x] Generate Command trait implementation
+  - [x] Support `reads:` field for declaring stream dependencies
+  - [x] Support `state:` block for state type definition
+  - [x] Support `apply:` block for event folding logic
+  - [x] Support `handle:` block with `require!` and `emit!` helpers
+  - [x] Add `read_only: true` option for query commands (if applicable)
+- [x] Write comprehensive tests for both macro types
+- [x] Document macro usage with examples
 
 ### 13.2 Simplified Command Traits
 

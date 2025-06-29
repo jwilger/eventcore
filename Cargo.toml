@@ -6,6 +6,7 @@ members = [
     "eventcore-memory",
     "eventcore-examples",
     "eventcore-benchmarks",
+    "eventcore-macros",
 ]
 
 [workspace.package]

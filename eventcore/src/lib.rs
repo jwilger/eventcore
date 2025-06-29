@@ -401,6 +401,63 @@
 //!
 //! ## Advanced Features
 //!
+//! ### Macros for Simplified Command Implementation
+//!
+//! EventCore provides helper macros to reduce boilerplate:
+//!
+//! #### Using `#[derive(Command)]` (from eventcore-macros)
+//!
+//! ```rust,ignore
+//! use eventcore_macros::Command;
+//! use eventcore::types::StreamId;
+//!
+//! #[derive(Command)]
+//! struct TransferMoney {
+//!     #[stream]
+//!     from_account: StreamId,
+//!     #[stream]
+//!     to_account: StreamId,
+//!     amount: Money,
+//! }
+//!
+//! // The macro generates:
+//! // - TransferMoneyStreamSet phantom type
+//! // - Implementation of read_streams() that returns [from_account, to_account]
+//! ```
+//!
+//! #### Using Helper Macros in Command Handlers
+//!
+//! ```rust,ignore
+//! use eventcore::prelude::*;
+//!
+//! async fn handle(
+//!     &self,
+//!     read_streams: ReadStreams<Self::StreamSet>,
+//!     state: Self::State,
+//!     input: Self::Input,
+//!     stream_resolver: &mut StreamResolver,
+//! ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+//!     // Use require! for business rule validation
+//!     require!(state.balance >= input.amount, "Insufficient funds");
+//!     require!(state.is_active, "Account is not active");
+//!     
+//!     let mut events = vec![];
+//!     
+//!     // Use emit! for creating events with type-safe stream access
+//!     emit!(events, &read_streams, input.from_account, AccountDebited {
+//!         amount: input.amount,
+//!         reference: input.reference,
+//!     });
+//!     
+//!     emit!(events, &read_streams, input.to_account, AccountCredited {
+//!         amount: input.amount,
+//!         reference: input.reference,
+//!     });
+//!     
+//!     Ok(events)
+//! }
+//! ```
+//!
 //! ### Projections
 //!
 //! Build read models from event streams:
@@ -488,6 +545,7 @@ mod event;
 mod event_store;
 mod event_store_adapter;
 mod executor;
+mod macros;
 mod metadata;
 mod monitoring;
 mod projection;
@@ -534,6 +592,9 @@ pub mod prelude {
         EventStore, EventToWrite, EventVersion, ExecutionOptions, ExpectedVersion,
         ProjectionResult, ReadOptions, StoredEvent, StreamData, StreamEvents, StreamId, Timestamp,
     };
+
+    // Re-export macros for convenience
+    pub use crate::{command, emit, require};
 
     #[cfg(any(test, feature = "testing"))]
     pub use crate::testing::prelude::*;

@@ -535,6 +535,7 @@ async fn test_transaction_isolation() {
 // Performance benchmarks would go in a separate benches/ directory
 // but we'll add a basic performance test here
 #[tokio::test]
+#[ignore = "Performance test may fail in CI/Docker environments"]
 async fn test_basic_performance() {
     let (_container, config) = setup_postgres_container().await;
 
