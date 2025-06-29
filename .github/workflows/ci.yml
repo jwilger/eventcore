@@ -139,7 +139,6 @@ jobs:
     name: Code Coverage
     runs-on: ubuntu-latest
     needs: [test]  # Wait for tests to pass first
-    if: matrix.rust == 'stable' || true  # Only run on stable, or always run if no matrix
     
     services:
       postgres-main:
