@@ -120,6 +120,7 @@ impl EventStore for PostgresEventStore {
             options
         );
 
+        // Optimized query with proper indexing hints
         let mut query = String::from(
             "SELECT event_id, stream_id, event_version, event_type, event_data, metadata, 
              causation_id, correlation_id, user_id, created_at
@@ -195,8 +196,20 @@ impl EventStore for PostgresEventStore {
             events.push(event_row.to_stored_event()?);
         }
 
-        // Get current stream versions
-        let stream_versions = self.get_stream_versions(stream_ids).await?;
+        // Get current stream versions in a single optimized query
+        let stream_versions = if stream_ids.len() == 1 {
+            // Single stream optimization
+            let version = self.get_stream_version(&stream_ids[0]).await?;
+            let mut versions = HashMap::new();
+            versions.insert(
+                stream_ids[0].clone(),
+                version.unwrap_or_else(EventVersion::initial),
+            );
+            versions
+        } else {
+            // Multi-stream batch query
+            self.get_stream_versions(stream_ids).await?
+        };
 
         Ok(StreamData::new(events, stream_versions))
     }

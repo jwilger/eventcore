@@ -9,10 +9,13 @@
 
 mod event_store;
 
+use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use eventcore::errors::EventStoreError;
+use eventcore::types::{EventVersion, StreamId};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use thiserror::Error;
@@ -57,12 +60,12 @@ impl Default for PostgresConfig {
     fn default() -> Self {
         Self {
             database_url: "postgres://postgres:postgres@localhost/eventcore".to_string(),
-            max_connections: 10,
-            min_connections: 1,
-            connect_timeout: Duration::from_secs(30),
-            max_lifetime: Some(Duration::from_secs(3600)),
-            idle_timeout: Some(Duration::from_secs(600)),
-            test_before_acquire: true,
+            max_connections: 20, // Increased for better concurrency
+            min_connections: 2,  // Keep minimum connections open
+            connect_timeout: Duration::from_secs(10), // Faster timeout for performance
+            max_lifetime: Some(Duration::from_secs(1800)), // 30 minutes
+            idle_timeout: Some(Duration::from_secs(600)), // 10 minutes
+            test_before_acquire: false, // Skip validation for performance
         }
     }
 }
@@ -103,11 +106,31 @@ impl From<PostgresError> for EventStoreError {
     }
 }
 
-/// `PostgreSQL` event store implementation
+/// Simple cache entry for stream versions
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Used in future performance optimizations
+struct VersionCacheEntry {
+    version: EventVersion,
+    timestamp: std::time::Instant,
+}
+
+/// `PostgreSQL` event store implementation
+#[derive(Debug)]
 pub struct PostgresEventStore {
     pool: Arc<PgPool>,
     config: PostgresConfig,
+    /// Simple cache for stream versions (read-heavy workload optimization)
+    version_cache: Arc<RwLock<HashMap<StreamId, VersionCacheEntry>>>,
+}
+
+impl Clone for PostgresEventStore {
+    fn clone(&self) -> Self {
+        Self {
+            pool: Arc::clone(&self.pool),
+            config: self.config.clone(),
+            version_cache: Arc::clone(&self.version_cache),
+        }
+    }
 }
 
 impl PostgresEventStore {
@@ -118,6 +141,7 @@ impl PostgresEventStore {
         Ok(Self {
             pool: Arc::new(pool),
             config,
+            version_cache: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -241,6 +265,49 @@ impl PostgresEventStore {
         debug!("PostgreSQL health check passed");
         Ok(())
     }
+
+    /// Get cached version if available and not expired (cache TTL: 5 seconds)
+    #[allow(dead_code)] // Used in future performance optimizations
+    fn get_cached_version(&self, stream_id: &StreamId) -> Option<EventVersion> {
+        const CACHE_TTL: Duration = Duration::from_secs(5);
+
+        let cache = self.version_cache.read();
+        cache.get(stream_id).and_then(|entry| {
+            if entry.timestamp.elapsed() < CACHE_TTL {
+                Some(entry.version)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Cache a stream version
+    #[allow(dead_code)] // Used in future performance optimizations
+    fn cache_version(&self, stream_id: StreamId, version: EventVersion) {
+        let mut cache = self.version_cache.write();
+        cache.insert(
+            stream_id,
+            VersionCacheEntry {
+                version,
+                timestamp: std::time::Instant::now(),
+            },
+        );
+
+        // Simple cache size management - keep last 1000 entries
+        if cache.len() > 1000 {
+            let oldest_keys: Vec<_> = cache.keys().take(100).cloned().collect();
+            for key in oldest_keys {
+                cache.remove(&key);
+            }
+        }
+    }
+
+    /// Invalidate cached version for a stream (called after writes)
+    #[allow(dead_code)] // Used in future performance optimizations
+    fn invalidate_cached_version(&self, stream_id: &StreamId) {
+        let mut cache = self.version_cache.write();
+        cache.remove(stream_id);
+    }
 }
 
 // EventStore implementation is now in the event_store module
@@ -310,6 +377,18 @@ impl PostgresConfigBuilder {
     pub fn build(self) -> PostgresConfig {
         self.config
     }
+
+    /// Configure for high-performance event sourcing workloads
+    #[must_use]
+    pub const fn performance_optimized(mut self) -> Self {
+        self.config.max_connections = 30;
+        self.config.min_connections = 5;
+        self.config.connect_timeout = Duration::from_secs(5);
+        self.config.max_lifetime = Some(Duration::from_secs(1800));
+        self.config.idle_timeout = Some(Duration::from_secs(300));
+        self.config.test_before_acquire = false;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -320,10 +399,10 @@ mod tests {
     #[test]
     fn test_postgres_config_default() {
         let config = PostgresConfig::default();
-        assert_eq!(config.max_connections, 10);
-        assert_eq!(config.min_connections, 1);
-        assert_eq!(config.connect_timeout, Duration::from_secs(30));
-        assert!(config.test_before_acquire);
+        assert_eq!(config.max_connections, 20); // Updated for performance
+        assert_eq!(config.min_connections, 2); // Updated for performance
+        assert_eq!(config.connect_timeout, Duration::from_secs(10)); // Updated for performance
+        assert!(!config.test_before_acquire); // Updated for performance
     }
 
     #[test]

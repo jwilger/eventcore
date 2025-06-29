@@ -302,14 +302,17 @@ where
             "Retrieved events for state reconstruction"
         );
 
-        // Step 3: Reconstruct state by folding events
+        // Step 3: Reconstruct state by folding events (optimized)
         let mut state = C::State::default();
         let mut applied_events = 0;
-        for event in stream_data.events() {
-            // Convert event payload from event store type to command event type
-            // This requires the command event type to be convertible from the store event type
+
+        // Pre-allocate vector to avoid reallocations during event conversion
+        let events: Vec<_> = stream_data.events().collect();
+        let mut converted_events = Vec::with_capacity(events.len());
+
+        // Convert all events upfront to reduce allocations in the loop
+        for event in events {
             if let Ok(command_event) = Self::try_convert_event::<C>(&event.payload) {
-                // Create a StoredEvent with the command's event type
                 let stored_event = crate::event_store::StoredEvent::new(
                     event.event_id,
                     event.stream_id.clone(),
@@ -318,9 +321,14 @@ where
                     command_event,
                     event.metadata.clone(),
                 );
-                command.apply(&mut state, &stored_event);
-                applied_events += 1;
+                converted_events.push(stored_event);
             }
+        }
+
+        // Apply all converted events to state
+        for stored_event in converted_events {
+            command.apply(&mut state, &stored_event);
+            applied_events += 1;
         }
         info!(applied_events, "Applied events to reconstruct state");
 
@@ -381,13 +389,16 @@ where
         C: Command,
         ES::Event: From<C::Event>,
     {
-        // Group events by stream
-        let mut streams: HashMap<StreamId, Vec<C::Event>> = HashMap::new();
+        // Group events by stream - optimized to avoid reallocations
+        let mut streams: HashMap<StreamId, Vec<C::Event>> = HashMap::with_capacity(4); // Most commands use 1-4 streams
         for (stream_id, event) in events_to_write {
-            streams.entry(stream_id).or_default().push(event);
+            streams
+                .entry(stream_id)
+                .or_insert_with(|| Vec::with_capacity(1))
+                .push(event);
         }
 
-        let mut stream_events = Vec::new();
+        let mut stream_events = Vec::with_capacity(streams.len());
 
         for (stream_id, events) in streams {
             // Get current version for optimistic concurrency control

@@ -85,9 +85,9 @@ where
     // Start with the default state
     let mut state = C::State::default();
 
-    // Get all events and sort them by EventId (UUIDv7 provides timestamp ordering)
-    let mut events: Vec<_> = stream_data.events().collect();
-    events.sort_by_key(|event| event.event_id);
+    // Events should already be sorted by EventId from the event store query
+    // UUIDv7 provides timestamp ordering, but we'll collect into a Vec for efficiency
+    let events: Vec<_> = stream_data.events().collect();
 
     // Apply each event to the state in chronological order
     for stored_event in events {

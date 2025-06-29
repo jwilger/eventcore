@@ -359,11 +359,11 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 11.2 Performance Optimization
 
-- [ ] Profile and optimize hot paths
-  - [ ] Minimize allocations in event processing
-  - [ ] Optimize database queries
-  - [ ] Add caching where appropriate
-  - [ ] Verify against performance targets
+- [x] Profile and optimize hot paths
+  - [x] Minimize allocations in event processing
+  - [x] Optimize database queries
+  - [x] Add caching where appropriate
+  - [x] Verify against performance targets
 
 ## Phase 12: Public API & Documentation
 

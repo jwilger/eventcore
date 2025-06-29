@@ -25,6 +25,7 @@ chrono = { workspace = true }
 
 # PostgreSQL specific
 sqlx = { workspace = true }
+parking_lot = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

@@ -46,6 +46,7 @@ testcontainers = "0.24.0"
 # Database dependencies (only for specific crates)
 # Note: We disable default features to avoid pulling in sqlx-mysql and its vulnerable rsa dependency
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
+parking_lot = "0.12.4"
 
 # Async stream utilities
 futures = "0.3.31"

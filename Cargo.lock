@@ -788,6 +788,7 @@ dependencies = [
  "eventcore-memory",
  "futures",
  "insta",
+ "parking_lot",
  "proptest",
  "serde",
  "serde_json",
