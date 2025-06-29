@@ -389,22 +389,22 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 12.3 Examples Crate
 
-- [ ] Create `eventcore-examples/Cargo.toml`
-  - [ ] Depend on `eventcore` core crate
-  - [ ] Depend on `eventcore-postgres` for examples
-  - [ ] Depend on `eventcore-memory` for tests
-- [ ] Design command input type patterns for examples
-  - [ ] Use smart constructors that parse raw input into valid types
-  - [ ] Ensure all command inputs are self-validating through their types
-  - [ ] Write property tests that valid inputs can be constructed
-  - [ ] Write tests that invalid raw data is rejected at construction
+- [x] Create `eventcore-examples/Cargo.toml`
+  - [x] Depend on `eventcore` core crate
+  - [x] Depend on `eventcore-postgres` for examples
+  - [x] Depend on `eventcore-memory` for tests
+- [x] Design command input type patterns for examples
+  - [x] Use smart constructors that parse raw input into valid types
+  - [x] Ensure all command inputs are self-validating through their types
+  - [x] Write property tests that valid inputs can be constructed
+  - [x] Write tests that invalid raw data is rejected at construction
 - [ ] Create `eventcore-examples/src/` structure:
-  - [ ] Banking transfer example (`banking/`)
-    - [ ] Define `Money` type with validation
-    - [ ] Define `AccountId` and `TransferId` types
-    - [ ] Implement `TransferMoney` command with validated input types
-    - [ ] Implement `OpenAccount` command with validated input types
-    - [ ] Create account balance projection
+  - [x] Banking transfer example (`banking/`)
+    - [x] Define `Money` type with validation
+    - [x] Define `AccountId` and `TransferId` types
+    - [x] Implement `TransferMoney` command with validated input types
+    - [x] Implement `OpenAccount` command with validated input types
+    - [x] Create account balance projection
   - [ ] E-commerce order example (`ecommerce/`)
     - [ ] Define order-specific types with validation
     - [ ] Implement order workflow commands with validated input types

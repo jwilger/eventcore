@@ -25,8 +25,14 @@ tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 
 # Type safety dependencies
-nutype = { workspace = true }
+nutype = { workspace = true, features = ["regex"] }
 derive_more = { workspace = true }
+regex = "1.11.1"
+
+# Additional dependencies for examples
+rust_decimal = { version = "1.37.0", features = ["serde"] }
+rust_decimal_macros = "1.37.0"
+anyhow = "1.0.95"
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -36,3 +42,20 @@ criterion = { workspace = true }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "banking"
+path = "src/banking/main.rs"
+
+[[example]]
+name = "ecommerce"
+path = "src/ecommerce/main.rs"
+
+[[example]]
+name = "sagas"
+path = "src/sagas/main.rs"
+
+[[bench]]
+name = "example_benchmarks"
+harness = false
+path = "src/benchmarks/bench.rs"

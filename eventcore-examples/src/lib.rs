@@ -5,16 +5,23 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+// Allow nutype macros to work with current MSRV
+#![allow(clippy::incompatible_msrv)]
+// These are examples, so we don't need to be as pedantic
+#![allow(clippy::missing_const_for_fn)]
+#![allow(clippy::use_self)]
 
-/// Banking example module placeholder
-pub mod banking {
-    // TODO: Implementation will be added in Phase 12
-}
+/// Banking example: Account management and money transfers with type-safe domain modeling
+pub mod banking;
 
-/// E-commerce example module placeholder
-pub mod ecommerce {
-    // TODO: Implementation will be added in Phase 12
-}
+/// E-commerce example: Order workflow with inventory management
+pub mod ecommerce;
+
+/// Sagas example: Long-running distributed transactions
+pub mod sagas;
+
+/// Benchmarks: Performance testing examples
+pub mod benchmarks;
 
 #[cfg(test)]
 mod tests {
