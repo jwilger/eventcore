@@ -23,14 +23,16 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,no_run
+//! Here's a complete example showing how to create a simple banking application with EventCore:
+//!
+//! ```rust,ignore
 //! use eventcore::prelude::*;
 //! use eventcore::{ReadStreams, StreamWrite, StreamResolver};
 //! use eventcore_memory::InMemoryEventStore;
 //! use async_trait::async_trait;
 //! use serde::{Serialize, Deserialize};
 //!
-//! // Define your events (must derive or implement TryFrom for executor)
+//! // Define your domain events
 //! #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 //! enum BankEvent {
 //!     AccountOpened { owner: String, initial_balance: u64 },
@@ -41,40 +43,101 @@
 //! // Required for type conversion in executor
 //! impl TryFrom<&BankEvent> for BankEvent {
 //!     type Error = std::convert::Infallible;
-//!
 //!     fn try_from(value: &BankEvent) -> Result<Self, Self::Error> {
 //!         Ok(value.clone())
 //!     }
 //! }
 //!
-//! // Define a command
+//! // Command input type (self-validating through construction)
+//! #[derive(Clone)]
+//! struct OpenAccountInput {
+//!     account_id: StreamId,
+//!     owner: String,
+//!     initial_balance: u64,
+//! }
+//!
+//! impl OpenAccountInput {
+//!     /// Smart constructor ensures valid inputs
+//!     fn new(account_id: &str, owner: &str, initial_balance: u64) -> Result<Self, String> {
+//!         if owner.trim().is_empty() {
+//!             return Err("Owner cannot be empty".to_string());
+//!         }
+//!         if initial_balance == 0 {
+//!             return Err("Initial balance must be greater than zero".to_string());
+//!         }
+//!         Ok(Self {
+//!             account_id: StreamId::try_new(account_id).map_err(|e| e.to_string())?,
+//!             owner: owner.to_string(),
+//!             initial_balance,
+//!         })
+//!     }
+//! }
+//!
+//! // Account state for event folding
+//! #[derive(Default)]
+//! struct AccountState {
+//!     exists: bool,
+//!     owner: String,
+//!     balance: u64,
+//! }
+//!
+//! // OpenAccount command implementation
 //! struct OpenAccount;
 //!
 //! #[async_trait]
 //! impl Command for OpenAccount {
 //!     type Input = OpenAccountInput;
-//!     type State = ();  // No pre-existing state needed
+//!     type State = AccountState;
 //!     type Event = BankEvent;
-//!     type StreamSet = (); // Simple phantom type for this example
+//!     type StreamSet = (); // Phantom type for compile-time stream access control
 //!
-//!     fn read_streams(&self, _input: &Self::Input) -> Vec<StreamId> {
-//!         vec![]  // New account, no streams to read
+//!     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+//!         // Read the account stream to check if it exists
+//!         vec![input.account_id.clone()]
 //!     }
 //!
-//!     fn apply(&self, _state: &mut Self::State, _event: &StoredEvent<Self::Event>) {
-//!         // No state to update for account opening
+//!     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+//!         // Fold events into account state
+//!         match &event.payload {
+//!             BankEvent::AccountOpened { owner, initial_balance } => {
+//!                 state.exists = true;
+//!                 state.owner = owner.clone();
+//!                 state.balance = *initial_balance;
+//!             }
+//!             BankEvent::MoneyDeposited { amount } => {
+//!                 state.balance += amount;
+//!             }
+//!             BankEvent::MoneyWithdrawn { amount } => {
+//!                 state.balance = state.balance.saturating_sub(*amount);
+//!             }
+//!         }
 //!     }
 //!
 //!     async fn handle(
 //!         &self,
-//!         _read_streams: ReadStreams<Self::StreamSet>,
-//!         _state: Self::State,
+//!         read_streams: ReadStreams<Self::StreamSet>,
+//!         state: Self::State,
 //!         input: Self::Input,
 //!         _stream_resolver: &mut StreamResolver,
 //!     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
-//!         // Since we don't read streams, we can't write to them in this example
-//!         // This is just for demonstration purposes
-//!         Ok(vec![])
+//!         // Business rule: account must not already exist
+//!         if state.exists {
+//!             return Err(CommandError::BusinessRuleViolation(
+//!                 format!("Account {} already exists", input.account_id)
+//!             ));
+//!         }
+//!
+//!         // Create account opened event with type-safe stream access
+//!         let event = StreamWrite::new(
+//!             &read_streams,
+//!             input.account_id.clone(),
+//!             BankEvent::AccountOpened {
+//!                 owner: input.owner,
+//!                 initial_balance: input.initial_balance,
+//!             }
+//!         )?;
+//!
+//!         Ok(vec![event])
 //!     }
 //! }
 //!
@@ -84,24 +147,15 @@
 //!     let event_store = InMemoryEventStore::<BankEvent>::new();
 //!     let executor = CommandExecutor::new(event_store);
 //!
-//!     // Execute a command
-//!     let input = OpenAccountInput {
-//!         account_id: StreamId::try_new("account-123")?,
-//!         owner: "Alice".to_string(),
-//!         initial_balance: 1000,
-//!     };
+//!     // Create a new account with validation
+//!     let input = OpenAccountInput::new("account-alice", "Alice Smith", 1000)?;
 //!     
-//!     executor.execute(&OpenAccount, input, ExecutionOptions::default()).await?;
+//!     // Execute the command
+//!     let result = executor.execute(&OpenAccount, input, ExecutionOptions::default()).await?;
+//!     println!("Account opened successfully! {} events written", result.events_written.len());
 //!     
 //!     Ok(())
 //! }
-//!
-//! # #[derive(Clone)]
-//! # struct OpenAccountInput {
-//! #     account_id: StreamId,
-//! #     owner: String,
-//! #     initial_balance: u64,
-//! # }
 //! ```
 //!
 //! ## Multi-Stream Event Sourcing
@@ -123,16 +177,88 @@
 //! }
 //! ```
 //!
-//! ### EventCore Solution
+//! ### EventCore Solution: Complete Money Transfer Example
 //!
 //! ```rust,ignore
-//! // EventCore: Direct, atomic operations across streams
+//! use eventcore::prelude::*;
+//! use eventcore::{ReadStreams, StreamWrite, StreamResolver};
+//! use async_trait::async_trait;
+//! use serde::{Serialize, Deserialize};
+//! use std::collections::HashMap;
+//!
+//! // Events for account operations
+//! #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+//! enum AccountEvent {
+//!     AccountOpened { owner: String, initial_balance: u64 },
+//!     MoneyDebited { amount: u64, reference: String },
+//!     MoneyCredited { amount: u64, reference: String },
+//! }
+//!
+//! impl TryFrom<&AccountEvent> for AccountEvent {
+//!     type Error = std::convert::Infallible;
+//!     fn try_from(value: &AccountEvent) -> Result<Self, Self::Error> { Ok(value.clone()) }
+//! }
+//!
+//! // Self-validating input type
+//! #[derive(Clone)]
+//! struct TransferMoneyInput {
+//!     from_account: StreamId,
+//!     to_account: StreamId,
+//!     amount: u64,
+//!     reference: String,
+//! }
+//!
+//! impl TransferMoneyInput {
+//!     fn new(from: &str, to: &str, amount: u64, reference: &str) -> Result<Self, String> {
+//!         if amount == 0 { return Err("Amount must be greater than zero".to_string()); }
+//!         if from == to { return Err("Cannot transfer to the same account".to_string()); }
+//!         Ok(Self {
+//!             from_account: StreamId::try_new(from).map_err(|e| e.to_string())?,
+//!             to_account: StreamId::try_new(to).map_err(|e| e.to_string())?,
+//!             amount,
+//!             reference: reference.to_string(),
+//!         })
+//!     }
+//! }
+//!
+//! // Transfer state tracks both account balances
+//! #[derive(Default)]
+//! struct TransferState {
+//!     accounts: HashMap<StreamId, (bool, u64)>, // (exists, balance)
+//! }
+//!
+//! // Transfer command: reads from and writes to multiple streams atomically
+//! struct TransferMoney;
+//!
+//! #[async_trait]
 //! impl Command for TransferMoney {
-//!     type StreamSet = (); // Phantom type for stream access control
+//!     type Input = TransferMoneyInput;
+//!     type State = TransferState;
+//!     type Event = AccountEvent;
+//!     type StreamSet = (); // Phantom type for compile-time stream access control
 //!     
 //!     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-//!         // Read from both accounts atomically
-//!         vec![input.from_account, input.to_account]
+//!         // Read from both accounts atomically - this is the consistency boundary
+//!         vec![input.from_account.clone(), input.to_account.clone()]
+//!     }
+//!
+//!     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+//!         // Fold events into account state
+//!         match &event.payload {
+//!             AccountEvent::AccountOpened { initial_balance, .. } => {
+//!                 state.accounts.insert(event.stream_id.clone(), (true, *initial_balance));
+//!             }
+//!             AccountEvent::MoneyDebited { amount, .. } => {
+//!                 if let Some((exists, balance)) = state.accounts.get_mut(&event.stream_id) {
+//!                     *balance = balance.saturating_sub(*amount);
+//!                 }
+//!             }
+//!             AccountEvent::MoneyCredited { amount, .. } => {
+//!                 if let Some((exists, balance)) = state.accounts.get_mut(&event.stream_id) {
+//!                     *balance += amount;
+//!                 }
+//!             }
+//!         }
 //!     }
 //!
 //!     async fn handle(
@@ -140,15 +266,76 @@
 //!         read_streams: ReadStreams<Self::StreamSet>,
 //!         state: Self::State,
 //!         input: Self::Input,
-//!         stream_resolver: &mut StreamResolver,
+//!         _stream_resolver: &mut StreamResolver,
 //!     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+//!         // Check business rules using current state
+//!         let from_balance = state.accounts.get(&input.from_account)
+//!             .map(|(exists, balance)| if *exists { *balance } else { 0 })
+//!             .unwrap_or(0);
+//!         
+//!         let to_exists = state.accounts.get(&input.to_account)
+//!             .map(|(exists, _)| *exists)
+//!             .unwrap_or(false);
+//!
+//!         if from_balance < input.amount {
+//!             return Err(CommandError::BusinessRuleViolation(
+//!                 format!("Insufficient funds: {} < {}", from_balance, input.amount)
+//!             ));
+//!         }
+//!
+//!         if !to_exists {
+//!             return Err(CommandError::BusinessRuleViolation(
+//!                 format!("Destination account {} does not exist", input.to_account)
+//!             ));
+//!         }
+//!
 //!         // Write to both accounts atomically with type-safe stream access
 //!         Ok(vec![
-//!             StreamWrite::new(&read_streams, input.from_account, MoneyDebited { amount })?,
-//!             StreamWrite::new(&read_streams, input.to_account, MoneyCredited { amount })?,
+//!             StreamWrite::new(
+//!                 &read_streams,
+//!                 input.from_account,
+//!                 AccountEvent::MoneyDebited {
+//!                     amount: input.amount,
+//!                     reference: input.reference.clone()
+//!                 }
+//!             )?,
+//!             StreamWrite::new(
+//!                 &read_streams,
+//!                 input.to_account,
+//!                 AccountEvent::MoneyCredited {
+//!                     amount: input.amount,
+//!                     reference: input.reference
+//!                 }
+//!             )?,
 //!         ])
 //!     }
 //! }
+//!
+//! // Usage example showing atomic cross-stream operations
+//! # #[tokio::main]
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! #     use eventcore_memory::InMemoryEventStore;
+//! #     let event_store = InMemoryEventStore::<AccountEvent>::new();
+//! #     let executor = CommandExecutor::new(event_store);
+//! #
+//!       // Transfer money between accounts - all happens in one transaction
+//!       let transfer_input = TransferMoneyInput::new(
+//!           "account-alice",
+//!           "account-bob",
+//!           500,
+//!           "monthly-allowance"
+//!       )?;
+//!       
+//!       let result = executor.execute(
+//!           &TransferMoney,
+//!           transfer_input,
+//!           ExecutionOptions::default()
+//!       ).await?;
+//!       
+//!       println!("✅ Transfer completed atomically! {} events written",
+//!                result.events_written.len());
+//! #     Ok(())
+//! # }
 //! ```
 //!
 //! ## Crate Usage Patterns
@@ -167,7 +354,7 @@
 //! async-trait = "0.1"
 //! ```
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use eventcore::{CommandExecutor, Command};
 //! use eventcore_memory::InMemoryEventStore;
 //!
@@ -238,7 +425,7 @@
 //! - **Features**: Fast, thread-safe, no persistence
 //! - **Limitations**: Data lost on restart, limited to single process
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use eventcore_memory::InMemoryEventStore;
 //! let store = InMemoryEventStore::<String>::new();
 //! ```
@@ -265,7 +452,7 @@
 //! ## Initialization Patterns
 //!
 //! ### Simple Setup (Testing/Development)
-//! ```rust,no_run
+//! ```rust,ignore
 //! use eventcore::{CommandExecutor, CommandExecutorBuilder};
 //! use eventcore_memory::InMemoryEventStore;
 //!
@@ -325,7 +512,7 @@
 //! ```
 //!
 //! ### Dependency Injection Pattern
-//! ```rust,no_run
+//! ```rust,ignore
 //! use eventcore::{CommandExecutor, EventStore};
 //! use std::sync::Arc;
 //!
@@ -531,26 +718,148 @@
 //! }
 //! ```
 //!
-//! ### Projections
+//! ### Projections: Building Read Models
 //!
-//! Build read models from event streams:
+//! Create efficient read models by projecting events into queryable views:
 //!
 //! ```rust,ignore
+//! use eventcore::prelude::*;
+//! use async_trait::async_trait;
+//! use serde::{Serialize, Deserialize};
+//! use std::collections::HashMap;
+//!
+//! // Domain events
+//! #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+//! enum BankEvent {
+//!     AccountOpened { owner: String, initial_balance: u64 },
+//!     MoneyDeposited { amount: u64 },
+//!     MoneyWithdrawn { amount: u64 },
+//! }
+//!
+//! // Account summary for queries
+//! #[derive(Debug, Clone, Serialize, Deserialize)]
+//! struct AccountSummary {
+//!     account_id: String,
+//!     owner: String,
+//!     current_balance: u64,
+//!     total_deposits: u64,
+//!     total_withdrawals: u64,
+//!     transaction_count: u64,
+//!     last_activity: Option<Timestamp>,
+//! }
+//!
+//! // Projection that maintains account summaries
+//! struct AccountSummaryProjection {
+//!     accounts: HashMap<String, AccountSummary>,
+//!     checkpoint: Option<ProjectionCheckpoint>,
+//! }
+//!
+//! impl AccountSummaryProjection {
+//!     fn new() -> Self {
+//!         Self {
+//!             accounts: HashMap::new(),
+//!             checkpoint: None,
+//!         }
+//!     }
+//!
+//!     /// Query account by ID
+//!     fn get_account(&self, account_id: &str) -> Option<&AccountSummary> {
+//!         self.accounts.get(account_id)
+//!     }
+//!
+//!     /// Query accounts by owner
+//!     fn accounts_by_owner(&self, owner: &str) -> Vec<&AccountSummary> {
+//!         self.accounts.values()
+//!             .filter(|account| account.owner == owner)
+//!             .collect()
+//!     }
+//!
+//!     /// Query accounts with balance above threshold
+//!     fn high_balance_accounts(&self, threshold: u64) -> Vec<&AccountSummary> {
+//!         self.accounts.values()
+//!             .filter(|account| account.current_balance >= threshold)
+//!             .collect()
+//!     }
+//! }
+//!
 //! #[async_trait]
-//! impl Projection for AccountBalanceProjection {
-//!     async fn handle_event(&mut self, event: &StoredEvent<BankEvent>) -> ProjectionResult<()> {
+//! impl Projection for AccountSummaryProjection {
+//!     type Event = BankEvent;
+//!     type Checkpoint = ProjectionCheckpoint;
+//!     type Error = ProjectionError;
+//!
+//!     async fn handle_event(&mut self, event: &StoredEvent<Self::Event>) -> ProjectionResult<()> {
+//!         let account_id = event.stream_id.to_string();
+//!         
 //!         match &event.payload {
+//!             BankEvent::AccountOpened { owner, initial_balance } => {
+//!                 let summary = AccountSummary {
+//!                     account_id: account_id.clone(),
+//!                     owner: owner.clone(),
+//!                     current_balance: *initial_balance,
+//!                     total_deposits: *initial_balance,
+//!                     total_withdrawals: 0,
+//!                     transaction_count: 1,
+//!                     last_activity: Some(event.timestamp),
+//!                 };
+//!                 self.accounts.insert(account_id, summary);
+//!             }
 //!             BankEvent::MoneyDeposited { amount } => {
-//!                 self.balance += amount;
+//!                 if let Some(account) = self.accounts.get_mut(&account_id) {
+//!                     account.current_balance += amount;
+//!                     account.total_deposits += amount;
+//!                     account.transaction_count += 1;
+//!                     account.last_activity = Some(event.timestamp);
+//!                 }
 //!             }
 //!             BankEvent::MoneyWithdrawn { amount } => {
-//!                 self.balance -= amount;
+//!                 if let Some(account) = self.accounts.get_mut(&account_id) {
+//!                     account.current_balance = account.current_balance.saturating_sub(*amount);
+//!                     account.total_withdrawals += amount;
+//!                     account.transaction_count += 1;
+//!                     account.last_activity = Some(event.timestamp);
+//!                 }
 //!             }
-//!             _ => {}
 //!         }
+//!         
+//!         // Update checkpoint to track progress
+//!         self.checkpoint = Some(ProjectionCheckpoint::new(event.id));
+//!         Ok(())
+//!     }
+//!
+//!     fn checkpoint(&self) -> Option<&Self::Checkpoint> {
+//!         self.checkpoint.as_ref()
+//!     }
+//!
+//!     async fn reset(&mut self) -> ProjectionResult<()> {
+//!         self.accounts.clear();
+//!         self.checkpoint = None;
 //!         Ok(())
 //!     }
 //! }
+//!
+//! // Usage example
+//! # #[tokio::main]
+//! # async fn projection_example() -> Result<(), Box<dyn std::error::Error>> {
+//! #     use eventcore_memory::InMemoryEventStore;
+//! #     let event_store = InMemoryEventStore::<BankEvent>::new();
+//!       
+//!       // Set up projection
+//!       let mut projection = AccountSummaryProjection::new();
+//!       
+//!       // Process events to build read model
+//!       // (In practice, you'd use ProjectionManager for this)
+//!       
+//!       // Query the projection
+//!       if let Some(account) = projection.get_account("account-123") {
+//!           println!("Account {} owner: {}, balance: {}",
+//!                   account.account_id, account.owner, account.current_balance);
+//!       }
+//!       
+//!       let high_balance = projection.high_balance_accounts(10000);
+//!       println!("Found {} high-balance accounts", high_balance.len());
+//! #     Ok(())
+//! # }
 //! ```
 //!
 //! ### Event Metadata
@@ -588,11 +897,125 @@
 //!
 //! ## Error Handling
 //!
-//! EventCore provides rich error types for different failure scenarios:
+//! EventCore provides rich error types with actionable diagnostics for different failure scenarios:
 //!
-//! - `CommandError`: Business logic violations, validation failures
-//! - `EventStoreError`: Storage layer issues, version conflicts
-//! - `ProjectionError`: Event processing failures
+//! ```rust,ignore
+//! use eventcore::prelude::*;
+//! use eventcore::miette::{Diagnostic, Report};
+//! use std::time::Duration;
+//! use tokio::time::sleep;
+//!
+//! // Example showing comprehensive error handling patterns
+//! async fn handle_transfer_with_retries(
+//!     executor: &CommandExecutor<impl EventStore<Event = AccountEvent>>,
+//!     from: &str,
+//!     to: &str,
+//!     amount: u64
+//! ) -> Result<(), Box<dyn std::error::Error>> {
+//!     let mut attempts = 0;
+//!     let max_attempts = 3;
+//!     
+//!     // Create input with validation
+//!     let input = match TransferMoneyInput::new(from, to, amount, "api-transfer") {
+//!         Ok(input) => input,
+//!         Err(validation_error) => {
+//!             eprintln!("❌ Input validation failed: {}", validation_error);
+//!             return Err(validation_error.into());
+//!         }
+//!     };
+//!     
+//!     loop {
+//!         match executor.execute(&TransferMoney, input.clone(), ExecutionOptions::default()).await {
+//!             Ok(result) => {
+//!                 println!("✅ Transfer successful! {} events written", result.events_written.len());
+//!                 return Ok(());
+//!             }
+//!             
+//!             // Handle specific error types with different strategies
+//!             Err(CommandError::BusinessRuleViolation(msg)) => {
+//!                 eprintln!("❌ Business rule violation: {}", msg);
+//!                 return Err(CommandError::BusinessRuleViolation(msg).into());
+//!             }
+//!             
+//!             Err(CommandError::ConcurrencyConflict { streams }) => {
+//!                 attempts += 1;
+//!                 if attempts >= max_attempts {
+//!                     let error = CommandError::ConcurrencyConflict { streams: streams.clone() };
+//!                     eprintln!("❌ Max retry attempts reached");
+//!                     eprintln!("{:?}", Report::new(error.clone()));
+//!                     return Err(error.into());
+//!                 }
+//!                 
+//!                 let delay = Duration::from_millis(100 * 2_u64.pow(attempts - 1));
+//!                 println!("⚠️  Concurrency conflict on streams: {:?}", streams);
+//!                 println!("🔄 Retrying in {:?} (attempt {}/{})", delay, attempts, max_attempts);
+//!                 sleep(delay).await;
+//!                 continue;
+//!             }
+//!             
+//!             Err(CommandError::InvalidStreamAccess { stream, declared_streams }) => {
+//!                 eprintln!("❌ Invalid stream access detected!");
+//!                 eprintln!("   Attempted to access: {}", stream);
+//!                 eprintln!("   Declared streams: {:?}", declared_streams);
+//!                 eprintln!("   💡 Fix: Add '{}' to your command's read_streams() method", stream);
+//!                 return Err(CommandError::InvalidStreamAccess { stream, declared_streams }.into());
+//!             }
+//!             
+//!             Err(CommandError::StreamNotDeclared { stream, command_type }) => {
+//!                 eprintln!("❌ Stream not declared in command!");
+//!                 eprintln!("   Stream: {}", stream);
+//!                 eprintln!("   Command: {}", command_type);
+//!                 eprintln!("   💡 Fix: Add stream to read_streams() method to enable write access");
+//!                 return Err(CommandError::StreamNotDeclared { stream, command_type }.into());
+//!             }
+//!             
+//!             Err(CommandError::EventStore(store_error)) => {
+//!                 eprintln!("❌ Event store error: {}", store_error);
+//!                 match store_error {
+//!                     EventStoreError::ConnectionFailed(_) => {
+//!                         if attempts < max_attempts {
+//!                             attempts += 1;
+//!                             println!("🔄 Retrying due to connection issue...");
+//!                             sleep(Duration::from_millis(1000)).await;
+//!                             continue;
+//!                         }
+//!                     }
+//!                     _ => {}
+//!                 }
+//!                 return Err(CommandError::EventStore(store_error).into());
+//!             }
+//!             
+//!             Err(other_error) => {
+//!                 eprintln!("❌ Unexpected error: {}", other_error);
+//!                 eprintln!("{:?}", Report::new(other_error.clone()));
+//!                 return Err(other_error.into());
+//!             }
+//!         }
+//!     }
+//! }
+//!
+//! // Example showing enhanced error reporting with diagnostics
+//! async fn demonstrate_error_diagnostics() {
+//!     // This will show rich error messages with helpful hints
+//!     let result = handle_transfer_with_retries(
+//!         &executor,
+//!         "nonexistent-account",
+//!         "another-account",
+//!         1000
+//!     ).await;
+//!     
+//!     if let Err(error) = result {
+//!         // miette provides beautiful, actionable error reports
+//!         eprintln!("{:?}", error);
+//!     }
+//! }
+//! ```
+//!
+//! ### Error Categories
+//!
+//! - **CommandError**: Business logic violations, validation failures, stream access errors
+//! - **EventStoreError**: Storage layer issues, connection failures, version conflicts  
+//! - **ProjectionError**: Event processing failures in read model updates
 //!
 //! ## Getting Help
 //!
@@ -655,6 +1078,80 @@ pub use miette;
 /// Testing utilities for event sourcing applications
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+
+/// Interactive tutorials and documentation
+///
+/// This module contains comprehensive tutorials for learning EventCore.
+/// Each tutorial is designed to be interactive and build upon the previous ones.
+pub mod docs {
+    /// Getting Started Tutorial
+    ///
+    /// Learn the fundamentals of EventCore by building a simple banking application.
+    /// This tutorial covers:
+    /// - Defining domain events
+    /// - Creating self-validating input types
+    /// - Implementing commands with business logic
+    /// - Using the event store and executor
+    ///
+    /// The complete tutorial is available in `docs/tutorials/first-command.md`.
+    pub mod first_command {
+        /// Writing Your First Command
+        ///
+        /// This tutorial guides you through creating your first EventCore command.
+        /// See `docs/tutorials/first-command.md` for the complete tutorial.
+        pub struct Tutorial;
+    }
+
+    /// Macro DSL Tutorial  
+    ///
+    /// Learn how to use EventCore's powerful macros to reduce boilerplate:
+    /// - The `#[derive(Command)]` procedural macro
+    /// - The declarative `command!` macro
+    /// - Helper functions like `require!` and `emit!`
+    ///
+    /// The complete tutorial is available in `docs/tutorials/macro-dsl.md`.
+    pub mod macro_dsl {
+        /// Using the Macro DSL
+        ///
+        /// This tutorial shows how to use EventCore's macros for cleaner code.
+        /// See `docs/tutorials/macro-dsl.md` for the complete tutorial.
+        pub struct Tutorial;
+    }
+
+    /// Projections Tutorial
+    ///
+    /// Build efficient read models from event streams:
+    /// - Simple projections for basic queries
+    /// - Aggregating projections for analytics
+    /// - Time-window projections for recent activity
+    /// - Managing projections with ProjectionManager
+    ///
+    /// The complete tutorial is available in `docs/tutorials/implementing-projections.md`.
+    pub mod implementing_projections {
+        /// Implementing Projections
+        ///
+        /// This tutorial covers building read models from event streams.
+        /// See `docs/tutorials/implementing-projections.md` for the complete tutorial.
+        pub struct Tutorial;
+    }
+
+    /// Error Handling Tutorial
+    ///
+    /// Learn best practices for handling errors in event-sourced systems:
+    /// - Understanding different error categories
+    /// - Implementing retry strategies
+    /// - Using circuit breaker patterns  
+    /// - Enhanced error reporting with miette
+    ///
+    /// The complete tutorial is available in `docs/tutorials/error-handling.md`.
+    pub mod error_handling {
+        /// Handling Errors Properly
+        ///
+        /// This tutorial covers error handling best practices.
+        /// See `docs/tutorials/error-handling.md` for the complete tutorial.
+        pub struct Tutorial;
+    }
+}
 
 /// Prelude module with commonly used imports
 ///

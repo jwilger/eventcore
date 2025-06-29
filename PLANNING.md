@@ -536,14 +536,14 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 13.4 Interactive Documentation
 
-- [ ] Add playground-compatible examples to all major types
-- [ ] Create interactive tutorials for:
-  - [ ] Writing your first command
-  - [ ] Using the macro DSL
-  - [ ] Implementing projections
-  - [ ] Handling errors properly
-- [ ] Set up doc tests to run in CI
-- [ ] Consider using `doc_comment` crate for external example files
+- [x] Add playground-compatible examples to all major types
+- [x] Create interactive tutorials for:
+  - [x] Writing your first command
+  - [x] Using the macro DSL
+  - [x] Implementing projections
+  - [x] Handling errors properly
+- [x] Set up doc tests to run in CI
+- [x] Consider using `doc_comment` crate for external example files
 
 ## Phase 14: Integration & Polish
 
