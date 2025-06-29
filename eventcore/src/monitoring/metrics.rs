@@ -477,6 +477,7 @@ impl Default for ProjectionMetrics {
 
 /// Centralized metrics registry
 #[derive(Debug)]
+#[allow(clippy::struct_field_names)]
 pub struct MetricsRegistry {
     pub command_metrics: CommandMetrics,
     pub event_store_metrics: EventStoreMetrics,

@@ -5,10 +5,8 @@
 //! objects while providing a convenient API.
 
 use crate::event::{Event, StoredEvent};
-use crate::event_store::{
-    EventMetadata as StoreEventMetadata, EventToWrite, StoredEvent as StoreStoredEvent,
-};
-use crate::metadata::EventMetadataBuilder;
+use crate::event_store::{EventToWrite, StoredEvent as StoreStoredEvent};
+use crate::metadata::{EventMetadata, EventMetadataBuilder};
 use crate::types::{EventId, EventVersion, StreamId, Timestamp};
 
 /// Builder for creating `Event<E>` instances for testing.
@@ -281,7 +279,7 @@ pub struct StoreEventBuilder<E> {
     event_version: Option<EventVersion>,
     timestamp: Option<Timestamp>,
     payload: Option<E>,
-    metadata: Option<StoreEventMetadata>,
+    metadata: Option<EventMetadata>,
 }
 
 impl<E> StoreEventBuilder<E> {
@@ -348,7 +346,7 @@ impl<E> StoreEventBuilder<E> {
 
     /// Sets the metadata.
     #[must_use]
-    pub fn with_metadata(mut self, metadata: StoreEventMetadata) -> Self {
+    pub fn with_metadata(mut self, metadata: EventMetadata) -> Self {
         self.metadata = Some(metadata);
         self
     }
@@ -379,7 +377,7 @@ impl<E> Default for StoreEventBuilder<E> {
 pub struct EventToWriteBuilder<E> {
     event_id: Option<EventId>,
     payload: Option<E>,
-    metadata: Option<StoreEventMetadata>,
+    metadata: Option<EventMetadata>,
 }
 
 impl<E> EventToWriteBuilder<E> {
@@ -408,7 +406,7 @@ impl<E> EventToWriteBuilder<E> {
 
     /// Sets the metadata.
     #[must_use]
-    pub fn with_metadata(mut self, metadata: StoreEventMetadata) -> Self {
+    pub fn with_metadata(mut self, metadata: EventMetadata) -> Self {
         self.metadata = Some(metadata);
         self
     }

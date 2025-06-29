@@ -389,6 +389,8 @@ where
         C: Command,
         ES::Event: From<C::Event>,
     {
+        use crate::metadata::{CorrelationId, UserId};
+
         // Group events by stream - optimized to avoid reallocations
         let mut streams: HashMap<StreamId, Vec<C::Event>> = HashMap::with_capacity(4); // Most commands use 1-4 streams
         for (stream_id, event) in events_to_write {
@@ -416,9 +418,21 @@ where
                 .into_iter()
                 .map(|event| {
                     let event_id = EventId::new();
-                    let metadata = crate::event_store::EventMetadata::new()
-                        .with_correlation_id(context.correlation_id.clone())
-                        .with_user_id(context.user_id.clone().unwrap_or_default());
+
+                    // Parse correlation ID - use a new one if parsing fails
+                    let correlation_id = uuid::Uuid::parse_str(&context.correlation_id)
+                        .ok()
+                        .and_then(|uuid| CorrelationId::try_new(uuid).ok())
+                        .unwrap_or_default();
+
+                    let user_id = context
+                        .user_id
+                        .as_ref()
+                        .and_then(|uid| UserId::try_new(uid.clone()).ok());
+
+                    let metadata = crate::metadata::EventMetadata::new()
+                        .with_correlation_id(correlation_id)
+                        .with_user_id(user_id);
 
                     EventToWrite::with_metadata(event_id, ES::Event::from(event), metadata)
                 })

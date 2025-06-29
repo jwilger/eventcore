@@ -9,5 +9,7 @@ pub mod health;
 #[allow(missing_docs)]
 pub mod metrics;
 
+#[allow(unused_imports)]
 pub use health::*;
+#[allow(unused_imports)]
 pub use metrics::*;

@@ -7,10 +7,8 @@ use criterion::{
     Throughput,
 };
 use eventcore::{
-    event_store::{
-        EventMetadata, EventStore, EventToWrite, ExpectedVersion, ReadOptions, StreamEvents,
-    },
-    types::{EventId, StreamId},
+    EventId, EventMetadata, EventStore, EventToWrite, ExpectedVersion, ReadOptions, StreamEvents,
+    StreamId,
 };
 use eventcore_memory::InMemoryEventStore;
 use std::hint::black_box;

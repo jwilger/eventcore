@@ -4,10 +4,7 @@
 #![allow(missing_docs)]
 
 use async_trait::async_trait;
-use eventcore::{
-    command::Command, errors::CommandError, event_store::EventStore, executor::CommandExecutor,
-    types::StreamId,
-};
+use eventcore::{Command, CommandError, CommandExecutor, EventStore, StreamId};
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
 use serde::{Deserialize, Serialize};
 use testcontainers::{core::WaitFor, runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt};
@@ -90,11 +87,7 @@ impl Command for IncrementCounterCommand {
         vec![input.stream_id.clone()]
     }
 
-    fn apply(
-        &self,
-        state: &mut Self::State,
-        stored_event: &eventcore::event_store::StoredEvent<Self::Event>,
-    ) {
+    fn apply(&self, state: &mut Self::State, stored_event: &eventcore::StoredEvent<Self::Event>) {
         match &stored_event.payload {
             TestEvent::CounterIncremented { amount } => state.value += amount,
             TestEvent::CounterDecremented { amount } => {
@@ -144,11 +137,7 @@ impl Command for TransferBetweenCountersCommand {
         vec![input.from_stream.clone(), input.to_stream.clone()]
     }
 
-    fn apply(
-        &self,
-        state: &mut Self::State,
-        stored_event: &eventcore::event_store::StoredEvent<Self::Event>,
-    ) {
+    fn apply(&self, state: &mut Self::State, stored_event: &eventcore::StoredEvent<Self::Event>) {
         // Apply events to the appropriate stream's state
         let counter_state = state.entry(stored_event.stream_id.clone()).or_default();
         match &stored_event.payload {
@@ -262,7 +251,7 @@ async fn test_concurrent_command_execution() {
     );
 
     // Verify final state
-    let read_options = eventcore::event_store::ReadOptions::default();
+    let read_options = eventcore::ReadOptions::default();
     let stream_data = executor
         .event_store()
         .read_streams(&[stream_id.clone()], &read_options)
@@ -323,7 +312,7 @@ async fn test_multi_stream_atomicity() {
     assert!(result.is_ok(), "Transfer should succeed");
 
     // Verify both streams were updated atomically
-    let read_options = eventcore::event_store::ReadOptions::default();
+    let read_options = eventcore::ReadOptions::default();
     let counter1_data = executor
         .event_store()
         .read_streams(&[counter1_id.clone()], &read_options)
@@ -497,7 +486,7 @@ async fn test_transaction_isolation() {
 
     // Verify data consistency
     for stream_id in &stream_ids {
-        let read_options = eventcore::event_store::ReadOptions::default();
+        let read_options = eventcore::ReadOptions::default();
         let stream_data = executor
             .event_store()
             .read_streams(&[stream_id.clone()], &read_options)

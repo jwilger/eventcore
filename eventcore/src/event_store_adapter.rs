@@ -130,11 +130,13 @@ impl Default for Features {
 
 impl Features {
     /// Checks if any backend is enabled.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub const fn any_enabled(&self) -> bool {
         self.postgres || self.eventstoredb || self.memory
     }
 
     /// Gets a list of enabled backend names.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn enabled_backends(&self) -> Vec<&'static str> {
         let mut backends = Vec::new();
         if self.postgres {

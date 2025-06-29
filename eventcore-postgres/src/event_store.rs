@@ -8,14 +8,12 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use eventcore::{
-    errors::{EventStoreError, EventStoreResult},
-    event_store::{
-        EventMetadata, EventStore, EventToWrite, ExpectedVersion, ReadOptions, StoredEvent,
-        StreamData, StreamEvents,
-    },
-    subscription::{Subscription, SubscriptionOptions},
-    types::{EventId, EventVersion, StreamId, Timestamp},
+    EventId, EventMetadata, EventStore, EventStoreError, EventToWrite, EventVersion,
+    ExpectedVersion, ReadOptions, StoredEvent, StreamData, StreamEvents, StreamId, Subscription,
+    SubscriptionOptions, Timestamp,
 };
+
+type EventStoreResult<T> = Result<T, EventStoreError>;
 use serde_json::Value;
 use sqlx::{postgres::PgRow, Row, Transaction};
 use tracing::{debug, instrument, warn};
@@ -581,8 +579,11 @@ impl PostgresEventStore {
                 .map_or((None, None, None), |metadata| {
                     (
                         metadata.causation_id.as_ref().map(|id| **id),
-                        metadata.correlation_id.clone(),
-                        metadata.user_id.clone(),
+                        Some(metadata.correlation_id.to_string()),
+                        metadata
+                            .user_id
+                            .as_ref()
+                            .map(|uid| uid.as_ref().to_string()),
                     )
                 });
 
@@ -651,7 +652,7 @@ impl PostgresEventStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::event_store::{EventToWrite, ExpectedVersion, StreamEvents};
+    use eventcore::{EventToWrite, ExpectedVersion, StreamEvents};
     use serde_json::json;
 
     // Note: These are unit tests for the individual methods.
@@ -707,9 +708,11 @@ mod tests {
 
     #[test]
     fn test_metadata_serialization() {
+        use eventcore::{CorrelationId, UserId};
+
         let metadata = EventMetadata::new()
-            .with_correlation_id("test-correlation".to_string())
-            .with_user_id("test-user".to_string());
+            .with_correlation_id(CorrelationId::new())
+            .with_user_id(Some(UserId::try_new("test-user").unwrap()));
 
         let json_value = serde_json::to_value(&metadata).unwrap();
         let deserialized: EventMetadata = serde_json::from_value(json_value).unwrap();

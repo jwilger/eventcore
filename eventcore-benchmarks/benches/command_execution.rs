@@ -6,11 +6,7 @@ use criterion::{
     async_executor::FuturesExecutor, criterion_group, criterion_main, BenchmarkId, Criterion,
     Throughput,
 };
-use eventcore::{
-    command::{Command, CommandResult},
-    executor::CommandExecutor,
-    types::StreamId,
-};
+use eventcore::{Command, CommandExecutor, CommandResult, StoredEvent, StreamId};
 use eventcore_memory::InMemoryEventStore;
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -70,11 +66,7 @@ impl Command for BenchmarkCommand {
         vec![input.target_stream.clone()]
     }
 
-    fn apply(
-        &self,
-        state: &mut Self::State,
-        event: &eventcore::event_store::StoredEvent<Self::Event>,
-    ) {
+    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         state.total += event.payload.value;
         state.count += 1;
     }
@@ -162,11 +154,7 @@ impl Command for MultiStreamBenchmarkCommand {
         input.streams.clone()
     }
 
-    fn apply(
-        &self,
-        state: &mut Self::State,
-        event: &eventcore::event_store::StoredEvent<Self::Event>,
-    ) {
+    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         // For benchmarking, we'll update all streams
         let keys: Vec<_> = state.stream_totals.keys().cloned().collect();
         for stream in keys {

@@ -147,6 +147,34 @@ impl EventMetadata {
             custom: std::collections::HashMap::new(),
         }
     }
+
+    /// Sets the causation ID.
+    #[must_use]
+    pub const fn with_causation_id(mut self, causation_id: CausationId) -> Self {
+        self.causation_id = Some(causation_id);
+        self
+    }
+
+    /// Sets the correlation ID.
+    #[must_use]
+    pub const fn with_correlation_id(mut self, correlation_id: CorrelationId) -> Self {
+        self.correlation_id = correlation_id;
+        self
+    }
+
+    /// Sets the user ID.
+    #[must_use]
+    pub fn with_user_id(mut self, user_id: Option<UserId>) -> Self {
+        self.user_id = user_id;
+        self
+    }
+
+    /// Adds custom metadata.
+    #[must_use]
+    pub fn with_custom(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        self.custom.insert(key.into(), value);
+        self
+    }
 }
 
 impl Default for EventMetadata {

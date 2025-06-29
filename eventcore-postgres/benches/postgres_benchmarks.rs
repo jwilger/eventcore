@@ -6,8 +6,7 @@
 use async_trait::async_trait;
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use eventcore::{
-    command::Command, errors::CommandError, event_store::EventStore, executor::CommandExecutor,
-    types::StreamId,
+    Command, CommandError, CommandExecutor, EventStore, ReadOptions, StoredEvent, StreamId,
 };
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
 use serde::{Deserialize, Serialize};
@@ -68,11 +67,7 @@ impl Command for IncrementCounterCommand {
         vec![input.stream_id.clone()]
     }
 
-    fn apply(
-        &self,
-        state: &mut Self::State,
-        stored_event: &eventcore::event_store::StoredEvent<Self::Event>,
-    ) {
+    fn apply(&self, state: &mut Self::State, stored_event: &StoredEvent<Self::Event>) {
         match &stored_event.payload {
             TestEvent::CounterIncremented { amount } => state.value += amount,
             TestEvent::CounterDecremented { amount } => {
@@ -116,11 +111,7 @@ impl Command for TransferBetweenCountersCommand {
         vec![input.from_stream.clone(), input.to_stream.clone()]
     }
 
-    fn apply(
-        &self,
-        state: &mut Self::State,
-        stored_event: &eventcore::event_store::StoredEvent<Self::Event>,
-    ) {
+    fn apply(&self, state: &mut Self::State, stored_event: &StoredEvent<Self::Event>) {
         match &stored_event.payload {
             TestEvent::CounterDecremented { amount } => {
                 state.0.value = state.0.value.saturating_sub(*amount);
@@ -383,7 +374,7 @@ fn bench_event_store_operations(c: &mut Criterion) {
                 let executor_clone = context.executor.clone();
                 context.runtime.block_on(async move {
                     let event_store = executor_clone.event_store();
-                    let read_options = eventcore::event_store::ReadOptions::default();
+                    let read_options = ReadOptions::default();
                     event_store
                         .read_streams(&[stream_id_clone], &read_options)
                         .await

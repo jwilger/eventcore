@@ -12,17 +12,19 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use eventcore::errors::{EventStoreError, EventStoreResult};
-use eventcore::event_store::{
-    EventStore, ExpectedVersion, ReadOptions, StoredEvent, StreamData, StreamEvents,
+use eventcore::{
+    EventStore, EventStoreError, EventVersion, ExpectedVersion, ReadOptions, StoredEvent,
+    StreamData, StreamEvents, StreamId, Subscription, SubscriptionImpl, SubscriptionOptions,
+    Timestamp,
 };
-use eventcore::types::{EventVersion, StreamId, Timestamp};
+
+type EventStoreResult<T> = Result<T, EventStoreError>;
 
 /// Thread-safe in-memory event store for testing
 #[derive(Clone)]
 pub struct InMemoryEventStore<E>
 where
-    E: Send + Sync + Clone + 'static,
+    E: Send + Sync + Clone + 'static + PartialEq + Eq,
 {
     // Maps stream IDs to their stored events
     streams: Arc<RwLock<HashMap<StreamId, Vec<StoredEvent<E>>>>>,
@@ -32,7 +34,7 @@ where
 
 impl<E> InMemoryEventStore<E>
 where
-    E: Send + Sync + Clone + 'static,
+    E: Send + Sync + Clone + 'static + PartialEq + Eq,
 {
     /// Create a new empty in-memory event store
     pub fn new() -> Self {
@@ -45,7 +47,7 @@ where
 
 impl<E> Default for InMemoryEventStore<E>
 where
-    E: Send + Sync + Clone + 'static,
+    E: Send + Sync + Clone + 'static + PartialEq + Eq,
 {
     fn default() -> Self {
         Self::new()
@@ -55,7 +57,7 @@ where
 #[async_trait]
 impl<E> EventStore for InMemoryEventStore<E>
 where
-    E: Send + Sync + Clone + 'static,
+    E: Send + Sync + Clone + 'static + PartialEq + Eq,
 {
     type Event = E;
 
@@ -200,10 +202,10 @@ where
 
     async fn subscribe(
         &self,
-        _options: eventcore::subscription::SubscriptionOptions,
-    ) -> EventStoreResult<Box<dyn eventcore::subscription::Subscription<Event = Self::Event>>> {
+        _options: SubscriptionOptions,
+    ) -> EventStoreResult<Box<dyn Subscription<Event = Self::Event>>> {
         // Return a basic subscription implementation for now
-        let subscription = eventcore::subscription::SubscriptionImpl::new();
+        let subscription = SubscriptionImpl::new();
         Ok(Box::new(subscription))
     }
 }
@@ -211,8 +213,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::event_store::EventToWrite;
-    use eventcore::types::EventId;
+    use eventcore::{EventId, EventToWrite};
 
     #[tokio::test]
     async fn test_new_store_is_empty() {

@@ -161,7 +161,9 @@ pub struct SerializedEventEnvelope {
 pub mod evolution;
 pub mod json;
 
+#[allow(unused_imports)]
 pub use evolution::{JsonSchemaEvolution, SchemaRegistry};
+#[allow(unused_imports)]
 pub use json::JsonEventSerializer;
 
 #[cfg(test)]

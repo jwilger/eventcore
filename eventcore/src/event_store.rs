@@ -5,6 +5,7 @@
 //! and support multi-stream atomic operations.
 
 use crate::errors::EventStoreResult;
+use crate::metadata::EventMetadata;
 use crate::types::{EventId, EventVersion, StreamId, Timestamp};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -104,65 +105,6 @@ impl<E> StoredEvent<E> {
             payload,
             metadata,
         }
-    }
-}
-
-/// Metadata that can be attached to events for tracking and correlation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EventMetadata {
-    /// ID of the event that caused this event (for causation tracking)
-    pub causation_id: Option<EventId>,
-    /// ID used to correlate related events across multiple commands
-    pub correlation_id: Option<String>,
-    /// ID of the user or system that initiated this event
-    pub user_id: Option<String>,
-    /// Additional custom metadata
-    pub custom: HashMap<String, String>,
-}
-
-impl EventMetadata {
-    /// Creates new empty metadata.
-    pub fn new() -> Self {
-        Self {
-            causation_id: None,
-            correlation_id: None,
-            user_id: None,
-            custom: HashMap::new(),
-        }
-    }
-
-    /// Sets the causation ID.
-    #[must_use]
-    pub const fn with_causation_id(mut self, causation_id: EventId) -> Self {
-        self.causation_id = Some(causation_id);
-        self
-    }
-
-    /// Sets the correlation ID.
-    #[must_use]
-    pub fn with_correlation_id(mut self, correlation_id: String) -> Self {
-        self.correlation_id = Some(correlation_id);
-        self
-    }
-
-    /// Sets the user ID.
-    #[must_use]
-    pub fn with_user_id(mut self, user_id: String) -> Self {
-        self.user_id = Some(user_id);
-        self
-    }
-
-    /// Adds custom metadata.
-    #[must_use]
-    pub fn with_custom(mut self, key: String, value: String) -> Self {
-        self.custom.insert(key, value);
-        self
-    }
-}
-
-impl Default for EventMetadata {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -439,22 +381,31 @@ mod tests {
 
     #[test]
     fn event_metadata_builder() {
-        let causation_id = EventId::new();
-        let correlation_id = "corr-123".to_string();
-        let user_id = "user-456".to_string();
+        use crate::metadata::{CausationId, CorrelationId, UserId};
+
+        let event_id = EventId::new();
+        let causation_id = CausationId::from(event_id);
+        let correlation_id = CorrelationId::new();
+        let user_id = UserId::try_new("user-456").unwrap();
 
         let metadata = EventMetadata::new()
             .with_causation_id(causation_id)
-            .with_correlation_id(correlation_id.clone())
-            .with_user_id(user_id.clone())
-            .with_custom("key1".to_string(), "value1".to_string())
-            .with_custom("key2".to_string(), "value2".to_string());
+            .with_correlation_id(correlation_id)
+            .with_user_id(Some(user_id.clone()))
+            .with_custom("key1", serde_json::json!("value1"))
+            .with_custom("key2", serde_json::json!("value2"));
 
         assert_eq!(metadata.causation_id, Some(causation_id));
-        assert_eq!(metadata.correlation_id, Some(correlation_id));
+        assert_eq!(metadata.correlation_id, correlation_id);
         assert_eq!(metadata.user_id, Some(user_id));
-        assert_eq!(metadata.custom.get("key1"), Some(&"value1".to_string()));
-        assert_eq!(metadata.custom.get("key2"), Some(&"value2".to_string()));
+        assert_eq!(
+            metadata.custom.get("key1"),
+            Some(&serde_json::json!("value1"))
+        );
+        assert_eq!(
+            metadata.custom.get("key2"),
+            Some(&serde_json::json!("value2"))
+        );
     }
 
     #[test]
@@ -503,6 +454,8 @@ mod tests {
 
     #[test]
     fn event_to_write_creation() {
+        use crate::metadata::UserId;
+
         let event_id = EventId::new();
         let payload = "test_payload";
 
@@ -513,7 +466,8 @@ mod tests {
         assert_eq!(event1.metadata, None);
 
         // With metadata
-        let metadata = EventMetadata::new().with_user_id("user-123".to_string());
+        let metadata =
+            EventMetadata::new().with_user_id(Some(UserId::try_new("user-123").unwrap()));
         let event2 = EventToWrite::with_metadata(event_id, payload, metadata.clone());
         assert_eq!(event2.event_id, event_id);
         assert_eq!(event2.payload, payload);
@@ -522,11 +476,14 @@ mod tests {
 
     #[test]
     fn event_metadata_serialization() {
+        use crate::metadata::{CausationId, CorrelationId, UserId};
+
+        let event_id = EventId::new();
         let metadata = EventMetadata::new()
-            .with_causation_id(EventId::new())
-            .with_correlation_id("test-correlation".to_string())
-            .with_user_id("test-user".to_string())
-            .with_custom("key".to_string(), "value".to_string());
+            .with_causation_id(CausationId::from(event_id))
+            .with_correlation_id(CorrelationId::new())
+            .with_user_id(Some(UserId::try_new("test-user").unwrap()))
+            .with_custom("key", serde_json::json!("value"));
 
         let json = serde_json::to_string(&metadata).unwrap();
         let deserialized: EventMetadata = serde_json::from_str(&json).unwrap();

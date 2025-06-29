@@ -14,8 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use eventcore::errors::EventStoreError;
-use eventcore::types::{EventVersion, StreamId};
+use eventcore::{EventStoreError, EventVersion, StreamId};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use thiserror::Error;

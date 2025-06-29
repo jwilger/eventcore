@@ -3,16 +3,18 @@
 //! This integration test module runs all property-based tests to verify
 //! fundamental invariants of the event sourcing system.
 
-use eventcore::event_store::EventStore;
+use eventcore::{
+    EventId, EventStore, EventToWrite, EventVersion, ExpectedVersion, ReadOptions, StreamEvents,
+    StreamId,
+};
 use eventcore_memory::InMemoryEventStore;
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 
 // Basic generators
-fn arb_stream_id() -> impl Strategy<Value = eventcore::types::StreamId> {
-    "[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}".prop_filter_map("Invalid StreamId", |s| {
-        eventcore::types::StreamId::try_new(s).ok()
-    })
+fn arb_stream_id() -> impl Strategy<Value = StreamId> {
+    "[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}"
+        .prop_filter_map("Invalid StreamId", |s| StreamId::try_new(s).ok())
 }
 
 /// Test that verifies the property test framework itself works correctly.
@@ -39,14 +41,14 @@ proptest! {
 
             for stream_id in &stream_ids {
                 for i in 0..events_per_stream {
-                    let event = eventcore::event_store::EventToWrite::new(
-                        eventcore::types::EventId::new(),
+                    let event = EventToWrite::new(
+                        EventId::new(),
                         format!("event-{i}")
                     );
 
-                    let stream_events = vec![eventcore::event_store::StreamEvents::new(
+                    let stream_events = vec![StreamEvents::new(
                         stream_id.clone(),
-                        eventcore::event_store::ExpectedVersion::Any,
+                        ExpectedVersion::Any,
                         vec![event]
                     )];
 
@@ -57,7 +59,7 @@ proptest! {
 
             // Read back to verify
             for stream_id in &stream_ids {
-                let data = store.read_streams(&[stream_id.clone()], &eventcore::event_store::ReadOptions::new()).await;
+                let data = store.read_streams(&[stream_id.clone()], &ReadOptions::new()).await;
                 prop_assert!(data.is_ok());
                 let stream_data = data.unwrap();
                 prop_assert_eq!(stream_data.events.len(), events_per_stream);
@@ -72,21 +74,18 @@ proptest! {
 #[test]
 fn test_event_immutability() {
     let store = InMemoryEventStore::new();
-    let stream_id = eventcore::types::StreamId::try_new("test-stream").unwrap();
+    let stream_id = StreamId::try_new("test-stream").unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        let original_event = eventcore::event_store::EventToWrite::new(
-            eventcore::types::EventId::new(),
-            "test-event".to_string(),
-        );
+        let original_event = EventToWrite::new(EventId::new(), "test-event".to_string());
 
         let original_id = original_event.event_id;
         let original_payload = original_event.payload.clone();
 
-        let stream_events = vec![eventcore::event_store::StreamEvents::new(
+        let stream_events = vec![StreamEvents::new(
             stream_id.clone(),
-            eventcore::event_store::ExpectedVersion::New,
+            ExpectedVersion::New,
             vec![original_event],
         )];
 
@@ -94,7 +93,7 @@ fn test_event_immutability() {
 
         // Read back the event
         let stream_data = store
-            .read_streams(&[stream_id], &eventcore::event_store::ReadOptions::new())
+            .read_streams(&[stream_id], &ReadOptions::new())
             .await
             .unwrap();
         let stored_event = &stream_data.events[0];
@@ -113,26 +112,23 @@ fn test_event_immutability() {
 #[test]
 fn test_version_monotonicity() {
     let store = InMemoryEventStore::new();
-    let stream_id = eventcore::types::StreamId::try_new("test-stream").unwrap();
+    let stream_id = StreamId::try_new("test-stream").unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        let mut current_version = eventcore::types::EventVersion::initial();
+        let mut current_version = EventVersion::initial();
 
         // Write multiple events and verify version progression
         for i in 0..5 {
-            let event = eventcore::event_store::EventToWrite::new(
-                eventcore::types::EventId::new(),
-                format!("event-{i}"),
-            );
+            let event = EventToWrite::new(EventId::new(), format!("event-{i}"));
 
             let expected_version = if i == 0 {
-                eventcore::event_store::ExpectedVersion::New
+                ExpectedVersion::New
             } else {
-                eventcore::event_store::ExpectedVersion::Exact(current_version)
+                ExpectedVersion::Exact(current_version)
             };
 
-            let stream_events = vec![eventcore::event_store::StreamEvents::new(
+            let stream_events = vec![StreamEvents::new(
                 stream_id.clone(),
                 expected_version,
                 vec![event],
@@ -148,7 +144,7 @@ fn test_version_monotonicity() {
 
         // Verify final state
         let stream_data = store
-            .read_streams(&[stream_id], &eventcore::event_store::ReadOptions::new())
+            .read_streams(&[stream_id], &ReadOptions::new())
             .await
             .unwrap();
         let events = stream_data.events;
@@ -157,7 +153,7 @@ fn test_version_monotonicity() {
 
         // Verify no version gaps
         for (i, event) in events.iter().enumerate() {
-            let expected_version = eventcore::types::EventVersion::try_new(i as u64 + 1).unwrap();
+            let expected_version = EventVersion::try_new(i as u64 + 1).unwrap();
             assert_eq!(event.event_version, expected_version);
         }
     });
@@ -167,7 +163,7 @@ fn test_version_monotonicity() {
 #[test]
 fn test_event_ordering() {
     let store = InMemoryEventStore::new();
-    let stream_id = eventcore::types::StreamId::try_new("test-stream").unwrap();
+    let stream_id = StreamId::try_new("test-stream").unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -175,14 +171,14 @@ fn test_event_ordering() {
 
         // Write events with delays to ensure different timestamps
         for i in 0..5 {
-            let event_id = eventcore::types::EventId::new();
+            let event_id = EventId::new();
             event_ids.push(event_id);
 
-            let event = eventcore::event_store::EventToWrite::new(event_id, format!("event-{i}"));
+            let event = EventToWrite::new(event_id, format!("event-{i}"));
 
-            let stream_events = vec![eventcore::event_store::StreamEvents::new(
+            let stream_events = vec![StreamEvents::new(
                 stream_id.clone(),
-                eventcore::event_store::ExpectedVersion::Any,
+                ExpectedVersion::Any,
                 vec![event],
             )];
 
@@ -194,7 +190,7 @@ fn test_event_ordering() {
 
         // Read back and verify ordering
         let stream_data = store
-            .read_streams(&[stream_id], &eventcore::event_store::ReadOptions::new())
+            .read_streams(&[stream_id], &ReadOptions::new())
             .await
             .unwrap();
         let events = stream_data.events;

@@ -369,15 +369,15 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 12.1 Library Public API
 
-- [ ] Create `eventcore/src/lib.rs` with clean exports
-  - [ ] Export core traits and types
-  - [ ] Export command creation helpers
-  - [ ] Export test utilities
-  - [ ] Hide implementation details
-- [ ] Document crate usage patterns:
-  - [ ] How to depend on core + adapter crates
-  - [ ] Example Cargo.toml configurations
-  - [ ] Adapter selection and initialization
+- [x] Create `eventcore/src/lib.rs` with clean exports
+  - [x] Export core traits and types
+  - [x] Export command creation helpers
+  - [x] Export test utilities
+  - [x] Hide implementation details
+- [x] Document crate usage patterns:
+  - [x] How to depend on core + adapter crates
+  - [x] Example Cargo.toml configurations
+  - [x] Adapter selection and initialization
 
 ### 12.2 Documentation
 

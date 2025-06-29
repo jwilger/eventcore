@@ -7,11 +7,8 @@ use criterion::{
     Throughput,
 };
 use eventcore::{
-    command::{Command, CommandResult},
-    event::Event,
-    event_store::{EventMetadata, EventStore, EventToWrite, ExpectedVersion, StreamEvents},
-    executor::CommandExecutor,
-    types::{EventId, StreamId},
+    Command, CommandExecutor, CommandResult, Event, EventId, EventMetadata, EventStore,
+    EventToWrite, ExpectedVersion, StoredEvent, StreamEvents, StreamId,
 };
 use eventcore_memory::InMemoryEventStore;
 use std::collections::HashMap;
@@ -96,11 +93,7 @@ impl Command for MemoryIntensiveCommand {
         vec![input.target_stream.clone()]
     }
 
-    fn apply(
-        &self,
-        state: &mut Self::State,
-        event: &eventcore::event_store::StoredEvent<Self::Event>,
-    ) {
+    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         state.total_events += 1;
         state.total_size_bytes += event.payload.data.len()
             + event
@@ -169,11 +162,7 @@ fn bench_event_serialization_allocations(c: &mut Criterion) {
             &size_kb,
             |b, &size| {
                 let stream_id = StreamId::try_new("test-stream").unwrap();
-                let event = Event::new(
-                    stream_id,
-                    LargeEvent::new(size),
-                    eventcore::metadata::EventMetadata::new(),
-                );
+                let event = Event::new(stream_id, LargeEvent::new(size), EventMetadata::new());
 
                 b.iter(|| {
                     let serialized = serde_json::to_vec(&event).unwrap();

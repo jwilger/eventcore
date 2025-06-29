@@ -7,10 +7,8 @@ use criterion::{
     Throughput,
 };
 use eventcore::{
-    event::Event,
-    metadata::EventMetadata,
-    projection::{Projection, ProjectionCheckpoint, ProjectionConfig, ProjectionStatus},
-    types::{EventId, StreamId},
+    Event, EventId, EventMetadata, Projection, ProjectionCheckpoint, ProjectionConfig,
+    ProjectionResult, ProjectionStatus, StreamId,
 };
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -53,7 +51,7 @@ impl UserCountProjection {
 }
 
 #[async_trait::async_trait]
-impl eventcore::projection::Projection for UserCountProjection {
+impl Projection for UserCountProjection {
     type State = UserCountState;
     type Event = BenchmarkEvent;
 
@@ -61,26 +59,23 @@ impl eventcore::projection::Projection for UserCountProjection {
         &self.config
     }
 
-    async fn get_state(&self) -> eventcore::errors::ProjectionResult<Self::State> {
+    async fn get_state(&self) -> ProjectionResult<Self::State> {
         Ok(self.state.clone())
     }
 
-    async fn get_status(&self) -> eventcore::errors::ProjectionResult<ProjectionStatus> {
+    async fn get_status(&self) -> ProjectionResult<ProjectionStatus> {
         Ok(ProjectionStatus::Running)
     }
 
-    async fn load_checkpoint(&self) -> eventcore::errors::ProjectionResult<ProjectionCheckpoint> {
+    async fn load_checkpoint(&self) -> ProjectionResult<ProjectionCheckpoint> {
         Ok(ProjectionCheckpoint::initial())
     }
 
-    async fn save_checkpoint(
-        &self,
-        _checkpoint: ProjectionCheckpoint,
-    ) -> eventcore::errors::ProjectionResult<()> {
+    async fn save_checkpoint(&self, _checkpoint: ProjectionCheckpoint) -> ProjectionResult<()> {
         Ok(())
     }
 
-    async fn initialize_state(&self) -> eventcore::errors::ProjectionResult<Self::State> {
+    async fn initialize_state(&self) -> ProjectionResult<Self::State> {
         Ok(UserCountState::default())
     }
 
@@ -88,7 +83,7 @@ impl eventcore::projection::Projection for UserCountProjection {
         &self,
         state: &mut Self::State,
         event: &Event<Self::Event>,
-    ) -> eventcore::errors::ProjectionResult<()> {
+    ) -> ProjectionResult<()> {
         if let BenchmarkEvent::UserRegistered { email, .. } = &event.payload {
             state.total_users += 1;
 
