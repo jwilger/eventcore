@@ -514,13 +514,13 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 13.2 Fluent Configuration API
 
-- [ ] Create `CommandExecutorBuilder` for executor configuration
-  - [ ] `.with_store()` method
-  - [ ] `.with_tracing()` method for enabling tracing
-  - [ ] `.build()` method returning configured executor
-- [ ] Keep execution simple: `executor.execute(command).await?`
-- [ ] Write tests for builder pattern
-- [ ] Document configuration options
+- [x] Create `CommandExecutorBuilder` for executor configuration
+  - [x] `.with_store()` method
+  - [x] `.with_tracing()` method for enabling tracing
+  - [x] `.build()` method returning configured executor
+- [x] Keep execution simple: `executor.execute(command).await?`
+- [x] Write tests for builder pattern
+- [x] Document configuration options
 
 ### 13.3 Better Error Messages
 

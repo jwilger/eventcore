@@ -266,21 +266,31 @@
 //!
 //! ### Simple Setup (Testing/Development)
 //! ```rust,no_run
-//! use eventcore::CommandExecutor;
+//! use eventcore::{CommandExecutor, CommandExecutorBuilder};
 //! use eventcore_memory::InMemoryEventStore;
 //!
+//! // Traditional constructor
 //! fn setup_simple() -> CommandExecutor<InMemoryEventStore<String>> {
 //!     let event_store = InMemoryEventStore::<String>::new();
 //!     CommandExecutor::new(event_store)
+//! }
+//!
+//! // Using the fluent builder API
+//! fn setup_simple_with_builder() -> CommandExecutor<InMemoryEventStore<String>> {
+//!     let event_store = InMemoryEventStore::<String>::new();
+//!     CommandExecutorBuilder::new()
+//!         .with_store(event_store)
+//!         .build()
 //! }
 //! ```
 //!
 //! ### Production Setup with Configuration
 //! ```rust,ignore
-//! use eventcore::CommandExecutor;
+//! use eventcore::{CommandExecutor, CommandExecutorBuilder, RetryPolicy};
 //! use eventcore_postgres::{PostgresEventStore, PostgresConfig};
 //! use std::time::Duration;
 //!
+//! // Traditional constructor approach
 //! async fn setup_production(database_url: String) -> Result<CommandExecutor<PostgresEventStore>, Box<dyn std::error::Error>> {
 //!     let config = PostgresConfig::new(database_url)
 //!         .with_max_connections(20)
@@ -292,6 +302,25 @@
 //!     event_store.initialize().await?;
 //!     
 //!     Ok(CommandExecutor::new(event_store))
+//! }
+//!
+//! // Using builder with advanced configuration
+//! async fn setup_production_with_builder(database_url: String) -> Result<CommandExecutor<PostgresEventStore>, Box<dyn std::error::Error>> {
+//!     let config = PostgresConfig::new(database_url)
+//!         .with_max_connections(20)
+//!         .with_min_connections(5)
+//!         .with_connect_timeout(Duration::from_secs(10))
+//!         .with_idle_timeout(Duration::from_secs(600));
+//!     
+//!     let event_store = PostgresEventStore::new(config).await?;
+//!     event_store.initialize().await?;
+//!     
+//!     Ok(CommandExecutorBuilder::new()
+//!         .with_store(event_store)
+//!         .with_fault_tolerant_retry()
+//!         .with_retry_policy(RetryPolicy::ConcurrencyAndTransient)
+//!         .with_tracing(true)
+//!         .build())
 //! }
 //! ```
 //!
@@ -312,6 +341,50 @@
 //!         }
 //!     }
 //! }
+//! ```
+//!
+//! ## Fluent Configuration API
+//!
+//! EventCore provides a fluent builder pattern for configuring command executors:
+//!
+//! ```rust,ignore
+//! use eventcore::{CommandExecutorBuilder, RetryConfig, RetryPolicy};
+//! use eventcore_memory::InMemoryEventStore;
+//! use std::time::Duration;
+//!
+//! // Basic usage
+//! let executor = CommandExecutorBuilder::new()
+//!     .with_store(InMemoryEventStore::<String>::new())
+//!     .build();
+//!
+//! // Advanced configuration
+//! let executor = CommandExecutorBuilder::new()
+//!     .with_store(my_event_store)
+//!     .with_retry_config(RetryConfig {
+//!         max_attempts: 5,
+//!         base_delay: Duration::from_millis(100),
+//!         max_delay: Duration::from_secs(30),
+//!         backoff_multiplier: 2.0,
+//!     })
+//!     .with_retry_policy(RetryPolicy::ConcurrencyAndTransient)
+//!     .with_tracing(true)
+//!     .build();
+//!
+//! // Preset configurations
+//! let fast_executor = CommandExecutorBuilder::new()
+//!     .with_store(my_event_store)
+//!     .with_fast_retry()  // Optimized for high-throughput
+//!     .build();
+//!
+//! let fault_tolerant_executor = CommandExecutorBuilder::new()
+//!     .with_store(my_event_store)
+//!     .with_fault_tolerant_retry()  // Optimized for reliability
+//!     .build();
+//!
+//! // Simple execution with convenience methods
+//! let result = executor.execute_simple(&command, input).await?;
+//! let result = executor.execute_with_correlation(&command, input, "req-123".to_string()).await?;
+//! let result = executor.execute_as_user(&command, input, "user-456".to_string()).await?;
 //! ```
 //!
 //! ## Core Concepts
@@ -566,7 +639,10 @@ pub use event::Event;
 pub use event_store::{
     EventStore, EventToWrite, ExpectedVersion, ReadOptions, StoredEvent, StreamData, StreamEvents,
 };
-pub use executor::{CommandExecutor, ExecutionContext, ExecutionOptions, RetryConfig, RetryPolicy};
+pub use executor::{
+    CommandExecutor, CommandExecutorBuilder, ExecutionContext, ExecutionOptions, RetryConfig,
+    RetryPolicy,
+};
 pub use metadata::{CausationId, CorrelationId, EventMetadata, UserId};
 pub use projection::{Projection, ProjectionCheckpoint, ProjectionConfig, ProjectionStatus};
 pub use projection_manager::ProjectionManager;
@@ -588,9 +664,10 @@ pub mod testing;
 pub mod prelude {
 
     pub use crate::{
-        Command, CommandError, CommandExecutor, CommandResult, Event, EventId, EventMetadata,
-        EventStore, EventToWrite, EventVersion, ExecutionOptions, ExpectedVersion,
-        ProjectionResult, ReadOptions, StoredEvent, StreamData, StreamEvents, StreamId, Timestamp,
+        Command, CommandError, CommandExecutor, CommandExecutorBuilder, CommandResult, Event,
+        EventId, EventMetadata, EventStore, EventToWrite, EventVersion, ExecutionOptions,
+        ExpectedVersion, ProjectionResult, ReadOptions, StoredEvent, StreamData, StreamEvents,
+        StreamId, Timestamp,
     };
 
     // Re-export macros for convenience
