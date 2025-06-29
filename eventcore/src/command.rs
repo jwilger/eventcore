@@ -20,7 +20,7 @@
 //! # Example: Money Transfer
 //!
 //! ```rust,ignore
-//! use eventcore::command::{Command, CommandResult};
+//! use eventcore::command::{Command, CommandResult, ReadStreams, StreamResolver, StreamWrite};
 //! use eventcore::types::StreamId;
 //! use eventcore::event_store::StoredEvent;
 //! use async_trait::async_trait;
@@ -43,6 +43,7 @@
 //!     type Input = TransferMoneyInput;
 //!     type State = TransferState;
 //!     type Event = TransferEvent;
+//!     type StreamSet = (); // Phantom type for stream access control
 //!
 //!     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
 //!         // Read from both account streams
@@ -69,9 +70,11 @@
 //!
 //!     async fn handle(
 //!         &self,
+//!         read_streams: ReadStreams<Self::StreamSet>,
 //!         state: Self::State,
 //!         input: Self::Input,
-//!     ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+//!         stream_resolver: &mut StreamResolver,
+//!     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
 //!         // Check business rules
 //!         if state.from_balance < input.amount {
 //!             return Err(CommandError::BusinessRuleViolation(
@@ -79,22 +82,24 @@
 //!             ));
 //!         }
 //!
-//!         // Return events for both streams
+//!         // Return events for both streams with type-safe stream access
 //!         Ok(vec![
-//!             (
+//!             StreamWrite::new(
+//!                 &read_streams,
 //!                 StreamId::try_new(format!("account-{}", input.from_account)).unwrap(),
 //!                 TransferEvent::MoneyDebited {
 //!                     account: input.from_account,
 //!                     amount: input.amount,
 //!                 }
-//!             ),
-//!             (
+//!             )?,
+//!             StreamWrite::new(
+//!                 &read_streams,
 //!                 StreamId::try_new(format!("account-{}", input.to_account)).unwrap(),
 //!                 TransferEvent::MoneyCredited {
 //!                     account: input.to_account,
 //!                     amount: input.amount,
 //!                 }
-//!             ),
+//!             )?,
 //!         ])
 //!     }
 //! }
@@ -306,7 +311,7 @@ impl<S, E> StreamWrite<S, E> {
 /// # Example: Order Placement
 ///
 /// ```rust,ignore
-/// use eventcore::command::{Command, CommandResult};
+/// use eventcore::command::{Command, CommandResult, ReadStreams, StreamResolver, StreamWrite};
 /// use eventcore::types::StreamId;
 /// use eventcore::event_store::StoredEvent;
 /// use async_trait::async_trait;
@@ -319,6 +324,7 @@ impl<S, E> StreamWrite<S, E> {
 ///     type Input = PlaceOrderInput;  // Self-validating input
 ///     type State = OrderPlacementState;  // Focused state model
 ///     type Event = OrderEvent;  // Domain events
+///     type StreamSet = (); // Phantom type for stream access control
 ///
 ///     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
 ///         // Read order, inventory, and customer streams
@@ -344,9 +350,11 @@ impl<S, E> StreamWrite<S, E> {
 ///
 ///     async fn handle(
 ///         &self,
+///         read_streams: ReadStreams<Self::StreamSet>,
 ///         state: Self::State,
 ///         input: Self::Input,
-///     ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
+///         stream_resolver: &mut StreamResolver,
+///     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
 ///         // Pure business logic
 ///         if !state.customer_validated {
 ///             return Err(CommandError::Unauthorized("Invalid customer".into()));
@@ -361,24 +369,26 @@ impl<S, E> StreamWrite<S, E> {
 ///             }
 ///         }
 ///
-///         // Generate events for multiple streams
+///         // Generate events for multiple streams with type-safe access
 ///         let mut events = vec![];
 ///         
 ///         // Order stream events
-///         events.push((
+///         events.push(StreamWrite::new(
+///             &read_streams,
 ///             input.order_stream(),
 ///             OrderEvent::OrderPlaced { /* ... */ }
-///         ));
+///         )?);
 ///
 ///         // Inventory stream events
 ///         for item in input.items {
-///             events.push((
+///             events.push(StreamWrite::new(
+///                 &read_streams,
 ///                 input.inventory_stream(),
 ///                 OrderEvent::ItemReserved {
 ///                     product_id: item.product_id,
 ///                     quantity: item.quantity,
 ///                 }
-///             ));
+///             )?);
 ///         }
 ///
 ///         Ok(events)

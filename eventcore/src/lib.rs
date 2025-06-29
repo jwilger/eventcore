@@ -128,16 +128,24 @@
 //! ```rust,ignore
 //! // EventCore: Direct, atomic operations across streams
 //! impl Command for TransferMoney {
+//!     type StreamSet = (); // Phantom type for stream access control
+//!     
 //!     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
 //!         // Read from both accounts atomically
 //!         vec![input.from_account, input.to_account]
 //!     }
 //!
-//!     async fn handle(...) -> CommandResult<Vec<(StreamId, Event)>> {
-//!         // Write to both accounts atomically
+//!     async fn handle(
+//!         &self,
+//!         read_streams: ReadStreams<Self::StreamSet>,
+//!         state: Self::State,
+//!         input: Self::Input,
+//!         stream_resolver: &mut StreamResolver,
+//!     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+//!         // Write to both accounts atomically with type-safe stream access
 //!         Ok(vec![
-//!             (from_account, MoneyDebited { amount }),
-//!             (to_account, MoneyCredited { amount }),
+//!             StreamWrite::new(&read_streams, input.from_account, MoneyDebited { amount })?,
+//!             StreamWrite::new(&read_streams, input.to_account, MoneyCredited { amount })?,
 //!         ])
 //!     }
 //! }
@@ -321,6 +329,7 @@
 //!     type Input = YourInput;    // Self-validating input types
 //!     type State = YourState;    // Command-specific state model
 //!     type Event = YourEvent;    // Domain events
+//!     type StreamSet = ();       // Phantom type for compile-time stream access control
 //!
 //!     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
 //!         // Define consistency boundary
@@ -332,10 +341,13 @@
 //!
 //!     async fn handle(
 //!         &self,
+//!         read_streams: ReadStreams<Self::StreamSet>,
 //!         state: Self::State,
 //!         input: Self::Input,
-//!     ) -> CommandResult<Vec<(StreamId, Self::Event)>> {
-//!         // Pure business logic
+//!         stream_resolver: &mut StreamResolver,
+//!     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+//!         // Pure business logic with type-safe stream access
+//!         // Can only write to streams declared in read_streams()
 //!     }
 //! }
 //! ```

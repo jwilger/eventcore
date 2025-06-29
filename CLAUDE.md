@@ -200,23 +200,66 @@ pub enum CommandError {
 pub trait Command: Send + Sync {
     // Input type should already be validated through its type construction
     // No need for a separate validate method - if you have an Input, it's valid
-    type Input: Send + Sync;
+    type Input: Send + Sync + Clone;
     type State: Default + Send + Sync;
     type Event: Send + Sync;
+    
+    // Phantom type for compile-time stream access control
+    type StreamSet: Send + Sync;
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId>;
 
-    fn apply(&self, state: &mut Self::State, event: &Self::Event);
+    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>);
 
     async fn handle(
         &self,
+        read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
         input: Self::Input,
-    ) -> CommandResult<Vec<(StreamId, Self::Event)>>;
+        stream_resolver: &mut StreamResolver,
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>>;
 
     // Note: No validate method! Input types should be self-validating
     // If you need validation, it should happen when constructing Input
 }
+```
+
+### Type-Safe Stream Access
+
+Commands now have compile-time guarantees that they can only write to streams they declared:
+
+```rust
+// In your command's handle method:
+async fn handle(
+    &self,
+    read_streams: ReadStreams<Self::StreamSet>,
+    state: Self::State,
+    input: Self::Input,
+    stream_resolver: &mut StreamResolver,
+) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    // StreamWrite::new() ensures you can only write to declared streams
+    let event = StreamWrite::new(
+        &read_streams,
+        input.account_stream(),
+        AccountEvent::Deposited { amount: input.amount }
+    )?; // Returns error if stream wasn't declared in read_streams()
+    
+    Ok(vec![event])
+}
+```
+
+### Dynamic Stream Discovery
+
+Commands can dynamically request additional streams during execution:
+
+```rust
+// After analyzing state, request additional streams
+let product_streams: Vec<StreamId> = state.order.items.keys()
+    .map(|id| StreamId::try_new(format!("product-{}", id)).unwrap())
+    .collect();
+stream_resolver.add_streams(product_streams);
+
+// The executor will automatically re-read all streams and rebuild state
 ```
 
 ### Testing Philosophy
