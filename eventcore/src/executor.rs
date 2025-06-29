@@ -4,6 +4,7 @@ use crate::event_store::{EventToWrite, ExpectedVersion, ReadOptions, StreamEvent
 use crate::types::{EventId, EventVersion, StreamId};
 use std::collections::HashMap;
 use std::time::Duration;
+use tracing::{info, instrument, warn};
 
 #[cfg(test)]
 use async_trait::async_trait;
@@ -212,6 +213,7 @@ where
     /// # Returns
     ///
     /// A result containing the success outcome or a `CommandError`.
+    #[instrument(skip(self, command, input), fields(command_type = std::any::type_name::<C>()))]
     pub async fn execute<C>(
         &self,
         command: &C,
@@ -257,6 +259,14 @@ where
     /// - Business rule violations
     /// - Concurrency conflicts
     /// - Event store errors
+    #[instrument(
+        skip(self, command, input),
+        fields(
+            command_type = std::any::type_name::<C>(),
+            correlation_id = %context.correlation_id,
+            user_id = context.user_id.as_deref().unwrap_or("anonymous")
+        )
+    )]
     pub async fn execute_with_context<C>(
         &self,
         command: &C,
@@ -271,16 +281,30 @@ where
     {
         // Step 1: Determine which streams to read
         let stream_ids = command.read_streams(&input);
+        info!(
+            streams_count = stream_ids.len(),
+            "Reading streams for command execution"
+        );
 
         // Step 2: Read events from those streams
         let stream_data = self
             .event_store
             .read_streams(&stream_ids, &ReadOptions::new())
             .await
-            .map_err(CommandError::from)?;
+            .map_err(|err| {
+                warn!(error = %err, "Failed to read streams from event store");
+                CommandError::from(err)
+            })?;
+
+        let total_events = stream_data.len();
+        info!(
+            events_count = total_events,
+            "Retrieved events for state reconstruction"
+        );
 
         // Step 3: Reconstruct state by folding events
         let mut state = C::State::default();
+        let mut applied_events = 0;
         for event in stream_data.events() {
             // Convert event payload from event store type to command event type
             // This requires the command event type to be convertible from the store event type
@@ -295,11 +319,22 @@ where
                     event.metadata.clone(),
                 );
                 command.apply(&mut state, &stored_event);
+                applied_events += 1;
             }
         }
+        info!(applied_events, "Applied events to reconstruct state");
 
         // Step 4: Execute command business logic
-        let events_to_write = command.handle(state, input).await?;
+        let events_to_write = command.handle(state, input).await.map_err(|err| {
+            warn!(error = %err, "Command business logic failed");
+            err
+        })?;
+
+        let events_to_write_count = events_to_write.len();
+        info!(
+            events_to_write = events_to_write_count,
+            "Command produced events for writing"
+        );
 
         // Step 5: Write resulting events atomically with optimistic concurrency control
         let stream_events =
@@ -309,8 +344,15 @@ where
             .event_store
             .write_events_multi(stream_events)
             .await
-            .map_err(CommandError::from)?;
+            .map_err(|err| {
+                warn!(error = %err, "Failed to write events to event store");
+                CommandError::from(err)
+            })?;
 
+        info!(
+            written_streams = result_versions.len(),
+            "Successfully executed command"
+        );
         Ok(result_versions)
     }
 
@@ -412,6 +454,15 @@ where
     /// - The error is not retryable according to the retry policy
     /// - All retry attempts have been exhausted
     /// - A non-retryable error occurs during any attempt
+    #[instrument(
+        skip(self, command, input),
+        fields(
+            command_type = std::any::type_name::<C>(),
+            correlation_id = %context.correlation_id,
+            user_id = context.user_id.as_deref().unwrap_or("anonymous"),
+            max_attempts = self.retry_config.max_attempts
+        )
+    )]
     pub async fn execute_with_retry<C>(
         &self,
         command: &C,
@@ -428,14 +479,28 @@ where
         let mut last_error = None;
 
         for attempt in 0..self.retry_config.max_attempts {
+            info!(attempt = attempt + 1, "Attempting command execution");
+
             match self
                 .execute_with_context(command, input.clone(), context.clone())
                 .await
             {
-                Ok(result) => return Ok(result),
+                Ok(result) => {
+                    if attempt > 0 {
+                        info!(attempt = attempt + 1, "Command succeeded after retry");
+                    }
+                    return Ok(result);
+                }
                 Err(error) => {
+                    warn!(
+                        attempt = attempt + 1,
+                        error = %error,
+                        "Command execution failed"
+                    );
+
                     // Check if this error should trigger a retry
                     if !self.retry_policy.should_retry(&error) {
+                        warn!("Error is not retryable, failing immediately");
                         return Err(error);
                     }
 
@@ -444,6 +509,11 @@ where
                     // If this is not the last attempt, wait before retrying
                     if attempt < self.retry_config.max_attempts - 1 {
                         let delay = self.calculate_retry_delay(attempt);
+                        info!(
+                            retry_delay_ms = delay.as_millis(),
+                            next_attempt = attempt + 2,
+                            "Retrying command execution after delay"
+                        );
                         tokio::time::sleep(delay).await;
                     }
                 }
@@ -451,6 +521,7 @@ where
         }
 
         // All retries exhausted, return the last error
+        warn!("All retry attempts exhausted");
         Err(last_error.unwrap_or_else(|| {
             CommandError::ValidationFailed("Retry exhausted with no error".to_string())
         }))

@@ -338,10 +338,10 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 
 ### 10.3 Structured Logging
 
-- [ ] Integrate `tracing` throughout codebase
-  - [ ] Add spans for command execution
-  - [ ] Log all errors with context
-  - [ ] Include correlation IDs
+- [x] Integrate `tracing` throughout codebase
+  - [x] Add spans for command execution
+  - [x] Log all errors with context
+  - [x] Include correlation IDs
 
 ## Phase 11: Performance & Benchmarks
 
