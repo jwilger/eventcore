@@ -476,6 +476,13 @@ This document outlines the implementation plan for the EventCore multi-stream ev
         - [x] Updated all Command trait implementations across entire codebase for new signature
         - [x] Fixed all benchmark commands, test fixtures, and property tests
         - [x] Updated documentation examples to include StreamResolver parameter
+        - [x] **FIXED CI CONFIGURATION ISSUES**: Resolved PostgreSQL and coverage efficiency problems
+          - [x] Added PostgreSQL services to test jobs (main DB on 5432, test DB on 5433)
+          - [x] Added health checks for databases to ensure readiness before tests
+          - [x] Set environment variables for DATABASE_URL and TEST_DATABASE_URL
+          - [x] Made coverage job more efficient with proper dependencies and faster tooling
+          - [x] Coverage job now waits for tests to pass first (fail fast)
+          - [x] Used taiki-e/install-action for faster cargo-llvm-cov installation
   - [ ] Long-running saga example (`sagas/`)
   - [ ] Performance testing example (`benchmarks/`)
 
