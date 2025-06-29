@@ -11,6 +11,7 @@ mod event_store;
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -115,24 +116,36 @@ struct VersionCacheEntry {
 
 /// `PostgreSQL` event store implementation
 #[derive(Debug)]
-pub struct PostgresEventStore {
+pub struct PostgresEventStore<E>
+where
+    E: Send + Sync,
+{
     pool: Arc<PgPool>,
     config: PostgresConfig,
     /// Simple cache for stream versions (read-heavy workload optimization)
     version_cache: Arc<RwLock<HashMap<StreamId, VersionCacheEntry>>>,
+    /// Phantom data to track event type
+    _phantom: PhantomData<E>,
 }
 
-impl Clone for PostgresEventStore {
+impl<E> Clone for PostgresEventStore<E>
+where
+    E: Send + Sync,
+{
     fn clone(&self) -> Self {
         Self {
             pool: Arc::clone(&self.pool),
             config: self.config.clone(),
             version_cache: Arc::clone(&self.version_cache),
+            _phantom: PhantomData,
         }
     }
 }
 
-impl PostgresEventStore {
+impl<E> PostgresEventStore<E>
+where
+    E: Send + Sync,
+{
     /// Create a new `PostgreSQL` event store with the given configuration
     pub async fn new(config: PostgresConfig) -> Result<Self, PostgresError> {
         let pool = Self::create_pool(&config).await?;
@@ -141,6 +154,7 @@ impl PostgresEventStore {
             pool: Arc::new(pool),
             config,
             version_cache: Arc::new(RwLock::new(HashMap::new())),
+            _phantom: PhantomData,
         })
     }
 

@@ -48,20 +48,17 @@ enum TestEvent {
     CounterReset,
 }
 
-// Conversion implementations for PostgreSQL JSON storage
-impl From<TestEvent> for serde_json::Value {
-    fn from(event: TestEvent) -> Self {
-        serde_json::to_value(event).expect("Failed to serialize TestEvent")
+// Implement required trait for CommandExecutor compatibility
+impl<'a> TryFrom<&'a Self> for TestEvent {
+    type Error = &'static str;
+
+    fn try_from(value: &'a Self) -> Result<Self, Self::Error> {
+        Ok(value.clone())
     }
 }
 
-impl TryFrom<&serde_json::Value> for TestEvent {
-    type Error = serde_json::Error;
-
-    fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        serde_json::from_value(value.clone())
-    }
-}
+// Note: No conversion implementations needed!
+// The PostgreSQL adapter now handles serialization/deserialization automatically
 
 #[derive(Debug, Default, Clone)]
 struct CounterState {
@@ -196,7 +193,7 @@ async fn test_concurrent_command_execution() {
     let (_container, config) = setup_postgres_container().await;
 
     // Initialize event store
-    let event_store = PostgresEventStore::new(config).await.unwrap();
+    let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
     event_store.initialize().await.unwrap();
 
     let executor = CommandExecutor::new(event_store);
@@ -274,7 +271,7 @@ async fn test_multi_stream_atomicity() {
     let (_container, config) = setup_postgres_container().await;
 
     // Initialize event store
-    let event_store = PostgresEventStore::new(config).await.unwrap();
+    let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
     event_store.initialize().await.unwrap();
 
     let executor = CommandExecutor::new(event_store);
@@ -394,7 +391,7 @@ async fn test_transaction_isolation() {
     let (_container, config) = setup_postgres_container().await;
 
     // Initialize event store
-    let event_store = PostgresEventStore::new(config).await.unwrap();
+    let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
     event_store.initialize().await.unwrap();
 
     let executor = CommandExecutor::new(event_store);
@@ -520,7 +517,7 @@ async fn test_basic_performance() {
     let (_container, config) = setup_postgres_container().await;
 
     // Initialize event store
-    let event_store = PostgresEventStore::new(config).await.unwrap();
+    let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
     event_store.initialize().await.unwrap();
 
     let executor = CommandExecutor::new(event_store);

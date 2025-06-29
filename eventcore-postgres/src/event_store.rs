@@ -12,14 +12,15 @@ use eventcore::{
     ExpectedVersion, ReadOptions, StoredEvent, StreamData, StreamEvents, StreamId, Subscription,
     SubscriptionOptions, Timestamp,
 };
-
-type EventStoreResult<T> = Result<T, EventStoreError>;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{postgres::PgRow, Row, Transaction};
 use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
 use crate::PostgresEventStore;
+
+type EventStoreResult<T> = Result<T, EventStoreError>;
 
 /// Database row representing an event
 #[derive(Debug)]
@@ -59,7 +60,10 @@ impl TryFrom<PgRow> for EventRow {
 impl EventRow {
     /// Convert database row to `StoredEvent`
     #[allow(clippy::wrong_self_convention)] // This consumes the row, which is correct
-    fn to_stored_event(self) -> EventStoreResult<StoredEvent<Value>> {
+    fn to_stored_event<E>(self) -> EventStoreResult<StoredEvent<E>>
+    where
+        E: for<'de> Deserialize<'de>,
+    {
         let event_id = EventId::try_new(self.event_id)
             .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
 
@@ -87,20 +91,28 @@ impl EventRow {
             None
         };
 
+        // Deserialize the event data from JSON to the target type
+        let payload: E = serde_json::from_value(self.event_data).map_err(|e| {
+            EventStoreError::SerializationFailed(format!("Failed to deserialize event data: {e}"))
+        })?;
+
         Ok(StoredEvent::new(
             event_id,
             stream_id,
             event_version,
             timestamp,
-            self.event_data,
+            payload,
             metadata,
         ))
     }
 }
 
 #[async_trait]
-impl EventStore for PostgresEventStore {
-    type Event = Value;
+impl<E> EventStore for PostgresEventStore<E>
+where
+    E: Serialize + for<'de> Deserialize<'de> + Send + Sync + std::fmt::Debug + 'static,
+{
+    type Event = E;
 
     #[instrument(skip(self), fields(streams = stream_ids.len()))]
     async fn read_streams(
@@ -191,7 +203,7 @@ impl EventStore for PostgresEventStore {
         for row in rows {
             let event_row = EventRow::try_from(row)
                 .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
-            events.push(event_row.to_stored_event()?);
+            events.push(event_row.to_stored_event::<E>()?);
         }
 
         // Get current stream versions in a single optimized query
@@ -304,7 +316,10 @@ impl EventStore for PostgresEventStore {
     }
 }
 
-impl PostgresEventStore {
+impl<E> PostgresEventStore<E>
+where
+    E: Send + Sync,
+{
     /// Get current versions for multiple streams
     async fn get_stream_versions(
         &self,
@@ -366,8 +381,11 @@ impl PostgresEventStore {
     async fn write_stream_events(
         &self,
         tx: &mut Transaction<'_, sqlx::Postgres>,
-        stream_events: StreamEvents<Value>,
-    ) -> EventStoreResult<EventVersion> {
+        stream_events: StreamEvents<E>,
+    ) -> EventStoreResult<EventVersion>
+    where
+        E: serde::Serialize + Sync,
+    {
         let StreamEvents {
             stream_id,
             expected_version,
@@ -560,8 +578,11 @@ impl PostgresEventStore {
         tx: &mut Transaction<'_, sqlx::Postgres>,
         stream_id: &StreamId,
         event_version: EventVersion,
-        event: &EventToWrite<Value>,
-    ) -> EventStoreResult<()> {
+        event: &EventToWrite<E>,
+    ) -> EventStoreResult<()>
+    where
+        E: serde::Serialize + Sync,
+    {
         let metadata_json = if let Some(metadata) = &event.metadata {
             Some(
                 serde_json::to_value(metadata)
@@ -587,6 +608,11 @@ impl PostgresEventStore {
                     )
                 });
 
+        // Serialize the event payload to JSON
+        let event_data = serde_json::to_value(&event.payload).map_err(|e| {
+            EventStoreError::SerializationFailed(format!("Failed to serialize event data: {e}"))
+        })?;
+
         sqlx::query(
             "INSERT INTO events 
              (event_id, stream_id, event_version, event_type, event_data, metadata, causation_id, correlation_id, user_id) 
@@ -601,7 +627,7 @@ impl PostgresEventStore {
             })?
         })
         .bind("generic") // TODO: Add event type detection
-        .bind(&event.payload)
+        .bind(event_data)
         .bind(metadata_json)
         .bind(causation_id)
         .bind(correlation_id)
@@ -653,7 +679,14 @@ impl PostgresEventStore {
 mod tests {
     use super::*;
     use eventcore::{EventToWrite, ExpectedVersion, StreamEvents};
-    use serde_json::json;
+    use serde::{Deserialize, Serialize};
+
+    // Test event type for unit tests
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    enum TestEvent {
+        Created { name: String },
+        Updated { value: i32 },
+    }
 
     // Note: These are unit tests for the individual methods.
     // Integration tests with a real database will be in the tests directory.
@@ -724,7 +757,9 @@ mod tests {
     fn test_stream_events_construction() {
         let stream_id = StreamId::try_new("test-stream").unwrap();
         let event_id = EventId::new();
-        let payload = json!({"test": "data"});
+        let payload = TestEvent::Created {
+            name: "test".to_string(),
+        };
 
         let event = EventToWrite::new(event_id, payload);
         let stream_events = StreamEvents::new(stream_id.clone(), ExpectedVersion::New, vec![event]);

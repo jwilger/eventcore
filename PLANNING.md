@@ -379,7 +379,20 @@ This document outlines the implementation plan for the EventCore multi-stream ev
   - [x] Example Cargo.toml configurations
   - [x] Adapter selection and initialization
 
-### 12.2 Documentation
+### 12.2 Critical Architecture Fix: PostgreSQL Adapter Type Safety
+
+- [x] **MAJOR IMPROVEMENT**: Made PostgreSQL adapter generic over event type `E`
+  - [x] PostgreSQL adapter now implements `EventStore<Event = E>` instead of `EventStore<Event = Value>`
+  - [x] Removed runtime type conversion overhead between domain types and JSON
+  - [x] Maintained type safety throughout the entire system
+  - [x] JSON serialization/deserialization now handled internally by the adapter
+  - [x] Updated all PostgreSQL adapter methods to work with generic event types
+  - [x] Updated EventRow to handle generic serialization/deserialization
+  - [x] Removed unnecessary conversion implementations from tests and benchmarks
+  - [x] Both memory and PostgreSQL adapters now work identically from user perspective
+  - [x] Follows "parse, don't validate" principle - types guarantee validity after construction
+
+### 12.3 Documentation
 
 - [x] Write comprehensive rustdoc comments
   - [x] Document all public types and traits
@@ -387,7 +400,7 @@ This document outlines the implementation plan for the EventCore multi-stream ev
   - [x] Create module-level documentation
   - [x] Generate and review HTML docs
 
-### 12.3 Examples Crate
+### 12.4 Examples Crate
 
 - [x] Create `eventcore-examples/Cargo.toml`
   - [x] Depend on `eventcore` core crate
