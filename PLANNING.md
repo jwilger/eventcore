@@ -512,38 +512,17 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 - [x] Write comprehensive tests for both macro types
 - [x] Document macro usage with examples
 
-### 13.2 Simplified Command Traits
-
-- [ ] Create `SimpleCommand` trait for common single-stream patterns
-  - [ ] Define trait with `Input`, `Event` associated types only
-  - [ ] Add `stream()` method for single stream identification
-  - [ ] Add `execute()` method for stateless command logic
-  - [ ] Implement automatic `Command` trait for all `SimpleCommand` implementors
-- [ ] Write tests demonstrating simplified usage
-- [ ] Add documentation comparing SimpleCommand vs full Command trait
-
-### 13.3 Type Inference Improvements
-
-- [ ] Improve `CommandExecutor::new()` to infer store type
-- [ ] Create type aliases for common result types:
-  - [ ] `WriteResult<E>` for command results
-  - [ ] `ExecutorResult<T>` for executor operations
-- [ ] Update all examples to use improved inference
-- [ ] Document type inference patterns
-
-### 13.4 Fluent Configuration API
+### 13.2 Fluent Configuration API
 
 - [ ] Create `CommandExecutorBuilder` for executor configuration
   - [ ] `.with_store()` method
-  - [ ] `.with_retry()` method accepting `RetryPolicy`
-  - [ ] `.with_timeout()` method for default timeout
   - [ ] `.with_tracing()` method for enabling tracing
   - [ ] `.build()` method returning configured executor
 - [ ] Keep execution simple: `executor.execute(command).await?`
 - [ ] Write tests for builder pattern
 - [ ] Document configuration options
 
-### 13.5 Better Error Messages
+### 13.3 Better Error Messages
 
 - [ ] Add `miette` or similar crate for diagnostic derives
 - [ ] Create custom diagnostics for common errors:
@@ -555,7 +534,7 @@ This document outlines the implementation plan for the EventCore multi-stream ev
 - [ ] Write tests verifying error message quality
 - [ ] Document error handling patterns
 
-### 13.6 Interactive Documentation
+### 13.4 Interactive Documentation
 
 - [ ] Add playground-compatible examples to all major types
 - [ ] Create interactive tutorials for:
