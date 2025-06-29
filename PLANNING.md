@@ -352,6 +352,10 @@ This document outlines the implementation plan for the EventCore multi-stream ev
   - [x] Event store read/write benchmarks
   - [x] Projection processing benchmarks
   - [x] Memory allocation profiling
+- [x] Create eventcore-benchmarks crate with comprehensive benchmark suite
+- [x] Fix all compilation errors and ensure benchmarks build successfully
+- [x] Integrate with Criterion framework for professional benchmarking
+- [x] Add async benchmark support with proper executor configuration
 
 ### 11.2 Performance Optimization
 

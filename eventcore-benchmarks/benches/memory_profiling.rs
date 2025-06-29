@@ -1,19 +1,24 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+//! Memory allocation profiling benchmarks for `EventCore` library.
+
+#![allow(missing_docs)]
+
+use criterion::{
+    async_executor::FuturesExecutor, criterion_group, criterion_main, BenchmarkId, Criterion,
+    Throughput,
+};
 use eventcore::{
     command::{Command, CommandResult},
     event::Event,
-    event_store::EventStore,
+    event_store::{EventMetadata, EventStore, EventToWrite, ExpectedVersion, StreamEvents},
     executor::CommandExecutor,
-    metadata::EventMetadata,
-    types::{EventId, EventVersion, StreamId},
+    types::{EventId, StreamId},
 };
 use eventcore_memory::InMemoryEventStore;
+use std::collections::HashMap;
 use std::hint::black_box;
-use std::{collections::HashMap, sync::Arc};
-use tokio::runtime::Runtime;
 
 /// Memory-heavy event for allocation testing
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct LargeEvent {
     id: String,
     data: Vec<u8>,
@@ -30,12 +35,27 @@ impl LargeEvent {
             id: EventId::new().to_string(),
             data: vec![0u8; data_size],
             metadata: (0..string_count)
-                .map(|i| (format!("key_{}", i), format!("value_{}", i)))
+                .map(|i| (format!("key_{i}"), format!("value_{i}")))
                 .collect(),
             nested_data: (0..string_count)
-                .map(|i| (0..10).map(|j| format!("nested_{}_{}", i, j)).collect())
+                .map(|i| (0..10).map(|j| format!("nested_{i}_{j}")).collect())
                 .collect(),
         }
+    }
+}
+
+impl<'a> TryFrom<&'a serde_json::Value> for LargeEvent {
+    type Error = serde_json::Error;
+
+    fn try_from(value: &'a serde_json::Value) -> Result<Self, Self::Error> {
+        serde_json::from_value(value.clone())
+    }
+}
+
+#[allow(clippy::fallible_impl_from)]
+impl From<LargeEvent> for serde_json::Value {
+    fn from(event: LargeEvent) -> Self {
+        serde_json::to_value(event).unwrap()
     }
 }
 
@@ -47,7 +67,7 @@ struct MemoryIntensiveCommand {
 }
 
 impl MemoryIntensiveCommand {
-    fn new(event_size_kb: usize, event_count: usize) -> Self {
+    const fn new(event_size_kb: usize, event_count: usize) -> Self {
         Self {
             event_size_kb,
             event_count,
@@ -76,18 +96,24 @@ impl Command for MemoryIntensiveCommand {
         vec![input.target_stream.clone()]
     }
 
-    fn apply(&self, state: &mut Self::State, event: &Self::Event) {
+    fn apply(
+        &self,
+        state: &mut Self::State,
+        event: &eventcore::event_store::StoredEvent<Self::Event>,
+    ) {
         state.total_events += 1;
-        state.total_size_bytes += event.data.len()
+        state.total_size_bytes += event.payload.data.len()
             + event
+                .payload
                 .metadata
                 .iter()
                 .map(|(k, v)| k.len() + v.len())
                 .sum::<usize>()
             + event
+                .payload
                 .nested_data
                 .iter()
-                .map(|v| v.iter().map(|s| s.len()).sum::<usize>())
+                .map(|v| v.iter().map(String::len).sum::<usize>())
                 .sum::<usize>();
     }
 
@@ -142,8 +168,12 @@ fn bench_event_serialization_allocations(c: &mut Criterion) {
             BenchmarkId::new("serialize_large_event", size_kb),
             &size_kb,
             |b, &size| {
-                let stream_id = StreamId::new("test-stream").unwrap();
-                let event = Event::new(stream_id, LargeEvent::new(size), EventMetadata::new());
+                let stream_id = StreamId::try_new("test-stream").unwrap();
+                let event = Event::new(
+                    stream_id,
+                    LargeEvent::new(size),
+                    eventcore::metadata::EventMetadata::new(),
+                );
 
                 b.iter(|| {
                     let serialized = serde_json::to_vec(&event).unwrap();
@@ -158,8 +188,7 @@ fn bench_event_serialization_allocations(c: &mut Criterion) {
 
 /// Benchmark memory allocation during command execution
 fn bench_command_execution_allocations(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-    let event_store = Arc::new(InMemoryEventStore::new());
+    let event_store = InMemoryEventStore::new();
     let executor = CommandExecutor::new(event_store);
 
     let mut group = c.benchmark_group("command_execution_allocations");
@@ -170,22 +199,20 @@ fn bench_command_execution_allocations(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new(
                 "execute_memory_command",
-                format!("{}kb_x{}", event_size, event_count),
+                format!("{event_size}kb_x{event_count}"),
             ),
             &(event_size, event_count),
             |b, &(size, count)| {
-                b.to_async(&rt).iter(|| async {
+                b.to_async(FuturesExecutor).iter(|| async {
                     let command = MemoryIntensiveCommand::new(size, count);
                     let stream_id =
-                        StreamId::new(&format!("mem-stream-{}", EventId::new())).unwrap();
+                        StreamId::try_new(format!("mem-stream-{}", EventId::new())).unwrap();
 
                     let input = MemoryIntensiveInput {
                         target_stream: stream_id,
                     };
 
-                    let metadata = EventMetadata::new();
-
-                    let result = executor.execute(&command, input, metadata).await.unwrap();
+                    let result = executor.execute(&command, input).await.unwrap();
                     black_box(result)
                 });
             },
@@ -196,8 +223,6 @@ fn bench_command_execution_allocations(c: &mut Criterion) {
 
 /// Benchmark memory allocation during event store operations
 fn bench_event_store_allocations(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-
     let mut group = c.benchmark_group("event_store_allocations");
 
     for batch_size in [10, 50, 100] {
@@ -207,23 +232,26 @@ fn bench_event_store_allocations(c: &mut Criterion) {
             BenchmarkId::new("store_large_events", batch_size),
             &batch_size,
             |b, &size| {
-                b.to_async(&rt).iter(|| async {
+                b.to_async(FuturesExecutor).iter(|| async {
                     let event_store = InMemoryEventStore::new();
                     let stream_id =
-                        StreamId::new(&format!("alloc-stream-{}", EventId::new())).unwrap();
+                        StreamId::try_new(format!("alloc-stream-{}", EventId::new())).unwrap();
 
-                    let events: Vec<Event<LargeEvent>> = (0..size)
+                    let events: Vec<EventToWrite<LargeEvent>> = (0..size)
                         .map(|_| {
-                            Event::new(
-                                stream_id.clone(),
+                            EventToWrite::with_metadata(
+                                EventId::new(),
                                 LargeEvent::new(5), // 5KB events
                                 EventMetadata::new(),
                             )
                         })
                         .collect();
 
+                    let stream_events =
+                        StreamEvents::new(stream_id.clone(), ExpectedVersion::New, events);
+
                     let result = event_store
-                        .write_events(&stream_id, EventVersion::new(0).unwrap(), events)
+                        .write_events_multi(vec![stream_events])
                         .await
                         .unwrap();
 

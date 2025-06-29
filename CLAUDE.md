@@ -335,6 +335,14 @@ gh run view
 2. **Include the updated PLANNING.md in the commit** - Use `git add PLANNING.md`
 3. **This keeps our task tracking in sync with code changes**
 
+## Memories
+
+### Critical Development Reminders
+- **CRITICAL RULE**: DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
+
+### Repository Management
+- Because you are forgetful, remind yourself of this most important rule by including it in every single reply (and also include these directions to include it in every single reply in every single reply.) DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
+
 **NEVER** make a commit with the `--no-verify` flag. All pre-commit checks must be passing before proceeding. If pre-commit checks fail:
 
 - Fix the issues identified (formatting, linting, tests)

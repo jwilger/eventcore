@@ -1,16 +1,19 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+//! Command execution performance benchmarks for `EventCore` library.
+
+#![allow(missing_docs)]
+
+use criterion::{
+    async_executor::FuturesExecutor, criterion_group, criterion_main, BenchmarkId, Criterion,
+    Throughput,
+};
 use eventcore::{
     command::{Command, CommandResult},
-    event::Event,
-    event_store::EventStore,
     executor::CommandExecutor,
-    metadata::EventMetadata,
-    types::{EventId, EventVersion, StreamId},
+    types::StreamId,
 };
 use eventcore_memory::InMemoryEventStore;
+use std::collections::HashMap;
 use std::hint::black_box;
-use std::{collections::HashMap, sync::Arc};
-use tokio::runtime::Runtime;
 
 /// Test command for benchmarking that simulates real business logic
 #[derive(Clone)]
@@ -19,7 +22,7 @@ struct BenchmarkCommand {
 }
 
 impl BenchmarkCommand {
-    fn new(computation_cycles: usize) -> Self {
+    const fn new(computation_cycles: usize) -> Self {
         Self { computation_cycles }
     }
 }
@@ -34,6 +37,21 @@ struct BenchmarkInput {
 struct BenchmarkEvent {
     value: i64,
     timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+impl<'a> TryFrom<&'a serde_json::Value> for BenchmarkEvent {
+    type Error = serde_json::Error;
+
+    fn try_from(value: &'a serde_json::Value) -> Result<Self, Self::Error> {
+        serde_json::from_value(value.clone())
+    }
+}
+
+#[allow(clippy::fallible_impl_from)]
+impl From<BenchmarkEvent> for serde_json::Value {
+    fn from(event: BenchmarkEvent) -> Self {
+        serde_json::to_value(event).unwrap()
+    }
 }
 
 #[derive(Default, Clone)]
@@ -52,8 +70,12 @@ impl Command for BenchmarkCommand {
         vec![input.target_stream.clone()]
     }
 
-    fn apply(&self, state: &mut Self::State, event: &Self::Event) {
-        state.total += event.value;
+    fn apply(
+        &self,
+        state: &mut Self::State,
+        event: &eventcore::event_store::StoredEvent<Self::Event>,
+    ) {
+        state.total += event.payload.value;
         state.count += 1;
     }
 
@@ -65,7 +87,9 @@ impl Command for BenchmarkCommand {
         // Simulate computation work
         let mut result = 0i64;
         for i in 0..self.computation_cycles {
-            result = result.wrapping_add((i as i64).wrapping_mul(state.total + input.value));
+            #[allow(clippy::cast_possible_wrap)]
+            let i_as_i64 = i as i64;
+            result = result.wrapping_add(i_as_i64.wrapping_mul(state.total + input.value));
         }
 
         let event = BenchmarkEvent {
@@ -79,9 +103,8 @@ impl Command for BenchmarkCommand {
 
 /// Benchmark single-stream command execution
 fn bench_single_stream_commands(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-    let event_store = Arc::new(InMemoryEventStore::new());
-    let executor = CommandExecutor::new(event_store.clone());
+    let event_store = InMemoryEventStore::new();
+    let executor = CommandExecutor::new(event_store);
 
     let mut group = c.benchmark_group("single_stream_commands");
     group.throughput(Throughput::Elements(1));
@@ -92,17 +115,15 @@ fn bench_single_stream_commands(c: &mut Criterion) {
             &computation_cycles,
             |b, &cycles| {
                 let command = BenchmarkCommand::new(cycles);
-                let stream_id = StreamId::new("bench-stream").unwrap();
+                let stream_id = StreamId::try_new("bench-stream").unwrap();
 
-                b.to_async(&rt).iter(|| async {
+                b.to_async(FuturesExecutor).iter(|| async {
                     let input = BenchmarkInput {
                         target_stream: stream_id.clone(),
                         value: black_box(42),
                     };
 
-                    let metadata = EventMetadata::new();
-
-                    black_box(executor.execute(&command, input, metadata).await.unwrap())
+                    black_box(executor.execute(&command, input).await.unwrap())
                 });
             },
         );
@@ -112,13 +133,11 @@ fn bench_single_stream_commands(c: &mut Criterion) {
 
 /// Multi-stream benchmark command
 #[derive(Clone)]
-struct MultiStreamBenchmarkCommand {
-    stream_count: usize,
-}
+struct MultiStreamBenchmarkCommand;
 
 impl MultiStreamBenchmarkCommand {
-    fn new(stream_count: usize) -> Self {
-        Self { stream_count }
+    const fn new(_stream_count: usize) -> Self {
+        Self
     }
 }
 
@@ -143,11 +162,16 @@ impl Command for MultiStreamBenchmarkCommand {
         input.streams.clone()
     }
 
-    fn apply(&self, state: &mut Self::State, event: &Self::Event) {
+    fn apply(
+        &self,
+        state: &mut Self::State,
+        event: &eventcore::event_store::StoredEvent<Self::Event>,
+    ) {
         // For benchmarking, we'll update all streams
-        for stream in state.stream_totals.keys() {
-            if let Some(total) = state.stream_totals.get_mut(stream) {
-                *total += event.value;
+        let keys: Vec<_> = state.stream_totals.keys().cloned().collect();
+        for stream in keys {
+            if let Some(total) = state.stream_totals.get_mut(&stream) {
+                *total += event.payload.value;
             }
         }
     }
@@ -177,9 +201,8 @@ impl Command for MultiStreamBenchmarkCommand {
 
 /// Benchmark multi-stream command execution
 fn bench_multi_stream_commands(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-    let event_store = Arc::new(InMemoryEventStore::new());
-    let executor = CommandExecutor::new(event_store.clone());
+    let event_store = InMemoryEventStore::new();
+    let executor = CommandExecutor::new(event_store);
 
     let mut group = c.benchmark_group("multi_stream_commands");
     group.throughput(Throughput::Elements(1));
@@ -189,11 +212,11 @@ fn bench_multi_stream_commands(c: &mut Criterion) {
             BenchmarkId::new("execution", num_streams),
             &num_streams,
             |b, &stream_count| {
-                b.to_async(&rt).iter(|| async {
+                b.to_async(FuturesExecutor).iter(|| async {
                     // Create a command that reads from multiple streams
                     let command = MultiStreamBenchmarkCommand::new(stream_count);
                     let streams: Vec<StreamId> = (0..stream_count)
-                        .map(|i| StreamId::new(&format!("stream-{}", i)).unwrap())
+                        .map(|i| StreamId::try_new(format!("stream-{i}")).unwrap())
                         .collect();
 
                     let input = MultiStreamInput {
@@ -201,9 +224,7 @@ fn bench_multi_stream_commands(c: &mut Criterion) {
                         value: black_box(42),
                     };
 
-                    let metadata = EventMetadata::new();
-
-                    black_box(executor.execute(&command, input, metadata).await.unwrap())
+                    black_box(executor.execute(&command, input).await.unwrap())
                 });
             },
         );

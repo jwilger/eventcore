@@ -1,13 +1,19 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+//! Projection processing performance benchmarks for `EventCore` library.
+
+#![allow(missing_docs)]
+
+use criterion::{
+    async_executor::FuturesExecutor, criterion_group, criterion_main, BenchmarkId, Criterion,
+    Throughput,
+};
 use eventcore::{
     event::Event,
     metadata::EventMetadata,
-    projection::{ProjectionCheckpoint, ProjectionConfig, ProjectionStatus},
+    projection::{Projection, ProjectionCheckpoint, ProjectionConfig, ProjectionStatus},
     types::{EventId, StreamId},
 };
 use std::collections::HashMap;
 use std::hint::black_box;
-use tokio::runtime::Runtime;
 
 /// Test event types for projection benchmarks
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -30,45 +36,18 @@ struct UserCountProjection {
     state: UserCountState,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct UserCountState {
     total_users: u64,
     users_by_domain: HashMap<String, u64>,
-}
-
-impl Default for UserCountState {
-    fn default() -> Self {
-        Self {
-            total_users: 0,
-            users_by_domain: HashMap::new(),
-        }
-    }
 }
 
 impl UserCountProjection {
     fn new() -> Self {
         Self {
             config: ProjectionConfig::new("user_count_projection")
-                .with_streams(vec![StreamId::new("users").unwrap()]),
+                .with_streams(vec![StreamId::try_new("users").unwrap()]),
             state: UserCountState::default(),
-        }
-    }
-
-    /// Process a single event (simulating projection processing)
-    fn process_event(&mut self, event: &BenchmarkEvent) {
-        match event {
-            BenchmarkEvent::UserRegistered { email, .. } => {
-                self.state.total_users += 1;
-
-                if let Some(domain) = email.split('@').nth(1) {
-                    *self
-                        .state
-                        .users_by_domain
-                        .entry(domain.to_string())
-                        .or_insert(0) += 1;
-                }
-            }
-            _ => {} // Other events don't affect user count
         }
     }
 }
@@ -91,7 +70,7 @@ impl eventcore::projection::Projection for UserCountProjection {
     }
 
     async fn load_checkpoint(&self) -> eventcore::errors::ProjectionResult<ProjectionCheckpoint> {
-        Ok(ProjectionCheckpoint::new())
+        Ok(ProjectionCheckpoint::initial())
     }
 
     async fn save_checkpoint(
@@ -100,24 +79,48 @@ impl eventcore::projection::Projection for UserCountProjection {
     ) -> eventcore::errors::ProjectionResult<()> {
         Ok(())
     }
+
+    async fn initialize_state(&self) -> eventcore::errors::ProjectionResult<Self::State> {
+        Ok(UserCountState::default())
+    }
+
+    async fn apply_event(
+        &self,
+        state: &mut Self::State,
+        event: &Event<Self::Event>,
+    ) -> eventcore::errors::ProjectionResult<()> {
+        if let BenchmarkEvent::UserRegistered { email, .. } = &event.payload {
+            state.total_users += 1;
+
+            if let Some(domain) = email.split('@').nth(1) {
+                *state.users_by_domain.entry(domain.to_string()).or_insert(0) += 1;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Benchmark single event processing by projections
 fn bench_single_event_processing(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-
     let mut group = c.benchmark_group("single_event_processing");
     group.throughput(Throughput::Elements(1));
 
     group.bench_function("user_count_projection", |b| {
-        b.to_async(&rt).iter(|| async {
-            let mut projection = UserCountProjection::new();
-            let event = BenchmarkEvent::UserRegistered {
-                user_id: format!("user-{}", EventId::new()),
-                email: format!("test-{}@example.com", EventId::new()),
-            };
+        b.to_async(FuturesExecutor).iter(|| async {
+            let projection = UserCountProjection::new();
+            let mut state = UserCountState::default();
+            let stream_id = StreamId::try_new("users").unwrap();
+            let event = Event::new(
+                stream_id,
+                BenchmarkEvent::UserRegistered {
+                    user_id: format!("user-{}", EventId::new()),
+                    email: format!("test-{}@example.com", EventId::new()),
+                },
+                EventMetadata::new(),
+            );
 
-            black_box(projection.process_event(&event))
+            projection.apply_event(&mut state, &event).await.unwrap();
+            black_box(());
         });
     });
 
@@ -126,8 +129,6 @@ fn bench_single_event_processing(c: &mut Criterion) {
 
 /// Benchmark batch event processing by projections
 fn bench_batch_event_processing(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-
     let mut group = c.benchmark_group("batch_event_processing");
 
     for batch_size in [10, 50, 100, 500] {
@@ -137,19 +138,25 @@ fn bench_batch_event_processing(c: &mut Criterion) {
             BenchmarkId::new("user_count_batch", batch_size),
             &batch_size,
             |b, &size| {
-                b.to_async(&rt).iter(|| async {
-                    let mut projection = UserCountProjection::new();
+                b.to_async(FuturesExecutor).iter(|| async {
+                    let projection = UserCountProjection::new();
+                    let mut state = UserCountState::default();
+                    let stream_id = StreamId::try_new("users").unwrap();
 
                     for i in 0..size {
-                        let event = BenchmarkEvent::UserRegistered {
-                            user_id: format!("user-{}", i),
-                            email: format!("test-{}@example.com", i),
-                        };
+                        let event = Event::new(
+                            stream_id.clone(),
+                            BenchmarkEvent::UserRegistered {
+                                user_id: format!("user-{i}"),
+                                email: format!("test-{i}@example.com"),
+                            },
+                            EventMetadata::new(),
+                        );
 
-                        projection.process_event(&event);
+                        projection.apply_event(&mut state, &event).await.unwrap();
                     }
 
-                    black_box(projection)
+                    black_box(state)
                 });
             },
         );
@@ -159,28 +166,14 @@ fn bench_batch_event_processing(c: &mut Criterion) {
 
 /// Benchmark projection state operations
 fn bench_projection_state_operations(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-
     let mut group = c.benchmark_group("projection_state_operations");
     group.throughput(Throughput::Elements(1));
 
-    // Setup: create projection with substantial state
-    let mut projection = UserCountProjection::new();
-
-    rt.block_on(async {
-        // Populate with test data
-        for i in 0..1000 {
-            let event = BenchmarkEvent::UserRegistered {
-                user_id: format!("user-{}", i),
-                email: format!("test-{}@{}.com", i, i % 10),
-            };
-            projection.process_event(&event);
-        }
-    });
-
     group.bench_function("get_projection_state", |b| {
-        b.to_async(&rt)
-            .iter(|| async { black_box(projection.get_state().await.unwrap()) });
+        b.to_async(FuturesExecutor).iter(|| async {
+            let projection = UserCountProjection::new();
+            black_box(projection.get_state().await.unwrap())
+        });
     });
 
     group.finish();
