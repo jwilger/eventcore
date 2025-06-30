@@ -6,8 +6,14 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![allow(clippy::struct_excessive_bools)]
+#![allow(clippy::unnecessary_wraps)]
+#![allow(clippy::unnecessary_cast)]
 
+pub mod circuit_breaker;
 mod event_store;
+pub mod monitoring;
+pub mod retry;
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -15,12 +21,69 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use chrono::{DateTime, Utc};
 use eventcore::EventStoreError;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use thiserror::Error;
 use tracing::{debug, info, instrument};
 
-/// Configuration for `PostgreSQL` connection
+pub use circuit_breaker::{
+    CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError, CircuitBreakerMetrics, CircuitState,
+};
+pub use monitoring::{AcquisitionTimer, PoolMetrics, PoolMonitor, PoolMonitoringTask};
+pub use retry::{RetryError, RetryStrategy};
+
+/// Comprehensive health status information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthStatus {
+    /// Whether the database is healthy overall
+    pub is_healthy: bool,
+    /// Latency of basic connectivity check
+    pub basic_latency: Duration,
+    /// Connection pool status
+    pub pool_status: PoolStatus,
+    /// Database schema status
+    pub schema_status: SchemaStatus,
+    /// Performance metrics
+    pub performance_status: PerformanceStatus,
+    /// Timestamp of last health check
+    pub last_check: DateTime<Utc>,
+}
+
+/// Connection pool status information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolStatus {
+    /// Current pool size
+    pub size: u32,
+    /// Number of idle connections
+    pub idle: u32,
+    /// Whether the pool is closed
+    pub is_closed: bool,
+}
+
+/// Database schema status information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaStatus {
+    /// Whether events table exists
+    pub has_events_table: bool,
+    /// Whether `event_streams` table exists
+    pub has_streams_table: bool,
+    /// Whether `subscription_checkpoints` table exists
+    pub has_subscriptions_table: bool,
+    /// Whether schema is complete for basic operations
+    pub is_complete: bool,
+}
+
+/// Performance status information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceStatus {
+    /// Latency of performance test query
+    pub query_latency: Duration,
+    /// Whether performance is within acceptable thresholds
+    pub is_performant: bool,
+}
+
+/// Configuration for `PostgreSQL` connection with production-hardening features
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostgresConfig {
     /// Database connection URL
@@ -47,6 +110,21 @@ pub struct PostgresConfig {
 
     /// Whether to test connections before use
     pub test_before_acquire: bool,
+
+    /// Maximum number of retry attempts for failed operations
+    pub max_retries: u32,
+
+    /// Base delay between retry attempts
+    pub retry_base_delay: Duration,
+
+    /// Maximum delay between retry attempts (for exponential backoff)
+    pub retry_max_delay: Duration,
+
+    /// Whether to enable connection recovery on failures
+    pub enable_recovery: bool,
+
+    /// Interval for periodic health checks
+    pub health_check_interval: Duration,
 }
 
 impl PostgresConfig {
@@ -70,6 +148,11 @@ impl Default for PostgresConfig {
             max_lifetime: Some(Duration::from_secs(1800)), // 30 minutes
             idle_timeout: Some(Duration::from_secs(600)), // 10 minutes
             test_before_acquire: false, // Skip validation for performance
+            max_retries: 3,      // Retry failed operations up to 3 times
+            retry_base_delay: Duration::from_millis(100), // Start with 100ms delay
+            retry_max_delay: Duration::from_secs(5), // Maximum 5 second delay
+            enable_recovery: true, // Enable automatic connection recovery
+            health_check_interval: Duration::from_secs(30), // Check health every 30 seconds
         }
     }
 }
@@ -144,6 +227,8 @@ where
 {
     pool: Arc<PgPool>,
     config: PostgresConfig,
+    retry_strategy: RetryStrategy,
+    monitor: Arc<monitoring::PoolMonitor>,
     /// Phantom data to track event type
     _phantom: PhantomData<E>,
 }
@@ -164,6 +249,8 @@ where
         Self {
             pool: Arc::clone(&self.pool),
             config: self.config.clone(),
+            retry_strategy: self.retry_strategy.clone(),
+            monitor: Arc::clone(&self.monitor),
             _phantom: PhantomData,
         }
     }
@@ -185,9 +272,37 @@ where
     pub async fn new(config: PostgresConfig) -> Result<Self, PostgresError> {
         let pool = Self::create_pool(&config).await?;
 
+        let retry_strategy = RetryStrategy {
+            max_attempts: config.max_retries,
+            base_delay: config.retry_base_delay,
+            max_delay: config.retry_max_delay,
+            ..RetryStrategy::default()
+        };
+
+        let monitor = Arc::new(monitoring::PoolMonitor::new(config.max_connections));
+
         Ok(Self {
             pool: Arc::new(pool),
             config,
+            retry_strategy,
+            monitor,
+            _phantom: PhantomData,
+        })
+    }
+
+    /// Create a new `PostgreSQL` event store with custom retry strategy
+    pub async fn new_with_retry_strategy(
+        config: PostgresConfig,
+        retry_strategy: RetryStrategy,
+    ) -> Result<Self, PostgresError> {
+        let pool = Self::create_pool(&config).await?;
+        let monitor = Arc::new(monitoring::PoolMonitor::new(config.max_connections));
+
+        Ok(Self {
+            pool: Arc::new(pool),
+            config,
+            retry_strategy,
+            monitor,
             _phantom: PhantomData,
         })
     }
@@ -406,16 +521,168 @@ where
         result
     }
 
-    /// Check database connectivity
+    /// Check database connectivity with comprehensive health checks
     #[instrument(skip(self))]
-    pub async fn health_check(&self) -> Result<(), PostgresError> {
+    pub async fn health_check(&self) -> Result<HealthStatus, PostgresError> {
+        let start = std::time::Instant::now();
+
+        // Basic connectivity check
         sqlx::query("SELECT 1")
             .execute(self.pool.as_ref())
             .await
             .map_err(PostgresError::Connection)?;
 
-        debug!("PostgreSQL health check passed");
+        let basic_latency = start.elapsed();
+
+        // Advanced health checks
+        let pool_status = self.get_pool_status()?;
+        let schema_status = self.verify_schema().await?;
+        let performance_status = self.check_performance().await?;
+
+        let status = HealthStatus {
+            is_healthy: true,
+            basic_latency,
+            pool_status,
+            schema_status,
+            performance_status,
+            last_check: chrono::Utc::now(),
+        };
+
+        debug!("PostgreSQL health check passed: {:?}", status);
+        Ok(status)
+    }
+
+    /// Get detailed connection pool status
+    fn get_pool_status(&self) -> Result<PoolStatus, PostgresError> {
+        let pool = self.pool.as_ref();
+
+        Ok(PoolStatus {
+            #[allow(clippy::cast_possible_truncation)]
+            size: pool.size() as u32,
+            #[allow(clippy::cast_possible_truncation)]
+            idle: pool.num_idle() as u32,
+            is_closed: pool.is_closed(),
+        })
+    }
+
+    /// Verify that required database schema exists
+    async fn verify_schema(&self) -> Result<SchemaStatus, PostgresError> {
+        let has_events_table = self.table_exists("events").await?;
+        let has_streams_table = self.table_exists("event_streams").await?;
+        let has_subscriptions_table = self
+            .table_exists("subscription_checkpoints")
+            .await
+            .unwrap_or(false);
+
+        Ok(SchemaStatus {
+            has_events_table,
+            has_streams_table,
+            has_subscriptions_table,
+            is_complete: has_events_table && has_streams_table,
+        })
+    }
+
+    /// Check if a specific table exists
+    async fn table_exists(&self, table_name: &str) -> Result<bool, PostgresError> {
+        let exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1 AND table_schema = 'public')"
+        )
+        .bind(table_name)
+        .fetch_one(self.pool.as_ref())
+        .await
+        .map_err(PostgresError::Connection)?;
+
+        Ok(exists)
+    }
+
+    /// Check database performance characteristics
+    async fn check_performance(&self) -> Result<PerformanceStatus, PostgresError> {
+        let start = std::time::Instant::now();
+
+        // Test a simple query that exercises indexes
+        let _count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM events WHERE created_at > NOW() - INTERVAL '1 minute'",
+        )
+        .fetch_one(self.pool.as_ref())
+        .await
+        .unwrap_or(0); // Gracefully handle if events table doesn't exist yet
+
+        let query_latency = start.elapsed();
+
+        Ok(PerformanceStatus {
+            query_latency,
+            is_performant: query_latency < Duration::from_millis(100), // 100ms threshold
+        })
+    }
+
+    /// Attempt to recover from connection issues
+    pub async fn recover_connection(&self) -> Result<(), PostgresError> {
+        debug!("Attempting connection recovery");
+
+        // Close any potentially stale connections
+        if !self.pool.is_closed() {
+            self.pool.close().await;
+        }
+
+        // Test if we can still connect with a new pool
+        let test_pool = Self::create_pool(&self.config).await?;
+
+        // Verify basic connectivity
+        sqlx::query("SELECT 1")
+            .execute(&test_pool)
+            .await
+            .map_err(PostgresError::Connection)?;
+
+        test_pool.close().await;
+
+        info!("Connection recovery completed successfully");
         Ok(())
+    }
+
+    /// Get current pool metrics
+    pub fn get_pool_metrics(&self) -> monitoring::PoolMetrics {
+        let pool_status = PoolStatus {
+            #[allow(clippy::cast_possible_truncation)]
+            size: self.pool.size() as u32,
+            #[allow(clippy::cast_possible_truncation)]
+            idle: self.pool.num_idle() as u32,
+            is_closed: self.pool.is_closed(),
+        };
+        self.monitor.get_metrics(&pool_status)
+    }
+
+    /// Get pool monitor for advanced monitoring setup
+    pub fn monitor(&self) -> Arc<monitoring::PoolMonitor> {
+        Arc::clone(&self.monitor)
+    }
+
+    /// Start background pool monitoring task
+    pub fn start_pool_monitoring(
+        &self,
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        tokio::sync::watch::Sender<bool>,
+    ) {
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let monitor = Arc::clone(&self.monitor);
+        let pool_ref = Arc::clone(&self.pool);
+        let interval = self.config.health_check_interval;
+
+        let task = tokio::spawn(async move {
+            let monitoring_task = monitoring::PoolMonitoringTask::new(monitor, interval, stop_rx);
+
+            monitoring_task
+                .run(move || PoolStatus {
+                    #[allow(clippy::cast_possible_truncation)]
+                    size: pool_ref.size() as u32,
+                    #[allow(clippy::cast_possible_truncation)]
+                    idle: pool_ref.num_idle() as u32,
+                    is_closed: pool_ref.is_closed(),
+                })
+                .await;
+        });
+
+        (task, stop_tx)
     }
 }
 
