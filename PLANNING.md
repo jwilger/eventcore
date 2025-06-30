@@ -288,17 +288,20 @@ After pushing changes:
 - **NO PREFIXES** in subject line (no "feat:", "fix:", "refactor:", etc.)
 - **Subject line**: Maximum 50 characters, imperative mood
 - **Body lines**: Maximum 72 characters before hard-wrapping
+- **Focus on WHY, not just what/how** - Explain the reasoning and motivation
 - Example:
   ```
   Add subscription system with position tracking
   
-  Implement real-time event subscription capabilities with automatic
-  position tracking and checkpointing. Includes replay functionality
-  for catching up on missed events and comprehensive error handling
-  for connection failures.
+  Expert review identified missing subscription capabilities as a major
+  gap preventing production usage. Without real-time event processing,
+  projections cannot stay current and users lose audit trail benefits.
   
-  Addresses feedback from expert review regarding missing subscription
-  features. All integration tests pass with PostgreSQL backend.
+  Implement comprehensive subscription system with automatic position
+  tracking, checkpointing, and replay functionality. This enables
+  real-time read models and eliminates polling-based workarounds.
+  
+  All integration tests pass with PostgreSQL backend.
   ```
 
 **NEVER** make a commit with the `--no-verify` flag. All pre-commit checks must be passing before proceeding.
