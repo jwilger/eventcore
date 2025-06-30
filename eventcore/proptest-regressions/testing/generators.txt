@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 94b97f038aa1d532c2dd2f3ffed1275b0abfc689aa58be8aee81100d75e84902 # shrinks to metadata = EventMetadata { timestamp: Timestamp(2025-06-28T18:02:28Z), correlation_id: CorrelationId(0197b7b4-79a8-74e2-8184-6f86c3e01b7c), causation_id: None, user_id: None, custom: {} }
+cc 01b7dc4125389c1e0b24cb2fdb6149c94480143b1d54c632ca31f5d244484de2 # shrinks to version = EventVersion(1023)

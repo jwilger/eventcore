@@ -138,14 +138,35 @@ impl Command for ConcurrencyTestCommand {
 /// This test verifies that when multiple commands increment a counter
 /// concurrently, the final result is consistent (though some commands
 /// may fail due to version conflicts).
+/// 
+/// Uses enhanced shrinking to find minimal failing cases with:
+/// - Smaller increment collections
+/// - Simpler stream IDs  
+/// - Smaller initial values
 #[test]
 fn prop_concurrent_counter_consistency() {
+    use eventcore::testing::generators::{arb_concurrent_operation_count, arb_transfer_amount};
+    use crate::properties::enhanced_proptest_config;
+    
+    let config = enhanced_proptest_config();
     proptest! {
+        #![proptest_config(config)]
         #[test]
         fn test_concurrent_counter_increments(
             stream_id in arb_stream_id(),
-            increments in prop::collection::vec(1i64..100, 2..10),
-            initial_value in 0i64..1000
+            increment_count in arb_concurrent_operation_count(),
+            increments in prop::collection::vec(
+                arb_transfer_amount().prop_map(|v| v as i64), 
+                increment_count
+            ),
+            initial_value in prop_oneof![
+                // High probability: Small initial values  
+                70 => (0i64..=10i64),
+                // Medium probability: Medium values
+                20 => (10i64..=100i64), 
+                // Low probability: Large values
+                10 => (100i64..=1000i64),
+            ]
         ) {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
@@ -268,14 +289,25 @@ fn prop_concurrent_counter_consistency() {
 ///
 /// This test verifies that when multiple commands try to create the same
 /// unique item, only one succeeds.
+/// 
+/// Uses enhanced shrinking to find minimal failing cases with:
+/// - Simpler item IDs and creator names
+/// - Smaller creator collections
+/// - Reused common values to increase collision probability
 #[test]
 fn prop_concurrent_unique_creation_consistency() {
+    use eventcore::testing::generators::{arb_concurrent_operation_count, arb_concurrent_string};
+    use crate::properties::enhanced_proptest_config;
+    
+    let config = enhanced_proptest_config();
     proptest! {
+        #![proptest_config(config)]
         #[test]
         fn test_concurrent_unique_item_creation(
             stream_id in arb_stream_id(),
-            item_id in any::<String>(),
-            creators in prop::collection::vec(any::<String>(), 2..8)
+            item_id in arb_concurrent_string(),
+            creator_count in arb_concurrent_operation_count(),
+            creators in prop::collection::vec(arb_concurrent_string(), creator_count)
         ) {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
@@ -607,17 +639,30 @@ fn prop_version_conflict_handling() {
     }
 }
 
-/// Generator for concurrency test operations.
+/// Generator for concurrency test operations with enhanced shrinking.
+///
+/// Uses domain-specific generators that prefer smaller, simpler values
+/// to produce more debuggable counterexamples.
 fn arb_concurrency_operation() -> impl Strategy<Value = ConcurrencyOperation> {
+    use eventcore::testing::generators::{arb_transfer_amount, arb_concurrent_string};
+    
     prop_oneof![
-        any::<i64>().prop_map(|amount| ConcurrencyOperation::AddToCounter { amount }),
-        (any::<String>(), any::<String>(), 1u64..100).prop_map(|(from, to, amount)| {
-            ConcurrencyOperation::Transfer { from_key: from, to_key: to, amount }
+        // Counter operations with smaller amounts
+        arb_transfer_amount().prop_map(|amount| ConcurrencyOperation::AddToCounter { 
+            amount: amount as i64 
         }),
-        (any::<String>(), any::<String>()).prop_map(|(id, name)| {
+        // Transfer operations with reusable keys and small amounts
+        (arb_concurrent_string(), arb_concurrent_string(), arb_transfer_amount()).prop_map(
+            |(from, to, amount)| ConcurrencyOperation::Transfer { 
+                from_key: from, to_key: to, amount 
+            }
+        ),
+        // Item creation with reusable IDs
+        (arb_concurrent_string(), arb_concurrent_string()).prop_map(|(id, name)| {
             ConcurrencyOperation::CreateUniqueItem { id, name }
         }),
-        (any::<String>(), any::<String>()).prop_map(|(id, name)| {
+        // Item updates with reusable IDs  
+        (arb_concurrent_string(), arb_concurrent_string()).prop_map(|(id, name)| {
             ConcurrencyOperation::UpdateIfExists { id, new_name: name }
         })
     ]

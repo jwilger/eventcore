@@ -8,11 +8,16 @@ use crate::types::{EventId, EventVersion, StreamId, Timestamp};
 use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
 
-/// Generates valid `StreamId` values.
+/// Generates valid `StreamId` values with enhanced shrinking.
 ///
 /// `StreamIds` are guaranteed to be:
 /// - Non-empty after trimming
 /// - At most 255 characters
+///
+/// The shrinking strategy prioritizes:
+/// 1. Shorter strings (easier to debug)
+/// 2. Alphanumeric characters (more readable)
+/// 3. Common prefixes and patterns
 ///
 /// # Example
 /// ```rust,ignore
@@ -27,8 +32,20 @@ use proptest::prelude::*;
 /// }
 /// ```
 pub fn arb_stream_id() -> impl Strategy<Value = StreamId> {
-    "[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}"
-        .prop_filter_map("Invalid StreamId", |s| StreamId::try_new(s).ok())
+    // Enhanced shrinking strategy: Start with simple patterns and add complexity
+    prop_oneof![
+        // High probability: Simple patterns that shrink well
+        20 => "[a-zA-Z][a-zA-Z0-9]{0,10}",
+        // Medium probability: Common patterns with separators
+        15 => "[a-zA-Z][a-zA-Z0-9]{0,10}-[a-zA-Z0-9]{1,10}",
+        // Medium probability: UUID-like patterns
+        10 => "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+        // Lower probability: Complex patterns
+        5 => "[a-zA-Z0-9][a-zA-Z0-9._-]{10,50}",
+        // Very low probability: Maximum complexity
+        1 => "[a-zA-Z0-9][a-zA-Z0-9._-]{50,254}",
+    ]
+    .prop_filter_map("Invalid StreamId", |s| StreamId::try_new(s).ok())
 }
 
 /// Generates valid `StreamId` values with a specific prefix.
@@ -53,18 +70,44 @@ pub fn arb_event_id() -> impl Strategy<Value = EventId> {
     any::<()>().prop_map(|()| EventId::new())
 }
 
-/// Generates valid `EventVersion` values.
+/// Generates valid `EventVersion` values with enhanced shrinking.
 ///
-/// Versions are non-negative integers.
+/// Versions are non-negative integers. The shrinking strategy prioritizes:
+/// 1. Smaller version numbers (easier to debug)
+/// 2. Common values like 0, 1, 2 (typical edge cases)
+/// 3. Powers of 2 and common boundaries
 pub fn arb_event_version() -> impl Strategy<Value = EventVersion> {
-    (0u64..=1000u64).prop_filter_map("Invalid EventVersion", |v| EventVersion::try_new(v).ok())
+    prop_oneof![
+        // High probability: Common small values that shrink well
+        40 => 0u64..=10u64,
+        // Medium probability: Medium range values
+        30 => 10u64..=100u64,
+        // Medium probability: Boundary values and powers of 2 (within the 1000 limit)
+        20 => prop_oneof![
+            Just(0u64), Just(1u64), Just(2u64), Just(7u64), Just(8u64), Just(15u64), Just(16u64),
+            Just(31u64), Just(32u64), Just(63u64), Just(64u64), Just(127u64), Just(128u64),
+            Just(255u64), Just(256u64), Just(511u64), Just(512u64), Just(999u64), Just(1000u64)
+        ],
+        // Lower probability: Large values
+        10 => 100u64..=1000u64,
+    ]
+    .prop_filter_map("Invalid EventVersion", |v| EventVersion::try_new(v).ok())
 }
 
-/// Generates small `EventVersion` values suitable for testing.
+/// Generates small `EventVersion` values suitable for testing with enhanced shrinking.
 ///
 /// Limited to 0-10 for more predictable test scenarios.
+/// Shrinks toward 0 for simpler failure cases.
 pub fn arb_small_event_version() -> impl Strategy<Value = EventVersion> {
-    (0u64..=10u64).prop_filter_map("Invalid EventVersion", |v| EventVersion::try_new(v).ok())
+    prop_oneof![
+        // Very high probability for small values
+        50 => 0u64..=3u64,
+        // Medium probability for slightly larger
+        30 => 3u64..=7u64,
+        // Lower probability for upper range
+        20 => 7u64..=10u64,
+    ]
+    .prop_filter_map("Invalid EventVersion", |v| EventVersion::try_new(v).ok())
 }
 
 /// Generates valid `Timestamp` values.
@@ -181,6 +224,95 @@ pub fn arb_ordered_versions(count: usize) -> impl Strategy<Value = Vec<EventVers
             .map(|i| EventVersion::try_new(i as u64).unwrap())
             .collect(),
     )
+}
+
+/// Generates collections optimized for concurrency testing.
+///
+/// These generators produce smaller, more manageable collections that lead to
+/// better shrinking when concurrency issues are found.
+/// Generates a small collection of stream IDs optimized for concurrency testing.
+///
+/// Prefers smaller collections and reuses stream IDs to increase collision probability.
+pub fn arb_concurrent_stream_ids() -> impl Strategy<Value = Vec<StreamId>> {
+    prop_oneof![
+        // High probability: Very small collections with reuse
+        30 => prop::collection::vec(
+            prop_oneof![
+                3 => Just("stream-a".to_string()),
+                3 => Just("stream-b".to_string()),
+                2 => Just("stream-c".to_string()),
+                1 => "[a-z]{1,3}".prop_map(|s| s),
+            ].prop_filter_map("Invalid StreamId", |s| StreamId::try_new(s).ok()),
+            1..=3
+        ),
+        // Medium probability: Small collections
+        25 => prop::collection::vec(arb_stream_id(), 2..=5),
+        // Lower probability: Medium collections
+        15 => prop::collection::vec(arb_stream_id(), 3..=8),
+    ]
+}
+
+/// Generates small operation counts optimized for concurrency testing.
+///
+/// Prefers smaller counts that shrink toward 1 to find minimal failing cases.
+pub fn arb_concurrent_operation_count() -> impl Strategy<Value = usize> {
+    prop_oneof![
+        // Very high probability: Small counts
+        50 => 1usize..=3,
+        // High probability: Medium counts
+        30 => 2usize..=5,
+        // Medium probability: Larger counts
+        15 => 4usize..=8,
+        // Low probability: Large counts
+        5 => 6usize..=15,
+    ]
+}
+
+/// Generates amounts optimized for transfer testing with enhanced shrinking.
+///
+/// Prefers small amounts and common values that tend to cause edge cases.
+pub fn arb_transfer_amount() -> impl Strategy<Value = u64> {
+    prop_oneof![
+        // High probability: Very small amounts
+        40 => 1u64..=10u64,
+        // Medium probability: Small amounts
+        25 => 5u64..=50u64,
+        // Medium probability: Common boundary values
+        20 => prop_oneof![
+            Just(1u64), Just(10u64), Just(100u64), Just(1000u64),
+            Just(255u64), Just(256u64), Just(1023u64), Just(1024u64),
+        ],
+        // Lower probability: Larger amounts
+        15 => 50u64..=1000u64,
+    ]
+}
+
+/// Generates small collections of amounts for batch operations.
+pub fn arb_transfer_amounts() -> impl Strategy<Value = Vec<u64>> {
+    prop::collection::vec(arb_transfer_amount(), 1..=5)
+}
+
+/// Generates strings optimized for concurrency testing.
+///
+/// Prefers shorter strings and reuses common values to increase collision probability.
+pub fn arb_concurrent_string() -> impl Strategy<Value = String> {
+    prop_oneof![
+        // High probability: Very short strings with reuse
+        40 => prop_oneof![
+            Just("a".to_string()),
+            Just("b".to_string()),
+            Just("c".to_string()),
+            Just("id1".to_string()),
+            Just("id2".to_string()),
+            Just("test".to_string()),
+        ],
+        // Medium probability: Short generated strings
+        30 => "[a-z]{1,5}".prop_map(|s| s),
+        // Lower probability: Medium strings
+        20 => "[a-z0-9]{3,10}".prop_map(|s| s),
+        // Very low probability: Longer strings
+        10 => "[a-zA-Z0-9_-]{5,20}".prop_map(|s| s),
+    ]
 }
 
 #[cfg(test)]
