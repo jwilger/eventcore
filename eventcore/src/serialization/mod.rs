@@ -158,11 +158,21 @@ pub struct SerializedEventEnvelope {
     pub stored_at: Timestamp,
 }
 
+pub mod compatibility;
 pub mod evolution;
 pub mod json;
 
 #[allow(unused_imports)]
-pub use evolution::{JsonSchemaEvolution, SchemaRegistry};
+pub use compatibility::{
+    CompatibilityAnalysis, CompatibilityLevel, CompatibilityValidator, JsonSchema,
+    MigrationBuilder, SchemaChange, SchemaFieldType,
+};
+#[allow(unused_imports)]
+pub use evolution::{
+    EnhancedJsonSchemaEvolution, EnhancedSchemaRegistry, EvolutionStrategy,
+    ForwardCompatibilityMode, JsonSchemaEvolution, MigrationPath, MigrationStep, SchemaRegistry,
+    VersionedEvent,
+};
 #[allow(unused_imports)]
 pub use json::JsonEventSerializer;
 

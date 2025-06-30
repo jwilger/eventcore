@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::errors::CommandError;
+use crate::errors::{CommandError, EventStoreError};
 use crate::types::{EventId, StreamId};
+use tracing::{debug, info, warn};
 
 /// Core metric types for observability.
 ///
@@ -480,13 +481,300 @@ impl Default for ProjectionMetrics {
     }
 }
 
-/// Centralized metrics registry
+/// System performance metrics for overall health monitoring
+#[derive(Debug)]
+pub struct SystemMetrics {
+    pub memory_usage: Gauge,
+    pub cpu_usage: Gauge,
+    pub connection_pool_size: Gauge,
+    pub connection_pool_available: Gauge,
+    pub gc_collections: Counter,
+    pub gc_pause_time: Timer,
+    pub disk_io_operations: Counter,
+    pub network_connections: Gauge,
+    pub circuit_breaker_states: Arc<RwLock<HashMap<String, String>>>,
+    pub subscription_lag: Arc<RwLock<HashMap<String, Gauge>>>,
+}
+
+#[allow(clippy::cast_precision_loss)]
+impl SystemMetrics {
+    pub fn new() -> Self {
+        Self {
+            memory_usage: Gauge::new(),
+            cpu_usage: Gauge::new(),
+            connection_pool_size: Gauge::new(),
+            connection_pool_available: Gauge::new(),
+            gc_collections: Counter::new(),
+            gc_pause_time: Timer::new(),
+            disk_io_operations: Counter::new(),
+            network_connections: Gauge::new(),
+            circuit_breaker_states: Arc::new(RwLock::new(HashMap::new())),
+            subscription_lag: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn record_memory_usage(&self, bytes: f64) {
+        self.memory_usage.set(bytes);
+        debug!(memory_usage_bytes = bytes, "Memory usage updated");
+    }
+
+    pub fn record_cpu_usage(&self, percentage: f64) {
+        self.cpu_usage.set(percentage);
+        if percentage > 80.0 {
+            warn!(cpu_usage_percent = percentage, "High CPU usage detected");
+        }
+    }
+
+    pub fn update_connection_pool(&self, total: usize, available: usize) {
+        self.connection_pool_size.set(total as f64);
+        self.connection_pool_available.set(available as f64);
+
+        let utilization = if total > 0 {
+            ((total - available) as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        if utilization > 90.0 {
+            warn!(
+                pool_size = total,
+                available = available,
+                utilization_percent = utilization,
+                "Connection pool nearing capacity"
+            );
+        }
+    }
+
+    pub fn record_gc_collection(&self, pause_time: Duration) {
+        self.gc_collections.increment();
+        self.gc_pause_time.record(pause_time);
+
+        if pause_time > Duration::from_millis(100) {
+            warn!(
+                pause_time_ms = pause_time.as_millis(),
+                "Long GC pause detected"
+            );
+        }
+    }
+
+    pub fn update_circuit_breaker_state(&self, name: &str, state: &str) {
+        if let Ok(mut states) = self.circuit_breaker_states.write() {
+            let old_state = states.insert(name.to_string(), state.to_string());
+            if old_state.as_deref() != Some(state) {
+                info!(
+                    circuit_breaker = name,
+                    old_state = old_state.as_deref().unwrap_or("unknown"),
+                    new_state = state,
+                    "Circuit breaker state changed"
+                );
+            }
+        }
+    }
+
+    pub fn update_subscription_lag(&self, subscription_name: &str, lag: Duration) {
+        if let Ok(mut lag_gauges) = self.subscription_lag.write() {
+            lag_gauges
+                .entry(subscription_name.to_string())
+                .or_insert_with(Gauge::new)
+                .set(lag.as_millis() as f64);
+
+            if lag > Duration::from_secs(60) {
+                warn!(
+                    subscription = subscription_name,
+                    lag_ms = lag.as_millis(),
+                    "High subscription lag detected"
+                );
+            }
+        }
+    }
+}
+
+impl Default for SystemMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Error metrics for comprehensive error tracking
+#[derive(Debug)]
+pub struct ErrorMetrics {
+    pub errors_by_type: Arc<RwLock<HashMap<String, Counter>>>,
+    pub errors_by_operation: Arc<RwLock<HashMap<String, Counter>>>,
+    pub error_rate: Gauge,
+    pub mean_time_to_resolution: Timer,
+    pub critical_errors: Counter,
+    pub transient_errors: Counter,
+    pub permanent_errors: Counter,
+}
+
+#[allow(clippy::unused_self, clippy::cast_precision_loss)]
+impl ErrorMetrics {
+    pub fn new() -> Self {
+        Self {
+            errors_by_type: Arc::new(RwLock::new(HashMap::new())),
+            errors_by_operation: Arc::new(RwLock::new(HashMap::new())),
+            error_rate: Gauge::new(),
+            mean_time_to_resolution: Timer::new(),
+            critical_errors: Counter::new(),
+            transient_errors: Counter::new(),
+            permanent_errors: Counter::new(),
+        }
+    }
+
+    pub fn record_command_error(&self, error: &CommandError, operation: &str) {
+        let error_type = self.classify_command_error(error);
+        self.record_error(
+            &error_type,
+            operation,
+            self.is_critical_command_error(error),
+        );
+    }
+
+    pub fn record_event_store_error(&self, error: &EventStoreError, operation: &str) {
+        let error_type = self.classify_event_store_error(error);
+        self.record_error(
+            &error_type,
+            operation,
+            self.is_critical_event_store_error(error),
+        );
+    }
+
+    fn record_error(&self, error_type: &str, operation: &str, is_critical: bool) {
+        // Record by type
+        if let Ok(mut errors_by_type) = self.errors_by_type.write() {
+            errors_by_type
+                .entry(error_type.to_string())
+                .or_insert_with(Counter::new)
+                .increment();
+        }
+
+        // Record by operation
+        if let Ok(mut errors_by_operation) = self.errors_by_operation.write() {
+            errors_by_operation
+                .entry(operation.to_string())
+                .or_insert_with(Counter::new)
+                .increment();
+        }
+
+        // Classify error severity
+        if is_critical {
+            self.critical_errors.increment();
+            warn!(
+                error_type = error_type,
+                operation = operation,
+                "Critical error recorded"
+            );
+        } else if self.is_transient_error(error_type) {
+            self.transient_errors.increment();
+        } else {
+            self.permanent_errors.increment();
+        }
+    }
+
+    fn classify_command_error(&self, error: &CommandError) -> String {
+        match error {
+            CommandError::ValidationFailed(_) => "validation_failed".to_string(),
+            CommandError::BusinessRuleViolation(_) => "business_rule_violation".to_string(),
+            CommandError::DomainError { .. } => "domain_error".to_string(),
+            CommandError::ConcurrencyConflict { .. } => "concurrency_conflict".to_string(),
+            CommandError::StreamNotFound(_) => "stream_not_found".to_string(),
+            CommandError::InvalidStreamAccess { .. } => "invalid_stream_access".to_string(),
+            CommandError::StreamNotDeclared { .. } => "stream_not_declared".to_string(),
+            CommandError::TypeMismatch { .. } => "type_mismatch".to_string(),
+            CommandError::Unauthorized(_) => "unauthorized".to_string(),
+            CommandError::EventStore(_) => "event_store_error".to_string(),
+            CommandError::Internal(_) => "internal_error".to_string(),
+            CommandError::Timeout(_) => "timeout".to_string(),
+        }
+    }
+
+    fn classify_event_store_error(&self, error: &EventStoreError) -> String {
+        match error {
+            EventStoreError::StreamNotFound(_) => "stream_not_found".to_string(),
+            EventStoreError::VersionConflict { .. } => "version_conflict".to_string(),
+            EventStoreError::DuplicateEventId(_) => "duplicate_event_id".to_string(),
+            EventStoreError::ConnectionFailed(_) => "connection_failed".to_string(),
+            EventStoreError::Configuration(_) => "configuration_error".to_string(),
+            EventStoreError::TransactionRollback(_) => "transaction_rollback".to_string(),
+            EventStoreError::SerializationFailed(_) => "serialization_failed".to_string(),
+            EventStoreError::DeserializationFailed(_) => "deserialization_failed".to_string(),
+            EventStoreError::SchemaEvolutionError(_) => "schema_evolution_error".to_string(),
+            EventStoreError::Io(_) => "io_error".to_string(),
+            EventStoreError::Timeout(_) => "timeout".to_string(),
+            EventStoreError::Unavailable(_) => "unavailable".to_string(),
+            EventStoreError::Internal(_) => "internal_error".to_string(),
+        }
+    }
+
+    const fn is_critical_command_error(&self, error: &CommandError) -> bool {
+        matches!(
+            error,
+            CommandError::Internal(_) | CommandError::EventStore(_)
+        )
+    }
+
+    const fn is_critical_event_store_error(&self, error: &EventStoreError) -> bool {
+        matches!(
+            error,
+            EventStoreError::Internal(_)
+                | EventStoreError::Configuration(_)
+                | EventStoreError::Io(_)
+        )
+    }
+
+    fn is_transient_error(&self, error_type: &str) -> bool {
+        matches!(
+            error_type,
+            "timeout"
+                | "connection_failed"
+                | "version_conflict"
+                | "unavailable"
+                | "transaction_rollback"
+        )
+    }
+
+    pub fn calculate_error_rate(&self, total_operations: u64) -> f64 {
+        let total_errors =
+            self.critical_errors.get() + self.transient_errors.get() + self.permanent_errors.get();
+        if total_operations > 0 {
+            (total_errors as f64 / total_operations as f64) * 100.0
+        } else {
+            0.0
+        }
+    }
+
+    pub fn get_error_count_by_type(&self, error_type: &str) -> u64 {
+        self.errors_by_type
+            .read()
+            .ok()
+            .and_then(|map| map.get(error_type).map(Counter::get))
+            .unwrap_or(0)
+    }
+
+    pub fn get_error_count_by_operation(&self, operation: &str) -> u64 {
+        self.errors_by_operation
+            .read()
+            .ok()
+            .and_then(|map| map.get(operation).map(Counter::get))
+            .unwrap_or(0)
+    }
+}
+
+impl Default for ErrorMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Centralized metrics registry with comprehensive observability
 #[derive(Debug)]
 #[allow(clippy::struct_field_names)]
 pub struct MetricsRegistry {
     pub command_metrics: CommandMetrics,
     pub event_store_metrics: EventStoreMetrics,
     pub projection_metrics: ProjectionMetrics,
+    pub system_metrics: SystemMetrics,
+    pub error_metrics: ErrorMetrics,
 }
 
 impl MetricsRegistry {
@@ -495,6 +783,138 @@ impl MetricsRegistry {
             command_metrics: CommandMetrics::new(),
             event_store_metrics: EventStoreMetrics::new(),
             projection_metrics: ProjectionMetrics::new(),
+            system_metrics: SystemMetrics::new(),
+            error_metrics: ErrorMetrics::new(),
+        }
+    }
+
+    /// Records comprehensive metrics for command execution
+    pub fn record_command_execution(
+        &self,
+        command_type: &str,
+        result: &Result<(), CommandError>,
+        duration: Duration,
+        retry_count: u32,
+        stream_count: usize,
+    ) {
+        // Record basic command metrics
+        self.command_metrics.record_command_start(command_type);
+
+        match result {
+            Ok(()) => {
+                self.command_metrics.record_command_success(duration);
+                info!(
+                    command_type = command_type,
+                    duration_ms = duration.as_millis(),
+                    retry_count = retry_count,
+                    stream_count = stream_count,
+                    "Command execution succeeded"
+                );
+            }
+            Err(error) => {
+                self.command_metrics.record_command_failure(error);
+                self.error_metrics
+                    .record_command_error(error, "command_execution");
+                warn!(
+                    command_type = command_type,
+                    error = %error,
+                    duration_ms = duration.as_millis(),
+                    retry_count = retry_count,
+                    stream_count = stream_count,
+                    "Command execution failed"
+                );
+            }
+        }
+    }
+
+    /// Records comprehensive metrics for event store operations
+    pub fn record_event_store_operation(
+        &self,
+        operation: &str,
+        stream_ids: &[StreamId],
+        result: &Result<usize, EventStoreError>,
+        duration: Duration,
+    ) {
+        match operation {
+            "read" => {
+                self.event_store_metrics.record_read_start(stream_ids);
+                match result {
+                    Ok(event_count) => {
+                        self.event_store_metrics
+                            .record_read_complete(*event_count, duration);
+                        debug!(
+                            operation = operation,
+                            stream_count = stream_ids.len(),
+                            event_count = event_count,
+                            duration_ms = duration.as_millis(),
+                            "Event store read completed"
+                        );
+                    }
+                    Err(error) => {
+                        self.error_metrics
+                            .record_event_store_error(error, operation);
+                        warn!(
+                            operation = operation,
+                            stream_count = stream_ids.len(),
+                            error = %error,
+                            duration_ms = duration.as_millis(),
+                            "Event store read failed"
+                        );
+                    }
+                }
+            }
+            "write" => {
+                self.event_store_metrics.record_write_start(stream_ids);
+                match result {
+                    Ok(event_count) => {
+                        self.event_store_metrics
+                            .record_write_complete(*event_count, duration);
+                        debug!(
+                            operation = operation,
+                            stream_count = stream_ids.len(),
+                            event_count = event_count,
+                            duration_ms = duration.as_millis(),
+                            "Event store write completed"
+                        );
+                    }
+                    Err(error) => {
+                        self.error_metrics
+                            .record_event_store_error(error, operation);
+                        warn!(
+                            operation = operation,
+                            stream_count = stream_ids.len(),
+                            error = %error,
+                            duration_ms = duration.as_millis(),
+                            "Event store write failed"
+                        );
+                    }
+                }
+            }
+            _ => {
+                debug!(operation = operation, "Unknown event store operation");
+            }
+        }
+    }
+
+    /// Updates health metrics for alerting
+    pub fn update_health_metrics(&self) {
+        let command_error_rate = self
+            .error_metrics
+            .calculate_error_rate(self.command_metrics.commands_executed.get());
+
+        if command_error_rate > 5.0 {
+            warn!(
+                error_rate_percent = command_error_rate,
+                "High command error rate detected"
+            );
+        }
+
+        let event_store_throughput = self.event_store_metrics.events_written.get() as f64 / 60.0; // per minute
+        if event_store_throughput < 100.0 {
+            warn!(
+                throughput_per_minute = event_store_throughput,
+                "Low event store throughput detected"
+            );
         }
     }
 
