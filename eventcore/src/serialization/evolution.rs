@@ -124,7 +124,7 @@ impl SchemaEvolution for JsonSchemaEvolution {
     ) -> Result<Vec<u8>, EventStoreError> {
         // Parse the JSON data
         let mut value: Value = serde_json::from_slice(data).map_err(|e| {
-            EventStoreError::DeserializationError(format!(
+            EventStoreError::DeserializationFailed(format!(
                 "Failed to parse JSON for migration: {e}"
             ))
         })?;
@@ -157,7 +157,7 @@ impl SchemaEvolution for JsonSchemaEvolution {
 
         // Serialize back to bytes
         serde_json::to_vec(&value).map_err(|e| {
-            EventStoreError::SerializationError(format!("Failed to serialize migrated data: {e}"))
+            EventStoreError::SerializationFailed(format!("Failed to serialize migrated data: {e}"))
         })
     }
 }

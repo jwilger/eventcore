@@ -262,6 +262,25 @@ pub enum CommandError {
     #[error("Business rule violation: {0}")]
     BusinessRuleViolation(String),
 
+    /// A domain-specific business rule was violated.
+    /// This variant preserves the structure of domain errors.
+    #[error("Domain error: {message}")]
+    #[diagnostic(
+        code(eventcore::domain_error),
+        help("{help}"),
+        url("https://docs.rs/eventcore/latest/eventcore/errors/enum.CommandError.html#variant.DomainError")
+    )]
+    DomainError {
+        /// The error message
+        message: String,
+        /// Error kind for programmatic handling
+        kind: String,
+        /// Help text for resolving the error
+        help: String,
+        /// Additional context as key-value pairs
+        context: std::collections::HashMap<String, String>,
+    },
+
     /// Optimistic concurrency control detected conflicting updates.
     #[error("Concurrency conflict on streams: {streams:?}")]
     #[diagnostic(
@@ -417,14 +436,6 @@ pub enum EventStoreError {
     #[error("Deserialization failed: {0}")]
     DeserializationFailed(String),
 
-    /// Serialization error.
-    #[error("Serialization error: {0}")]
-    SerializationError(String),
-
-    /// Deserialization error.
-    #[error("Deserialization error: {0}")]
-    DeserializationError(String),
-
     /// Schema evolution error.
     #[error("Schema evolution error: {0}")]
     SchemaEvolutionError(String),
@@ -465,8 +476,6 @@ impl Clone for EventStoreError {
             Self::TransactionRollback(msg) => Self::TransactionRollback(msg.clone()),
             Self::SerializationFailed(msg) => Self::SerializationFailed(msg.clone()),
             Self::DeserializationFailed(msg) => Self::DeserializationFailed(msg.clone()),
-            Self::SerializationError(msg) => Self::SerializationError(msg.clone()),
-            Self::DeserializationError(msg) => Self::DeserializationError(msg.clone()),
             Self::SchemaEvolutionError(msg) => Self::SchemaEvolutionError(msg.clone()),
             Self::Io(err) => Self::Io(std::io::Error::new(err.kind(), err.to_string())),
             Self::Timeout(duration) => Self::Timeout(*duration),
@@ -634,6 +643,114 @@ pub enum ValidationError {
     Custom(String),
 }
 
+/// Trait for converting domain-specific errors to CommandError while preserving structure.
+///
+/// This trait enables domain errors to be converted to `CommandError::DomainError`
+/// with full context preservation, avoiding lossy string conversions.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use eventcore::errors::{CommandError, DomainErrorConversion};
+/// use std::collections::HashMap;
+///
+/// #[derive(Debug, thiserror::Error)]
+/// enum BankingError {
+///     #[error("Account not found: {0}")]
+///     AccountNotFound(String),
+///     
+///     #[error("Insufficient funds: balance {balance}, requested {requested}")]
+///     InsufficientFunds {
+///         balance: u64,
+///         requested: u64,
+///     },
+/// }
+///
+/// impl DomainErrorConversion for BankingError {
+///     fn error_kind(&self) -> &'static str {
+///         match self {
+///             Self::AccountNotFound(_) => "account_not_found",
+///             Self::InsufficientFunds { .. } => "insufficient_funds",
+///         }
+///     }
+///
+///     fn error_context(&self) -> HashMap<String, String> {
+///         match self {
+///             Self::AccountNotFound(id) => {
+///                 let mut ctx = HashMap::new();
+///                 ctx.insert("account_id".to_string(), id.clone());
+///                 ctx
+///             }
+///             Self::InsufficientFunds { balance, requested } => {
+///                 let mut ctx = HashMap::new();
+///                 ctx.insert("balance".to_string(), balance.to_string());
+///                 ctx.insert("requested".to_string(), requested.to_string());
+///                 ctx
+///             }
+///         }
+///     }
+///
+///     fn help_text(&self) -> String {
+///         match self {
+///             Self::AccountNotFound(_) => "Ensure the account exists before attempting operations".to_string(),
+///             Self::InsufficientFunds { .. } => "Check account balance before initiating transfers".to_string(),
+///         }
+///     }
+/// }
+/// ```
+pub trait DomainErrorConversion: std::error::Error {
+    /// Returns a stable identifier for the error kind.
+    /// This enables programmatic error handling without string matching.
+    fn error_kind(&self) -> &'static str;
+
+    /// Returns structured context information about the error.
+    /// This preserves all relevant data for debugging and handling.
+    fn error_context(&self) -> std::collections::HashMap<String, String>;
+
+    /// Returns help text for resolving the error.
+    fn help_text(&self) -> String;
+
+    /// Converts this error to a CommandError::DomainError.
+    fn to_command_error(&self) -> CommandError {
+        CommandError::DomainError {
+            message: self.to_string(),
+            kind: self.error_kind().to_string(),
+            help: self.help_text(),
+            context: self.error_context(),
+        }
+    }
+}
+
+/// Extension trait for Result types to simplify domain error conversion.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use eventcore::errors::{CommandResult, DomainErrorExt};
+///
+/// fn process_transfer() -> Result<(), BankingError> {
+///     // ... banking logic
+/// }
+///
+/// fn handle_command() -> CommandResult<()> {
+///     process_transfer().map_domain_err()?;
+///     Ok(())
+/// }
+/// ```
+pub trait DomainErrorExt<T, E> {
+    /// Maps a domain error to CommandError while preserving structure.
+    fn map_domain_err(self) -> CommandResult<T>;
+}
+
+impl<T, E> DomainErrorExt<T, E> for Result<T, E>
+where
+    E: DomainErrorConversion,
+{
+    fn map_domain_err(self) -> CommandResult<T> {
+        self.map_err(|e| e.to_command_error())
+    }
+}
+
 /// Type alias for command results.
 pub type CommandResult<T> = Result<T, CommandError>;
 
@@ -654,9 +771,28 @@ impl From<EventStoreError> for CommandError {
     }
 }
 
+/// Automatic conversion from serde_json errors to EventStoreError
+impl From<serde_json::Error> for EventStoreError {
+    fn from(err: serde_json::Error) -> Self {
+        if err.is_data() {
+            Self::DeserializationFailed(format!("JSON deserialization failed: {err}"))
+        } else {
+            Self::SerializationFailed(format!("JSON serialization failed: {err}"))
+        }
+    }
+}
+
+/// Automatic conversion from TryFromIntError to EventStoreError
+impl From<std::num::TryFromIntError> for EventStoreError {
+    fn from(err: std::num::TryFromIntError) -> Self {
+        Self::SerializationFailed(format!("Integer conversion failed: {err}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn command_error_messages_are_descriptive() {
@@ -928,5 +1064,121 @@ mod tests {
         let help = err.help().unwrap();
         assert!(help.to_string().contains("read_streams"));
         assert!(help.to_string().contains("Add"));
+    }
+
+    #[test]
+    fn domain_error_preserves_structure() {
+        use std::collections::HashMap;
+
+        let mut context = HashMap::new();
+        context.insert("account_id".to_string(), "acc-123".to_string());
+        context.insert("balance".to_string(), "1000".to_string());
+
+        let err = CommandError::DomainError {
+            message: "Insufficient funds".to_string(),
+            kind: "insufficient_funds".to_string(),
+            help: "Check balance before transfer".to_string(),
+            context: context.clone(),
+        };
+
+        assert_eq!(err.to_string(), "Domain error: Insufficient funds");
+
+        match err {
+            CommandError::DomainError {
+                kind, context: ctx, ..
+            } => {
+                assert_eq!(kind, "insufficient_funds");
+                assert_eq!(ctx.get("account_id"), Some(&"acc-123".to_string()));
+                assert_eq!(ctx.get("balance"), Some(&"1000".to_string()));
+            }
+            _ => panic!("Expected DomainError variant"),
+        }
+    }
+
+    #[test]
+    fn domain_error_conversion_trait_works() {
+        use std::collections::HashMap;
+
+        // Test error type
+        #[derive(Debug, thiserror::Error)]
+        enum TestError {
+            #[error("Test error: {0}")]
+            TestCase(String),
+        }
+
+        impl DomainErrorConversion for TestError {
+            fn error_kind(&self) -> &'static str {
+                match self {
+                    Self::TestCase(_) => "test_case",
+                }
+            }
+
+            fn error_context(&self) -> HashMap<String, String> {
+                match self {
+                    Self::TestCase(msg) => {
+                        let mut ctx = HashMap::new();
+                        ctx.insert("detail".to_string(), msg.clone());
+                        ctx
+                    }
+                }
+            }
+
+            fn help_text(&self) -> String {
+                "This is a test error".to_string()
+            }
+        }
+
+        let test_err = TestError::TestCase("example".to_string());
+        let cmd_err = test_err.to_command_error();
+
+        match cmd_err {
+            CommandError::DomainError {
+                message,
+                kind,
+                help,
+                context,
+            } => {
+                assert_eq!(message, "Test error: example");
+                assert_eq!(kind, "test_case");
+                assert_eq!(help, "This is a test error");
+                assert_eq!(context.get("detail"), Some(&"example".to_string()));
+            }
+            _ => panic!("Expected DomainError variant"),
+        }
+    }
+
+    #[test]
+    fn domain_error_ext_trait_works() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("Test domain error")]
+        struct TestDomainError;
+
+        impl DomainErrorConversion for TestDomainError {
+            fn error_kind(&self) -> &'static str {
+                "test_domain_error"
+            }
+
+            fn error_context(&self) -> HashMap<String, String> {
+                HashMap::new()
+            }
+
+            fn help_text(&self) -> String {
+                "Test help".to_string()
+            }
+        }
+
+        fn failing_operation() -> Result<(), TestDomainError> {
+            Err(TestDomainError)
+        }
+
+        let result: CommandResult<()> = failing_operation().map_domain_err();
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            CommandError::DomainError { kind, .. } => {
+                assert_eq!(kind, "test_domain_error");
+            }
+            _ => panic!("Expected DomainError variant"),
+        }
     }
 }

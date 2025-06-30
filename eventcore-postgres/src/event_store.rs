@@ -21,7 +21,7 @@ use sqlx::{postgres::PgRow, Row, Transaction};
 use tracing::{debug, error, instrument};
 use uuid::Uuid;
 
-use crate::PostgresEventStore;
+use crate::{PostgresError, PostgresEventStore};
 
 type EventStoreResult<T> = Result<T, EventStoreError>;
 
@@ -74,8 +74,7 @@ impl EventRow {
             .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
 
         let event_version = if self.event_version >= 0 {
-            let version_u64 = u64::try_from(self.event_version)
-                .map_err(|_| EventStoreError::SerializationFailed("Invalid version".to_string()))?;
+            let version_u64 = u64::try_from(self.event_version)?;
             EventVersion::try_new(version_u64)
                 .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?
         } else {
@@ -87,17 +86,14 @@ impl EventRow {
         let timestamp = Timestamp::new(self.created_at);
 
         let metadata = if let Some(metadata_json) = self.metadata {
-            let event_metadata: EventMetadata = serde_json::from_value(metadata_json)
-                .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
+            let event_metadata: EventMetadata = serde_json::from_value(metadata_json)?;
             Some(event_metadata)
         } else {
             None
         };
 
         // Deserialize the event data from JSON to the target type
-        let payload: E = serde_json::from_value(self.event_data).map_err(|e| {
-            EventStoreError::SerializationFailed(format!("Failed to deserialize event data: {e}"))
-        })?;
+        let payload: E = serde_json::from_value(self.event_data)?;
 
         Ok(StoredEvent::new(
             event_id,
@@ -205,7 +201,7 @@ where
         let rows = sqlx_query
             .fetch_all(self.pool.as_ref())
             .await
-            .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
+            .map_err(PostgresError::Connection)?;
 
         debug!("Retrieved {} events from database", rows.len());
 
@@ -247,11 +243,7 @@ where
         debug!("Writing events to {} streams", stream_events.len());
 
         // Start transaction for atomicity
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| EventStoreError::TransactionRollback(e.to_string()))?;
+        let mut tx = self.pool.begin().await.map_err(PostgresError::Connection)?;
 
         let mut result_versions = HashMap::new();
 
@@ -262,9 +254,7 @@ where
         }
 
         // Commit transaction
-        tx.commit()
-            .await
-            .map_err(|e| EventStoreError::TransactionRollback(e.to_string()))?;
+        tx.commit().await.map_err(PostgresError::Connection)?;
 
         debug!(
             "Successfully wrote events to {} streams",
@@ -280,7 +270,7 @@ where
                 .bind(stream_id.as_ref())
                 .fetch_one(self.pool.as_ref())
                 .await
-                .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
+                .map_err(PostgresError::Connection)?;
 
         Ok(exists)
     }
@@ -295,7 +285,7 @@ where
                 .bind(stream_id.as_ref())
                 .fetch_optional(self.pool.as_ref())
                 .await
-                .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
+                .map_err(PostgresError::Connection)?;
 
         match version {
             Some(v) => {

@@ -1097,7 +1097,8 @@ mod types;
 // Public API exports
 pub use command::{Command, CommandResult, ReadStreams, StreamResolver, StreamWrite};
 pub use errors::{
-    CommandError, EventStoreError, ProjectionError, ProjectionResult, ValidationError,
+    CommandError, DomainErrorConversion, DomainErrorExt, EventStoreError, ProjectionError,
+    ProjectionResult, ValidationError,
 };
 pub use event::Event;
 pub use event_store::{

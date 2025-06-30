@@ -232,7 +232,7 @@ impl TypeRegistry for InMemoryTypeRegistry {
         let deserializer: DeserializerFn = Arc::new(move |data| {
             Box::pin(async move {
                 let event: E = serde_json::from_slice(&data)
-                    .map_err(|e| EventStoreError::SerializationError(e.to_string()))?;
+                    .map_err(|e| EventStoreError::DeserializationFailed(e.to_string()))?;
                 Ok(Box::new(event) as Box<dyn Any + Send>)
             })
         });
@@ -357,18 +357,18 @@ impl From<TypeRegistryError> for EventStoreError {
     fn from(err: TypeRegistryError) -> Self {
         match err {
             TypeRegistryError::UnknownEventType { type_name } => {
-                Self::SerializationError(format!("Unknown event type: {type_name}"))
+                Self::DeserializationFailed(format!("Unknown event type: {type_name}"))
             }
             TypeRegistryError::TypeNameConflict { type_name } => {
-                Self::SerializationError(format!("Type name conflict for: {type_name}"))
+                Self::SerializationFailed(format!("Type name conflict for: {type_name}"))
             }
             TypeRegistryError::DeserializationFailed { type_name, source } => {
-                Self::SerializationError(format!(
+                Self::DeserializationFailed(format!(
                     "Deserialization failed for {type_name}: {source}"
                 ))
             }
             TypeRegistryError::DeserializerNotFound { type_name } => {
-                Self::SerializationError(format!("Deserializer not found for: {type_name}"))
+                Self::DeserializationFailed(format!("Deserializer not found for: {type_name}"))
             }
         }
     }
@@ -539,7 +539,7 @@ mod tests {
 
         assert!(matches!(
             event_store_error,
-            EventStoreError::SerializationError(_)
+            EventStoreError::DeserializationFailed(_)
         ));
     }
 }

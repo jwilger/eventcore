@@ -97,10 +97,10 @@ Based on the comprehensive expert review, the following improvements have been i
 
 **Addresses feedback from Without Boats, Edwin Brady, and Michael Snoyman**
 
-- [ ] **Unified Error Types**
-  - [ ] Create unified `ValidationError` type to reduce error mapping boilerplate
-  - [ ] Improve error conversion traits and reduce manual mapping
-  - [ ] Separate business rule violations from technical errors clearly
+- [x] **Unified Error Types**
+  - [x] Create unified `ValidationError` type to reduce error mapping boilerplate
+  - [x] Improve error conversion traits and reduce manual mapping
+  - [x] Separate business rule violations from technical errors clearly
 
 - [ ] **Better Lock Handling**
   - [ ] Replace `expect("RwLock poisoned")` with graceful error handling

@@ -56,7 +56,7 @@ impl EventSerializer for JsonEventSerializer {
         E: Serialize + Send + Sync,
     {
         serde_json::to_vec(event).map_err(|e| {
-            EventStoreError::SerializationError(format!("Failed to serialize event: {e}"))
+            EventStoreError::SerializationFailed(format!("Failed to serialize event: {e}"))
         })
     }
 
@@ -65,7 +65,7 @@ impl EventSerializer for JsonEventSerializer {
         E: for<'de> Deserialize<'de> + Send + Sync,
     {
         serde_json::from_slice(data).map_err(|e| {
-            EventStoreError::DeserializationError(format!("Failed to deserialize event: {e}"))
+            EventStoreError::DeserializationFailed(format!("Failed to deserialize event: {e}"))
         })
     }
 
@@ -93,7 +93,7 @@ impl EventSerializer for JsonEventSerializer {
         };
 
         serde_json::to_vec(&envelope).map_err(|e| {
-            EventStoreError::SerializationError(format!("Failed to serialize event envelope: {e}"))
+            EventStoreError::SerializationFailed(format!("Failed to serialize event envelope: {e}"))
         })
     }
 
@@ -106,7 +106,7 @@ impl EventSerializer for JsonEventSerializer {
         E: for<'de> Deserialize<'de> + Send + Sync + PartialEq + Eq,
     {
         let envelope: SerializedEventEnvelope = serde_json::from_slice(data).map_err(|e| {
-            EventStoreError::DeserializationError(format!(
+            EventStoreError::DeserializationFailed(format!(
                 "Failed to deserialize event envelope: {e}"
             ))
         })?;

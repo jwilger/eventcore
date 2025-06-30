@@ -254,6 +254,7 @@ impl CommandMetrics {
         let error_type = match error {
             CommandError::ValidationFailed(_) => "validation_failed",
             CommandError::BusinessRuleViolation(_) => "business_rule_violation",
+            CommandError::DomainError { .. } => "domain_error",
             CommandError::ConcurrencyConflict { streams: _ } => "concurrency_conflict",
             CommandError::StreamNotFound(_) => "stream_not_found",
             CommandError::InvalidStreamAccess { .. } => "invalid_stream_access",

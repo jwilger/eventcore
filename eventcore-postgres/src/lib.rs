@@ -96,7 +96,33 @@ pub enum PostgresError {
 impl From<PostgresError> for EventStoreError {
     fn from(error: PostgresError) -> Self {
         match error {
-            PostgresError::Connection(sqlx_error) => Self::ConnectionFailed(sqlx_error.to_string()),
+            PostgresError::Connection(sqlx_error) => {
+                // Handle specific sqlx errors
+                use sqlx::Error::{
+                    Configuration, Database, Io, PoolClosed, PoolTimedOut, Protocol, RowNotFound,
+                    Tls,
+                };
+                match &sqlx_error {
+                    Configuration(_) => Self::Configuration(sqlx_error.to_string()),
+                    Database(db_err) => {
+                        // Check for unique constraint violations
+                        if let Some(code) = db_err.code() {
+                            if code == "23505" {
+                                // PostgreSQL unique violation
+                                return Self::ConnectionFailed(format!(
+                                    "Unique constraint violation: {db_err}"
+                                ));
+                            }
+                        }
+                        Self::ConnectionFailed(db_err.to_string())
+                    }
+                    Io(_) | Tls(_) | Protocol(_) | PoolTimedOut | PoolClosed => {
+                        Self::ConnectionFailed(sqlx_error.to_string())
+                    }
+                    RowNotFound => Self::ConnectionFailed(format!("Row not found: {sqlx_error}")),
+                    _ => Self::Internal(sqlx_error.to_string()),
+                }
+            }
             PostgresError::PoolCreation(msg) => Self::ConnectionFailed(msg),
             PostgresError::Migration(msg) => Self::Configuration(msg),
             PostgresError::Serialization(err) => Self::SerializationFailed(err.to_string()),
