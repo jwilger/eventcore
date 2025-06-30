@@ -414,10 +414,10 @@ pub mod utils {
     }
 
     /// Extracts trace context from span metadata (simplified implementation)
-    pub fn extract_trace_context() -> Option<String> {
+    pub fn extract_trace_context() -> String {
         // In a real implementation, we'd extract the actual trace_id value from span context
         // This is a simplified version for demonstration that generates a new trace ID
-        Some(Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string())
+        Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string()
     }
 }
 

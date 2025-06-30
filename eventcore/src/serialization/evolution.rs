@@ -276,13 +276,14 @@ impl std::fmt::Debug for MigrationPath {
     }
 }
 
+#[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for MigrationStep {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MigrationStep")
             .field("from_version", &self.from_version)
             .field("to_version", &self.to_version)
             .field("cost", &self.cost)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -403,6 +404,7 @@ impl EnhancedSchemaRegistry {
     }
 
     /// Estimates the computational cost of a migration step.
+    #[allow(clippy::cast_precision_loss)]
     fn estimate_migration_cost(from_version: u32, to_version: u32) -> f32 {
         // Simple heuristic: larger version jumps are more expensive
         // In practice, this could be based on benchmarking actual migrations
@@ -410,6 +412,7 @@ impl EnhancedSchemaRegistry {
     }
 
     /// Applies a migration path to event data.
+    #[allow(clippy::unused_self)]
     pub fn apply_migration_path(
         &self,
         data: &[u8],
@@ -462,6 +465,7 @@ impl EnhancedJsonSchemaEvolution {
     }
 
     /// Handles forward compatibility scenarios where the event version is newer than supported.
+    #[allow(clippy::option_if_let_else)]
     pub async fn handle_forward_compatibility(
         &self,
         data: &[u8],
@@ -938,6 +942,7 @@ pub mod helpers {
         use super::{EventStoreError, Value};
 
         /// Combines first and last name into a full name.
+        #[allow(clippy::needless_pass_by_value)]
         pub fn combine_full_name(values: Vec<Value>) -> Result<Value, EventStoreError> {
             if values.len() != 2 {
                 return Err(EventStoreError::SchemaEvolutionError(

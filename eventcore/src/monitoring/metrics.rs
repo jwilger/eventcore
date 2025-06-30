@@ -828,6 +828,7 @@ impl MetricsRegistry {
     }
 
     /// Records comprehensive metrics for event store operations
+    #[allow(clippy::cognitive_complexity)]
     pub fn record_event_store_operation(
         &self,
         operation: &str,
@@ -897,6 +898,7 @@ impl MetricsRegistry {
     }
 
     /// Updates health metrics for alerting
+    #[allow(clippy::cast_precision_loss)]
     pub fn update_health_metrics(&self) {
         let command_error_rate = self
             .error_metrics

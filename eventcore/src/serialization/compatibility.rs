@@ -258,10 +258,7 @@ impl CompatibilityValidator {
                         has_breaking_changes = true;
                     }
                 }
-                SchemaChange::FieldRemoved { .. } => {
-                    has_breaking_changes = true;
-                }
-                SchemaChange::FieldRenamed { .. } => {
+                SchemaChange::FieldRemoved { .. } | SchemaChange::FieldRenamed { .. } => {
                     has_breaking_changes = true;
                 }
                 SchemaChange::FieldTypeChanged {
@@ -304,16 +301,10 @@ impl CompatibilityValidator {
             // Same types are always compatible
             (a, b) if a == b => true,
 
-            // Number and string are often interconvertible
-            (SchemaFieldType::Number, SchemaFieldType::String) => true,
-            (SchemaFieldType::String, SchemaFieldType::Number) => true,
-
-            // Boolean and string are often interconvertible
-            (SchemaFieldType::Boolean, SchemaFieldType::String) => true,
-            (SchemaFieldType::String, SchemaFieldType::Boolean) => true,
-
-            // Null can be compatible if the new type is optional
-            (SchemaFieldType::Null, _) => true,
+            // Number, Boolean, and string are often interconvertible
+            (SchemaFieldType::Number | SchemaFieldType::Boolean, SchemaFieldType::String)
+            | (SchemaFieldType::String, SchemaFieldType::Number | SchemaFieldType::Boolean)
+            | (SchemaFieldType::Null, _) => true,
 
             // Arrays are compatible if element types are compatible
             (SchemaFieldType::Array(old_elem), SchemaFieldType::Array(new_elem)) => {
@@ -397,19 +388,20 @@ impl CompatibilityValidator {
     }
 
     /// Gets a default value for a schema field type.
+    #[allow(clippy::unnecessary_wraps)]
     fn get_default_value_for_type(field_type: &SchemaFieldType) -> Option<Value> {
-        match field_type {
-            SchemaFieldType::String => Some(Value::String(String::new())),
-            SchemaFieldType::Number => Some(Value::Number(0.into())),
-            SchemaFieldType::Boolean => Some(Value::Bool(false)),
-            SchemaFieldType::Array(_) => Some(Value::Array(Vec::new())),
-            SchemaFieldType::Object(_) => Some(Value::Object(Map::new())),
-            SchemaFieldType::Null => Some(Value::Null),
-            SchemaFieldType::Union(_) => Some(Value::Null),
-        }
+        Some(match field_type {
+            SchemaFieldType::String => Value::String(String::new()),
+            SchemaFieldType::Number => Value::Number(0.into()),
+            SchemaFieldType::Boolean => Value::Bool(false),
+            SchemaFieldType::Array(_) => Value::Array(Vec::new()),
+            SchemaFieldType::Object(_) => Value::Object(Map::new()),
+            SchemaFieldType::Null | SchemaFieldType::Union(_) => Value::Null,
+        })
     }
 
     /// Gets a type converter function for converting between compatible types.
+    #[allow(clippy::type_complexity)]
     fn get_type_converter(
         old_type: &SchemaFieldType,
         new_type: &SchemaFieldType,
