@@ -284,4 +284,21 @@ After pushing changes:
 1. **Ensure @PLANNING.md is updated** - All completed tasks must be marked with [x]
 2. **Include the updated PLANNING.md in the commit** - Use `git add PLANNING.md`
 
+**COMMIT MESSAGE FORMAT**:
+- **NO PREFIXES** in subject line (no "feat:", "fix:", "refactor:", etc.)
+- **Subject line**: Maximum 50 characters, imperative mood
+- **Body lines**: Maximum 72 characters before hard-wrapping
+- Example:
+  ```
+  Add subscription system with position tracking
+  
+  Implement real-time event subscription capabilities with automatic
+  position tracking and checkpointing. Includes replay functionality
+  for catching up on missed events and comprehensive error handling
+  for connection failures.
+  
+  Addresses feedback from expert review regarding missing subscription
+  features. All integration tests pass with PostgreSQL backend.
+  ```
+
 **NEVER** make a commit with the `--no-verify` flag. All pre-commit checks must be passing before proceeding.
