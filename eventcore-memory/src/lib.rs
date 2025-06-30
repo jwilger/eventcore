@@ -66,9 +66,13 @@ where
         stream_ids: &[StreamId],
         options: &ReadOptions,
     ) -> EventStoreResult<StreamData<Self::Event>> {
-        let streams = self.streams.read().expect("RwLock poisoned");
+        let streams = self.streams.read().map_err(|_| {
+            EventStoreError::Internal("Failed to acquire read lock on streams".to_string())
+        })?;
 
-        let versions = self.versions.read().expect("RwLock poisoned");
+        let versions = self.versions.read().map_err(|_| {
+            EventStoreError::Internal("Failed to acquire read lock on versions".to_string())
+        })?;
 
         let mut all_events = Vec::new();
         let mut stream_versions = HashMap::new();
@@ -116,9 +120,13 @@ where
         &self,
         stream_events: Vec<StreamEvents<Self::Event>>,
     ) -> EventStoreResult<HashMap<StreamId, EventVersion>> {
-        let mut streams = self.streams.write().expect("RwLock poisoned");
+        let mut streams = self.streams.write().map_err(|_| {
+            EventStoreError::Internal("Failed to acquire write lock on streams".to_string())
+        })?;
 
-        let mut versions = self.versions.write().expect("RwLock poisoned");
+        let mut versions = self.versions.write().map_err(|_| {
+            EventStoreError::Internal("Failed to acquire write lock on versions".to_string())
+        })?;
 
         // First, verify all expected versions match
         for stream_event in &stream_events {
@@ -186,7 +194,9 @@ where
     }
 
     async fn stream_exists(&self, stream_id: &StreamId) -> EventStoreResult<bool> {
-        let streams = self.streams.read().expect("RwLock poisoned");
+        let streams = self.streams.read().map_err(|_| {
+            EventStoreError::Internal("Failed to acquire read lock on streams".to_string())
+        })?;
 
         Ok(streams.contains_key(stream_id))
     }
@@ -195,7 +205,9 @@ where
         &self,
         stream_id: &StreamId,
     ) -> EventStoreResult<Option<EventVersion>> {
-        let versions = self.versions.read().expect("RwLock poisoned");
+        let versions = self.versions.read().map_err(|_| {
+            EventStoreError::Internal("Failed to acquire read lock on versions".to_string())
+        })?;
 
         Ok(versions.get(stream_id).copied())
     }

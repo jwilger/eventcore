@@ -44,8 +44,8 @@ Based on the comprehensive expert review, the following improvements have been i
 
 - [x] **Remove Over-Engineering**
   - [x] Remove unused `version_cache` field from PostgreSQL adapter or implement it
-  - [ ] Evaluate and remove other premature optimizations identified in review
-  - [ ] Simplify configuration options where possible
+  - [x] Evaluate and remove other premature optimizations identified in review
+  - [x] Simplify configuration options where possible
 
 - [x] **Magic Number Configuration**
   - [x] Replace hardcoded `MAX_ITERATIONS: usize = 10` with configurable parameter

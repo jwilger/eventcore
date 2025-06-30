@@ -960,40 +960,6 @@ where
             metadata,
         }
     }
-
-    /// Creates a retry configuration for high-throughput scenarios.
-    ///
-    /// This configuration reduces retry delays and attempts for scenarios
-    /// where fast failure is preferred over persistence.
-    ///
-    /// # Returns
-    ///
-    /// A `RetryConfig` optimized for high-throughput scenarios.
-    pub const fn fast_retry_config() -> RetryConfig {
-        RetryConfig {
-            max_attempts: 2,
-            base_delay: Duration::from_millis(50),
-            max_delay: Duration::from_secs(5),
-            backoff_multiplier: 1.5,
-        }
-    }
-
-    /// Creates a retry configuration for fault-tolerant scenarios.
-    ///
-    /// This configuration increases retry attempts and delays for scenarios
-    /// where eventual success is preferred over fast failure.
-    ///
-    /// # Returns
-    ///
-    /// A `RetryConfig` optimized for fault-tolerant scenarios.
-    pub const fn fault_tolerant_retry_config() -> RetryConfig {
-        RetryConfig {
-            max_attempts: 10,
-            base_delay: Duration::from_millis(200),
-            max_delay: Duration::from_secs(120),
-            backoff_multiplier: 2.5,
-        }
-    }
 }
 
 /// A fluent builder for creating and configuring a `CommandExecutor`.
@@ -1132,32 +1098,6 @@ where
     pub const fn with_tracing(mut self, enabled: bool) -> Self {
         self.tracing_enabled = enabled;
         self
-    }
-
-    /// Sets retry configuration optimized for high-throughput scenarios.
-    ///
-    /// This configures reduced retry attempts and delays for scenarios
-    /// where fast failure is preferred over persistence.
-    ///
-    /// # Returns
-    ///
-    /// Self for method chaining.
-    #[must_use]
-    pub const fn with_fast_retry(self) -> Self {
-        self.with_retry_config(CommandExecutor::<ES>::fast_retry_config())
-    }
-
-    /// Sets retry configuration optimized for fault-tolerant scenarios.
-    ///
-    /// This configures increased retry attempts and delays for scenarios
-    /// where eventual success is preferred over fast failure.
-    ///
-    /// # Returns
-    ///
-    /// Self for method chaining.
-    #[must_use]
-    pub const fn with_fault_tolerant_retry(self) -> Self {
-        self.with_retry_config(CommandExecutor::<ES>::fault_tolerant_retry_config())
     }
 
     /// Builds the configured command executor.
@@ -1866,26 +1806,6 @@ mod tests {
         assert_eq!(context.metadata, metadata);
     }
 
-    #[test]
-    fn fast_retry_config_has_reduced_values() {
-        let config = CommandExecutor::<MockEventStore>::fast_retry_config();
-
-        assert_eq!(config.max_attempts, 2);
-        assert_eq!(config.base_delay, Duration::from_millis(50));
-        assert_eq!(config.max_delay, Duration::from_secs(5));
-        assert!((config.backoff_multiplier - 1.5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn fault_tolerant_retry_config_has_increased_values() {
-        let config = CommandExecutor::<MockEventStore>::fault_tolerant_retry_config();
-
-        assert_eq!(config.max_attempts, 10);
-        assert_eq!(config.base_delay, Duration::from_millis(200));
-        assert_eq!(config.max_delay, Duration::from_secs(120));
-        assert!((config.backoff_multiplier - 2.5).abs() < f64::EPSILON);
-    }
-
     proptest! {
         #[test]
         fn retry_delay_calculation_respects_bounds(attempt in 0u32..10) {
@@ -2034,15 +1954,22 @@ mod tests {
         }
 
         #[test]
-        fn command_executor_builder_with_fast_retry() {
+        fn command_executor_builder_with_custom_retry() {
             let event_store = MockEventStore::new();
+
+            let custom_retry = RetryConfig {
+                max_attempts: 2,
+                base_delay: Duration::from_millis(50),
+                max_delay: Duration::from_secs(5),
+                backoff_multiplier: 1.5,
+            };
 
             let executor = CommandExecutorBuilder::new()
                 .with_store(event_store)
-                .with_fast_retry()
+                .with_retry_config(custom_retry)
                 .build();
 
-            // Verify fast retry configuration is applied
+            // Verify custom retry configuration is applied
             assert_eq!(executor.retry_config.max_attempts, 2);
             assert_eq!(executor.retry_config.base_delay, Duration::from_millis(50));
             assert_eq!(executor.retry_config.max_delay, Duration::from_secs(5));
@@ -2050,15 +1977,22 @@ mod tests {
         }
 
         #[test]
-        fn command_executor_builder_with_fault_tolerant_retry() {
+        fn command_executor_builder_with_high_retry_config() {
             let event_store = MockEventStore::new();
+
+            let high_retry = RetryConfig {
+                max_attempts: 10,
+                base_delay: Duration::from_millis(200),
+                max_delay: Duration::from_secs(120),
+                backoff_multiplier: 2.5,
+            };
 
             let executor = CommandExecutorBuilder::new()
                 .with_store(event_store)
-                .with_fault_tolerant_retry()
+                .with_retry_config(high_retry)
                 .build();
 
-            // Verify fault tolerant retry configuration is applied
+            // Verify high retry configuration is applied
             assert_eq!(executor.retry_config.max_attempts, 10);
             assert_eq!(executor.retry_config.base_delay, Duration::from_millis(200));
             assert_eq!(executor.retry_config.max_delay, Duration::from_secs(120));
@@ -2109,9 +2043,14 @@ mod tests {
             // Test that the API feels natural and fluent
             let event_store = MockEventStore::new();
 
+            let custom_retry = RetryConfig {
+                max_attempts: 2,
+                ..Default::default()
+            };
+
             let executor = CommandExecutorBuilder::new()
                 .with_store(event_store)
-                .with_fast_retry()
+                .with_retry_config(custom_retry)
                 .with_retry_policy(RetryPolicy::ConcurrencyAndTransient)
                 .with_tracing(true)
                 .build();
@@ -2124,10 +2063,22 @@ mod tests {
         fn command_executor_builder_override_retry_config() {
             let event_store = MockEventStore::new();
 
+            let fast_retry = RetryConfig {
+                max_attempts: 2,
+                base_delay: Duration::from_millis(50),
+                ..Default::default()
+            };
+
+            let fault_tolerant_retry = RetryConfig {
+                max_attempts: 10,
+                base_delay: Duration::from_millis(200),
+                ..Default::default()
+            };
+
             let executor = CommandExecutorBuilder::new()
                 .with_store(event_store)
-                .with_fast_retry() // First set fast retry
-                .with_fault_tolerant_retry() // Then override with fault tolerant
+                .with_retry_config(fast_retry) // First set fast retry
+                .with_retry_config(fault_tolerant_retry) // Then override with fault tolerant
                 .build();
 
             // Should use the last configuration (fault tolerant)
