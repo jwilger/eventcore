@@ -18,7 +18,15 @@ const POSTGRES_USER: &str = "postgres";
 const POSTGRES_PASSWORD: &str = "postgres";
 const POSTGRES_DB: &str = "eventcore_test";
 
-async fn setup_postgres_container() -> (ContainerAsync<GenericImage>, PostgresConfig) {
+async fn setup_postgres_container() -> (Option<ContainerAsync<GenericImage>>, PostgresConfig) {
+    // Check if running in CI with existing PostgreSQL service
+    if let Ok(test_db_url) = std::env::var("TEST_DATABASE_URL") {
+        // Use the existing CI PostgreSQL service
+        let config = PostgresConfig::new(test_db_url);
+        return (None, config);
+    }
+
+    // Fall back to testcontainers for local development
     let postgres_image = GenericImage::new("postgres", POSTGRES_VERSION).with_wait_for(
         WaitFor::message_on_stderr("database system is ready to accept connections"),
     );
@@ -39,7 +47,7 @@ async fn setup_postgres_container() -> (ContainerAsync<GenericImage>, PostgresCo
     // Give PostgreSQL a moment to fully initialize
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    (container, config)
+    (Some(container), config)
 }
 
 // Test events and commands
