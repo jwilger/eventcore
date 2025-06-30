@@ -62,10 +62,10 @@ Based on the comprehensive expert review, the following improvements have been i
   - [x] Update MSRV if necessary for native async traits
   - **Decision**: Migration not recommended due to trait object compatibility issues and minimal performance benefit. See ASYNC_TRAIT_MIGRATION.md for detailed analysis.
 
-- [ ] **Dependency Optimization**
-  - [ ] Add granular Tokio feature flags to reduce dependency weight
-  - [ ] Evaluate and remove unnecessary dependency features
-  - [ ] Update workspace Cargo.toml with minimal feature requirements
+- [x] **Dependency Optimization**
+  - [x] Add granular Tokio feature flags to reduce dependency weight
+  - [x] Evaluate and remove unnecessary dependency features
+  - [x] Update workspace Cargo.toml with minimal feature requirements
 
 - [ ] **Enhanced Type Safety**
   - [ ] Explore const generics for compile-time stream set validation

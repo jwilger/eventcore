@@ -26,7 +26,6 @@ chrono = { workspace = true }
 
 # Type safety dependencies
 nutype = { workspace = true, features = ["regex"] }
-derive_more = { workspace = true }
 regex = "1.11.1"
 
 # Additional dependencies for examples

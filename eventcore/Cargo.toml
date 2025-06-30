@@ -24,7 +24,6 @@ chrono = { workspace = true }
 
 # Type safety dependencies
 nutype = { workspace = true }
-derive_more = { workspace = true }
 
 # Random number generation for jitter
 rand = { workspace = true }
