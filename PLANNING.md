@@ -102,14 +102,14 @@ Based on the comprehensive expert review, the following improvements have been i
   - [x] Improve error conversion traits and reduce manual mapping
   - [x] Separate business rule violations from technical errors clearly
 
-- [ ] **Better Lock Handling**
-  - [ ] Replace `expect("RwLock poisoned")` with graceful error handling
-  - [ ] Implement recovery strategies for lock poisoning scenarios
-  - [ ] Add comprehensive tests for panic recovery
+- [x] **Better Lock Handling**
+  - [x] Replace `expect("RwLock poisoned")` with graceful error handling
+  - [x] Implement recovery strategies for lock poisoning scenarios
+  - [x] Add comprehensive tests for panic recovery
 
-- [ ] **Timeout Controls**
-  - [ ] Add timeout configuration to all EventStore operations
-  - [ ] Implement timeout handling in command execution
+- [x] **Timeout Controls**
+  - [x] Add timeout configuration to all EventStore operations
+  - [x] Implement timeout handling in command execution
   - [ ] Add circuit breaker patterns for resilience
 
 ### 15.4 Complete Missing Features

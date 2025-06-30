@@ -461,8 +461,14 @@ where
 
             // Start the subscription with our processor
             let subscription_name =
-                SubscriptionName::try_new(format!("projection-{projection_name}"))
-                    .expect("Projection name should be valid for subscription");
+                match SubscriptionName::try_new(format!("projection-{projection_name}")) {
+                    Ok(name) => name,
+                    Err(e) => {
+                        error!("Invalid projection name for subscription: {}", e);
+                        is_running.store(false, Ordering::Release);
+                        return;
+                    }
+                };
 
             {
                 let mut sub_guard = subscription.lock().await;

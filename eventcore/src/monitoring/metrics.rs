@@ -263,6 +263,7 @@ impl CommandMetrics {
             CommandError::Unauthorized(_) => "unauthorized",
             CommandError::EventStore(_) => "event_store_error",
             CommandError::Internal(_) => "internal_error",
+            CommandError::Timeout(_) => "timeout",
         };
 
         if let Ok(mut counters) = self.errors_by_type.write() {

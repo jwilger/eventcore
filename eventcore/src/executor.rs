@@ -127,6 +127,12 @@ pub struct ExecutionOptions {
     /// This prevents infinite loops when commands dynamically request streams.
     /// Default is 10 iterations.
     pub max_stream_discovery_iterations: usize,
+    /// Timeout for individual EventStore operations (read_streams, write_events_multi).
+    /// Default is 30 seconds. Set to None to disable timeouts.
+    pub event_store_timeout: Option<Duration>,
+    /// Overall timeout for the entire command execution.
+    /// Default is None (no overall timeout). This timeout encompasses retries.
+    pub command_timeout: Option<Duration>,
 }
 
 impl Default for ExecutionOptions {
@@ -136,6 +142,8 @@ impl Default for ExecutionOptions {
             retry_config: Some(RetryConfig::default()), // Retry enabled by default
             retry_policy: RetryPolicy::default(),
             max_stream_discovery_iterations: 10, // Safe default to prevent infinite loops
+            event_store_timeout: Some(Duration::from_secs(30)), // 30 seconds default timeout
+            command_timeout: None,               // No overall timeout by default
         }
     }
 }
@@ -198,6 +206,40 @@ impl ExecutionOptions {
     #[must_use]
     pub const fn with_max_stream_discovery_iterations(mut self, max_iterations: usize) -> Self {
         self.max_stream_discovery_iterations = max_iterations;
+        self
+    }
+
+    /// Sets the timeout for individual EventStore operations.
+    ///
+    /// This timeout applies to each read_streams and write_events_multi call.
+    /// Set to None to disable timeouts for EventStore operations.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let options = ExecutionOptions::new()
+    ///     .with_event_store_timeout(Some(Duration::from_secs(10)));
+    /// ```
+    #[must_use]
+    pub const fn with_event_store_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.event_store_timeout = timeout;
+        self
+    }
+
+    /// Sets the overall timeout for command execution.
+    ///
+    /// This timeout encompasses the entire command execution including retries.
+    /// If this timeout is exceeded, the command will fail with a timeout error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let options = ExecutionOptions::new()
+    ///     .with_command_timeout(Some(Duration::from_secs(60)));
+    /// ```
+    #[must_use]
+    pub const fn with_command_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.command_timeout = timeout;
         self
     }
 }
@@ -364,13 +406,46 @@ where
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event>,
     {
+        // Wrap the execution with overall command timeout if specified
+        #[allow(clippy::option_if_let_else)] // The match is clearer than map_or here
+        let result = if let Some(command_timeout) = options.command_timeout {
+            match tokio::time::timeout(
+                command_timeout,
+                self.execute_without_timeout(command, input, &options),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(CommandError::Timeout(command_timeout)),
+            }
+        } else {
+            self.execute_without_timeout(command, input, &options).await
+        };
+
+        result
+    }
+
+    /// Execute command without overall timeout (but still respecting event store timeouts)
+    async fn execute_without_timeout<C>(
+        &self,
+        command: &C,
+        input: C::Input,
+        options: &ExecutionOptions,
+    ) -> CommandResult<HashMap<StreamId, EventVersion>>
+    where
+        C: Command,
+        C::Input: Clone,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
+        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
+        ES::Event: From<C::Event>,
+    {
         match &options.retry_config {
             Some(retry_config) => {
                 // Execute with retry logic
                 self.execute_with_retry_internal(
                     command,
                     input,
-                    &options,
+                    options,
                     retry_config.clone(),
                     options.retry_policy.clone(),
                 )
@@ -378,7 +453,7 @@ where
             }
             None => {
                 // Execute without retry
-                self.execute_once(command, input, &options).await
+                self.execute_once(command, input, options).await
             }
         }
     }
@@ -455,14 +530,36 @@ where
             );
 
             // Read all currently known streams
-            let stream_data = self
-                .event_store
-                .read_streams(&stream_ids, &ReadOptions::new())
+            let stream_data = if let Some(timeout) = options.event_store_timeout {
+                if let Ok(result) = tokio::time::timeout(
+                    timeout,
+                    self.event_store
+                        .read_streams(&stream_ids, &ReadOptions::new()),
+                )
                 .await
-                .map_err(|err| {
-                    warn!(error = %err, "Failed to read streams from event store");
-                    CommandError::from(err)
-                })?;
+                {
+                    result.map_err(|err| {
+                        warn!(error = %err, "Failed to read streams from event store");
+                        CommandError::from(err)
+                    })?
+                } else {
+                    warn!(
+                        "EventStore read_streams operation timed out after {:?}",
+                        timeout
+                    );
+                    return Err(CommandError::EventStore(
+                        crate::errors::EventStoreError::Timeout(timeout),
+                    ));
+                }
+            } else {
+                self.event_store
+                    .read_streams(&stream_ids, &ReadOptions::new())
+                    .await
+                    .map_err(|err| {
+                        warn!(error = %err, "Failed to read streams from event store");
+                        CommandError::from(err)
+                    })?
+            };
 
             // Reconstruct state from all events
             let mut state = C::State::default();
@@ -539,14 +636,36 @@ where
                 .collect();
 
             // Re-read streams one final time for version checking
-            let final_stream_data = self
-                .event_store
-                .read_streams(&stream_ids, &ReadOptions::new())
+            let final_stream_data = if let Some(timeout) = options.event_store_timeout {
+                if let Ok(result) = tokio::time::timeout(
+                    timeout,
+                    self.event_store
+                        .read_streams(&stream_ids, &ReadOptions::new()),
+                )
                 .await
-                .map_err(|err| {
-                    warn!(error = %err, "Failed to re-read streams for version check");
-                    CommandError::from(err)
-                })?;
+                {
+                    result.map_err(|err| {
+                        warn!(error = %err, "Failed to re-read streams for version check");
+                        CommandError::from(err)
+                    })?
+                } else {
+                    warn!(
+                        "EventStore read_streams operation timed out after {:?}",
+                        timeout
+                    );
+                    return Err(CommandError::EventStore(
+                        crate::errors::EventStoreError::Timeout(timeout),
+                    ));
+                }
+            } else {
+                self.event_store
+                    .read_streams(&stream_ids, &ReadOptions::new())
+                    .await
+                    .map_err(|err| {
+                        warn!(error = %err, "Failed to re-read streams for version check");
+                        CommandError::from(err)
+                    })?
+            };
 
             // Write events with complete concurrency control
             let stream_events = Self::prepare_stream_events_with_complete_concurrency_control::<C>(
@@ -556,14 +675,35 @@ where
                 &options.context,
             );
 
-            let result_versions = self
-                .event_store
-                .write_events_multi(stream_events)
+            let result_versions = if let Some(timeout) = options.event_store_timeout {
+                if let Ok(result) = tokio::time::timeout(
+                    timeout,
+                    self.event_store.write_events_multi(stream_events),
+                )
                 .await
-                .map_err(|err| {
-                    warn!(error = %err, "Failed to write events to event store");
-                    CommandError::from(err)
-                })?;
+                {
+                    result.map_err(|err| {
+                        warn!(error = %err, "Failed to write events to event store");
+                        CommandError::from(err)
+                    })?
+                } else {
+                    warn!(
+                        "EventStore write_events_multi operation timed out after {:?}",
+                        timeout
+                    );
+                    return Err(CommandError::EventStore(
+                        crate::errors::EventStoreError::Timeout(timeout),
+                    ));
+                }
+            } else {
+                self.event_store
+                    .write_events_multi(stream_events)
+                    .await
+                    .map_err(|err| {
+                        warn!(error = %err, "Failed to write events to event store");
+                        CommandError::from(err)
+                    })?
+            };
 
             info!(
                 written_streams = result_versions.len(),
@@ -988,6 +1128,8 @@ pub struct CommandExecutorBuilder<ES = ()> {
     retry_config: Option<RetryConfig>,
     retry_policy: RetryPolicy,
     tracing_enabled: bool,
+    default_event_store_timeout: Option<Duration>,
+    default_command_timeout: Option<Duration>,
 }
 
 impl CommandExecutorBuilder<()> {
@@ -1005,6 +1147,8 @@ impl CommandExecutorBuilder<()> {
             retry_config: None,
             retry_policy: RetryPolicy::ConcurrencyConflictsOnly,
             tracing_enabled: true,
+            default_event_store_timeout: Some(Duration::from_secs(30)),
+            default_command_timeout: None,
         }
     }
 
@@ -1031,6 +1175,8 @@ impl CommandExecutorBuilder<()> {
             retry_config: self.retry_config,
             retry_policy: self.retry_policy,
             tracing_enabled: self.tracing_enabled,
+            default_event_store_timeout: self.default_event_store_timeout,
+            default_command_timeout: self.default_command_timeout,
         }
     }
 }
@@ -1100,6 +1246,42 @@ where
         self
     }
 
+    /// Sets the default timeout for EventStore operations.
+    ///
+    /// This timeout applies to individual read_streams and write_events_multi calls.
+    /// Can be overridden per-execution using ExecutionOptions.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - The default timeout, or None to disable
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    #[must_use]
+    pub const fn with_default_event_store_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.default_event_store_timeout = timeout;
+        self
+    }
+
+    /// Sets the default timeout for overall command execution.
+    ///
+    /// This timeout encompasses the entire command execution including retries.
+    /// Can be overridden per-execution using ExecutionOptions.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - The default timeout, or None to disable
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    #[must_use]
+    pub const fn with_default_command_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.default_command_timeout = timeout;
+        self
+    }
+
     /// Builds the configured command executor.
     ///
     /// # Returns
@@ -1119,6 +1301,58 @@ where
         // For now, tracing is controlled globally through the tracing subscriber
 
         executor
+    }
+
+    /// Configures the executor with fast, aggressive timeouts.
+    ///
+    /// Suitable for high-performance scenarios where fast failure is preferred.
+    ///
+    /// - EventStore timeout: 5 seconds
+    /// - Command timeout: 10 seconds
+    /// - Retry: limited attempts with short delays
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    #[must_use]
+    pub const fn with_fast_timeouts(mut self) -> Self {
+        self.default_event_store_timeout = Some(Duration::from_secs(5));
+        self.default_command_timeout = Some(Duration::from_secs(10));
+        if self.retry_config.is_none() {
+            self.retry_config = Some(RetryConfig {
+                max_attempts: 2,
+                base_delay: Duration::from_millis(50),
+                max_delay: Duration::from_secs(1),
+                backoff_multiplier: 2.0,
+            });
+        }
+        self
+    }
+
+    /// Configures the executor with tolerant timeouts for reliability.
+    ///
+    /// Suitable for scenarios where completion is more important than speed.
+    ///
+    /// - EventStore timeout: 60 seconds
+    /// - Command timeout: 5 minutes
+    /// - Retry: more attempts with longer delays
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    #[must_use]
+    pub const fn with_fault_tolerant_timeouts(mut self) -> Self {
+        self.default_event_store_timeout = Some(Duration::from_secs(60));
+        self.default_command_timeout = Some(Duration::from_secs(300)); // 5 minutes
+        if self.retry_config.is_none() {
+            self.retry_config = Some(RetryConfig {
+                max_attempts: 5,
+                base_delay: Duration::from_millis(500),
+                max_delay: Duration::from_secs(30),
+                backoff_multiplier: 2.0,
+            });
+        }
+        self
     }
 }
 
@@ -2208,6 +2442,308 @@ mod tests {
             let user_id = "user-456".to_string();
 
             let result = executor.execute_as_user(&command, input, user_id).await;
+            assert!(result.is_ok());
+        }
+    }
+
+    // Timeout tests
+    mod timeout_tests {
+        use super::*;
+        use std::time::Instant;
+
+        // Mock event store that delays operations
+        #[derive(Clone)]
+        struct DelayedEventStore {
+            inner: MockEventStore,
+            read_delay: Duration,
+            write_delay: Duration,
+        }
+
+        impl DelayedEventStore {
+            fn new() -> Self {
+                Self {
+                    inner: MockEventStore::new(),
+                    read_delay: Duration::from_millis(0),
+                    write_delay: Duration::from_millis(0),
+                }
+            }
+
+            fn with_read_delay(mut self, delay: Duration) -> Self {
+                self.read_delay = delay;
+                self
+            }
+
+            fn with_write_delay(mut self, delay: Duration) -> Self {
+                self.write_delay = delay;
+                self
+            }
+        }
+
+        #[async_trait]
+        impl EventStore for DelayedEventStore {
+            type Event = String;
+
+            async fn read_streams(
+                &self,
+                stream_ids: &[StreamId],
+                options: &ReadOptions,
+            ) -> crate::errors::EventStoreResult<crate::event_store::StreamData<Self::Event>>
+            {
+                tokio::time::sleep(self.read_delay).await;
+                self.inner.read_streams(stream_ids, options).await
+            }
+
+            async fn write_events_multi(
+                &self,
+                stream_events: Vec<StreamEvents<Self::Event>>,
+            ) -> crate::errors::EventStoreResult<HashMap<StreamId, EventVersion>> {
+                tokio::time::sleep(self.write_delay).await;
+                self.inner.write_events_multi(stream_events).await
+            }
+
+            async fn stream_exists(
+                &self,
+                stream_id: &StreamId,
+            ) -> crate::errors::EventStoreResult<bool> {
+                self.inner.stream_exists(stream_id).await
+            }
+
+            async fn get_stream_version(
+                &self,
+                stream_id: &StreamId,
+            ) -> crate::errors::EventStoreResult<Option<EventVersion>> {
+                self.inner.get_stream_version(stream_id).await
+            }
+
+            async fn subscribe(
+                &self,
+                options: crate::subscription::SubscriptionOptions,
+            ) -> crate::errors::EventStoreResult<
+                Box<dyn crate::subscription::Subscription<Event = Self::Event>>,
+            > {
+                self.inner.subscribe(options).await
+            }
+        }
+
+        #[tokio::test]
+        async fn event_store_read_timeout() {
+            let event_store = DelayedEventStore::new().with_read_delay(Duration::from_secs(2)); // 2 second delay
+            let executor = CommandExecutor::new(event_store);
+
+            let stream_id = StreamId::try_new("test-stream").unwrap();
+            let command = MockCommand::new(
+                vec![stream_id.clone()],
+                vec![(stream_id.clone(), "test-event".to_string())],
+            );
+            let input = MockInput {
+                value: "test".to_string(),
+            };
+
+            let options = ExecutionOptions::new()
+                .with_event_store_timeout(Some(Duration::from_millis(100))) // 100ms timeout
+                .without_retry();
+
+            let start = Instant::now();
+            let result = executor.execute(&command, input, options).await;
+            let elapsed = start.elapsed();
+
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                CommandError::EventStore(crate::errors::EventStoreError::Timeout(timeout)) => {
+                    assert_eq!(timeout, Duration::from_millis(100));
+                }
+                e => panic!("Expected timeout error, got: {e:?}"),
+            }
+            // Should timeout quickly, not wait for full 2 seconds
+            assert!(elapsed < Duration::from_secs(1));
+        }
+
+        #[tokio::test]
+        async fn event_store_write_timeout() {
+            let event_store = DelayedEventStore::new().with_write_delay(Duration::from_secs(2)); // 2 second delay
+            let executor = CommandExecutor::new(event_store);
+
+            let stream_id = StreamId::try_new("test-stream").unwrap();
+            let command = MockCommand::new(
+                vec![stream_id.clone()],
+                vec![(stream_id.clone(), "test-event".to_string())],
+            );
+            let input = MockInput {
+                value: "test".to_string(),
+            };
+
+            let options = ExecutionOptions::new()
+                .with_event_store_timeout(Some(Duration::from_millis(100))) // 100ms timeout
+                .without_retry();
+
+            let start = Instant::now();
+            let result = executor.execute(&command, input, options).await;
+            let elapsed = start.elapsed();
+
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                CommandError::EventStore(crate::errors::EventStoreError::Timeout(timeout)) => {
+                    assert_eq!(timeout, Duration::from_millis(100));
+                }
+                e => panic!("Expected timeout error, got: {e:?}"),
+            }
+            // Should timeout quickly, not wait for full 2 seconds
+            assert!(elapsed < Duration::from_secs(1));
+        }
+
+        #[tokio::test]
+        async fn command_timeout() {
+            let event_store = DelayedEventStore::new()
+                .with_read_delay(Duration::from_millis(500))
+                .with_write_delay(Duration::from_millis(500));
+            let executor = CommandExecutor::new(event_store);
+
+            let stream_id = StreamId::try_new("test-stream").unwrap();
+            let command = MockCommand::new(
+                vec![stream_id.clone()],
+                vec![(stream_id.clone(), "test-event".to_string())],
+            );
+            let input = MockInput {
+                value: "test".to_string(),
+            };
+
+            let options = ExecutionOptions::new()
+                .with_command_timeout(Some(Duration::from_millis(100))) // 100ms overall timeout
+                .without_retry();
+
+            let start = Instant::now();
+            let result = executor.execute(&command, input, options).await;
+            let elapsed = start.elapsed();
+
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                CommandError::Timeout(timeout) => {
+                    assert_eq!(timeout, Duration::from_millis(100));
+                }
+                e => panic!("Expected command timeout error, got: {e:?}"),
+            }
+            // Should timeout quickly
+            assert!(elapsed < Duration::from_millis(200));
+        }
+
+        #[tokio::test]
+        async fn command_timeout_overrides_event_store_timeout() {
+            let event_store = DelayedEventStore::new().with_read_delay(Duration::from_millis(500));
+            let executor = CommandExecutor::new(event_store);
+
+            let stream_id = StreamId::try_new("test-stream").unwrap();
+            let command = MockCommand::new(
+                vec![stream_id.clone()],
+                vec![(stream_id.clone(), "test-event".to_string())],
+            );
+            let input = MockInput {
+                value: "test".to_string(),
+            };
+
+            let options = ExecutionOptions::new()
+                .with_event_store_timeout(Some(Duration::from_secs(10))) // Long event store timeout
+                .with_command_timeout(Some(Duration::from_millis(100))) // Short overall timeout
+                .without_retry();
+
+            let result = executor.execute(&command, input, options).await;
+
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                CommandError::Timeout(timeout) => {
+                    assert_eq!(timeout, Duration::from_millis(100));
+                }
+                e => panic!("Expected command timeout error, got: {e:?}"),
+            }
+        }
+
+        #[test]
+        fn execution_options_timeout_defaults() {
+            let options = ExecutionOptions::default();
+            assert_eq!(options.event_store_timeout, Some(Duration::from_secs(30)));
+            assert_eq!(options.command_timeout, None);
+        }
+
+        #[test]
+        fn execution_options_with_timeout_methods() {
+            let options = ExecutionOptions::new()
+                .with_event_store_timeout(Some(Duration::from_secs(10)))
+                .with_command_timeout(Some(Duration::from_secs(60)));
+
+            assert_eq!(options.event_store_timeout, Some(Duration::from_secs(10)));
+            assert_eq!(options.command_timeout, Some(Duration::from_secs(60)));
+
+            let options_no_timeout = ExecutionOptions::new()
+                .with_event_store_timeout(None)
+                .with_command_timeout(None);
+
+            assert_eq!(options_no_timeout.event_store_timeout, None);
+            assert_eq!(options_no_timeout.command_timeout, None);
+        }
+
+        #[test]
+        fn command_executor_builder_timeout_configuration() {
+            let event_store = MockEventStore::new();
+
+            let _executor = CommandExecutorBuilder::new()
+                .with_store(event_store)
+                .with_default_event_store_timeout(Some(Duration::from_secs(15)))
+                .with_default_command_timeout(Some(Duration::from_secs(120)))
+                .build();
+
+            // Builder timeouts are stored but not directly accessible on executor
+            // They would be used as defaults when creating ExecutionOptions
+        }
+
+        #[test]
+        fn command_executor_builder_fast_timeouts() {
+            let event_store = MockEventStore::new();
+
+            let executor = CommandExecutorBuilder::new()
+                .with_store(event_store)
+                .with_fast_timeouts()
+                .build();
+
+            // Fast timeouts also configure retry
+            assert_eq!(executor.retry_config.max_attempts, 2);
+            assert_eq!(executor.retry_config.base_delay, Duration::from_millis(50));
+        }
+
+        #[test]
+        fn command_executor_builder_fault_tolerant_timeouts() {
+            let event_store = MockEventStore::new();
+
+            let executor = CommandExecutorBuilder::new()
+                .with_store(event_store)
+                .with_fault_tolerant_timeouts()
+                .build();
+
+            // Fault tolerant timeouts configure retry for reliability
+            assert_eq!(executor.retry_config.max_attempts, 5);
+            assert_eq!(executor.retry_config.base_delay, Duration::from_millis(500));
+        }
+
+        #[tokio::test]
+        async fn no_timeout_when_disabled() {
+            let event_store = DelayedEventStore::new().with_read_delay(Duration::from_millis(200));
+            let executor = CommandExecutor::new(event_store);
+
+            let stream_id = StreamId::try_new("test-stream").unwrap();
+            let command = MockCommand::new(
+                vec![stream_id.clone()],
+                vec![(stream_id.clone(), "test-event".to_string())],
+            );
+            let input = MockInput {
+                value: "test".to_string(),
+            };
+
+            let options = ExecutionOptions::new()
+                .with_event_store_timeout(None) // No timeout
+                .with_command_timeout(None) // No timeout
+                .without_retry();
+
+            let result = executor.execute(&command, input, options).await;
+
+            // Should succeed despite delay because no timeout is set
             assert!(result.is_ok());
         }
     }

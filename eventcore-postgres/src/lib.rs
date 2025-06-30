@@ -35,6 +35,10 @@ pub struct PostgresConfig {
     /// Connection timeout
     pub connect_timeout: Duration,
 
+    /// Query timeout for individual database operations
+    /// This is different from connection timeout and applies to query execution
+    pub query_timeout: Option<Duration>,
+
     /// Maximum lifetime of a connection
     pub max_lifetime: Option<Duration>,
 
@@ -62,6 +66,7 @@ impl Default for PostgresConfig {
             max_connections: 20, // Increased for better concurrency
             min_connections: 2,  // Keep minimum connections open
             connect_timeout: Duration::from_secs(10), // Faster timeout for performance
+            query_timeout: Some(Duration::from_secs(30)), // 30 second default query timeout
             max_lifetime: Some(Duration::from_secs(1800)), // 30 minutes
             idle_timeout: Some(Duration::from_secs(600)), // 10 minutes
             test_before_acquire: false, // Skip validation for performance
@@ -189,10 +194,20 @@ where
 
     /// Create a connection pool from configuration
     async fn create_pool(config: &PostgresConfig) -> Result<PgPool, PostgresError> {
-        let connect_options: PgConnectOptions = config
+        let mut connect_options: PgConnectOptions = config
             .database_url
             .parse()
             .map_err(|e| PostgresError::PoolCreation(format!("Invalid database URL: {e}")))?;
+
+        // Apply query timeout if configured
+        if let Some(query_timeout) = config.query_timeout {
+            // Convert Duration to postgres statement timeout format (milliseconds)
+            // Safe to cast as we're unlikely to have timeouts > u64::MAX milliseconds
+            #[allow(clippy::cast_possible_truncation)]
+            let timeout_ms = query_timeout.as_millis() as u64;
+            connect_options =
+                connect_options.options([("statement_timeout", &timeout_ms.to_string())]);
+        }
 
         let mut pool_options = PgPoolOptions::new()
             .max_connections(config.max_connections)
@@ -467,6 +482,13 @@ impl PostgresConfigBuilder {
         self
     }
 
+    /// Set the query timeout
+    #[must_use]
+    pub const fn query_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.config.query_timeout = timeout;
+        self
+    }
+
     /// Build the configuration
     pub fn build(self) -> PostgresConfig {
         self.config
@@ -478,6 +500,7 @@ impl PostgresConfigBuilder {
         self.config.max_connections = 30;
         self.config.min_connections = 5;
         self.config.connect_timeout = Duration::from_secs(5);
+        self.config.query_timeout = Some(Duration::from_secs(10)); // Fast query timeout
         self.config.max_lifetime = Some(Duration::from_secs(1800));
         self.config.idle_timeout = Some(Duration::from_secs(300));
         self.config.test_before_acquire = false;

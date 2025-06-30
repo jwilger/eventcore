@@ -349,6 +349,15 @@ pub enum CommandError {
     #[error("Event store error: {0}")]
     EventStore(EventStoreError),
 
+    /// Command execution timed out.
+    #[error("Command execution timed out after {0:?}")]
+    #[diagnostic(
+        code(eventcore::command_timeout),
+        help("The command took too long to execute. This could be due to slow database operations, network issues, or complex processing. Consider increasing the timeout or optimizing the command."),
+        url("https://docs.rs/eventcore/latest/eventcore/errors/enum.CommandError.html#variant.Timeout")
+    )]
+    Timeout(std::time::Duration),
+
     /// An unexpected internal error occurred.
     #[error("Internal error: {0}")]
     Internal(String),

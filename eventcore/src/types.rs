@@ -182,7 +182,14 @@ impl StreamId {
 
         // First try to read from cache
         {
-            let cache_read = cache.read().expect("StreamId cache should not be poisoned");
+            let cache_read = match cache.read() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    // Lock was poisoned, but we can recover by using the poisoned data
+                    // The cache is just an optimization, so this is safe
+                    poisoned.into_inner()
+                }
+            };
             if let Some(cached_id) = cache_read.get(s) {
                 return Ok(cached_id.clone());
             }
@@ -193,9 +200,16 @@ impl StreamId {
 
         // Update cache with write lock
         {
-            let mut cache_write = cache
-                .write()
-                .expect("StreamId cache should not be poisoned");
+            let mut cache_write = match cache.write() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    // Lock was poisoned, but we can recover by using the poisoned data
+                    // We'll clear the cache to ensure a clean state
+                    let mut guard = poisoned.into_inner();
+                    guard.clear();
+                    guard
+                }
+            };
 
             // Simple LRU: if cache is full, clear it completely
             // This is a simple strategy that avoids complex LRU tracking

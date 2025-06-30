@@ -1093,6 +1093,7 @@ mod state_reconstruction;
 mod subscription;
 mod type_registry;
 mod types;
+mod utils;
 
 // Public API exports
 pub use command::{Command, CommandResult, ReadStreams, StreamResolver, StreamWrite};
