@@ -36,21 +36,21 @@ Based on the comprehensive expert review, the following improvements have been i
 
 **Addresses feedback from Rich Hickey, Ward Cunningham, and Without Boats regarding complexity management**
 
-- [ ] **Consolidate Command Creation Approaches**
-  - [ ] Evaluate usage patterns of manual vs procedural macro vs declarative macro approaches
-  - [ ] Choose one primary approach and deprecate others for 1.0 release
-  - [ ] Update documentation to focus on the chosen approach
-  - [ ] Provide clear migration paths for existing code
+- [x] **Consolidate Command Creation Approaches**
+  - [x] Evaluate usage patterns of manual vs procedural macro vs declarative macro approaches
+  - [x] Choose one primary approach and deprecate others for 1.0 release
+  - [x] Update documentation to focus on the chosen approach
+  - [x] Provide clear migration paths for existing code
 
-- [ ] **Remove Over-Engineering**
-  - [ ] Remove unused `version_cache` field from PostgreSQL adapter or implement it
+- [x] **Remove Over-Engineering**
+  - [x] Remove unused `version_cache` field from PostgreSQL adapter or implement it
   - [ ] Evaluate and remove other premature optimizations identified in review
   - [ ] Simplify configuration options where possible
 
-- [ ] **Magic Number Configuration**
-  - [ ] Replace hardcoded `MAX_ITERATIONS: usize = 10` with configurable parameter
-  - [ ] Add validation and sensible defaults for iteration limits
-  - [ ] Document when high iteration counts might be legitimate
+- [x] **Magic Number Configuration**
+  - [x] Replace hardcoded `MAX_ITERATIONS: usize = 10` with configurable parameter
+  - [x] Add validation and sensible defaults for iteration limits
+  - [x] Document when high iteration counts might be legitimate
 
 ### 15.2 Modernize Rust Dependencies and Idioms
 

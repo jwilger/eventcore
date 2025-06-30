@@ -123,6 +123,10 @@ pub struct ExecutionOptions {
     pub retry_config: Option<RetryConfig>,
     /// Policy for determining which errors should trigger a retry.
     pub retry_policy: RetryPolicy,
+    /// Maximum number of stream discovery iterations before aborting.
+    /// This prevents infinite loops when commands dynamically request streams.
+    /// Default is 10 iterations.
+    pub max_stream_discovery_iterations: usize,
 }
 
 impl Default for ExecutionOptions {
@@ -131,6 +135,7 @@ impl Default for ExecutionOptions {
             context: ExecutionContext::default(),
             retry_config: Some(RetryConfig::default()), // Retry enabled by default
             retry_policy: RetryPolicy::default(),
+            max_stream_discovery_iterations: 10, // Safe default to prevent infinite loops
         }
     }
 }
@@ -180,6 +185,19 @@ impl ExecutionOptions {
     #[must_use]
     pub fn with_user_id(mut self, user_id: Option<String>) -> Self {
         self.context.user_id = user_id;
+        self
+    }
+
+    /// Sets the maximum number of stream discovery iterations.
+    ///
+    /// This controls how many times the command executor will re-read streams
+    /// when a command dynamically requests additional streams during execution.
+    /// Higher values allow more complex stream discovery scenarios but risk
+    /// infinite loops if commands have bugs. Lower values are safer but may
+    /// prevent legitimate complex workflows.
+    #[must_use]
+    pub const fn with_max_stream_discovery_iterations(mut self, max_iterations: usize) -> Self {
+        self.max_stream_discovery_iterations = max_iterations;
         self
     }
 }
@@ -346,21 +364,21 @@ where
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event>,
     {
-        match options.retry_config {
+        match &options.retry_config {
             Some(retry_config) => {
                 // Execute with retry logic
                 self.execute_with_retry_internal(
                     command,
                     input,
-                    options.context,
-                    retry_config,
-                    options.retry_policy,
+                    &options,
+                    retry_config.clone(),
+                    options.retry_policy.clone(),
                 )
                 .await
             }
             None => {
                 // Execute without retry
-                self.execute_once(command, input, options.context).await
+                self.execute_once(command, input, &options).await
             }
         }
     }
@@ -396,11 +414,12 @@ where
     /// - Concurrency conflicts
     /// - Event store errors
     #[instrument(
-        skip(self, command, input),
+        skip(self, command, input, options),
         fields(
             command_type = std::any::type_name::<C>(),
-            correlation_id = %context.correlation_id,
-            user_id = context.user_id.as_deref().unwrap_or("anonymous")
+            correlation_id = %options.context.correlation_id,
+            user_id = options.context.user_id.as_deref().unwrap_or("anonymous"),
+            max_stream_discovery_iterations = options.max_stream_discovery_iterations
         )
     )]
     #[allow(clippy::too_many_lines)]
@@ -408,7 +427,7 @@ where
         &self,
         command: &C,
         input: C::Input,
-        context: ExecutionContext,
+        options: &ExecutionOptions,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
@@ -419,14 +438,14 @@ where
         let mut stream_ids = command.read_streams(&input);
         let mut stream_resolver = StreamResolver::new();
         let mut iteration = 0;
-        const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
+        let max_iterations = options.max_stream_discovery_iterations;
 
         loop {
             iteration += 1;
-            if iteration > MAX_ITERATIONS {
-                return Err(CommandError::ValidationFailed(
-                    "Command exceeded maximum stream discovery iterations".to_string(),
-                ));
+            if iteration > max_iterations {
+                return Err(CommandError::ValidationFailed(format!(
+                    "Command exceeded maximum stream discovery iterations ({max_iterations})"
+                )));
             }
 
             info!(
@@ -534,7 +553,7 @@ where
                 events_to_write,
                 &final_stream_data,
                 &stream_ids,
-                &context,
+                &options.context,
             );
 
             let result_versions = self
@@ -776,11 +795,11 @@ where
     /// - All retry attempts have been exhausted
     /// - A non-retryable error occurs during any attempt
     #[instrument(
-        skip(self, command, input),
+        skip(self, command, input, options),
         fields(
             command_type = std::any::type_name::<C>(),
-            correlation_id = %context.correlation_id,
-            user_id = context.user_id.as_deref().unwrap_or("anonymous"),
+            correlation_id = %options.context.correlation_id,
+            user_id = options.context.user_id.as_deref().unwrap_or("anonymous"),
             max_attempts = retry_config.max_attempts
         )
     )]
@@ -788,7 +807,7 @@ where
         &self,
         command: &C,
         input: C::Input,
-        context: ExecutionContext,
+        options: &ExecutionOptions,
         retry_config: RetryConfig,
         retry_policy: RetryPolicy,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
@@ -804,10 +823,7 @@ where
         for attempt in 0..retry_config.max_attempts {
             info!(attempt = attempt + 1, "Attempting command execution");
 
-            match self
-                .execute_once(command, input.clone(), context.clone())
-                .await
-            {
+            match self.execute_once(command, input.clone(), options).await {
                 Ok(result) => {
                     if attempt > 0 {
                         info!(attempt = attempt + 1, "Command succeeded after retry");

@@ -661,11 +661,9 @@
 //!
 //! ## Advanced Features
 //!
-//! ### Macros for Simplified Command Implementation
+//! ### Simplified Command Creation with Procedural Macros
 //!
-//! EventCore provides helper macros to reduce boilerplate:
-//!
-//! #### Using `#[derive(Command)]` (from eventcore-macros)
+//! **Recommended Approach**: Use the `#[derive(Command)]` procedural macro for streamlined command development:
 //!
 //! ```rust,ignore
 //! use eventcore_macros::Command;
@@ -680,9 +678,52 @@
 //!     amount: Money,
 //! }
 //!
-//! // The macro generates:
-//! // - TransferMoneyStreamSet phantom type
+//! // The macro automatically generates:
+//! // - TransferMoneyStreamSet phantom type for compile-time stream access control
 //! // - Implementation of read_streams() that returns [from_account, to_account]
+//! // - Partial Command trait implementation
+//!
+//! // You still implement the business logic manually for full control:
+//! #[async_trait]
+//! impl Command for TransferMoney {
+//!     type Input = TransferMoneyInput;
+//!     type State = TransferState;
+//!     type Event = BankingEvent;
+//!     // StreamSet is automatically set by the macro
+//!
+//!     // read_streams() is automatically implemented
+//!     
+//!     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+//!         // Your event folding logic
+//!     }
+//!
+//!     async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+//!         // Your business logic with compile-time stream access guarantees
+//!     }
+//! }
+//! ```
+//!
+//! #### Manual Implementation (Advanced Users)
+//!
+//! For complete control, you can still implement the `Command` trait manually:
+//!
+//! ```rust,ignore
+//! // This approach is available but not recommended as the primary interface
+//! struct TransferMoney;
+//!
+//! #[async_trait]
+//! impl Command for TransferMoney {
+//!     type Input = TransferMoneyInput;
+//!     type State = TransferState;
+//!     type Event = BankingEvent;
+//!     type StreamSet = (); // You manage phantom types yourself
+//!
+//!     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+//!         vec![input.from_account.clone(), input.to_account.clone()]
+//!     }
+//!
+//!     // ... rest of implementation
+//! }
 //! ```
 //!
 //! #### Using Helper Macros in Command Handlers
@@ -1102,18 +1143,18 @@ pub mod docs {
         pub struct Tutorial;
     }
 
-    /// Macro DSL Tutorial  
+    /// Procedural Macro Tutorial  
     ///
-    /// Learn how to use EventCore's powerful macros to reduce boilerplate:
-    /// - The `#[derive(Command)]` procedural macro
-    /// - The declarative `command!` macro
-    /// - Helper functions like `require!` and `emit!`
+    /// Learn how to use EventCore's `#[derive(Command)]` procedural macro to reduce boilerplate:
+    /// - Using `#[derive(Command)]` for automatic stream management
+    /// - Stream field annotations with `#[stream]`
+    /// - Helper macros like `require!` and `emit!`
     ///
     /// The complete tutorial is available in `docs/tutorials/macro-dsl.md`.
     pub mod macro_dsl {
-        /// Using the Macro DSL
+        /// Using the Procedural Macro
         ///
-        /// This tutorial shows how to use EventCore's macros for cleaner code.
+        /// This tutorial shows how to use EventCore's `#[derive(Command)]` macro for cleaner code.
         /// See `docs/tutorials/macro-dsl.md` for the complete tutorial.
         pub struct Tutorial;
     }
@@ -1171,7 +1212,7 @@ pub mod prelude {
     };
 
     // Re-export macros for convenience
-    pub use crate::{command, emit, require};
+    pub use crate::{emit, require};
 
     #[cfg(any(test, feature = "testing"))]
     pub use crate::testing::prelude::*;

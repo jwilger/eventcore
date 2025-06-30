@@ -1,4 +1,4 @@
-//! Tests for declarative macros.
+//! Tests for helper macros.
 
 use crate::command::CommandResult;
 use crate::errors::CommandError;
@@ -38,17 +38,4 @@ fn test_emit_macro() {
     // that integration tests in the examples crate would be more valuable.
 
     // Placeholder to ensure the macro module compiles
-}
-
-#[test]
-fn test_command_macro_compile_error() {
-    // The command! macro should produce a compile error
-    // This is tested at compile time, not runtime
-
-    // If we uncomment this, it should fail to compile:
-    // command! {
-    //     pub struct TestCommand {
-    //         field: String,
-    //     }
-    // }
 }

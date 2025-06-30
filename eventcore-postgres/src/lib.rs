@@ -9,13 +9,11 @@
 
 mod event_store;
 
-use parking_lot::RwLock;
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use eventcore::{EventStoreError, EventVersion, StreamId};
+use eventcore::EventStoreError;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use thiserror::Error;
@@ -106,14 +104,6 @@ impl From<PostgresError> for EventStoreError {
     }
 }
 
-/// Simple cache entry for stream versions
-#[derive(Debug, Clone)]
-#[allow(dead_code)] // Used in future performance optimizations
-struct VersionCacheEntry {
-    version: EventVersion,
-    timestamp: std::time::Instant,
-}
-
 /// `PostgreSQL` event store implementation
 #[derive(Debug)]
 pub struct PostgresEventStore<E>
@@ -122,8 +112,6 @@ where
 {
     pool: Arc<PgPool>,
     config: PostgresConfig,
-    /// Simple cache for stream versions (read-heavy workload optimization)
-    version_cache: Arc<RwLock<HashMap<StreamId, VersionCacheEntry>>>,
     /// Phantom data to track event type
     _phantom: PhantomData<E>,
 }
@@ -136,7 +124,6 @@ where
         Self {
             pool: Arc::clone(&self.pool),
             config: self.config.clone(),
-            version_cache: Arc::clone(&self.version_cache),
             _phantom: PhantomData,
         }
     }
@@ -153,7 +140,6 @@ where
         Ok(Self {
             pool: Arc::new(pool),
             config,
-            version_cache: Arc::new(RwLock::new(HashMap::new())),
             _phantom: PhantomData,
         })
     }
@@ -328,49 +314,6 @@ where
 
         debug!("PostgreSQL health check passed");
         Ok(())
-    }
-
-    /// Get cached version if available and not expired (cache TTL: 5 seconds)
-    #[allow(dead_code)] // Used in future performance optimizations
-    fn get_cached_version(&self, stream_id: &StreamId) -> Option<EventVersion> {
-        const CACHE_TTL: Duration = Duration::from_secs(5);
-
-        let cache = self.version_cache.read();
-        cache.get(stream_id).and_then(|entry| {
-            if entry.timestamp.elapsed() < CACHE_TTL {
-                Some(entry.version)
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Cache a stream version
-    #[allow(dead_code)] // Used in future performance optimizations
-    fn cache_version(&self, stream_id: StreamId, version: EventVersion) {
-        let mut cache = self.version_cache.write();
-        cache.insert(
-            stream_id,
-            VersionCacheEntry {
-                version,
-                timestamp: std::time::Instant::now(),
-            },
-        );
-
-        // Simple cache size management - keep last 1000 entries
-        if cache.len() > 1000 {
-            let oldest_keys: Vec<_> = cache.keys().take(100).cloned().collect();
-            for key in oldest_keys {
-                cache.remove(&key);
-            }
-        }
-    }
-
-    /// Invalidate cached version for a stream (called after writes)
-    #[allow(dead_code)] // Used in future performance optimizations
-    fn invalidate_cached_version(&self, stream_id: &StreamId) {
-        let mut cache = self.version_cache.write();
-        cache.remove(stream_id);
     }
 }
 

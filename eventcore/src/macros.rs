@@ -1,82 +1,10 @@
-//! Declarative macros for EventCore commands.
+//! Helper macros for EventCore commands.
 //!
-//! This module provides declarative macros that complement the procedural macros
-//! from `eventcore-macros`, offering a more concise syntax for common patterns.
+//! This module provides helper macros that work with the `#[derive(Command)]`
+//! procedural macro from `eventcore-macros` to reduce boilerplate in command implementations.
 
 #[cfg(test)]
 mod tests;
-
-/// Declarative macro for defining commands with a unified structure.
-///
-/// This macro provides a concise way to define a command's state, events,
-/// and business logic. It's designed to work alongside the `#[derive(Command)]`
-/// procedural macro from `eventcore-macros`.
-///
-/// # Note
-///
-/// Due to the complexity of Rust's macro system and the need for proper type
-/// name generation, this macro is currently a placeholder. The full implementation
-/// would require either:
-///
-/// 1. Manual specification of all type names (State, Event, StreamSet)
-/// 2. Use of a proc-macro that can properly generate type names
-/// 3. Integration with the paste crate (which would add a dependency)
-///
-/// For now, users should use the `#[derive(Command)]` procedural macro
-/// along with manual implementation of the Command trait methods.
-///
-/// # Future Syntax (Planned)
-///
-/// ```ignore
-/// command! {
-///     pub struct TransferMoney {
-///         #[stream]
-///         from_account: StreamId,
-///         #[stream]
-///         to_account: StreamId,
-///         amount: Money,
-///     }
-///     
-///     state {
-///         from_balance: Money,
-///         to_balance: Money,
-///     }
-///     
-///     events {
-///         MoneyDebited { account: AccountId, amount: Money },
-///         MoneyCredited { account: AccountId, amount: Money },
-///     }
-///     
-///     apply {
-///         MoneyDebited { account, amount } => {
-///             state.from_balance -= amount;
-///         }
-///         MoneyCredited { account, amount } => {
-///             state.to_balance += amount;
-///         }
-///     }
-///     
-///     handle {
-///         require!(state.from_balance >= input.amount, "Insufficient funds");
-///         
-///         emit!(input.from_account, MoneyDebited {
-///             account: input.from_account.into(),
-///             amount: input.amount,
-///         });
-///         
-///         emit!(input.to_account, MoneyCredited {
-///             account: input.to_account.into(),
-///             amount: input.amount,
-///         });
-///     }
-/// }
-/// ```
-#[macro_export]
-macro_rules! command {
-    ($($tt:tt)*) => {
-        compile_error!("The command! macro is not yet implemented. Please use #[derive(Command)] from eventcore-macros instead.");
-    };
-}
 
 /// Helper macro to check business rules in command handlers.
 ///
