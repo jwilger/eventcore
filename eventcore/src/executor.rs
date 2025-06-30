@@ -4,8 +4,10 @@ use crate::command::{Command, CommandResult, ReadStreams, StreamResolver};
 use crate::command::StreamWrite;
 use crate::errors::CommandError;
 use crate::event_store::{EventToWrite, ExpectedVersion, ReadOptions, StreamEvents};
+use crate::monitoring::resilience::{CircuitBreaker, CircuitBreakerConfig, CircuitResult};
 use crate::types::{EventId, EventVersion, StreamId};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, instrument, warn};
 
@@ -133,6 +135,9 @@ pub struct ExecutionOptions {
     /// Overall timeout for the entire command execution.
     /// Default is None (no overall timeout). This timeout encompasses retries.
     pub command_timeout: Option<Duration>,
+    /// Circuit breaker configuration for EventStore operations.
+    /// When specified, EventStore operations will be protected by circuit breakers.
+    pub circuit_breaker_config: Option<CircuitBreakerConfig>,
 }
 
 impl Default for ExecutionOptions {
@@ -144,6 +149,7 @@ impl Default for ExecutionOptions {
             max_stream_discovery_iterations: 10, // Safe default to prevent infinite loops
             event_store_timeout: Some(Duration::from_secs(30)), // 30 seconds default timeout
             command_timeout: None,               // No overall timeout by default
+            circuit_breaker_config: None,        // No circuit breaker by default
         }
     }
 }
@@ -242,6 +248,23 @@ impl ExecutionOptions {
         self.command_timeout = timeout;
         self
     }
+
+    /// Sets the circuit breaker configuration for EventStore operations.
+    ///
+    /// When configured, EventStore operations (read_streams, write_events_multi)
+    /// will be protected by circuit breakers to prevent cascading failures.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let options = ExecutionOptions::new()
+    ///     .with_circuit_breaker(Some(CircuitBreakerConfig::default()));
+    /// ```
+    #[must_use]
+    pub const fn with_circuit_breaker(mut self, config: Option<CircuitBreakerConfig>) -> Self {
+        self.circuit_breaker_config = config;
+        self
+    }
 }
 
 /// Stream state information for concurrency control.
@@ -270,6 +293,7 @@ pub use crate::event_store::EventStore;
 /// 4. Writing resulting events atomically
 /// 5. Handling optimistic concurrency control
 /// 6. Managing retries for transient failures
+/// 7. Circuit breaker protection for EventStore operations
 ///
 /// # Type Parameters
 ///
@@ -287,7 +311,7 @@ pub use crate::event_store::EventStore;
 ///     .execute(&transfer_command, transfer_input, context)
 ///     .await?;
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CommandExecutor<ES> {
     /// The event store implementation.
     event_store: ES,
@@ -295,6 +319,25 @@ pub struct CommandExecutor<ES> {
     retry_config: RetryConfig,
     /// Policy for determining retry eligibility.
     retry_policy: RetryPolicy,
+    /// Circuit breaker for read operations.
+    read_circuit_breaker: Option<Arc<CircuitBreaker>>,
+    /// Circuit breaker for write operations.
+    write_circuit_breaker: Option<Arc<CircuitBreaker>>,
+}
+
+impl<ES> Clone for CommandExecutor<ES>
+where
+    ES: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            event_store: self.event_store.clone(),
+            retry_config: self.retry_config.clone(),
+            retry_policy: self.retry_policy.clone(),
+            read_circuit_breaker: self.read_circuit_breaker.clone(),
+            write_circuit_breaker: self.write_circuit_breaker.clone(),
+        }
+    }
 }
 
 impl<ES> CommandExecutor<ES>
@@ -315,6 +358,8 @@ where
             event_store,
             retry_config: RetryConfig::default(),
             retry_policy: RetryPolicy::default(),
+            read_circuit_breaker: None,
+            write_circuit_breaker: None,
         }
     }
 
@@ -348,6 +393,123 @@ where
     pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
         self.retry_policy = policy;
         self
+    }
+
+    /// Configures circuit breakers for EventStore operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The circuit breaker configuration to use
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    #[must_use]
+    pub fn with_circuit_breakers(mut self, config: CircuitBreakerConfig) -> Self {
+        self.read_circuit_breaker = Some(Arc::new(CircuitBreaker::new(
+            "eventstore_read",
+            config.clone(),
+        )));
+        self.write_circuit_breaker =
+            Some(Arc::new(CircuitBreaker::new("eventstore_write", config)));
+        self
+    }
+
+    /// Applies circuit breaker configuration from execution options.
+    fn apply_circuit_breaker_config(&mut self, options: &ExecutionOptions) {
+        if let Some(config) = &options.circuit_breaker_config {
+            self.read_circuit_breaker = Some(Arc::new(CircuitBreaker::new(
+                "eventstore_read",
+                config.clone(),
+            )));
+            self.write_circuit_breaker = Some(Arc::new(CircuitBreaker::new(
+                "eventstore_write",
+                config.clone(),
+            )));
+        }
+    }
+
+    /// Reads streams from the event store with circuit breaker protection.
+    async fn read_streams_with_circuit_breaker(
+        &self,
+        stream_ids: &[StreamId],
+        options: &ReadOptions,
+        execution_options: &ExecutionOptions,
+    ) -> Result<crate::event_store::StreamData<ES::Event>, crate::errors::EventStoreError> {
+        // Use configured circuit breaker or create temporary one from options
+        let circuit_breaker = self.read_circuit_breaker.as_ref().map_or_else(
+            || {
+                execution_options
+                    .circuit_breaker_config
+                    .as_ref()
+                    .map(|config| Arc::new(CircuitBreaker::new("eventstore_read", config.clone())))
+            },
+            |cb| Some(cb.clone()),
+        );
+
+        if let Some(circuit_breaker) = circuit_breaker {
+            match circuit_breaker
+                .call(|| self.event_store.read_streams(stream_ids, options))
+                .await
+            {
+                CircuitResult::Success(result) => result,
+                CircuitResult::Failure => unreachable!(
+                    "Circuit breaker should always return Success for failed operations"
+                ),
+                CircuitResult::CircuitOpen => {
+                    warn!("EventStore read circuit breaker is open, failing fast");
+                    Err(crate::errors::EventStoreError::Unavailable(
+                        "EventStore read circuit breaker is open".to_string(),
+                    ))
+                }
+            }
+        } else {
+            self.event_store.read_streams(stream_ids, options).await
+        }
+    }
+
+    /// Writes events to the event store with circuit breaker protection.
+    async fn write_events_with_circuit_breaker(
+        &self,
+        stream_events: &[crate::event_store::StreamEvents<ES::Event>],
+        execution_options: &ExecutionOptions,
+    ) -> Result<HashMap<StreamId, EventVersion>, crate::errors::EventStoreError>
+    where
+        ES::Event: Clone,
+    {
+        // Use configured circuit breaker or create temporary one from options
+        let circuit_breaker = self.write_circuit_breaker.as_ref().map_or_else(
+            || {
+                execution_options
+                    .circuit_breaker_config
+                    .as_ref()
+                    .map(|config| Arc::new(CircuitBreaker::new("eventstore_write", config.clone())))
+            },
+            |cb| Some(cb.clone()),
+        );
+
+        if let Some(circuit_breaker) = circuit_breaker {
+            let events_to_write = stream_events.to_vec();
+            match circuit_breaker
+                .call(|| self.event_store.write_events_multi(events_to_write.clone()))
+                .await
+            {
+                CircuitResult::Success(result) => result,
+                CircuitResult::Failure => unreachable!(
+                    "Circuit breaker should always return Success for failed operations"
+                ),
+                CircuitResult::CircuitOpen => {
+                    warn!("EventStore write circuit breaker is open, failing fast");
+                    Err(crate::errors::EventStoreError::Unavailable(
+                        "EventStore write circuit breaker is open".to_string(),
+                    ))
+                }
+            }
+        } else {
+            self.event_store
+                .write_events_multi(stream_events.to_vec())
+                .await
+        }
     }
 
     /// Executes a command with automatic retry logic based on the provided options.
@@ -404,7 +566,7 @@ where
         C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event>,
+        ES::Event: From<C::Event> + Clone,
     {
         // Wrap the execution with overall command timeout if specified
         #[allow(clippy::option_if_let_else)] // The match is clearer than map_or here
@@ -437,7 +599,7 @@ where
         C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event>,
+        ES::Event: From<C::Event> + Clone,
     {
         match &options.retry_config {
             Some(retry_config) => {
@@ -508,7 +670,7 @@ where
         C: Command,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event>,
+        ES::Event: From<C::Event> + Clone,
     {
         let mut stream_ids = command.read_streams(&input);
         let mut stream_resolver = StreamResolver::new();
@@ -529,12 +691,15 @@ where
                 "Reading streams for command execution"
             );
 
-            // Read all currently known streams
+            // Read all currently known streams with circuit breaker protection
             let stream_data = if let Some(timeout) = options.event_store_timeout {
                 if let Ok(result) = tokio::time::timeout(
                     timeout,
-                    self.event_store
-                        .read_streams(&stream_ids, &ReadOptions::new()),
+                    self.read_streams_with_circuit_breaker(
+                        &stream_ids,
+                        &ReadOptions::new(),
+                        options,
+                    ),
                 )
                 .await
                 {
@@ -552,8 +717,7 @@ where
                     ));
                 }
             } else {
-                self.event_store
-                    .read_streams(&stream_ids, &ReadOptions::new())
+                self.read_streams_with_circuit_breaker(&stream_ids, &ReadOptions::new(), options)
                     .await
                     .map_err(|err| {
                         warn!(error = %err, "Failed to read streams from event store");
@@ -635,12 +799,15 @@ where
                 .map(super::command::StreamWrite::into_parts)
                 .collect();
 
-            // Re-read streams one final time for version checking
+            // Re-read streams one final time for version checking with circuit breaker protection
             let final_stream_data = if let Some(timeout) = options.event_store_timeout {
                 if let Ok(result) = tokio::time::timeout(
                     timeout,
-                    self.event_store
-                        .read_streams(&stream_ids, &ReadOptions::new()),
+                    self.read_streams_with_circuit_breaker(
+                        &stream_ids,
+                        &ReadOptions::new(),
+                        options,
+                    ),
                 )
                 .await
                 {
@@ -658,8 +825,7 @@ where
                     ));
                 }
             } else {
-                self.event_store
-                    .read_streams(&stream_ids, &ReadOptions::new())
+                self.read_streams_with_circuit_breaker(&stream_ids, &ReadOptions::new(), options)
                     .await
                     .map_err(|err| {
                         warn!(error = %err, "Failed to re-read streams for version check");
@@ -678,7 +844,7 @@ where
             let result_versions = if let Some(timeout) = options.event_store_timeout {
                 if let Ok(result) = tokio::time::timeout(
                     timeout,
-                    self.event_store.write_events_multi(stream_events),
+                    self.write_events_with_circuit_breaker(&stream_events, options),
                 )
                 .await
                 {
@@ -696,8 +862,7 @@ where
                     ));
                 }
             } else {
-                self.event_store
-                    .write_events_multi(stream_events)
+                self.write_events_with_circuit_breaker(&stream_events, options)
                     .await
                     .map_err(|err| {
                         warn!(error = %err, "Failed to write events to event store");
@@ -956,7 +1121,7 @@ where
         C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event>,
+        ES::Event: From<C::Event> + Clone,
     {
         let mut last_error = None;
 
@@ -1408,7 +1573,7 @@ where
         C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event>,
+        ES::Event: From<C::Event> + Clone,
     {
         self.execute(command, input, ExecutionOptions::default())
             .await
@@ -1453,7 +1618,7 @@ where
         C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event>,
+        ES::Event: From<C::Event> + Clone,
     {
         self.execute(command, input, ExecutionOptions::new().without_retry())
             .await
@@ -1503,7 +1668,7 @@ where
         C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event>,
+        ES::Event: From<C::Event> + Clone,
     {
         let options = ExecutionOptions::default().with_correlation_id(correlation_id);
         self.execute(command, input, options).await
@@ -1553,7 +1718,7 @@ where
         C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event>,
+        ES::Event: From<C::Event> + Clone,
     {
         let options = ExecutionOptions::default().with_user_id(Some(user_id));
         self.execute(command, input, options).await
