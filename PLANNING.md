@@ -78,10 +78,10 @@ Based on the comprehensive expert review, the following improvements have been i
 
 **Based on corrected analysis of what's actually feasible given dynamic stream IDs**
 
-- [ ] **Stream Access Validation Optimization** (HIGH IMPACT)
-  - [ ] Replace O(n) vector search with O(1) hash set lookup in `StreamWrite::new`
-  - [ ] Add pre-computed hash set to `ReadStreams` for fast validation
-  - [ ] Benchmark performance improvement (expected: eliminate O(n) cost per stream write)
+- [x] **Stream Access Validation Optimization** (HIGH IMPACT)
+  - [x] Replace O(n) vector search with O(1) hash set lookup in `StreamWrite::new`
+  - [x] Add pre-computed hash set to `ReadStreams` for fast validation
+  - [x] Benchmark performance improvement (expected: eliminate O(n) cost per stream write)
 
 - [ ] **Stream ID Constructor Optimization**
   - [ ] Add `StreamId::from_static()` for compile-time known literals (e.g., "transfers")

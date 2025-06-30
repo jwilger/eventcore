@@ -108,6 +108,7 @@
 use crate::errors::CommandError;
 use crate::types::StreamId;
 use async_trait::async_trait;
+use std::collections::HashSet;
 use std::marker::PhantomData;
 
 /// A resolver that allows commands to dynamically request additional streams.
@@ -200,6 +201,8 @@ pub type CommandResult<T> = Result<T, CommandError>;
 pub struct ReadStreams<S> {
     /// The actual stream IDs that were declared for reading
     pub(crate) stream_ids: Vec<StreamId>,
+    /// Pre-computed hash set for O(1) stream validation lookups
+    pub(crate) stream_set: HashSet<StreamId>,
     /// Phantom data to track the stream set at the type level
     _phantom: PhantomData<S>,
 }
@@ -209,9 +212,11 @@ impl<S> ReadStreams<S> {
     ///
     /// This is called internally by the command executor after calling `read_streams`.
     /// User code should not call this directly.
-    pub(crate) const fn new(stream_ids: Vec<StreamId>) -> Self {
+    pub(crate) fn new(stream_ids: Vec<StreamId>) -> Self {
+        let stream_set = stream_ids.iter().cloned().collect();
         Self {
             stream_ids,
+            stream_set,
             _phantom: PhantomData,
         }
     }
@@ -249,8 +254,8 @@ impl<S, E> StreamWrite<S, E> {
         stream_id: StreamId,
         event: E,
     ) -> Result<Self, CommandError> {
-        // Verify the stream was declared for reading
-        if !read_streams.stream_ids.contains(&stream_id) {
+        // Verify the stream was declared for reading using O(1) hash set lookup
+        if !read_streams.stream_set.contains(&stream_id) {
             return Err(CommandError::ValidationFailed(format!(
                 "Cannot write to stream '{stream_id}' - it was not declared in read_streams()"
             )));
