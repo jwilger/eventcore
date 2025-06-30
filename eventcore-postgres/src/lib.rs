@@ -206,6 +206,63 @@ where
         Ok(())
     }
 
+    /// Check if schema tables exist
+    async fn schema_exists(&self) -> Result<bool, PostgresError> {
+        let count = sqlx::query_scalar::<_, i64>(
+            r"
+            SELECT COUNT(*) FROM information_schema.tables 
+            WHERE table_name IN ('events', 'event_streams')
+            AND table_schema = 'public'
+            ",
+        )
+        .fetch_one(self.pool.as_ref())
+        .await
+        .map_err(PostgresError::Connection)?;
+
+        Ok(count >= 2)
+    }
+
+    /// Try to acquire schema initialization lock
+    async fn try_acquire_schema_lock(&self, lock_id: i64) -> Result<bool, PostgresError> {
+        sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock($1)")
+            .bind(lock_id)
+            .fetch_one(self.pool.as_ref())
+            .await
+            .map_err(PostgresError::Connection)
+    }
+
+    /// Wait for schema initialization by another process
+    async fn wait_for_schema_initialization(&self, lock_id: i64) -> Result<bool, PostgresError> {
+        // Try to acquire the lock again with a longer wait
+        for _ in 0..50 {
+            // Try for up to 5 seconds
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            if self.try_acquire_schema_lock(lock_id).await? {
+                // We got the lock
+                return Ok(true);
+            }
+
+            // Check if tables were created while we were waiting
+            if self.schema_exists().await? {
+                debug!("Database schema initialized by another process while waiting");
+                return Ok(false);
+            }
+        }
+
+        // Final check
+        if self.try_acquire_schema_lock(lock_id).await? {
+            Ok(true)
+        } else if self.schema_exists().await? {
+            debug!("Database schema initialized by another process");
+            Ok(false)
+        } else {
+            Err(PostgresError::Migration(
+                "Failed to acquire schema initialization lock after multiple attempts".to_string(),
+            ))
+        }
+    }
+
     /// Initialize the database schema
     ///
     /// This method creates the necessary tables and indexes for the event store.
@@ -216,38 +273,25 @@ where
         // Lock ID 123456789 is arbitrary but consistent for schema initialization
         const SCHEMA_LOCK_ID: i64 = 123_456_789;
 
-        // Acquire advisory lock with timeout to prevent deadlocks
-        let lock_acquired = sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock($1)")
-            .bind(SCHEMA_LOCK_ID)
-            .fetch_one(self.pool.as_ref())
-            .await
-            .map_err(PostgresError::Connection)?;
+        // Try to acquire advisory lock
+        let mut lock_acquired = self.try_acquire_schema_lock(SCHEMA_LOCK_ID).await?;
 
         if !lock_acquired {
             // Another process is initializing the schema, wait briefly and check if schema exists
             tokio::time::sleep(Duration::from_millis(100)).await;
 
             // Check if tables exist - if they do, initialization was completed by another process
-            let tables_exist = sqlx::query_scalar::<_, i64>(
-                r"
-                SELECT COUNT(*) FROM information_schema.tables 
-                WHERE table_name IN ('events', 'event_streams')
-                AND table_schema = 'public'
-                ",
-            )
-            .fetch_one(self.pool.as_ref())
-            .await
-            .map_err(PostgresError::Connection)?;
-
-            let tables_exist = tables_exist >= 2;
-
-            if tables_exist {
+            if self.schema_exists().await? {
                 debug!("Database schema already initialized by another process");
                 return Ok(());
             }
-            return Err(PostgresError::Migration(
-                "Failed to acquire schema initialization lock".to_string(),
-            ));
+
+            // Wait for schema initialization or acquire lock
+            lock_acquired = self.wait_for_schema_initialization(SCHEMA_LOCK_ID).await?;
+            if !lock_acquired {
+                // Schema was initialized by another process
+                return Ok(());
+            }
         }
 
         // We have the lock, proceed with initialization

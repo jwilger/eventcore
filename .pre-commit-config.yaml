@@ -22,6 +22,13 @@ repos:
         files: \.(rs|toml)$
         pass_filenames: false
 
+      - id: cargo-test-integration
+        name: cargo integration tests
+        entry: cargo test --workspace --test '*'
+        language: system
+        files: \.(rs|toml)$
+        pass_filenames: false
+
       - id: cargo-check
         name: cargo check
         entry: cargo check --all-targets
