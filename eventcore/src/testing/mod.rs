@@ -50,6 +50,7 @@
 
 pub mod assertions;
 pub mod builders;
+pub mod chaos;
 pub mod fixtures;
 pub mod generators;
 pub mod harness;
@@ -63,6 +64,7 @@ pub mod harness;
 pub mod prelude {
     pub use super::assertions::*;
     pub use super::builders::*;
+    pub use super::chaos::*;
     pub use super::fixtures::*;
     pub use super::generators::*;
     pub use super::harness::*;
