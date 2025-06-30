@@ -13,8 +13,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use eventcore::EventStoreError;
 use serde::{Deserialize, Serialize};
+
+use eventcore::EventStoreError;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use thiserror::Error;
 use tracing::{debug, info, instrument};
@@ -118,7 +119,15 @@ where
 
 impl<E> Clone for PostgresEventStore<E>
 where
-    E: Send + Sync,
+    E: Serialize
+        + for<'de> Deserialize<'de>
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + 'static,
 {
     fn clone(&self) -> Self {
         Self {
@@ -131,7 +140,15 @@ where
 
 impl<E> PostgresEventStore<E>
 where
-    E: Send + Sync,
+    E: Serialize
+        + for<'de> Deserialize<'de>
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + 'static,
 {
     /// Create a new `PostgreSQL` event store with the given configuration
     pub async fn new(config: PostgresConfig) -> Result<Self, PostgresError> {

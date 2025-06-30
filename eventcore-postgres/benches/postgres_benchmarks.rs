@@ -21,7 +21,7 @@ const POSTGRES_PASSWORD: &str = "postgres";
 const POSTGRES_DB: &str = "eventcore_bench";
 
 // Test events and commands (same as in integration tests)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
 enum TestEvent {
     CounterIncremented { amount: u32 },

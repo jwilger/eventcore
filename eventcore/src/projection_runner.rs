@@ -9,8 +9,7 @@
 
 use crate::{
     errors::{ProjectionError, ProjectionResult},
-    event::StoredEvent,
-    event_store::EventStore,
+    event_store::{EventStore, StoredEvent},
     projection::{Projection, ProjectionCheckpoint, ProjectionStatus},
     subscription::{
         EventProcessor, Subscription, SubscriptionError, SubscriptionName, SubscriptionOptions,
@@ -93,7 +92,7 @@ pub struct ProjectionRunnerStats {
 pub struct ProjectionRunner<P, E>
 where
     P: Projection<Event = E>,
-    E: Send + Sync + PartialEq + Eq + std::fmt::Debug + 'static,
+    E: Send + Sync + PartialEq + Eq + std::fmt::Debug + Clone + 'static,
 {
     projection: Arc<P>,
     subscription: Arc<Mutex<Option<Box<dyn Subscription<Event = E>>>>>,
@@ -110,7 +109,7 @@ impl<P, E> ProjectionRunner<P, E>
 where
     P: Projection<Event = E> + Send + Sync + 'static,
     P::State: Send + Sync + std::fmt::Debug + Clone + 'static,
-    E: Send + Sync + PartialEq + Eq + std::fmt::Debug + 'static,
+    E: Send + Sync + PartialEq + Eq + std::fmt::Debug + Clone + 'static,
 {
     /// Creates a new projection runner.
     pub fn new(projection: P) -> Self {
@@ -513,7 +512,7 @@ where
 struct ProjectionEventProcessor<P, E>
 where
     P: Projection<Event = E>,
-    E: Send + Sync + PartialEq + Eq + std::fmt::Debug,
+    E: Send + Sync + PartialEq + Eq + std::fmt::Debug + Clone,
 {
     projection: Arc<P>,
     config: ProjectionRunnerConfig,
@@ -526,7 +525,7 @@ where
 impl<P, E> ProjectionEventProcessor<P, E>
 where
     P: Projection<Event = E>,
-    E: Send + Sync + PartialEq + Eq + std::fmt::Debug,
+    E: Send + Sync + PartialEq + Eq + std::fmt::Debug + Clone,
 {
     const fn new(
         projection: Arc<P>,
@@ -569,7 +568,7 @@ where
 
                     // Call error handler
                     let processing_error = ProjectionError::EventProcessingFailed {
-                        event_id: event.event.id,
+                        event_id: event.event_id,
                         reason: format!("Event processing failed: {e}"),
                     };
                     if let Err(handler_error) = self.projection.on_error(&processing_error).await {
@@ -581,7 +580,7 @@ where
 
                         if self.config.stop_on_error {
                             let max_retries_error = ProjectionError::EventProcessingFailed {
-                                event_id: event.event.id,
+                                event_id: event.event_id,
                                 reason: format!("Max retries exceeded: {e}"),
                             };
                             return Err(SubscriptionError::Projection(max_retries_error));
@@ -625,9 +624,15 @@ where
 
     /// Processes a single event through the projection.
     async fn process_single_event(&self, event: &StoredEvent<E>) -> ProjectionResult<()> {
+        // Convert to Event for projection compatibility
+        let event_for_projection = event.to_event();
+
         // Check if projection should process this event
-        if !self.projection.should_process_event(&event.event) {
-            debug!("Skipping event {} - projection not interested", event.id());
+        if !self.projection.should_process_event(&event_for_projection) {
+            debug!(
+                "Skipping event {} - projection not interested",
+                event.event_id
+            );
             return Ok(());
         }
 
@@ -641,7 +646,7 @@ where
 
         // Apply the event
         self.projection
-            .apply_event(&mut current_state, &event.event)
+            .apply_event(&mut current_state, &event_for_projection)
             .await?;
 
         // Update state
@@ -655,8 +660,8 @@ where
             let mut checkpoint_guard = self.last_checkpoint.write().await;
             *checkpoint_guard = checkpoint_guard
                 .clone()
-                .with_event_id(event.event.id)
-                .with_stream_position(event.event.stream_id.clone(), event.event.id);
+                .with_event_id(event.event_id)
+                .with_stream_position(event.stream_id.clone(), event.event_id);
         }
 
         // Check if we should save checkpoint
@@ -719,7 +724,7 @@ impl<P, E> EventProcessor for ProjectionEventProcessor<P, E>
 where
     P: Projection<Event = E> + Send + Sync,
     P::State: Send + Sync + std::fmt::Debug + Clone,
-    E: Send + Sync + PartialEq + Eq + std::fmt::Debug,
+    E: Send + Sync + PartialEq + Eq + std::fmt::Debug + Clone,
 {
     type Event = E;
 
@@ -1015,7 +1020,14 @@ mod tests {
             "test-payload".to_string(),
             EventMetadata::default(),
         );
-        let stored_event = StoredEvent::new(event, EventVersion::try_new(1).unwrap());
+        let stored_event = StoredEvent::new(
+            event.id,
+            event.stream_id,
+            EventVersion::try_new(1).unwrap(),
+            event.created_at,
+            event.payload,
+            Some(event.metadata),
+        );
 
         // Process the event - should succeed after retries
         let result = processor.process_event_with_retry(&stored_event).await;
@@ -1060,7 +1072,14 @@ mod tests {
             "test-payload".to_string(),
             EventMetadata::default(),
         );
-        let stored_event = StoredEvent::new(event, EventVersion::try_new(1).unwrap());
+        let stored_event = StoredEvent::new(
+            event.id,
+            event.stream_id,
+            EventVersion::try_new(1).unwrap(),
+            event.created_at,
+            event.payload,
+            Some(event.metadata),
+        );
 
         // Process the event - should fail after max retries
         let result = processor.process_event_with_retry(&stored_event).await;
@@ -1105,7 +1124,14 @@ mod tests {
             "test-payload".to_string(),
             EventMetadata::default(),
         );
-        let stored_event = StoredEvent::new(event, EventVersion::try_new(1).unwrap());
+        let stored_event = StoredEvent::new(
+            event.id,
+            event.stream_id,
+            EventVersion::try_new(1).unwrap(),
+            event.created_at,
+            event.payload,
+            Some(event.metadata),
+        );
 
         // Process the event - should succeed (skip the event) after max retries
         let result = processor.process_event_with_retry(&stored_event).await;
@@ -1154,8 +1180,22 @@ mod tests {
             "payload2".to_string(),
             EventMetadata::default(),
         );
-        let stored_event1 = StoredEvent::new(event1, EventVersion::try_new(1).unwrap());
-        let stored_event2 = StoredEvent::new(event2, EventVersion::try_new(2).unwrap());
+        let stored_event1 = StoredEvent::new(
+            event1.id,
+            event1.stream_id,
+            EventVersion::try_new(1).unwrap(),
+            event1.created_at,
+            event1.payload,
+            Some(event1.metadata),
+        );
+        let stored_event2 = StoredEvent::new(
+            event2.id,
+            event2.stream_id,
+            EventVersion::try_new(2).unwrap(),
+            event2.created_at,
+            event2.payload,
+            Some(event2.metadata),
+        );
 
         // Process first event
         let result1 = processor.process_single_event(&stored_event1).await;

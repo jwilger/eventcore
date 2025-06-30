@@ -6,7 +6,7 @@
 
 use crate::{
     errors::{EventStoreError, ProjectionError},
-    event::StoredEvent,
+    event_store::StoredEvent,
     types::{EventId, StreamId},
 };
 use async_trait::async_trait;

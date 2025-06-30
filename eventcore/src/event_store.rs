@@ -183,7 +183,10 @@ pub struct StoredEvent<E> {
     pub metadata: Option<EventMetadata>,
 }
 
-impl<E> StoredEvent<E> {
+impl<E> StoredEvent<E>
+where
+    E: PartialEq + Eq,
+{
     /// Creates a new stored event.
     pub const fn new(
         event_id: EventId,
@@ -200,6 +203,20 @@ impl<E> StoredEvent<E> {
             timestamp,
             payload,
             metadata,
+        }
+    }
+
+    /// Converts this StoredEvent to an Event for compatibility with projections.
+    pub fn to_event(&self) -> crate::event::Event<E>
+    where
+        E: Clone,
+    {
+        crate::event::Event {
+            id: self.event_id,
+            stream_id: self.stream_id.clone(),
+            payload: self.payload.clone(),
+            metadata: self.metadata.clone().unwrap_or_default(),
+            created_at: self.timestamp,
         }
     }
 }

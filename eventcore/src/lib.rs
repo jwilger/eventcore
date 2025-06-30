@@ -1110,7 +1110,10 @@ pub use executor::{
 pub use metadata::{CausationId, CorrelationId, EventMetadata, UserId};
 pub use projection::{Projection, ProjectionCheckpoint, ProjectionConfig, ProjectionStatus};
 pub use projection_manager::ProjectionManager;
-pub use subscription::{Subscription, SubscriptionImpl, SubscriptionOptions};
+pub use subscription::{
+    Checkpoint, EventProcessor, Subscription, SubscriptionError, SubscriptionImpl,
+    SubscriptionName, SubscriptionOptions, SubscriptionPosition, SubscriptionResult,
+};
 pub use types::{EventId, EventVersion, StreamId, Timestamp};
 
 // Re-export miette for enhanced error diagnostics

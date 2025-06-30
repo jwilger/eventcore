@@ -31,7 +31,7 @@ struct BenchmarkInput {
     value: i64,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 struct BenchmarkEvent {
     value: i64,
     timestamp: chrono::DateTime<chrono::Utc>,

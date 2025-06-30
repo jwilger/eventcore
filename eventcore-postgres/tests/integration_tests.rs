@@ -43,7 +43,7 @@ async fn setup_postgres_container() -> (ContainerAsync<GenericImage>, PostgresCo
 }
 
 // Test events and commands
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
 enum TestEvent {
     CounterIncremented { amount: u32 },

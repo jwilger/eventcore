@@ -282,7 +282,10 @@ pub struct StoreEventBuilder<E> {
     metadata: Option<EventMetadata>,
 }
 
-impl<E> StoreEventBuilder<E> {
+impl<E> StoreEventBuilder<E>
+where
+    E: PartialEq + Eq,
+{
     /// Creates a new store event builder.
     pub const fn new() -> Self {
         Self {
@@ -367,7 +370,10 @@ impl<E> StoreEventBuilder<E> {
     }
 }
 
-impl<E> Default for StoreEventBuilder<E> {
+impl<E> Default for StoreEventBuilder<E>
+where
+    E: PartialEq + Eq,
+{
     fn default() -> Self {
         Self::new()
     }

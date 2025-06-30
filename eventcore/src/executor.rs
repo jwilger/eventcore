@@ -360,7 +360,7 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event>,
     {
@@ -431,7 +431,7 @@ where
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
-        C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event>,
     {
@@ -814,7 +814,7 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event>,
     {
@@ -1172,7 +1172,7 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event>,
     {
@@ -1217,7 +1217,7 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event>,
     {
@@ -1267,7 +1267,7 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event>,
     {
@@ -1317,7 +1317,7 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event>,
     {
@@ -1560,7 +1560,7 @@ mod tests {
     }
 
     // Create a simple mock event type for testing
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     struct MockEvent(String);
 
     // Custom error type for testing that implements Display

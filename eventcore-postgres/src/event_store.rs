@@ -5,17 +5,20 @@
 //! and efficient event querying.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use eventcore::{
-    EventId, EventMetadata, EventStore, EventStoreError, EventToWrite, EventVersion,
-    ExpectedVersion, ReadOptions, StoredEvent, StreamData, StreamEvents, StreamId, Subscription,
-    SubscriptionOptions, Timestamp,
+    Checkpoint, EventId, EventMetadata, EventProcessor, EventStore, EventStoreError, EventToWrite,
+    EventVersion, ExpectedVersion, ReadOptions, StoredEvent, StreamData, StreamEvents, StreamId,
+    Subscription, SubscriptionError, SubscriptionName, SubscriptionOptions, SubscriptionPosition,
+    SubscriptionResult, Timestamp,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{postgres::PgRow, Row, Transaction};
-use tracing::{debug, instrument, warn};
+use tracing::{debug, error, instrument};
 use uuid::Uuid;
 
 use crate::PostgresEventStore;
@@ -62,7 +65,7 @@ impl EventRow {
     #[allow(clippy::wrong_self_convention)] // This consumes the row, which is correct
     fn to_stored_event<E>(self) -> EventStoreResult<StoredEvent<E>>
     where
-        E: for<'de> Deserialize<'de>,
+        E: for<'de> Deserialize<'de> + PartialEq + Eq,
     {
         let event_id = EventId::try_new(self.event_id)
             .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
@@ -110,7 +113,15 @@ impl EventRow {
 #[async_trait]
 impl<E> EventStore for PostgresEventStore<E>
 where
-    E: Serialize + for<'de> Deserialize<'de> + Send + Sync + std::fmt::Debug + 'static,
+    E: Serialize
+        + for<'de> Deserialize<'de>
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + 'static,
 {
     type Event = E;
 
@@ -306,19 +317,451 @@ where
     #[instrument(skip(self))]
     async fn subscribe(
         &self,
-        _options: SubscriptionOptions,
+        options: SubscriptionOptions,
     ) -> EventStoreResult<Box<dyn Subscription<Event = Self::Event>>> {
-        // TODO: Implement subscription functionality
-        warn!("PostgreSQL subscriptions not yet implemented");
-        Err(EventStoreError::Configuration(
-            "Subscriptions not yet implemented".to_string(),
-        ))
+        let subscription = PostgresSubscription::new(self.clone(), options);
+        Ok(Box::new(subscription))
+    }
+}
+
+/// `PostgreSQL` subscription implementation with database checkpointing support.
+pub struct PostgresSubscription<E>
+where
+    E: Serialize
+        + for<'de> Deserialize<'de>
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + 'static,
+{
+    event_store: PostgresEventStore<E>,
+    options: SubscriptionOptions,
+    current_position: Arc<RwLock<Option<SubscriptionPosition>>>,
+    is_running: Arc<AtomicBool>,
+    is_paused: Arc<AtomicBool>,
+    stop_signal: Arc<AtomicBool>,
+}
+
+impl<E> PostgresSubscription<E>
+where
+    E: Serialize
+        + for<'de> Deserialize<'de>
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + 'static,
+{
+    /// Creates a new `PostgreSQL` subscription.
+    pub fn new(event_store: PostgresEventStore<E>, options: SubscriptionOptions) -> Self {
+        Self {
+            event_store,
+            options,
+            current_position: Arc::new(RwLock::new(None)),
+            is_running: Arc::new(AtomicBool::new(false)),
+            is_paused: Arc::new(AtomicBool::new(false)),
+            stop_signal: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Processes events from the event store according to subscription options.
+    async fn process_events(
+        &self,
+        name: SubscriptionName,
+        mut processor: Box<dyn EventProcessor<Event = E>>,
+    ) -> SubscriptionResult<()>
+    where
+        E: PartialEq + Eq,
+    {
+        // Load checkpoint to determine starting position
+        let starting_position = self.load_checkpoint(&name).await?;
+
+        loop {
+            // Check if we should stop
+            if self.stop_signal.load(Ordering::Acquire) {
+                break;
+            }
+
+            // Check if we're paused
+            if self.is_paused.load(Ordering::Acquire) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            }
+
+            // Get events according to subscription options
+            let events = self
+                .get_events_for_processing(starting_position.as_ref())
+                .await?;
+
+            let mut current_pos = starting_position.clone();
+            let mut has_new_events = false;
+
+            for event in events {
+                // Skip events we've already processed
+                if let Some(ref pos) = current_pos {
+                    if event.event_id <= pos.last_event_id {
+                        continue;
+                    }
+                }
+
+                // Process the event
+                processor.process_event(event.clone()).await?;
+                has_new_events = true;
+
+                // Update current position
+                let new_checkpoint = Checkpoint::new(event.event_id, event.event_version.into());
+
+                current_pos = Some(if let Some(mut pos) = current_pos {
+                    pos.last_event_id = event.event_id;
+                    pos.update_checkpoint(event.stream_id.clone(), new_checkpoint);
+                    pos
+                } else {
+                    let mut pos = SubscriptionPosition::new(event.event_id);
+                    pos.update_checkpoint(event.stream_id.clone(), new_checkpoint);
+                    pos
+                });
+
+                // Update our current position
+                {
+                    let mut guard = self.current_position.write().map_err(|_| {
+                        SubscriptionError::CheckpointSaveFailed(
+                            "Failed to acquire position lock".to_string(),
+                        )
+                    })?;
+                    (*guard).clone_from(&current_pos);
+                }
+
+                // Periodically save checkpoint to database
+                if let Some(ref pos) = current_pos {
+                    self.save_checkpoint_to_db(&name, pos.clone()).await?;
+                }
+            }
+
+            // If we're caught up and this is a live subscription, notify the processor
+            if !has_new_events && matches!(self.options, SubscriptionOptions::LiveOnly) {
+                processor.on_live().await?;
+            }
+
+            // Sleep briefly to avoid busy-waiting
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        Ok(())
+    }
+
+    /// Gets events for processing based on subscription options.
+    async fn get_events_for_processing(
+        &self,
+        starting_position: Option<&SubscriptionPosition>,
+    ) -> SubscriptionResult<Vec<StoredEvent<E>>> {
+        let (streams, from_position) = match &self.options {
+            SubscriptionOptions::CatchUpFromBeginning => (vec![], None),
+            SubscriptionOptions::CatchUpFromPosition(pos) => (vec![], Some(pos.last_event_id)),
+            SubscriptionOptions::LiveOnly => {
+                // For live-only, start from the current position in the store
+                (vec![], starting_position.as_ref().map(|p| p.last_event_id))
+            }
+            SubscriptionOptions::SpecificStreamsFromBeginning(_mode) => {
+                // This would need stream selection logic based on mode
+                (vec![], None)
+            }
+            SubscriptionOptions::SpecificStreamsFromPosition(_mode, pos) => {
+                (vec![], Some(pos.last_event_id))
+            }
+            SubscriptionOptions::AllStreams { from_position } => (vec![], *from_position),
+            SubscriptionOptions::SpecificStreams {
+                streams,
+                from_position,
+            } => (streams.clone(), *from_position),
+        };
+
+        // Read events from PostgreSQL
+        if streams.is_empty() {
+            self.read_all_events_since(
+                from_position.or_else(|| starting_position.map(|p| p.last_event_id)),
+            )
+            .await
+        } else {
+            self.read_streams_events_since(
+                &streams,
+                from_position.or_else(|| starting_position.map(|p| p.last_event_id)),
+            )
+            .await
+        }
+    }
+
+    /// Reads all events from `PostgreSQL` since a given event ID.
+    async fn read_all_events_since(
+        &self,
+        from_event_id: Option<EventId>,
+    ) -> SubscriptionResult<Vec<StoredEvent<E>>> {
+        // For now, use a simple approach: read all streams and filter
+        // This can be optimized later with direct SQL queries
+        let all_streams = self.get_all_stream_ids().await?;
+        if all_streams.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let read_options = ReadOptions {
+            from_version: None,
+            to_version: None,
+            max_events: Some(1000),
+        };
+
+        let stream_data = self
+            .event_store
+            .read_streams(&all_streams, &read_options)
+            .await
+            .map_err(SubscriptionError::EventStore)?;
+
+        // Filter events based on from_event_id
+        let filtered_events = if let Some(from_id) = from_event_id {
+            stream_data
+                .events
+                .into_iter()
+                .filter(|e| e.event_id > from_id)
+                .collect()
+        } else {
+            stream_data.events
+        };
+
+        Ok(filtered_events)
+    }
+
+    /// Gets all stream IDs from the database.
+    async fn get_all_stream_ids(&self) -> SubscriptionResult<Vec<StreamId>> {
+        let rows = sqlx::query("SELECT DISTINCT stream_id FROM events LIMIT 1000")
+            .fetch_all(self.event_store.pool.as_ref())
+            .await
+            .map_err(|e| {
+                SubscriptionError::EventStore(EventStoreError::Internal(format!(
+                    "Failed to fetch stream IDs: {e}"
+                )))
+            })?;
+
+        let mut stream_ids = Vec::new();
+        for row in rows {
+            let stream_id_str: String = row.get("stream_id");
+            if let Ok(stream_id) = StreamId::try_new(stream_id_str) {
+                stream_ids.push(stream_id);
+            }
+        }
+
+        Ok(stream_ids)
+    }
+
+    /// Reads events from specific streams since a given event ID.
+    async fn read_streams_events_since(
+        &self,
+        stream_ids: &[StreamId],
+        from_event_id: Option<EventId>,
+    ) -> SubscriptionResult<Vec<StoredEvent<E>>> {
+        let read_options = ReadOptions {
+            from_version: None,
+            to_version: None,
+            max_events: None,
+        };
+
+        let stream_data = self
+            .event_store
+            .read_streams(stream_ids, &read_options)
+            .await
+            .map_err(SubscriptionError::EventStore)?;
+
+        // Filter events based on from_event_id
+        let filtered_events = if let Some(from_id) = from_event_id {
+            stream_data
+                .events
+                .into_iter()
+                .filter(|e| e.event_id > from_id)
+                .collect()
+        } else {
+            stream_data.events
+        };
+
+        Ok(filtered_events)
+    }
+
+    /// Saves checkpoint to `PostgreSQL` database.
+    async fn save_checkpoint_to_db(
+        &self,
+        name: &SubscriptionName,
+        position: SubscriptionPosition,
+    ) -> SubscriptionResult<()> {
+        let position_json = serde_json::to_string(&position).map_err(|e| {
+            SubscriptionError::CheckpointSaveFailed(format!("Serialization failed: {e}"))
+        })?;
+
+        sqlx::query(
+            "INSERT INTO subscription_checkpoints (subscription_name, position_data, updated_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (subscription_name) 
+             DO UPDATE SET position_data = $2, updated_at = NOW()",
+        )
+        .bind(name.as_ref())
+        .bind(position_json)
+        .execute(self.event_store.pool.as_ref())
+        .await
+        .map_err(|e| SubscriptionError::CheckpointSaveFailed(format!("Database error: {e}")))?;
+
+        Ok(())
+    }
+
+    /// Loads checkpoint from `PostgreSQL` database.
+    async fn load_checkpoint_from_db(
+        &self,
+        name: &SubscriptionName,
+    ) -> SubscriptionResult<Option<SubscriptionPosition>> {
+        let row = sqlx::query(
+            "SELECT position_data FROM subscription_checkpoints WHERE subscription_name = $1",
+        )
+        .bind(name.as_ref())
+        .fetch_optional(self.event_store.pool.as_ref())
+        .await
+        .map_err(|e| SubscriptionError::CheckpointLoadFailed(format!("Database error: {e}")))?;
+
+        if let Some(row) = row {
+            let position_json: String = row.get("position_data");
+            let position = serde_json::from_str(&position_json).map_err(|e| {
+                SubscriptionError::CheckpointLoadFailed(format!("Deserialization failed: {e}"))
+            })?;
+            Ok(Some(position))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+#[async_trait]
+impl<E> Subscription for PostgresSubscription<E>
+where
+    E: Serialize
+        + for<'de> Deserialize<'de>
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + 'static,
+{
+    type Event = E;
+
+    async fn start(
+        &mut self,
+        name: SubscriptionName,
+        options: SubscriptionOptions,
+        processor: Box<dyn EventProcessor<Event = Self::Event>>,
+    ) -> SubscriptionResult<()>
+    where
+        Self::Event: PartialEq + Eq,
+    {
+        // Update options if provided
+        self.options = options;
+
+        // Set running state
+        self.is_running.store(true, Ordering::Release);
+        self.stop_signal.store(false, Ordering::Release);
+        self.is_paused.store(false, Ordering::Release);
+
+        // Start processing events in a background task
+        let subscription = self.clone(); // We'll need to implement Clone
+        let name_copy = name;
+
+        tokio::spawn(async move {
+            if let Err(e) = subscription.process_events(name_copy, processor).await {
+                error!("PostgreSQL subscription processing failed: {}", e);
+            }
+        });
+
+        Ok(())
+    }
+
+    async fn stop(&mut self) -> SubscriptionResult<()> {
+        self.stop_signal.store(true, Ordering::Release);
+        self.is_running.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    async fn pause(&mut self) -> SubscriptionResult<()> {
+        self.is_paused.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    async fn resume(&mut self) -> SubscriptionResult<()> {
+        self.is_paused.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    async fn get_position(&self) -> SubscriptionResult<Option<SubscriptionPosition>> {
+        let guard = self.current_position.read().map_err(|_| {
+            SubscriptionError::CheckpointLoadFailed("Failed to acquire position lock".to_string())
+        })?;
+        Ok(guard.clone())
+    }
+
+    async fn save_checkpoint(&mut self, position: SubscriptionPosition) -> SubscriptionResult<()> {
+        // For the PostgreSQL implementation, we update the current position
+        {
+            let mut guard = self.current_position.write().map_err(|_| {
+                SubscriptionError::CheckpointSaveFailed(
+                    "Failed to acquire position lock".to_string(),
+                )
+            })?;
+            *guard = Some(position);
+        }
+        Ok(())
+    }
+
+    async fn load_checkpoint(
+        &self,
+        name: &SubscriptionName,
+    ) -> SubscriptionResult<Option<SubscriptionPosition>> {
+        self.load_checkpoint_from_db(name).await
+    }
+}
+
+// Implement Clone for the PostgreSQL subscription
+impl<E> Clone for PostgresSubscription<E>
+where
+    E: Serialize
+        + for<'de> Deserialize<'de>
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            event_store: self.event_store.clone(),
+            options: self.options.clone(),
+            current_position: Arc::clone(&self.current_position),
+            is_running: Arc::clone(&self.is_running),
+            is_paused: Arc::clone(&self.is_paused),
+            stop_signal: Arc::clone(&self.stop_signal),
+        }
     }
 }
 
 impl<E> PostgresEventStore<E>
 where
-    E: Send + Sync,
+    E: Serialize
+        + for<'de> Deserialize<'de>
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + 'static,
 {
     /// Get current versions for multiple streams
     async fn get_stream_versions(
