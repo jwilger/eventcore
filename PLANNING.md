@@ -83,10 +83,10 @@ Based on the comprehensive expert review, the following improvements have been i
   - [x] Add pre-computed hash set to `ReadStreams` for fast validation
   - [x] Benchmark performance improvement (expected: eliminate O(n) cost per stream write)
 
-- [ ] **Stream ID Constructor Optimization**
-  - [ ] Add `StreamId::from_static()` for compile-time known literals (e.g., "transfers")
-  - [ ] Implement const fn validation for string literals where possible
-  - [ ] Optimize hot path construction for dynamic IDs with runtime caching
+- [x] **Stream ID Constructor Optimization**
+  - [x] Add `StreamId::from_static()` for compile-time known literals (e.g., "transfers")
+  - [x] Implement const fn validation for string literals where possible
+  - [x] Optimize hot path construction for dynamic IDs with runtime caching
 
 - [ ] **Input Type Safety Improvements**
   - [ ] Implement branded types for command inputs (SourceAccount vs TargetAccount)

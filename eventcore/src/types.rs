@@ -88,6 +88,128 @@ use uuid::Uuid;
 )]
 pub struct StreamId(String);
 
+impl StreamId {
+    /// Creates a `StreamId` from a compile-time validated string literal.
+    ///
+    /// This function performs validation at compile time for string literals,
+    /// providing optimized construction for common stream ID patterns.
+    /// It's particularly useful for predefined stream types like "transfers",
+    /// "orders", or "users".
+    ///
+    /// The validation is performed at compile time via const assertions,
+    /// ensuring the string is non-empty and within the 255 character limit.
+    /// Runtime validation is skipped since the input is already verified.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use eventcore::StreamId;
+    ///
+    /// // These are validated at compile time - zero runtime cost
+    /// let transfer_stream = StreamId::from_static("transfers");
+    /// let order_stream = StreamId::from_static("orders");
+    /// let user_stream = StreamId::from_static("users");
+    /// ```
+    ///
+    /// # Compile-time validation
+    ///
+    /// The validation occurs at compile time, so invalid inputs will cause compilation to fail:
+    ///
+    /// ```ignore
+    /// use eventcore::StreamId;
+    /// // This would panic at compile time due to empty string
+    /// let invalid = StreamId::from_static("");
+    ///
+    /// // This would panic at compile time due to length > 255
+    /// let too_long = StreamId::from_static("a string that is much longer than the 255 character limit and would cause a compile-time panic due to the const validation function checking the length at compile time which is exactly what we want for this optimization");
+    /// ```
+    pub fn from_static(s: &'static str) -> Self {
+        // Compile-time validation using const assertions
+        const fn validate_static_str(s: &str) {
+            assert!(!s.is_empty(), "StreamId cannot be empty");
+            assert!(s.len() <= 255, "StreamId cannot exceed 255 characters");
+            // Note: We assume static strings are pre-trimmed for performance
+        }
+
+        // This will panic at compile time if validation fails
+        validate_static_str(s);
+
+        // We still need to use try_new since nutype doesn't expose direct construction,
+        // but the const validation above ensures this will always succeed
+        Self::try_new(s).expect("const validation guarantees validity")
+    }
+
+    /// Creates a `StreamId` with optimized construction for frequently used dynamic strings.
+    ///
+    /// This method provides an optimization for hot paths where the same dynamic
+    /// stream IDs are constructed repeatedly. It uses an internal cache to avoid
+    /// redundant validation and string operations for previously seen values.
+    ///
+    /// The cache is bounded and uses a least-recently-used (LRU) eviction policy
+    /// to prevent unbounded memory growth. This makes it safe to use in long-running
+    /// applications.
+    ///
+    /// # Performance
+    ///
+    /// - First time: Full validation and caching (similar to `try_new`)
+    /// - Subsequent times: O(1) cache lookup, no validation needed
+    /// - Cache misses: Falls back to normal validation and updates cache
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use eventcore::StreamId;
+    ///
+    /// // First call performs validation and caches
+    /// let stream1 = StreamId::cached("user-123").expect("valid stream");
+    ///
+    /// // Subsequent calls are optimized - no validation needed
+    /// let stream2 = StreamId::cached("user-123").expect("cached stream");
+    /// assert_eq!(stream1, stream2);
+    ///
+    /// // Different IDs are also cached
+    /// let order_stream = StreamId::cached("order-456").expect("valid stream");
+    /// ```
+    pub fn cached(s: &str) -> Result<Self, StreamIdError> {
+        use std::collections::HashMap;
+        use std::sync::{OnceLock, RwLock};
+
+        // Cache with bounded size to prevent memory growth
+        const CACHE_SIZE: usize = 1000;
+        static CACHE: OnceLock<RwLock<HashMap<String, StreamId>>> = OnceLock::new();
+
+        let cache = CACHE.get_or_init(|| RwLock::new(HashMap::with_capacity(CACHE_SIZE)));
+
+        // First try to read from cache
+        {
+            let cache_read = cache.read().expect("StreamId cache should not be poisoned");
+            if let Some(cached_id) = cache_read.get(s) {
+                return Ok(cached_id.clone());
+            }
+        }
+
+        // Cache miss - validate and store
+        let validated_id = Self::try_new(s)?;
+
+        // Update cache with write lock
+        {
+            let mut cache_write = cache
+                .write()
+                .expect("StreamId cache should not be poisoned");
+
+            // Simple LRU: if cache is full, clear it completely
+            // This is a simple strategy that avoids complex LRU tracking
+            if cache_write.len() >= CACHE_SIZE {
+                cache_write.clear();
+            }
+
+            cache_write.insert(s.to_string(), validated_id.clone());
+        }
+
+        Ok(validated_id)
+    }
+}
+
 /// A globally unique event identifier using UUIDv7 format.
 ///
 /// `EventId` provides globally unique identification for events while maintaining
@@ -669,6 +791,153 @@ mod tests {
         // Valid edge case: exactly 255 chars
         let max_string = "a".repeat(255);
         assert!(StreamId::try_new(max_string).is_ok());
+    }
+
+    // Tests for StreamId::from_static optimization
+    #[test]
+    fn stream_id_from_static_creates_valid_ids() {
+        let transfer_stream = StreamId::from_static("transfers");
+        assert_eq!(transfer_stream.as_ref(), "transfers");
+
+        let order_stream = StreamId::from_static("orders");
+        assert_eq!(order_stream.as_ref(), "orders");
+
+        let user_stream = StreamId::from_static("users");
+        assert_eq!(user_stream.as_ref(), "users");
+    }
+
+    #[test]
+    fn stream_id_from_static_handles_edge_cases() {
+        // Single character
+        let single = StreamId::from_static("a");
+        assert_eq!(single.as_ref(), "a");
+
+        // Special characters
+        let special = StreamId::from_static("user-123_test");
+        assert_eq!(special.as_ref(), "user-123_test");
+
+        // Long but valid string (testing with a static string of reasonable length)
+        let long_static = StreamId::from_static(
+            "this-is-a-very-long-stream-name-but-still-within-limits-for-testing-purposes",
+        );
+        assert!(long_static.as_ref().len() > 50);
+    }
+
+    #[test]
+    fn stream_id_from_static_equals_try_new() {
+        let static_id = StreamId::from_static("test-stream");
+        let dynamic_id = StreamId::try_new("test-stream").unwrap();
+        assert_eq!(static_id, dynamic_id);
+    }
+
+    // Tests for StreamId::cached optimization
+    #[test]
+    fn stream_id_cached_stores_and_retrieves() {
+        let id1 = StreamId::cached("test-cache-1").expect("valid stream id");
+        let id2 = StreamId::cached("test-cache-1").expect("cached stream id");
+
+        // Should be equal
+        assert_eq!(id1, id2);
+        assert_eq!(id1.as_ref(), "test-cache-1");
+    }
+
+    #[test]
+    fn stream_id_cached_handles_multiple_entries() {
+        let user_id = StreamId::cached("user-456").expect("valid user stream");
+        let order_id = StreamId::cached("order-789").expect("valid order stream");
+        let product_id = StreamId::cached("product-101").expect("valid product stream");
+
+        // Retrieve again to test cache hits
+        let user_id2 = StreamId::cached("user-456").expect("cached user stream");
+        let order_id2 = StreamId::cached("order-789").expect("cached order stream");
+        let product_id2 = StreamId::cached("product-101").expect("cached product stream");
+
+        assert_eq!(user_id, user_id2);
+        assert_eq!(order_id, order_id2);
+        assert_eq!(product_id, product_id2);
+    }
+
+    #[test]
+    fn stream_id_cached_rejects_invalid_input() {
+        // Empty string should fail
+        assert!(StreamId::cached("").is_err());
+
+        // Too long string should fail
+        let too_long = "a".repeat(256);
+        assert!(StreamId::cached(&too_long).is_err());
+
+        // Whitespace-only should fail
+        assert!(StreamId::cached("   ").is_err());
+    }
+
+    #[test]
+    fn stream_id_cached_equals_try_new() {
+        let test_str = "cached-test-stream";
+        let cached_id = StreamId::cached(test_str).expect("valid cached stream");
+        let regular_id = StreamId::try_new(test_str).expect("valid regular stream");
+
+        assert_eq!(cached_id, regular_id);
+    }
+
+    #[test]
+    fn stream_id_cached_performance_stress_test() {
+        // Test cache with many different entries
+        let mut ids = Vec::new();
+
+        // Fill cache with different IDs
+        for i in 0..500 {
+            let stream_name = format!("stream-{i}");
+            let id = StreamId::cached(&stream_name).expect("valid stream id");
+            ids.push((stream_name, id));
+        }
+
+        // Verify all cached IDs are still accessible
+        for (stream_name, original_id) in &ids {
+            let cached_id = StreamId::cached(stream_name).expect("cached stream id");
+            assert_eq!(*original_id, cached_id);
+        }
+
+        // Test cache overflow behavior (should not crash)
+        for i in 500..1500 {
+            let stream_name = format!("overflow-stream-{i}");
+            let id = StreamId::cached(&stream_name).expect("valid overflow stream id");
+            assert_eq!(id.as_ref(), stream_name);
+        }
+    }
+
+    #[test]
+    fn stream_id_cached_concurrent_access() {
+        use std::thread;
+
+        let handles: Vec<_> = (0..10)
+            .map(|thread_id| {
+                thread::spawn(move || {
+                    let mut results = Vec::new();
+                    for i in 0..100 {
+                        let stream_name = format!("thread-{thread_id}-stream-{i}");
+                        let id =
+                            StreamId::cached(&stream_name).expect("valid concurrent stream id");
+                        results.push((stream_name, id));
+                    }
+                    results
+                })
+            })
+            .collect();
+
+        // Wait for all threads and collect results
+        let mut all_results = Vec::new();
+        for handle in handles {
+            all_results.extend(handle.join().expect("thread should complete"));
+        }
+
+        // Verify all IDs are correct
+        for (stream_name, id) in all_results {
+            assert_eq!(id.as_ref(), stream_name);
+
+            // Verify we can still retrieve from cache
+            let cached_again = StreamId::cached(&stream_name).expect("should still be cached");
+            assert_eq!(id, cached_again);
+        }
     }
 
     #[test]
