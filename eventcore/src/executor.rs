@@ -849,10 +849,20 @@ where
                 &options.context,
             );
 
-            let result_versions = if let Some(timeout) = options.event_store_timeout {
+            // Filter out empty StreamEvents (those with no actual events to write)
+            // These are created for version checking but shouldn't be sent to the database
+            let stream_events_with_writes: Vec<_> = stream_events
+                .into_iter()
+                .filter(|se| !se.events.is_empty())
+                .collect();
+
+            let result_versions = if stream_events_with_writes.is_empty() {
+                // If there are no actual events to write, return empty version map
+                HashMap::new()
+            } else if let Some(timeout) = options.event_store_timeout {
                 if let Ok(result) = tokio::time::timeout(
                     timeout,
-                    self.write_events_with_circuit_breaker(&stream_events, options),
+                    self.write_events_with_circuit_breaker(&stream_events_with_writes, options),
                 )
                 .await
                 {
@@ -870,7 +880,7 @@ where
                     ));
                 }
             } else {
-                self.write_events_with_circuit_breaker(&stream_events, options)
+                self.write_events_with_circuit_breaker(&stream_events_with_writes, options)
                     .await
                     .map_err(|err| {
                         warn!(error = %err, "Failed to write events to event store");
