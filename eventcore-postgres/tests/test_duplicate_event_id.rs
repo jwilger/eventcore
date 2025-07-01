@@ -88,6 +88,12 @@ async fn test_duplicate_event_id_investigation() {
         .await
         .expect("Failed to create PostgreSQL event store");
 
+    // Initialize database tables
+    event_store
+        .initialize()
+        .await
+        .expect("Failed to initialize database");
+
     let executor = Arc::new(CommandExecutor::new(event_store));
 
     // Use a unique stream for this test

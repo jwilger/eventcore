@@ -90,6 +90,12 @@ async fn test_concurrent_creation_with_retry() {
         .await
         .expect("Failed to create PostgreSQL event store");
 
+    // Initialize database tables
+    event_store
+        .initialize()
+        .await
+        .expect("Failed to initialize database");
+
     let executor = Arc::new(CommandExecutor::new(event_store));
 
     // Test concurrent creation of the same stream

@@ -182,7 +182,7 @@ Based on the comprehensive expert review, the following improvements have been i
     - [x] Replace single `INSERT` statements with batch `VALUES` clauses  
     - [x] Implement `insert_events_batch()` method in PostgreSQL adapter
     - [x] Update `write_stream_events()` to use batch insertion
-    - [ ] Benchmark batch sizes (suggested: 100-1000 events per batch)
+    - [x] Benchmark batch sizes (suggested: 100-1000 events per batch)
   - [ ] **Connection Pool Configuration** (Moderate Impact: ~1.5x performance gain)
     - [ ] Create `PostgresConfig` struct with pool configuration options
     - [ ] Expose `pool_size`, `max_connections`, `connection_timeout`, `idle_timeout`
