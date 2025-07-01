@@ -571,14 +571,20 @@ where
         // Wrap the execution with overall command timeout if specified
         #[allow(clippy::option_if_let_else)] // The match is clearer than map_or here
         let result = if let Some(command_timeout) = options.command_timeout {
-            match tokio::time::timeout(
+            if let Ok(result) = tokio::time::timeout(
                 command_timeout,
                 self.execute_without_timeout(command, input, &options),
             )
             .await
             {
-                Ok(result) => result,
-                Err(_) => Err(CommandError::Timeout(command_timeout)),
+                result
+            } else {
+                warn!(
+                    command_type = std::any::type_name::<C>(),
+                    timeout = ?command_timeout,
+                    "Command execution timed out"
+                );
+                Err(CommandError::Timeout(command_timeout))
             }
         } else {
             self.execute_without_timeout(command, input, &options).await
@@ -681,7 +687,9 @@ where
             iteration += 1;
             if iteration > max_iterations {
                 return Err(CommandError::ValidationFailed(format!(
-                    "Command exceeded maximum stream discovery iterations ({max_iterations})"
+                    "Command '{}' exceeded maximum stream discovery iterations ({max_iterations}). This suggests the command is continuously discovering new streams. Current streams: {:?}",
+                    std::any::type_name::<C>(),
+                    stream_ids.iter().map(std::convert::AsRef::as_ref).collect::<Vec<_>>()
                 )));
             }
 

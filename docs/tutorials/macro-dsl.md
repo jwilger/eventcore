@@ -1,6 +1,6 @@
-# Tutorial: Using the Macro DSL
+# Tutorial: Using EventCore Macros
 
-EventCore provides powerful macros to reduce boilerplate and make command definitions more declarative. This tutorial shows you how to use both the `#[derive(Command)]` macro and the declarative `command!` macro.
+EventCore provides powerful macros to reduce boilerplate in command implementations. This tutorial shows you how to use the `#[derive(Command)]` procedural macro and the helper macros `require!` and `emit!`.
 
 ## Prerequisites
 
@@ -15,9 +15,9 @@ async-trait = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 ```
 
-## Approach 1: Using `#[derive(Command)]`
+## Using `#[derive(Command)]`
 
-The `#[derive(Command)]` macro automatically generates the `Command` trait implementation based on field annotations.
+The `#[derive(Command)]` macro automatically generates the `Command` trait implementation based on field annotations, significantly reducing boilerplate code.
 
 ### Basic Example
 
@@ -131,190 +131,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Approach 2: Using the `command!` Macro
+## Helper Macros
 
-The `command!` macro provides a more declarative syntax for defining commands entirely in one place.
+EventCore provides two helper macros that work with the `#[derive(Command)]` procedural macro to reduce boilerplate in command implementations.
 
-### Basic Command Definition
+### `require!(condition, message)`
 
-```rust
-use eventcore::{command, require, emit};
-use eventcore::types::StreamId;
-use std::collections::HashMap;
-
-command! {
-    /// Transfer money between two accounts
-    TransferMoneyV2 {
-        // Fields marked with 'reads:' contribute to the consistency boundary
-        reads: from_account: StreamId,
-        reads: to_account: StreamId,
-        
-        // Regular fields
-        amount: u64,
-        reference: String,
-    }
-    
-    // Define the state type
-    state: TransferStateV2 {
-        accounts: HashMap<StreamId, (bool, u64)>, // (exists, balance)
-    }
-    
-    // Define how events are folded into state
-    apply(state, event) {
-        match event.payload {
-            BankEvent::AccountOpened { initial_balance, .. } => {
-                state.accounts.insert(event.stream_id.clone(), (true, initial_balance));
-            }
-            BankEvent::MoneyTransferred { amount, .. } => {
-                // Update balances based on stream
-                if let Some((exists, balance)) = state.accounts.get_mut(&event.stream_id) {
-                    // This is simplified - you'd need more logic to determine debit vs credit
-                }
-            }
-        }
-    }
-    
-    // Define the business logic
-    handle(read_streams, state, input, stream_resolver) -> Vec<StreamWrite<_, BankEvent>> {
-        // Use require! for business rule validation
-        let from_balance = state.accounts.get(&input.from_account)
-            .map(|(exists, balance)| if *exists { *balance } else { 0 })
-            .unwrap_or(0);
-            
-        require!(from_balance >= input.amount, "Insufficient funds");
-        
-        let to_exists = state.accounts.get(&input.to_account)
-            .map(|(exists, _)| *exists)
-            .unwrap_or(false);
-            
-        require!(to_exists, "Destination account does not exist");
-        
-        let mut events = Vec::new();
-        
-        // Use emit! for creating events with type-safe stream access
-        emit!(events, read_streams, input.from_account, BankEvent::MoneyTransferred {
-            from: input.from_account.to_string(),
-            to: input.to_account.to_string(),
-            amount: input.amount,
-        });
-        
-        emit!(events, read_streams, input.to_account, BankEvent::MoneyTransferred {
-            from: input.from_account.to_string(),
-            to: input.to_account.to_string(),
-            amount: input.amount,
-        });
-        
-        events
-    }
-}
-```
-
-### Macro Helper Functions
-
-The `command!` macro provides several helper functions:
-
-#### `require!(condition, message)`
 Validates business rules and returns an error if the condition is false:
 
 ```rust
-handle(read_streams, state, input, stream_resolver) {
+use eventcore::require;
+
+async fn handle(
+    &self,
+    read_streams: ReadStreams<Self::StreamSet>,
+    state: Self::State,
+    input: Self::Input,
+    stream_resolver: &mut StreamResolver,
+) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
     require!(input.amount > 0, "Amount must be positive");
     require!(state.account_exists, "Account must exist");
     require!(state.balance >= input.amount, "Insufficient funds");
     
-    // ... rest of logic
+    // ... rest of business logic
 }
 ```
 
-#### `emit!(events, read_streams, stream, event)`
+### `emit!(events, read_streams, stream, event)`
+
 Creates events with compile-time stream access validation:
 
 ```rust
-handle(read_streams, state, input, stream_resolver) {
+use eventcore::emit;
+
+async fn handle(
+    &self,
+    read_streams: ReadStreams<Self::StreamSet>,
+    state: Self::State,
+    input: Self::Input,
+    stream_resolver: &mut StreamResolver,
+) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
     let mut events = Vec::new();
     
-    emit!(events, read_streams, input.account_id, AccountEvent::Deposited {
+    emit!(events, &read_streams, input.account_id, AccountEvent::Deposited {
         amount: input.amount,
     });
     
     // Conditional events
     if input.amount > 1000 {
-        emit!(events, read_streams, audit_stream, AuditEvent::LargeTransaction {
+        emit!(events, &read_streams, audit_stream(), AuditEvent::LargeTransaction {
             account: input.account_id.clone(),
             amount: input.amount,
         });
     }
     
-    events
+    Ok(events)
 }
 ```
 
-### Advanced Macro Features
-
-#### Optional Fields and Defaults
-
-```rust
-command! {
-    CreateOrder {
-        reads: customer_stream: StreamId,
-        reads: product_stream: StreamId,
-        
-        quantity: u32,
-        
-        // Optional field with default
-        priority: Option<String> = None,
-        
-        // Field with custom default
-        created_at: Timestamp = Timestamp::now(),
-    }
-    
-    // ... rest of definition
-}
-```
-
-#### Read-Only Commands
-
-For commands that only read data (queries):
-
-```rust
-command! {
-    GetAccountBalance {
-        reads: account_id: StreamId,
-        
-        // Mark as read-only to skip event generation
-        read_only: true,
-    }
-    
-    state: AccountState {
-        balance: u64,
-        exists: bool,
-    }
-    
-    apply(state, event) {
-        match event.payload {
-            BankEvent::AccountOpened { initial_balance, .. } => {
-                state.exists = true;
-                state.balance = initial_balance;
-            }
-            BankEvent::MoneyDeposited { amount } => {
-                state.balance += amount;
-            }
-            BankEvent::MoneyWithdrawn { amount } => {
-                state.balance = state.balance.saturating_sub(amount);
-            }
-        }
-    }
-    
-    handle(read_streams, state, input, stream_resolver) -> Vec<StreamWrite<_, BankEvent>> {
-        // For read-only commands, typically you'd return query results
-        // through a different mechanism (not events)
-        println!("Account {} balance: {}", input.account_id, state.balance);
-        vec![] // No events for read-only commands
-    }
-}
-```
-
-## Comparison: Manual vs Macro Approaches
+## Comparison: Manual vs Derive Macro Approaches
 
 ### Manual Implementation (verbose but explicit)
 ```rust
@@ -345,18 +220,34 @@ impl Command for TransferMoney {
 }
 ```
 
-### Macro Implementation (concise and declarative)
+### Derive Macro Implementation (concise with generated boilerplate)
 ```rust
-command! {
-    TransferMoney {
-        reads: from_account: StreamId,
-        reads: to_account: StreamId,
-        amount: u64,
-    }
+#[derive(Command)]
+struct TransferMoney {
+    #[stream]
+    from_account: StreamId,
+    #[stream]
+    to_account: StreamId,
+    amount: u64,
+}
+
+// Only need to implement the business logic methods:
+#[async_trait]
+impl Command for TransferMoney {
+    type Input = Self;
+    type State = TransferState;
+    type Event = BankEvent;
+    type StreamSet = TransferMoneyStreamSet; // Generated by macro
+
+    // read_streams() is auto-generated
     
-    state: TransferState { /* ... */ }
-    apply(state, event) { /* ... */ }
-    handle(read_streams, state, input, stream_resolver) { /* ... */ }
+    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+        // Your event folding logic
+    }
+
+    async fn handle(&self, ...) -> CommandResult<Vec<StreamWrite<...>>> {
+        // Your business logic with require! and emit! helpers
+    }
 }
 ```
 
@@ -365,22 +256,27 @@ command! {
 ### When to Use Each Approach
 
 **Use `#[derive(Command)]` when:**
-- You want to keep the manual `apply()` and `handle()` implementations
-- You need maximum control over the implementation
-- You're gradually migrating from manual implementations
+- You want reduced boilerplate for stream declarations
+- You prefer explicit trait implementations for business logic
+- You need type-safe stream access without repetitive `read_streams()` implementations
 
-**Use `command!` macro when:**
-- You want the most concise syntax
-- You're starting fresh with new commands
-- You want to leverage the helper functions (`require!`, `emit!`)
+**Use manual implementation when:**
+- You need maximum control over every aspect of the command
+- You're debugging complex command interactions
+- You're gradually migrating existing code
 
 ### Naming Conventions
 
 ```rust
 // Commands use imperative verb + noun
-command! { TransferMoney { ... } }
-command! { OpenAccount { ... } }
-command! { CancelOrder { ... } }
+#[derive(Command)]
+struct TransferMoney { ... }
+
+#[derive(Command)]
+struct OpenAccount { ... }
+
+#[derive(Command)]
+struct CancelOrder { ... }
 
 // Events use past tense
 enum BankEvent {
@@ -393,23 +289,25 @@ enum BankEvent {
 ### Stream Field Patterns
 
 ```rust
-command! {
-    ProcessOrder {
-        // Primary entity stream
-        reads: order_stream: StreamId,
-        
-        // Related entity streams
-        reads: customer_stream: StreamId,
-        reads: inventory_stream: StreamId,
-        
-        // Non-stream fields
-        processing_notes: String,
-        operator_id: String,
-    }
+#[derive(Command)]
+struct ProcessOrder {
+    // Primary entity stream
+    #[stream]
+    order_stream: StreamId,
+    
+    // Related entity streams
+    #[stream]
+    customer_stream: StreamId,
+    #[stream]
+    inventory_stream: StreamId,
+    
+    // Non-stream fields
+    processing_notes: String,
+    operator_id: String,
 }
 ```
 
-## Testing Macro-Generated Commands
+## Testing Derive Macro Commands
 
 ```rust
 #[cfg(test)]
@@ -417,15 +315,14 @@ mod tests {
     use super::*;
     
     #[tokio::test]
-    async fn test_macro_command() {
-        let command = TransferMoneyV2 {
+    async fn test_derive_macro_command() {
+        let command = TransferMoney {
             from_account: StreamId::try_new("from").unwrap(),
             to_account: StreamId::try_new("to").unwrap(),
             amount: 100,
-            reference: "test".to_string(),
         };
         
-        // Test that streams are correctly identified
+        // Test that streams are correctly identified by the derive macro
         let streams = command.read_streams(&command);
         assert_eq!(streams.len(), 2);
         assert!(streams.contains(&StreamId::try_new("from").unwrap()));
@@ -433,8 +330,8 @@ mod tests {
     }
     
     #[test]
-    fn test_require_macro() {
-        // The require! macro should generate appropriate errors
+    fn test_helper_macros() {
+        // The require! and emit! macros should work correctly
         // This would be tested within the command execution
     }
 }
@@ -442,18 +339,30 @@ mod tests {
 
 ## Advanced Patterns
 
-### Dynamic Stream Discovery with Macros
+### Dynamic Stream Discovery with Helper Macros
 
 ```rust
-command! {
-    ProcessBulkOrder {
-        reads: order_stream: StreamId,
-        reads: customer_stream: StreamId,
-        
-        item_ids: Vec<String>,
-    }
+#[derive(Command)]
+struct ProcessBulkOrder {
+    #[stream]
+    order_stream: StreamId,
+    #[stream] 
+    customer_stream: StreamId,
     
-    handle(read_streams, state, input, stream_resolver) {
+    item_ids: Vec<String>,
+}
+
+#[async_trait]
+impl Command for ProcessBulkOrder {
+    // ... other trait implementations
+    
+    async fn handle(
+        &self,
+        read_streams: ReadStreams<Self::StreamSet>,
+        state: Self::State,
+        input: Self::Input,
+        stream_resolver: &mut StreamResolver,
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Dynamically add product streams for each item
         let product_streams: Vec<StreamId> = input.item_ids.iter()
             .map(|id| StreamId::try_new(format!("product-{}", id)).unwrap())
@@ -465,8 +374,8 @@ command! {
         // and call handle() again with complete state
         
         let mut events = Vec::new();
-        // Process with full state...
-        events
+        // Process with full state using emit! helper...
+        Ok(events)
     }
 }
 ```
@@ -474,11 +383,17 @@ command! {
 ### Conditional Event Generation
 
 ```rust
-handle(read_streams, state, input, stream_resolver) {
+async fn handle(
+    &self,
+    read_streams: ReadStreams<Self::StreamSet>,
+    state: Self::State,
+    input: Self::Input,
+    stream_resolver: &mut StreamResolver,
+) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
     let mut events = Vec::new();
     
     // Always emit the main event
-    emit!(events, read_streams, input.account_id, AccountEvent::Deposited {
+    emit!(events, &read_streams, input.account_id, AccountEvent::Deposited {
         amount: input.amount,
     });
     
@@ -486,15 +401,15 @@ handle(read_streams, state, input, stream_resolver) {
     if input.amount > 10000 {
         require!(state.is_verified, "Large deposits require verified accounts");
         
-        emit!(events, read_streams, audit_stream(), AuditEvent::LargeDeposit {
+        emit!(events, &read_streams, audit_stream(), AuditEvent::LargeDeposit {
             account: input.account_id.clone(),
             amount: input.amount,
             timestamp: Timestamp::now(),
         });
     }
     
-    events
+    Ok(events)
 }
 ```
 
-The macro DSL makes EventCore commands more maintainable and less error-prone while preserving the full power of the underlying system. Choose the approach that best fits your team's preferences and requirements.
+EventCore's derive macro and helper macros make commands more maintainable and less error-prone while preserving the full power of the type-safe command system. The `#[derive(Command)]` macro eliminates stream declaration boilerplate, while `require!` and `emit!` helpers reduce business logic verbosity. Choose between manual implementation for maximum control or derive macros for reduced boilerplate, based on your team's preferences and requirements.

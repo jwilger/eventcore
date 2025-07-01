@@ -530,7 +530,7 @@ where
             .await
             .map_err(|e| {
                 SubscriptionError::EventStore(EventStoreError::Internal(format!(
-                    "Failed to fetch stream IDs: {e}"
+                    "Failed to fetch stream IDs from database for subscription processing (query: 'SELECT DISTINCT stream_id FROM events LIMIT 1000'): {e}"
                 )))
             })?;
 
@@ -584,7 +584,10 @@ where
         position: SubscriptionPosition,
     ) -> SubscriptionResult<()> {
         let position_json = serde_json::to_string(&position).map_err(|e| {
-            SubscriptionError::CheckpointSaveFailed(format!("Serialization failed: {e}"))
+            SubscriptionError::CheckpointSaveFailed(format!(
+                "Failed to serialize checkpoint position for subscription '{}': {e}",
+                name.as_ref()
+            ))
         })?;
 
         sqlx::query(
@@ -597,7 +600,12 @@ where
         .bind(position_json)
         .execute(self.event_store.pool.as_ref())
         .await
-        .map_err(|e| SubscriptionError::CheckpointSaveFailed(format!("Database error: {e}")))?;
+        .map_err(|e| {
+            SubscriptionError::CheckpointSaveFailed(format!(
+                "Failed to save checkpoint for subscription '{}' to database: {e}",
+                name.as_ref()
+            ))
+        })?;
 
         Ok(())
     }
@@ -613,12 +621,20 @@ where
         .bind(name.as_ref())
         .fetch_optional(self.event_store.pool.as_ref())
         .await
-        .map_err(|e| SubscriptionError::CheckpointLoadFailed(format!("Database error: {e}")))?;
+        .map_err(|e| {
+            SubscriptionError::CheckpointLoadFailed(format!(
+                "Failed to load checkpoint for subscription '{}' from database: {e}",
+                name.as_ref()
+            ))
+        })?;
 
         if let Some(row) = row {
             let position_json: String = row.get("position_data");
             let position = serde_json::from_str(&position_json).map_err(|e| {
-                SubscriptionError::CheckpointLoadFailed(format!("Deserialization failed: {e}"))
+                SubscriptionError::CheckpointLoadFailed(format!(
+                    "Failed to deserialize checkpoint position for subscription '{}': {e}",
+                    name.as_ref()
+                ))
             })?;
             Ok(Some(position))
         } else {
@@ -826,7 +842,11 @@ where
         } = stream_events;
 
         if events.is_empty() {
-            return Err(EventStoreError::Internal("No events to write".to_string()));
+            return Err(EventStoreError::Internal(format!(
+                "No events to write to stream '{}' (expected_version: {:?}). This may indicate a bug in command logic where events are created but then filtered out.",
+                stream_id.as_ref(),
+                expected_version
+            )));
         }
 
         // Check and update stream version with optimistic concurrency control
