@@ -58,3 +58,7 @@ harness = false
 [[bench]]
 name = "stream_discovery_simple"
 harness = false
+
+[[bench]]
+name = "traditional_vs_multistream"
+harness = false
