@@ -562,10 +562,14 @@ impl PostgresPerformanceTestRunner {
 
     // Copy key methods from InMemoryPerformanceTestRunner
     async fn setup_test_data(&self, num_accounts: usize, num_products: usize) {
-        // Create test accounts
+        // Create test accounts and products with sufficient funds/inventory
+
+        // Create test accounts with initial funds
         for i in 0..num_accounts {
             let account_stream = StreamId::try_new(format!("account-acc{:04}", i)).unwrap();
-            let event = EventToWrite {
+
+            // Create account first
+            let create_event = EventToWrite {
                 event_id: EventId::new(),
                 payload: RealisticEvent::AccountCreated {
                     id: format!("acc{:04}", i),
@@ -574,10 +578,30 @@ impl PostgresPerformanceTestRunner {
                 metadata: None,
             };
 
+            // Give account initial funds (multiple deposits to simulate realistic balance)
+            let deposit_event = EventToWrite {
+                event_id: EventId::new(),
+                payload: RealisticEvent::TransactionInitiated {
+                    id: format!("init-deposit-{}", i),
+                    from: "external".to_string(),
+                    to: format!("acc{:04}", i),
+                    amount: 100_000, // $1000 initial funds
+                },
+                metadata: None,
+            };
+
+            let completion_event = EventToWrite {
+                event_id: EventId::new(),
+                payload: RealisticEvent::TransactionCompleted {
+                    id: format!("init-deposit-{}", i),
+                },
+                metadata: None,
+            };
+
             let stream_events = StreamEvents {
                 stream_id: account_stream,
-                expected_version: ExpectedVersion::New,
-                events: vec![event],
+                expected_version: ExpectedVersion::Any, // Handle existing streams gracefully
+                events: vec![create_event, deposit_event, completion_event],
             };
 
             self.executor
@@ -601,7 +625,32 @@ impl PostgresPerformanceTestRunner {
 
             let stream_events = StreamEvents {
                 stream_id: product_stream,
-                expected_version: ExpectedVersion::New,
+                expected_version: ExpectedVersion::Any, // Handle existing streams gracefully
+                events: vec![event],
+            };
+
+            self.executor
+                .event_store()
+                .write_events_multi(vec![stream_events])
+                .await
+                .unwrap();
+        }
+
+        // Create test customers
+        for i in 0..10 {
+            let customer_stream = StreamId::try_new(format!("customer-cust{:04}", i)).unwrap();
+            let event = EventToWrite {
+                event_id: EventId::new(),
+                payload: RealisticEvent::AccountCreated {
+                    id: format!("cust{:04}", i),
+                    email: format!("customer{}@example.com", i),
+                },
+                metadata: None,
+            };
+
+            let stream_events = StreamEvents {
+                stream_id: customer_stream,
+                expected_version: ExpectedVersion::Any,
                 events: vec![event],
             };
 
@@ -623,7 +672,7 @@ impl PostgresPerformanceTestRunner {
 
             let command = FinancialTransactionCommand;
             let input = TransactionInput {
-                account_id: format!("acc{:04}", i % 100), // Rotate through 100 accounts
+                account_id: format!("acc{:04}", i % 20), // Rotate through 20 accounts (we only create 20)
                 transaction_id: format!(
                     "txn-{}",
                     uuid::Uuid::new_v7(Timestamp::now(uuid::NoContext))
@@ -635,7 +684,7 @@ impl PostgresPerformanceTestRunner {
                     TransactionType::Withdrawal
                 } else {
                     TransactionType::Transfer {
-                        to_account: format!("acc{:04}", (i + 1) % 100),
+                        to_account: format!("acc{:04}", (i + 1) % 20),
                     }
                 },
             };
@@ -668,7 +717,7 @@ impl PostgresPerformanceTestRunner {
             // Create orders with 2-5 products each
             let num_products = 2 + (i % 4);
             let products: Vec<(String, u32)> = (0..num_products)
-                .map(|j| (format!("prod{:04}", (i + j) % 50), 1 + (j % 3) as u32))
+                .map(|j| (format!("prod{:04}", (i + j) % 10), 1 + (j % 3) as u32)) // Use 10 products (we only create 10)
                 .collect();
 
             let input = OrderInput {
@@ -676,7 +725,7 @@ impl PostgresPerformanceTestRunner {
                     "order-{}",
                     uuid::Uuid::new_v7(Timestamp::now(uuid::NoContext))
                 ),
-                customer_id: format!("cust{:04}", i % 20),
+                customer_id: format!("cust{:04}", i % 10), // Use reasonable customer range
                 products,
             };
 
