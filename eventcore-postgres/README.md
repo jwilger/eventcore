@@ -24,13 +24,20 @@ eventcore-postgres = "0.1"
 ```rust
 use eventcore_postgres::{PostgresEventStore, PostgresConfig};
 use eventcore::CommandExecutor;
+use std::time::Duration;
 
-// Configure
-let config = PostgresConfig {
-    url: "postgres://user:pass@localhost/eventcore".into(),
-    max_connections: 10,
-    acquire_timeout: Duration::from_secs(5),
-};
+// Configure with basic settings
+let config = PostgresConfig::new("postgres://user:pass@localhost/eventcore");
+
+// Or use the builder for advanced configuration
+let config = PostgresConfigBuilder::new()
+    .database_url("postgres://user:pass@localhost/eventcore")
+    .max_connections(20)
+    .min_connections(2)
+    .connect_timeout(Duration::from_secs(10))
+    .idle_timeout(Some(Duration::from_secs(600)))
+    .max_lifetime(Some(Duration::from_secs(1800)))
+    .build();
 
 // Initialize
 let store = PostgresEventStore::new(config).await?;
@@ -42,22 +49,51 @@ let executor = CommandExecutor::new(store);
 
 ## Configuration
 
-### Environment Variables
+### Connection Pool Options
 
-```bash
-DATABASE_URL=postgres://localhost/eventcore
-DATABASE_MAX_CONNECTIONS=10
-DATABASE_ACQUIRE_TIMEOUT=5
-```
+PostgresConfig provides comprehensive connection pool configuration:
+
+- `max_connections` (default: 20) - Maximum connections in the pool
+- `min_connections` (default: 2) - Minimum idle connections to maintain
+- `connect_timeout` (default: 10s) - Connection acquisition timeout
+- `idle_timeout` (default: 600s) - How long connections can remain idle
+- `max_lifetime` (default: 1800s) - Maximum lifetime of a connection
+- `query_timeout` (default: 30s) - Timeout for individual queries
+- `test_before_acquire` (default: false) - Test connections before use
 
 ### Code Configuration
 
 ```rust
-let config = PostgresConfig::builder()
-    .url("postgres://localhost/eventcore")
-    .max_connections(10)
-    .acquire_timeout(Duration::from_secs(5))
-    .build()?;
+use eventcore_postgres::{PostgresConfigBuilder, PostgresEventStore};
+use std::time::Duration;
+
+// Basic configuration
+let config = PostgresConfig::new("postgres://localhost/eventcore");
+
+// Advanced configuration with builder
+let config = PostgresConfigBuilder::new()
+    .database_url("postgres://localhost/eventcore")
+    .max_connections(30)
+    .min_connections(5)
+    .connect_timeout(Duration::from_secs(5))
+    .idle_timeout(Some(Duration::from_secs(300)))
+    .max_lifetime(Some(Duration::from_secs(1800)))
+    .query_timeout(Some(Duration::from_secs(10)))
+    .test_before_acquire(false)  // Skip for better performance
+    .build();
+
+// Performance-optimized preset
+let config = PostgresConfigBuilder::new()
+    .database_url("postgres://localhost/eventcore")
+    .performance_optimized()  // Applies optimized settings
+    .build();
+```
+
+### Environment Variables
+
+```bash
+DATABASE_URL=postgres://localhost/eventcore
+# Note: Connection pool settings are configured in code, not via environment variables
 ```
 
 ## Schema
@@ -93,11 +129,30 @@ CREATE INDEX idx_events_created_at ON events(created_at);
 
 ```rust
 // For high-throughput systems
-let config = PostgresConfig::builder()
-    .url(database_url)
-    .max_connections(num_cpus::get() * 2)  // Rule of thumb
-    .min_connections(num_cpus::get())      // Keep connections warm
-    .build()?;
+let config = PostgresConfigBuilder::new()
+    .database_url(database_url)
+    .max_connections(num_cpus::get() as u32 * 2)  // Rule of thumb: 2x CPU cores
+    .min_connections(num_cpus::get() as u32)      // Keep connections warm
+    .idle_timeout(Some(Duration::from_secs(300))) // 5 minutes
+    .max_lifetime(Some(Duration::from_secs(3600))) // 1 hour
+    .build();
+
+// For bursty workloads
+let config = PostgresConfigBuilder::new()
+    .database_url(database_url)
+    .max_connections(50)                          // Higher max for bursts
+    .min_connections(5)                           // Lower minimum
+    .connect_timeout(Duration::from_secs(2))      // Fast timeout
+    .idle_timeout(Some(Duration::from_secs(60)))  // Aggressive cleanup
+    .build();
+
+// For long-running operations
+let config = PostgresConfigBuilder::new()
+    .database_url(database_url)
+    .max_connections(15)
+    .query_timeout(Some(Duration::from_secs(300))) // 5 minute queries
+    .max_lifetime(None)                            // No lifetime limit
+    .build();
 ```
 
 ### Transaction Isolation
@@ -122,9 +177,23 @@ ALTER SYSTEM SET random_page_cost = 1.1;
 
 ### Monitoring
 
-The adapter exposes metrics via the `tracing` crate:
+The adapter provides comprehensive connection pool monitoring:
 
 ```rust
+// Get current pool metrics
+let metrics = store.get_pool_metrics();
+println!("Active connections: {}", metrics.active_connections);
+println!("Idle connections: {}", metrics.idle_connections);
+println!("Pool utilization: {:.1}%", metrics.utilization_percent);
+
+// Start background monitoring
+let (monitor_task, stop_tx) = store.start_pool_monitoring();
+
+// Access detailed health information
+let health = store.health_check().await?;
+println!("Pool healthy: {}", health.pool_status.is_closed == false);
+println!("Query latency: {:?}", health.performance_status.query_latency);
+
 // Enable detailed tracing
 tracing_subscriber::fmt()
     .with_env_filter("eventcore_postgres=debug")
@@ -132,10 +201,12 @@ tracing_subscriber::fmt()
 ```
 
 Key metrics to monitor:
-- Connection pool utilization
-- Transaction retry rates
-- Event write latency
-- Version conflict frequency
+- `current_connections` - Active connections in pool
+- `idle_connections` - Available connections
+- `utilization_percent` - Pool usage (0-100%)
+- `connection_timeouts` - Failed connection attempts
+- `avg_acquisition_time` - Time to get a connection
+- `peak_connections` - Historical maximum
 
 ## Testing
 
@@ -196,10 +267,28 @@ This is optimistic concurrency control working correctly. EventCore will automat
 
 ### "Connection pool timeout"
 
-Increase pool size or connection timeout:
+This indicates all connections are busy. Solutions:
+
 ```rust
-.max_connections(20)
-.acquire_timeout(Duration::from_secs(10))
+// 1. Increase pool size
+let config = PostgresConfigBuilder::new()
+    .database_url(database_url)
+    .max_connections(30)  // Increase from default 20
+    .connect_timeout(Duration::from_secs(10))  // Give more time
+    .build();
+
+// 2. Check pool health
+let metrics = store.get_pool_metrics();
+if metrics.utilization_percent > 80.0 {
+    warn!("Pool utilization high: {:.1}%", metrics.utilization_percent);
+}
+
+// 3. Enable connection recovery
+let config = PostgresConfig {
+    enable_recovery: true,  // Automatic recovery on failures
+    max_retries: 5,        // More retry attempts
+    ..PostgresConfig::new(database_url)
+};
 ```
 
 ### Schema initialization hangs
@@ -208,6 +297,7 @@ Another process might be initializing. This is normal - EventCore uses advisory 
 
 ## See Also
 
+- [Connection Tuning Guide](docs/CONNECTION_TUNING.md) - Detailed connection pool tuning
 - [EventCore Core](../eventcore/) - Core library documentation
 - [Examples](../eventcore-examples/) - Complete applications
 - [Memory Adapter](../eventcore-memory/) - For testing

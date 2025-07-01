@@ -183,11 +183,11 @@ Based on the comprehensive expert review, the following improvements have been i
     - [x] Implement `insert_events_batch()` method in PostgreSQL adapter
     - [x] Update `write_stream_events()` to use batch insertion
     - [x] Benchmark batch sizes (suggested: 100-1000 events per batch)
-  - [ ] **Connection Pool Configuration** (Moderate Impact: ~1.5x performance gain)
-    - [ ] Create `PostgresConfig` struct with pool configuration options
-    - [ ] Expose `pool_size`, `max_connections`, `connection_timeout`, `idle_timeout`
-    - [ ] Add connection pool health checks and monitoring
-    - [ ] Update documentation with connection tuning guidelines
+  - [x] **Connection Pool Configuration** (Moderate Impact: ~1.5x performance gain)
+    - [x] Create `PostgresConfig` struct with pool configuration options
+    - [x] Expose `pool_size`, `max_connections`, `connection_timeout`, `idle_timeout`
+    - [x] Add connection pool health checks and monitoring
+    - [x] Update documentation with connection tuning guidelines
   - [ ] **Prepared Statement Caching** (Consistent Improvement)
     - [ ] Implement prepared statement cache for hot queries
     - [ ] Cache multi-stream read queries with `stream_id = ANY($1)` pattern

@@ -756,6 +756,41 @@ impl PostgresConfigBuilder {
         self
     }
 
+    /// Set the health check interval
+    #[must_use]
+    pub const fn health_check_interval(mut self, interval: Duration) -> Self {
+        self.config.health_check_interval = interval;
+        self
+    }
+
+    /// Set the maximum retries
+    #[must_use]
+    pub const fn max_retries(mut self, retries: u32) -> Self {
+        self.config.max_retries = retries;
+        self
+    }
+
+    /// Set the retry base delay
+    #[must_use]
+    pub const fn retry_base_delay(mut self, delay: Duration) -> Self {
+        self.config.retry_base_delay = delay;
+        self
+    }
+
+    /// Set the retry max delay
+    #[must_use]
+    pub const fn retry_max_delay(mut self, delay: Duration) -> Self {
+        self.config.retry_max_delay = delay;
+        self
+    }
+
+    /// Enable or disable connection recovery
+    #[must_use]
+    pub const fn enable_recovery(mut self, enable: bool) -> Self {
+        self.config.enable_recovery = enable;
+        self
+    }
+
     /// Build the configuration
     pub fn build(self) -> PostgresConfig {
         self.config
@@ -812,5 +847,130 @@ mod tests {
         let event_store_error: EventStoreError = postgres_error.into();
 
         matches!(event_store_error, EventStoreError::TransactionRollback(_));
+    }
+
+    #[test]
+    fn test_postgres_config_new() {
+        let config = PostgresConfig::new("postgres://custom/db");
+        assert_eq!(config.database_url, "postgres://custom/db");
+        // Should use defaults for other fields
+        assert_eq!(config.max_connections, 20);
+        assert_eq!(config.min_connections, 2);
+        assert_eq!(config.connect_timeout, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_postgres_config_all_fields() {
+        let config = PostgresConfig {
+            database_url: "postgres://test/db".to_string(),
+            max_connections: 50,
+            min_connections: 10,
+            connect_timeout: Duration::from_secs(5),
+            query_timeout: Some(Duration::from_secs(60)),
+            max_lifetime: Some(Duration::from_secs(3600)),
+            idle_timeout: Some(Duration::from_secs(300)),
+            test_before_acquire: true,
+            max_retries: 5,
+            retry_base_delay: Duration::from_millis(200),
+            retry_max_delay: Duration::from_secs(10),
+            enable_recovery: false,
+            health_check_interval: Duration::from_secs(60),
+        };
+
+        assert_eq!(config.max_connections, 50);
+        assert_eq!(config.min_connections, 10);
+        assert_eq!(config.connect_timeout, Duration::from_secs(5));
+        assert_eq!(config.query_timeout, Some(Duration::from_secs(60)));
+        assert_eq!(config.max_lifetime, Some(Duration::from_secs(3600)));
+        assert_eq!(config.idle_timeout, Some(Duration::from_secs(300)));
+        assert!(config.test_before_acquire);
+        assert_eq!(config.max_retries, 5);
+        assert_eq!(config.retry_base_delay, Duration::from_millis(200));
+        assert_eq!(config.retry_max_delay, Duration::from_secs(10));
+        assert!(!config.enable_recovery);
+        assert_eq!(config.health_check_interval, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_postgres_config_builder_all_methods() {
+        let config = PostgresConfigBuilder::new()
+            .database_url("postgres://builder/test")
+            .max_connections(25)
+            .min_connections(3)
+            .connect_timeout(Duration::from_secs(8))
+            .max_lifetime(Some(Duration::from_secs(1200)))
+            .idle_timeout(Some(Duration::from_secs(240)))
+            .test_before_acquire(true)
+            .query_timeout(Some(Duration::from_secs(45)))
+            .build();
+
+        assert_eq!(config.database_url, "postgres://builder/test");
+        assert_eq!(config.max_connections, 25);
+        assert_eq!(config.min_connections, 3);
+        assert_eq!(config.connect_timeout, Duration::from_secs(8));
+        assert_eq!(config.max_lifetime, Some(Duration::from_secs(1200)));
+        assert_eq!(config.idle_timeout, Some(Duration::from_secs(240)));
+        assert!(config.test_before_acquire);
+        assert_eq!(config.query_timeout, Some(Duration::from_secs(45)));
+    }
+
+    #[test]
+    fn test_postgres_config_builder_performance_optimized() {
+        let config = PostgresConfigBuilder::new()
+            .database_url("postgres://perf/test")
+            .performance_optimized()
+            .build();
+
+        assert_eq!(config.database_url, "postgres://perf/test");
+        assert_eq!(config.max_connections, 30);
+        assert_eq!(config.min_connections, 5);
+        assert_eq!(config.connect_timeout, Duration::from_secs(5));
+        assert_eq!(config.query_timeout, Some(Duration::from_secs(10)));
+        assert_eq!(config.max_lifetime, Some(Duration::from_secs(1800)));
+        assert_eq!(config.idle_timeout, Some(Duration::from_secs(300)));
+        assert!(!config.test_before_acquire);
+    }
+
+    #[test]
+    fn test_pool_status_fields() {
+        let status = PoolStatus {
+            size: 10,
+            idle: 3,
+            is_closed: false,
+        };
+
+        assert_eq!(status.size, 10);
+        assert_eq!(status.idle, 3);
+        assert!(!status.is_closed);
+    }
+
+    #[test]
+    fn test_health_status_fields() {
+        let health = HealthStatus {
+            is_healthy: true,
+            basic_latency: Duration::from_millis(5),
+            pool_status: PoolStatus {
+                size: 20,
+                idle: 15,
+                is_closed: false,
+            },
+            schema_status: SchemaStatus {
+                has_events_table: true,
+                has_streams_table: true,
+                has_subscriptions_table: false,
+                is_complete: true,
+            },
+            performance_status: PerformanceStatus {
+                query_latency: Duration::from_millis(10),
+                is_performant: true,
+            },
+            last_check: chrono::Utc::now(),
+        };
+
+        assert!(health.is_healthy);
+        assert_eq!(health.basic_latency, Duration::from_millis(5));
+        assert_eq!(health.pool_status.size, 20);
+        assert!(health.schema_status.is_complete);
+        assert!(health.performance_status.is_performant);
     }
 }
