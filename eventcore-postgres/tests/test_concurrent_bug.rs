@@ -139,39 +139,28 @@ async fn test_concurrent_creation_with_retry() {
     let result1 = handle1.await.unwrap();
     let result2 = handle2.await.unwrap();
 
-    // There are three possible outcomes due to timing:
-    // 1. One succeeds, one fails with BusinessRuleViolation (optimal case)
-    // 2. Both succeed with different versions (both read before either writes)
-    // 3. One succeeds, one fails with ConcurrencyConflict that exhausts retries (rare)
-
-    let both_succeeded = result1.is_ok() && result2.is_ok();
-    let one_succeeded_one_business_error = (result1.is_ok()
-        && matches!(result2, Err(CommandError::BusinessRuleViolation(ref msg)) if msg == "Already exists"))
-        || (result2.is_ok()
-            && matches!(result1, Err(CommandError::BusinessRuleViolation(ref msg)) if msg == "Already exists"));
-    let one_succeeded_one_concurrency_error = (result1.is_ok()
-        && matches!(result2, Err(CommandError::ConcurrencyConflict { .. })))
-        || (result2.is_ok() && matches!(result1, Err(CommandError::ConcurrencyConflict { .. })));
-
+    // One should succeed, one should fail with BusinessRuleViolation after retry
+    // This is the correct behavior: the executor retries on ConcurrencyConflict,
+    // reads the updated state, and the business logic correctly detects "Already exists"
     assert!(
-        both_succeeded || one_succeeded_one_business_error || one_succeeded_one_concurrency_error,
-        "Unexpected results - result1: {result1:?}, result2: {result2:?}"
+        (result1.is_ok()
+            && matches!(result2, Err(CommandError::BusinessRuleViolation(ref msg)) if msg == "Already exists"))
+            || (result2.is_ok()
+                && matches!(result1, Err(CommandError::BusinessRuleViolation(ref msg)) if msg == "Already exists")),
+        "Expected one success and one BusinessRuleViolation('Already exists'), got: {result1:?} and {result2:?}"
     );
 
-    // Check the number of events in the stream
+    // Check that there's exactly one event in the stream
     let stream_data = executor
         .event_store()
         .read_streams(&[stream_id], &eventcore::ReadOptions::default())
         .await
         .unwrap();
 
-    // If both succeeded, we should have 2 events. Otherwise, 1 event.
-    let expected_events = if both_succeeded { 2 } else { 1 };
     assert_eq!(
         stream_data.events.len(),
-        expected_events,
-        "Expected {} event(s), found {}",
-        expected_events,
+        1,
+        "Expected exactly 1 event, found {}",
         stream_data.events.len()
     );
 }

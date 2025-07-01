@@ -318,12 +318,11 @@ Each improvement area is complete when:
 
 When working on this project, **ALWAYS** follow these rules:
 
-1. **BROKEN CI BUILDS ARE HIGHEST PRIORITY** - If CI is failing, stop all other work and fix it immediately. A broken build blocks all progress.
-2. **Review @PLANNING.md** to discover the next task to work on (unless CI is broken - see rule #1).
-3. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
-4. **ALWAYS include "Update @PLANNING.md to mark completed tasks" in your todolist** - This task should come BEFORE the commit task to ensure completed work is tracked.
-5. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
-6. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
+1. **Review @PLANNING.md** to discover the next task to work on.
+2. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
+3. **ALWAYS include "Update @PLANNING.md to mark completed tasks" in your todolist** - This task should come BEFORE the commit task to ensure completed work is tracked.
+4. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
+5. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
 
 ### CRITICAL: Todo List Structure
 
