@@ -33,6 +33,8 @@
             nodejs_22
             glow
             jq
+            sqlx-cli
+            postgresql
           ];
 
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";

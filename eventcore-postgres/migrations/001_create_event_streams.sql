@@ -9,11 +9,11 @@ CREATE TABLE IF NOT EXISTS event_streams (
 );
 
 -- Index for efficient version queries during optimistic concurrency checks
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_event_streams_version 
+CREATE INDEX IF NOT EXISTS idx_event_streams_version 
 ON event_streams (stream_id, stream_version);
 
 -- Index for timestamp-based queries
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_event_streams_updated_at 
+CREATE INDEX IF NOT EXISTS idx_event_streams_updated_at 
 ON event_streams (updated_at);
 
 -- Trigger to automatically update the updated_at timestamp

@@ -31,38 +31,37 @@ CREATE TABLE IF NOT EXISTS events_simple (
 );
 
 -- Essential indexes for the simple schema
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_simple_stream_id_version 
+CREATE INDEX IF NOT EXISTS idx_events_simple_stream_id_version 
 ON events_simple (stream_id, event_version);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_simple_event_id_timestamp 
+CREATE INDEX IF NOT EXISTS idx_events_simple_event_id_timestamp 
 ON events_simple (event_id, created_at);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_simple_event_type 
+CREATE INDEX IF NOT EXISTS idx_events_simple_event_type 
 ON events_simple (event_type, created_at);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_simple_causation_correlation 
+CREATE INDEX IF NOT EXISTS idx_events_simple_causation_correlation 
 ON events_simple (causation_id, correlation_id) WHERE causation_id IS NOT NULL;
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_simple_user_id 
+CREATE INDEX IF NOT EXISTS idx_events_simple_user_id 
 ON events_simple (user_id, created_at) WHERE user_id IS NOT NULL;
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_simple_metadata_gin 
+CREATE INDEX IF NOT EXISTS idx_events_simple_metadata_gin 
 ON events_simple USING GIN (metadata) WHERE metadata IS NOT NULL;
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_simple_data_gin 
+CREATE INDEX IF NOT EXISTS idx_events_simple_data_gin 
 ON events_simple USING GIN (event_data);
 
 -- Performance indexes for common query patterns
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_simple_multistream_read 
+CREATE INDEX IF NOT EXISTS idx_events_simple_multistream_read 
 ON events_simple (stream_id, event_version, created_at);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_simple_saga_correlation 
+CREATE INDEX IF NOT EXISTS idx_events_simple_saga_correlation 
 ON events_simple (correlation_id, created_at, stream_id) 
 WHERE correlation_id IS NOT NULL;
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_simple_recent 
-ON events_simple (created_at DESC, stream_id) 
-WHERE created_at > NOW() - INTERVAL '30 days';
+CREATE INDEX IF NOT EXISTS idx_events_simple_recent 
+ON events_simple (created_at DESC, stream_id);
 
 -- View to provide unified access regardless of which schema is used
 CREATE OR REPLACE VIEW events_unified AS

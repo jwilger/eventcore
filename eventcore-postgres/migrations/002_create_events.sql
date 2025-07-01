@@ -21,36 +21,35 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 -- Primary index for reading events by stream (most common query pattern)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_stream_id_version 
+CREATE INDEX IF NOT EXISTS idx_events_stream_id_version 
 ON events (stream_id, event_version);
 
 -- Index for global event ordering using UUIDv7 chronological ordering
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_event_id_timestamp 
+CREATE INDEX IF NOT EXISTS idx_events_event_id_timestamp 
 ON events (event_id, created_at);
 
 -- Index for querying events by type (useful for projections)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_event_type 
+CREATE INDEX IF NOT EXISTS idx_events_event_type 
 ON events (event_type, created_at);
 
 -- Index for causation and correlation tracking (useful for debugging and sagas)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_causation_correlation 
+CREATE INDEX IF NOT EXISTS idx_events_causation_correlation 
 ON events (causation_id, correlation_id) WHERE causation_id IS NOT NULL;
 
 -- Index for user-based event queries
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_user_id 
+CREATE INDEX IF NOT EXISTS idx_events_user_id 
 ON events (user_id, created_at) WHERE user_id IS NOT NULL;
 
--- Partial index for recent events (optimization for hot data)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_recent 
-ON events (created_at DESC, stream_id) 
-WHERE created_at > NOW() - INTERVAL '30 days';
+-- Index for recent events (optimization for hot data)
+CREATE INDEX IF NOT EXISTS idx_events_recent 
+ON events (created_at DESC, stream_id);
 
 -- GIN index for JSONB metadata queries
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_metadata_gin 
+CREATE INDEX IF NOT EXISTS idx_events_metadata_gin 
 ON events USING GIN (metadata) WHERE metadata IS NOT NULL;
 
 -- GIN index for JSONB event_data queries (useful for projections that query event content)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_data_gin 
+CREATE INDEX IF NOT EXISTS idx_events_data_gin 
 ON events USING GIN (event_data);
 
 -- Comments for documentation
