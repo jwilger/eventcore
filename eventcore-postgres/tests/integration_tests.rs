@@ -576,6 +576,192 @@ async fn test_transaction_isolation() {
     }
 }
 
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn test_batch_event_insertion() {
+    let (_container, config) = setup_postgres_container().await;
+
+    // Initialize event store
+    let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
+    event_store.initialize().await.unwrap();
+
+    // Test small batch (under MAX_EVENTS_PER_BATCH limit)
+    let stream_id = StreamId::try_new("batch-test-small").unwrap();
+    let mut events = Vec::new();
+    for i in 0..10 {
+        let event = eventcore::EventToWrite::new(
+            eventcore::EventId::new(),
+            TestEvent::CounterIncremented { amount: i + 1 },
+        );
+        events.push(event);
+    }
+
+    let stream_events =
+        eventcore::StreamEvents::new(stream_id.clone(), eventcore::ExpectedVersion::New, events);
+
+    let result = event_store.write_events_multi(vec![stream_events]).await;
+
+    assert!(result.is_ok(), "Small batch write should succeed");
+    let versions = result.unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(
+        versions.get(&stream_id).unwrap(),
+        &eventcore::EventVersion::try_new(10).unwrap(),
+        "Stream version should be 10 after writing 10 events"
+    );
+
+    // Verify all events were written
+    let read_options = eventcore::ReadOptions::default();
+    let stream_data = event_store
+        .read_streams(&[stream_id.clone()], &read_options)
+        .await
+        .unwrap();
+    assert_eq!(stream_data.events.len(), 10, "Should have 10 events");
+
+    // Test large batch (exceeds MAX_EVENTS_PER_BATCH, will be split)
+    let large_stream_id = StreamId::try_new("batch-test-large").unwrap();
+    let mut large_events = Vec::new();
+    for i in 0..2500 {
+        // 2500 events to test batch splitting
+        let event = eventcore::EventToWrite::new(
+            eventcore::EventId::new(),
+            TestEvent::CounterIncremented {
+                amount: i % 100 + 1,
+            },
+        );
+        large_events.push(event);
+    }
+
+    let large_stream_events = eventcore::StreamEvents::new(
+        large_stream_id.clone(),
+        eventcore::ExpectedVersion::New,
+        large_events,
+    );
+
+    let large_result = event_store
+        .write_events_multi(vec![large_stream_events])
+        .await;
+
+    assert!(large_result.is_ok(), "Large batch write should succeed");
+    let large_versions = large_result.unwrap();
+    assert_eq!(
+        large_versions.get(&large_stream_id).unwrap(),
+        &eventcore::EventVersion::try_new(2500).unwrap(),
+        "Stream version should be 2500 after writing 2500 events"
+    );
+
+    // Verify all events were written for large batch
+    let large_stream_data = event_store
+        .read_streams(&[large_stream_id.clone()], &read_options)
+        .await
+        .unwrap();
+    assert_eq!(
+        large_stream_data.events.len(),
+        2500,
+        "Should have 2500 events"
+    );
+
+    // Test multi-stream batch operation
+    let stream1 = StreamId::try_new("batch-multi-1").unwrap();
+    let stream2 = StreamId::try_new("batch-multi-2").unwrap();
+
+    let stream1_batch = eventcore::StreamEvents::new(
+        stream1.clone(),
+        eventcore::ExpectedVersion::New,
+        vec![
+            eventcore::EventToWrite::new(
+                eventcore::EventId::new(),
+                TestEvent::CounterIncremented { amount: 10 },
+            ),
+            eventcore::EventToWrite::new(
+                eventcore::EventId::new(),
+                TestEvent::CounterIncremented { amount: 20 },
+            ),
+        ],
+    );
+
+    let stream2_batch = eventcore::StreamEvents::new(
+        stream2.clone(),
+        eventcore::ExpectedVersion::New,
+        vec![
+            eventcore::EventToWrite::new(
+                eventcore::EventId::new(),
+                TestEvent::CounterIncremented { amount: 30 },
+            ),
+            eventcore::EventToWrite::new(
+                eventcore::EventId::new(),
+                TestEvent::CounterIncremented { amount: 40 },
+            ),
+            eventcore::EventToWrite::new(
+                eventcore::EventId::new(),
+                TestEvent::CounterIncremented { amount: 50 },
+            ),
+        ],
+    );
+
+    let multi_result = event_store
+        .write_events_multi(vec![stream1_batch, stream2_batch])
+        .await;
+
+    assert!(
+        multi_result.is_ok(),
+        "Multi-stream batch write should succeed"
+    );
+    let multi_versions = multi_result.unwrap();
+    assert_eq!(multi_versions.len(), 2);
+    assert_eq!(
+        multi_versions.get(&stream1).unwrap(),
+        &eventcore::EventVersion::try_new(2).unwrap()
+    );
+    assert_eq!(
+        multi_versions.get(&stream2).unwrap(),
+        &eventcore::EventVersion::try_new(3).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn test_batch_insertion_performance() {
+    let (_container, config) = setup_postgres_container().await;
+
+    // Initialize event store
+    let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
+    event_store.initialize().await.unwrap();
+
+    // Measure performance of batch insertion
+    let stream_id = StreamId::try_new("batch-perf-test").unwrap();
+
+    // Create 1000 events for batch insertion
+    let mut events = Vec::new();
+    for i in 0..1000 {
+        let event = eventcore::EventToWrite::new(
+            eventcore::EventId::new(),
+            TestEvent::CounterIncremented {
+                amount: i % 100 + 1,
+            },
+        );
+        events.push(event);
+    }
+
+    let stream_events =
+        eventcore::StreamEvents::new(stream_id.clone(), eventcore::ExpectedVersion::New, events);
+
+    let start = std::time::Instant::now();
+    let result = event_store.write_events_multi(vec![stream_events]).await;
+    let duration = start.elapsed();
+
+    assert!(result.is_ok(), "Batch performance test should succeed");
+
+    let events_per_sec = 1000.0 / duration.as_secs_f64();
+    println!("Batch insertion performance: {events_per_sec:.2} events/sec");
+
+    // Batch insertion should be significantly faster than individual inserts
+    // Even in test environment, should handle at least 500 events/sec
+    assert!(
+        events_per_sec > 500.0,
+        "Batch insertion performance too low: {events_per_sec:.2} events/sec"
+    );
+}
+
 // Performance benchmarks would go in a separate benches/ directory
 // but we'll add a basic performance test here
 #[tokio::test]

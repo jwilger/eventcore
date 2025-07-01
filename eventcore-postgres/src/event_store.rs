@@ -864,15 +864,10 @@ where
         self.update_stream_version_if_current(tx, &stream_id, current_version, new_version)
             .await?;
 
-        // Now that we've reserved the version slot, insert events
+        // Now that we've reserved the version slot, insert events using batch operation
         // If this fails, the transaction will rollback and free the version slot
-        for (i, event) in events.iter().enumerate() {
-            let event_version = EventVersion::try_new(current_value + i as u64 + 1)
-                .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
-
-            self.insert_event(tx, &stream_id, event_version, event)
-                .await?;
-        }
+        self.insert_events_batch(tx, &stream_id, current_version, &events)
+            .await?;
 
         Ok(new_version)
     }
@@ -1001,84 +996,6 @@ where
         }
     }
 
-    /// Insert a single event into the events table
-    async fn insert_event(
-        &self,
-        tx: &mut Transaction<'_, sqlx::Postgres>,
-        stream_id: &StreamId,
-        event_version: EventVersion,
-        event: &EventToWrite<E>,
-    ) -> EventStoreResult<()>
-    where
-        E: serde::Serialize + Sync,
-    {
-        let metadata_json = if let Some(metadata) = &event.metadata {
-            Some(
-                serde_json::to_value(metadata)
-                    .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?,
-            )
-        } else {
-            None
-        };
-
-        // Extract metadata fields for indexing
-        let (causation_id, correlation_id, user_id) =
-            event
-                .metadata
-                .as_ref()
-                .map_or((None, None, None), |metadata| {
-                    (
-                        metadata.causation_id.as_ref().map(|id| **id),
-                        Some(metadata.correlation_id.to_string()),
-                        metadata
-                            .user_id
-                            .as_ref()
-                            .map(|uid| uid.as_ref().to_string()),
-                    )
-                });
-
-        // Serialize the event payload to JSON
-        let event_data = serde_json::to_value(&event.payload).map_err(|e| {
-            EventStoreError::SerializationFailed(format!("Failed to serialize event data: {e}"))
-        })?;
-
-        sqlx::query(
-            "INSERT INTO events 
-             (event_id, stream_id, event_version, event_type, event_data, metadata, causation_id, correlation_id, user_id) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
-        )
-        .bind(*event.event_id)
-        .bind(stream_id.as_ref())
-        .bind({
-            let version_value: u64 = event_version.into();
-            i64::try_from(version_value).map_err(|_| {
-                EventStoreError::SerializationFailed("Version too large for database".to_string())
-            })?
-        })
-        .bind("generic") // TODO: Add event type detection
-        .bind(event_data)
-        .bind(metadata_json)
-        .bind(causation_id)
-        .bind(correlation_id)
-        .bind(user_id)
-        .execute(tx.as_mut())
-        .await
-        .map_err(|e| {
-            e.as_database_error().map_or_else(
-                || EventStoreError::ConnectionFailed(e.to_string()),
-                |db_err| {
-                    if db_err.is_unique_violation() {
-                        EventStoreError::DuplicateEventId(event.event_id)
-                    } else {
-                        EventStoreError::ConnectionFailed(e.to_string())
-                    }
-                },
-            )
-        })?;
-
-        Ok(())
-    }
-
     /// Convert i64 version from database to `EventVersion`
     fn convert_version(version: i64) -> EventStoreResult<EventVersion> {
         if version >= 0 {
@@ -1141,6 +1058,162 @@ where
                 expected: current_version,
                 current: actual,
             });
+        }
+
+        Ok(())
+    }
+
+    /// Insert multiple events in a single batch operation for improved performance
+    #[allow(clippy::too_many_lines)]
+    async fn insert_events_batch(
+        &self,
+        tx: &mut Transaction<'_, sqlx::Postgres>,
+        stream_id: &StreamId,
+        starting_version: EventVersion,
+        events: &[EventToWrite<E>],
+    ) -> EventStoreResult<()>
+    where
+        E: serde::Serialize + Sync,
+    {
+        // Process events in batches to avoid hitting PostgreSQL parameter limits
+        // PostgreSQL has a limit of 65535 parameters per query, and we use 9 parameters per event
+        const MAX_EVENTS_PER_BATCH: usize = 1000; // Conservative limit for safety
+
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let starting_version_u64: u64 = starting_version.into();
+
+        for (batch_idx, batch) in events.chunks(MAX_EVENTS_PER_BATCH).enumerate() {
+            // Build the batch insert query
+            let mut query = String::from(
+                "INSERT INTO events 
+                 (event_id, stream_id, event_version, event_type, event_data, metadata, causation_id, correlation_id, user_id) 
+                 VALUES "
+            );
+
+            let mut values = Vec::new();
+            let batch_starting_version =
+                starting_version_u64 + (batch_idx * MAX_EVENTS_PER_BATCH) as u64;
+
+            // Prepare all data for this batch
+            let mut event_ids = Vec::with_capacity(batch.len());
+            let mut stream_ids = Vec::with_capacity(batch.len());
+            let mut versions = Vec::with_capacity(batch.len());
+            let mut event_types = Vec::with_capacity(batch.len());
+            let mut event_data_values = Vec::with_capacity(batch.len());
+            let mut metadata_values = Vec::with_capacity(batch.len());
+            let mut causation_ids = Vec::with_capacity(batch.len());
+            let mut correlation_ids = Vec::with_capacity(batch.len());
+            let mut user_ids = Vec::with_capacity(batch.len());
+
+            for (i, event) in batch.iter().enumerate() {
+                // Calculate version for this event
+                let event_version = EventVersion::try_new(batch_starting_version + i as u64 + 1)
+                    .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
+
+                // Serialize metadata if present
+                let metadata_json = if let Some(metadata) = &event.metadata {
+                    Some(
+                        serde_json::to_value(metadata)
+                            .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?,
+                    )
+                } else {
+                    None
+                };
+
+                // Extract metadata fields for indexing
+                let (causation_id, correlation_id, user_id) =
+                    event
+                        .metadata
+                        .as_ref()
+                        .map_or((None, None, None), |metadata| {
+                            (
+                                metadata.causation_id.as_ref().map(|id| **id),
+                                Some(metadata.correlation_id.to_string()),
+                                metadata
+                                    .user_id
+                                    .as_ref()
+                                    .map(|uid| uid.as_ref().to_string()),
+                            )
+                        });
+
+                // Serialize the event payload to JSON
+                let event_data = serde_json::to_value(&event.payload).map_err(|e| {
+                    EventStoreError::SerializationFailed(format!(
+                        "Failed to serialize event data: {e}"
+                    ))
+                })?;
+
+                // Build the value placeholder for this event
+                let param_offset = i * 9;
+                values.push(format!(
+                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                    param_offset + 1,
+                    param_offset + 2,
+                    param_offset + 3,
+                    param_offset + 4,
+                    param_offset + 5,
+                    param_offset + 6,
+                    param_offset + 7,
+                    param_offset + 8,
+                    param_offset + 9
+                ));
+
+                // Collect values
+                event_ids.push(*event.event_id);
+                stream_ids.push(stream_id.as_ref().to_string());
+                versions.push({
+                    let version_value: u64 = event_version.into();
+                    i64::try_from(version_value).map_err(|_| {
+                        EventStoreError::SerializationFailed(
+                            "Version too large for database".to_string(),
+                        )
+                    })?
+                });
+                event_types.push("generic".to_string()); // TODO: Add event type detection
+                event_data_values.push(event_data);
+                metadata_values.push(metadata_json);
+                causation_ids.push(causation_id);
+                correlation_ids.push(correlation_id);
+                user_ids.push(user_id);
+            }
+
+            // Complete the query
+            query.push_str(&values.join(", "));
+
+            // Create and execute the batch insert query
+            let mut sqlx_query = sqlx::query(&query);
+
+            // Bind all values in the correct order
+            for i in 0..batch.len() {
+                sqlx_query = sqlx_query
+                    .bind(event_ids[i])
+                    .bind(&stream_ids[i])
+                    .bind(versions[i])
+                    .bind(&event_types[i])
+                    .bind(&event_data_values[i])
+                    .bind(&metadata_values[i])
+                    .bind(causation_ids[i])
+                    .bind(&correlation_ids[i])
+                    .bind(&user_ids[i]);
+            }
+
+            sqlx_query.execute(tx.as_mut()).await.map_err(|e| {
+                e.as_database_error().map_or_else(
+                    || EventStoreError::ConnectionFailed(e.to_string()),
+                    |db_err| {
+                        if db_err.is_unique_violation() {
+                            // Find which event ID was duplicate - in batch insert,
+                            // we don't know exactly which one, so report the first
+                            EventStoreError::DuplicateEventId(batch[0].event_id)
+                        } else {
+                            EventStoreError::ConnectionFailed(e.to_string())
+                        }
+                    },
+                )
+            })?;
         }
 
         Ok(())
