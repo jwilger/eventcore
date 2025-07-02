@@ -739,21 +739,32 @@ where
             let mut converted_events = Vec::with_capacity(events.len());
 
             for event in events {
-                if let Ok(command_event) = Self::try_convert_event::<C>(&event.payload) {
-                    let stored_event = crate::event_store::StoredEvent::new(
-                        event.event_id,
-                        event.stream_id.clone(),
-                        event.event_version,
-                        event.timestamp,
-                        command_event,
-                        event.metadata.clone(),
-                    );
-                    converted_events.push(stored_event);
+                match Self::try_convert_event::<C>(&event.payload) {
+                    Ok(command_event) => {
+                        let stored_event = crate::event_store::StoredEvent::new(
+                            event.event_id,
+                            event.stream_id.clone(),
+                            event.event_version,
+                            event.timestamp,
+                            command_event,
+                            event.metadata.clone(),
+                        );
+                        converted_events.push(stored_event);
+                    }
+                    Err(conversion_error) => {
+                        // Log event conversion failures - this might be why state isn't rebuilt correctly
+                        warn!(
+                            event_id = %event.event_id,
+                            stream_id = %event.stream_id,
+                            error = %conversion_error,
+                            "Failed to convert event - skipping state application"
+                        );
+                    }
                 }
             }
 
-            for stored_event in converted_events {
-                command.apply(&mut state, &stored_event);
+            for stored_event in &converted_events {
+                command.apply(&mut state, stored_event);
             }
 
             info!(
@@ -807,44 +818,14 @@ where
                 .map(super::command::StreamWrite::into_parts)
                 .collect();
 
-            // Re-read streams one final time for version checking with circuit breaker protection
-            let final_stream_data = if let Some(timeout) = options.event_store_timeout {
-                if let Ok(result) = tokio::time::timeout(
-                    timeout,
-                    self.read_streams_with_circuit_breaker(
-                        &stream_ids,
-                        &ReadOptions::new(),
-                        options,
-                    ),
-                )
-                .await
-                {
-                    result.map_err(|err| {
-                        warn!(error = %err, "Failed to re-read streams for version check");
-                        CommandError::from(err)
-                    })?
-                } else {
-                    warn!(
-                        "EventStore read_streams operation timed out after {:?}",
-                        timeout
-                    );
-                    return Err(CommandError::EventStore(
-                        crate::errors::EventStoreError::Timeout(timeout),
-                    ));
-                }
-            } else {
-                self.read_streams_with_circuit_breaker(&stream_ids, &ReadOptions::new(), options)
-                    .await
-                    .map_err(|err| {
-                        warn!(error = %err, "Failed to re-read streams for version check");
-                        CommandError::from(err)
-                    })?
-            };
+            // Use the SAME stream data that was used to build state for version consistency
+            // This prevents race conditions where state is built from version X but writes use version Y
+            let final_stream_data = &stream_data;
 
             // Write events with complete concurrency control
             let stream_events = Self::prepare_stream_events_with_complete_concurrency_control::<C>(
                 events_to_write,
-                &final_stream_data,
+                final_stream_data,
                 &stream_ids,
                 &options.context,
             );

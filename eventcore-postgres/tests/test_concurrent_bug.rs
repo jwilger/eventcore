@@ -7,6 +7,7 @@ use eventcore::{
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::sync::Barrier;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 enum TestEvent {
@@ -24,6 +25,7 @@ impl<'a> TryFrom<&'a Self> for TestEvent {
 #[derive(Debug, Default)]
 struct TestState {
     exists: bool,
+    event_count: usize,
 }
 
 #[derive(Debug)]
@@ -48,6 +50,7 @@ impl Command for CreateCommand {
 
     fn apply(&self, state: &mut Self::State, _event: &StoredEvent<Self::Event>) {
         state.exists = true;
+        state.event_count += 1;
     }
 
     async fn handle(
@@ -57,12 +60,16 @@ impl Command for CreateCommand {
         input: Self::Input,
         _resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+        // This command models "create if not exists" behavior
+        // It should only succeed in creating the stream (writing the first event)
+        // If the stream already exists, it's a business rule violation
         if state.exists {
             return Err(CommandError::BusinessRuleViolation(
-                "Already exists".to_string(),
+                "Stream already exists".to_string(),
             ));
         }
 
+        // Try to create the stream with the first event
         Ok(vec![StreamWrite::new(
             &read_streams,
             input.stream_id,
@@ -73,12 +80,12 @@ impl Command for CreateCommand {
 
 #[tokio::test]
 async fn test_concurrent_creation_with_retry() {
-    // This test verifies that optimistic concurrency control works correctly:
-    // 1. Two commands try to create the same stream concurrently
-    // 2. One gets a version conflict and is automatically retried by the executor
-    // 3. On retry, it sees the stream exists and returns BusinessRuleViolation
-    // 4. The other command succeeds normally
-    // 5. Only one event is actually written to the stream
+    // This test verifies that when two commands try to create the same stream:
+    // 1. Exactly one command succeeds in creating the stream (version 1)
+    // 2. The other command fails with BusinessRuleViolation
+    //
+    // The test uses a barrier to increase the likelihood of true concurrent
+    // execution, but exact timing cannot be guaranteed.
 
     // Create PostgreSQL store
     let database_url = std::env::var("DATABASE_URL")
@@ -98,69 +105,184 @@ async fn test_concurrent_creation_with_retry() {
 
     let executor = Arc::new(CommandExecutor::new(event_store));
 
-    // Test concurrent creation of the same stream
+    // Test concurrent creation of the same stream multiple times to ensure reliability
+    for test_run in 0..2 {
+        // Reduced to 2 iterations to debug
+        // Use unique stream ID for each test run
+        let stream_id = StreamId::try_new(format!(
+            "concurrent-test-{}-{}",
+            test_run,
+            uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))
+        ))
+        .unwrap();
+
+        // Use a barrier to ensure both commands start at the same time
+        let barrier = Arc::new(Barrier::new(2));
+
+        // Spawn two concurrent operations trying to create the same stream
+        let executor1 = executor.clone();
+        let stream_id1 = stream_id.clone();
+        let barrier1 = barrier.clone();
+        let handle1 = tokio::spawn(async move {
+            // Wait for both tasks to be ready
+            barrier1.wait().await;
+
+            let result = executor1
+                .execute(
+                    &CreateCommand,
+                    CreateInput {
+                        stream_id: stream_id1.clone(),
+                        value: "value1".to_string(),
+                    },
+                    ExecutionOptions::default(),
+                )
+                .await;
+            result
+        });
+
+        let executor2 = executor.clone();
+        let stream_id2 = stream_id.clone();
+        let barrier2 = barrier.clone();
+        let handle2 = tokio::spawn(async move {
+            // Wait for both tasks to be ready
+            barrier2.wait().await;
+
+            let result = executor2
+                .execute(
+                    &CreateCommand,
+                    CreateInput {
+                        stream_id: stream_id2.clone(),
+                        value: "value2".to_string(),
+                    },
+                    ExecutionOptions::default(),
+                )
+                .await;
+            result
+        });
+
+        let result1 = handle1.await.unwrap();
+        let result2 = handle2.await.unwrap();
+
+        // Check the results. We expect one of these scenarios:
+        // 1. Both commands race: one succeeds (v1), one retries and fails with BusinessRuleViolation
+        // 2. Sequential execution: one succeeds (v1), the other reads existing stream and fails
+        //
+        // Note: We previously saw a bug where the second command would succeed with v2,
+        // but this should not happen with our "create if not exists" business logic.
+        let success_count = [&result1, &result2].iter().filter(|r| r.is_ok()).count();
+        let business_violation_count = [&result1, &result2]
+            .iter()
+            .filter(|r| matches!(r, Err(CommandError::BusinessRuleViolation(ref msg)) if msg == "Stream already exists"))
+            .count();
+
+        assert_eq!(
+            success_count, 1,
+            "Test run {test_run}: Expected exactly 1 success, got {success_count}. Results: {result1:?} and {result2:?}"
+        );
+        assert_eq!(
+            business_violation_count, 1,
+            "Test run {test_run}: Expected exactly 1 BusinessRuleViolation, got {business_violation_count}. Results: {result1:?} and {result2:?}"
+        );
+
+        // Check that there's exactly one event in the stream
+        let stream_data = executor
+            .event_store()
+            .read_streams(&[stream_id], &eventcore::ReadOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            stream_data.events.len(),
+            1,
+            "Test run {}: Expected exactly 1 event, found {}",
+            test_run,
+            stream_data.events.len()
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_concurrent_creation_stress() {
+    // Stress test: Multiple commands trying to create the same stream
+    // This should reliably enforce the business invariant that only one succeeds
+
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/eventcore".to_string());
+
+    let config = PostgresConfig::new(database_url);
+
+    let event_store = PostgresEventStore::<TestEvent>::new(config)
+        .await
+        .expect("Failed to create PostgreSQL event store");
+
+    event_store
+        .initialize()
+        .await
+        .expect("Failed to initialize database");
+
+    let executor = Arc::new(CommandExecutor::new(event_store));
+
     let stream_id = StreamId::try_new(format!(
-        "test-{}",
+        "stress-test-{}",
         uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))
     ))
     .unwrap();
 
-    // Spawn two concurrent operations trying to create the same stream
-    let executor1 = executor.clone();
-    let stream_id1 = stream_id.clone();
-    let handle1 = tokio::spawn(async move {
-        executor1
-            .execute(
-                &CreateCommand,
-                CreateInput {
-                    stream_id: stream_id1,
-                    value: "value1".to_string(),
-                },
-                ExecutionOptions::default(),
-            )
-            .await
-    });
+    // Spawn 10 concurrent operations trying to create the same stream
+    let mut handles = vec![];
+    for i in 0..10 {
+        let executor_clone = executor.clone();
+        let stream_id_clone = stream_id.clone();
+        let handle = tokio::spawn(async move {
+            executor_clone
+                .execute(
+                    &CreateCommand,
+                    CreateInput {
+                        stream_id: stream_id_clone,
+                        value: format!("value{i}"),
+                    },
+                    ExecutionOptions::default(),
+                )
+                .await
+        });
+        handles.push(handle);
+    }
 
-    let executor2 = executor.clone();
-    let stream_id2 = stream_id.clone();
-    let handle2 = tokio::spawn(async move {
-        executor2
-            .execute(
-                &CreateCommand,
-                CreateInput {
-                    stream_id: stream_id2,
-                    value: "value2".to_string(),
-                },
-                ExecutionOptions::default(),
-            )
-            .await
-    });
+    // Wait for all to complete
+    let results: Vec<_> = futures::future::join_all(handles).await;
 
-    let result1 = handle1.await.unwrap();
-    let result2 = handle2.await.unwrap();
+    // Count outcomes
+    let mut success_count = 0;
+    let mut business_violation_count = 0;
+    let mut other_error_count = 0;
 
-    // One should succeed, one should fail with BusinessRuleViolation after retry
-    // This is the correct behavior: the executor retries on ConcurrencyConflict,
-    // reads the updated state, and the business logic correctly detects "Already exists"
-    assert!(
-        (result1.is_ok()
-            && matches!(result2, Err(CommandError::BusinessRuleViolation(ref msg)) if msg == "Already exists"))
-            || (result2.is_ok()
-                && matches!(result1, Err(CommandError::BusinessRuleViolation(ref msg)) if msg == "Already exists")),
-        "Expected one success and one BusinessRuleViolation('Already exists'), got: {result1:?} and {result2:?}"
+    for result in results {
+        match result.unwrap() {
+            Ok(_) => success_count += 1,
+            Err(CommandError::BusinessRuleViolation(ref msg)) if msg == "Stream already exists" => {
+                business_violation_count += 1;
+            }
+            Err(e) => {
+                other_error_count += 1;
+                eprintln!("Unexpected error: {e:?}");
+            }
+        }
+    }
+
+    // Only one should succeed, all others should fail with business rule violation
+    assert_eq!(success_count, 1, "Expected exactly 1 success");
+    assert_eq!(
+        business_violation_count, 9,
+        "Expected exactly 9 business rule violations"
     );
+    assert_eq!(other_error_count, 0, "Expected no other types of errors");
 
-    // Check that there's exactly one event in the stream
+    // Verify exactly one event in the stream
     let stream_data = executor
         .event_store()
         .read_streams(&[stream_id], &eventcore::ReadOptions::default())
         .await
         .unwrap();
 
-    assert_eq!(
-        stream_data.events.len(),
-        1,
-        "Expected exactly 1 event, found {}",
-        stream_data.events.len()
-    );
+    assert_eq!(stream_data.events.len(), 1, "Expected exactly 1 event");
 }

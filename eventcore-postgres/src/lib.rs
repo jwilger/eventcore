@@ -181,6 +181,7 @@ pub enum PostgresError {
     Transaction(String),
 }
 
+#[allow(clippy::fallible_impl_from)] // We use expect() for critical internal errors that should never fail
 impl From<PostgresError> for EventStoreError {
     fn from(error: PostgresError) -> Self {
         match error {
@@ -193,15 +194,44 @@ impl From<PostgresError> for EventStoreError {
                 match &sqlx_error {
                     Configuration(_) => Self::Configuration(sqlx_error.to_string()),
                     Database(db_err) => {
-                        // Check for unique constraint violations
+                        // Check for specific PostgreSQL error codes
                         if let Some(code) = db_err.code() {
-                            if code == "23505" {
-                                // PostgreSQL unique violation
-                                return Self::ConnectionFailed(format!(
-                                    "Unique constraint violation: {db_err}"
-                                ));
+                            match code.as_ref() {
+                                "23505" => {
+                                    // PostgreSQL unique violation
+                                    return Self::ConnectionFailed(format!(
+                                        "Unique constraint violation: {db_err}"
+                                    ));
+                                }
+                                "40001" => {
+                                    // Serialization failure - transaction conflict in SERIALIZABLE isolation
+                                    // Convert to VersionConflict which will be converted to ConcurrencyConflict by the executor
+                                    // We can't determine the specific stream, so create a generic conflict
+                                    use eventcore::{EventVersion, StreamId};
+                                    return Self::VersionConflict {
+                                        stream: StreamId::try_new("serialization-conflict")
+                                            .unwrap(),
+                                        expected: EventVersion::initial(),
+                                        current: EventVersion::try_new(1).unwrap(),
+                                    };
+                                }
+                                _ => {}
                             }
                         }
+
+                        // Also check the error message for serialization failures that might not have the code
+                        let error_msg = db_err.to_string().to_lowercase();
+                        if error_msg.contains("could not serialize access due to concurrent update")
+                            || error_msg.contains("serialization failure")
+                        {
+                            use eventcore::{EventVersion, StreamId};
+                            return Self::VersionConflict {
+                                stream: StreamId::try_new("serialization-conflict").unwrap(),
+                                expected: EventVersion::initial(),
+                                current: EventVersion::try_new(1).unwrap(),
+                            };
+                        }
+
                         Self::ConnectionFailed(db_err.to_string())
                     }
                     Io(_) | Tls(_) | Protocol(_) | PoolTimedOut | PoolClosed => {
@@ -424,6 +454,7 @@ where
     /// This method creates the necessary tables and indexes for the event store.
     /// It is idempotent and can be called multiple times safely.
     /// Uses `PostgreSQL` advisory locks to prevent concurrent initialization conflicts.
+    #[allow(clippy::too_many_lines)]
     pub async fn initialize(&self) -> Result<(), PostgresError> {
         // Use PostgreSQL advisory lock to prevent concurrent schema initialization
         // Lock ID 123456789 is arbitrary but consistent for schema initialization
@@ -492,20 +523,128 @@ where
             .await
             .map_err(PostgresError::Connection)?;
 
-            // Create event_streams table for tracking stream metadata
+            // Enable pgcrypto extension for random bytes generation
+            sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+                .execute(self.pool.as_ref())
+                .await
+                .map_err(PostgresError::Connection)?;
+
+            // Create function to generate UUIDv7
             sqlx::query(
                 r"
-                CREATE TABLE IF NOT EXISTS event_streams (
-                    stream_id VARCHAR(255) PRIMARY KEY,
-                    current_version BIGINT NOT NULL DEFAULT 0,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
+                CREATE OR REPLACE FUNCTION gen_uuidv7() RETURNS UUID AS $$
+                DECLARE
+                    unix_ts_ms BIGINT;
+                    uuid_bytes BYTEA;
+                BEGIN
+                    -- Get current timestamp in milliseconds since Unix epoch
+                    unix_ts_ms := (extract(epoch from clock_timestamp()) * 1000)::BIGINT;
+                    
+                    -- Create a 16-byte UUID:
+                    -- Bytes 0-5: 48-bit big-endian timestamp (milliseconds since Unix epoch)
+                    -- Bytes 6-7: 4-bit version (0111) + 12 random bits  
+                    -- Bytes 8-9: 2-bit variant (10) + 14 random bits
+                    -- Bytes 10-15: 48 random bits
+                    
+                    -- Build the UUID byte by byte
+                    uuid_bytes := 
+                        -- Timestamp: 48 bits, big-endian
+                        substring(int8send(unix_ts_ms) from 3 for 6) ||
+                        -- Version (0111 = 7) + random: 16 bits
+                        -- First byte: 0111RRRR (where R is random)
+                        set_byte(gen_random_bytes(1), 0, (get_byte(gen_random_bytes(1), 0) & 15) | 112) ||
+                        -- Second byte: all random
+                        gen_random_bytes(1) ||
+                        -- Variant (10) + random: 16 bits  
+                        -- First byte: 10RRRRRR (where R is random)
+                        set_byte(gen_random_bytes(1), 0, (get_byte(gen_random_bytes(1), 0) & 63) | 128) ||
+                        -- Remaining 7 bytes: all random
+                        gen_random_bytes(7);
+                    
+                    RETURN encode(uuid_bytes, 'hex')::UUID;
+                END;
+                $$ LANGUAGE plpgsql VOLATILE;
                 ",
             )
             .execute(self.pool.as_ref())
             .await
             .map_err(PostgresError::Connection)?;
+
+            // Create function for atomic version checking
+            sqlx::query(
+                r"
+                CREATE OR REPLACE FUNCTION check_event_version() RETURNS TRIGGER AS $$
+                DECLARE
+                    current_max_version BIGINT;
+                    expected_version BIGINT;
+                BEGIN
+                    -- Lock the stream for this transaction to ensure sequential versioning
+                    -- This prevents gaps when multiple events are inserted in parallel
+                    PERFORM pg_advisory_xact_lock(hashtext(NEW.stream_id));
+                    
+                    -- Get the current maximum version for this stream
+                    -- Returns NULL if no events exist, which we'll treat as 0
+                    SELECT COALESCE(MAX(event_version), 0) INTO current_max_version
+                    FROM events
+                    WHERE stream_id = NEW.stream_id;
+                    
+                    -- Version checking logic:
+                    -- The unique constraint on (stream_id, event_version) prevents duplicates
+                    -- but we need to ensure no gaps and handle ExpectedVersion::New properly
+                    
+                    -- For version 1, this is ExpectedVersion::New - stream MUST be empty
+                    IF NEW.event_version = 1 THEN
+                        IF current_max_version != 0 THEN
+                            RAISE EXCEPTION 'Version conflict for stream %: cannot insert version 1 when stream already has events', 
+                                NEW.stream_id
+                                USING ERRCODE = '40001'; -- Use serialization_failure error code
+                        END IF;
+                    ELSE
+                        -- For versions > 1, ensure no gaps in the sequence
+                        expected_version := current_max_version + 1;
+                        IF NEW.event_version != expected_version THEN
+                            RAISE EXCEPTION 'Version gap detected for stream %: expected version %, got %', 
+                                NEW.stream_id, expected_version, NEW.event_version
+                                USING ERRCODE = '40001'; -- Use serialization_failure error code
+                        END IF;
+                    END IF;
+                    
+                    -- Generate event_id using UUIDv7 (always required since we never pass one)
+                    NEW.event_id := gen_uuidv7();
+                    
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                ",
+            )
+            .execute(self.pool.as_ref())
+            .await
+            .map_err(PostgresError::Connection)?;
+
+            // Drop existing trigger if it exists
+            sqlx::query("DROP TRIGGER IF EXISTS enforce_event_version ON events")
+                .execute(self.pool.as_ref())
+                .await
+                .map_err(PostgresError::Connection)?;
+
+            // Create trigger to enforce sequential versioning
+            sqlx::query(
+                r"
+                CREATE TRIGGER enforce_event_version
+                    BEFORE INSERT ON events
+                    FOR EACH ROW
+                    EXECUTE FUNCTION check_event_version()
+                ",
+            )
+            .execute(self.pool.as_ref())
+            .await
+            .map_err(PostgresError::Connection)?;
+
+            // Drop the foreign key constraint since we no longer use event_streams table
+            sqlx::query("ALTER TABLE events DROP CONSTRAINT IF EXISTS fk_events_stream_id")
+                .execute(self.pool.as_ref())
+                .await
+                .map_err(PostgresError::Connection)?;
 
             info!("Database schema initialized successfully");
             Ok::<(), PostgresError>(())

@@ -17,7 +17,7 @@ use eventcore::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{postgres::PgRow, Row, Transaction};
+use sqlx::{postgres::PgRow, Row};
 use tracing::{debug, error, instrument};
 use uuid::Uuid;
 
@@ -205,28 +205,31 @@ where
 
         debug!("Retrieved {} events from database", rows.len());
 
-        // Convert rows to events
+        // Convert rows to events and derive stream versions atomically
         let mut events = Vec::new();
+        let mut stream_versions = HashMap::new();
+
+        // Initialize all requested streams to version 0 (in case they have no events)
+        for stream_id in stream_ids {
+            stream_versions.insert(stream_id.clone(), EventVersion::initial());
+        }
+
         for row in rows {
             let event_row = EventRow::try_from(row)
                 .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
-            events.push(event_row.to_stored_event::<E>()?);
-        }
+            let stored_event = event_row.to_stored_event::<E>()?;
 
-        // Get current stream versions in a single optimized query
-        let stream_versions = if stream_ids.len() == 1 {
-            // Single stream optimization
-            let version = self.get_stream_version(&stream_ids[0]).await?;
-            let mut versions = HashMap::new();
-            versions.insert(
-                stream_ids[0].clone(),
-                version.unwrap_or_else(EventVersion::initial),
-            );
-            versions
-        } else {
-            // Multi-stream batch query
-            self.get_stream_versions(stream_ids).await?
-        };
+            // Update stream version to max of events read for this stream
+            let initial_version = EventVersion::initial();
+            let current_max = stream_versions
+                .get(&stored_event.stream_id)
+                .unwrap_or(&initial_version);
+            if stored_event.event_version > *current_max {
+                stream_versions.insert(stored_event.stream_id.clone(), stored_event.event_version);
+            }
+
+            events.push(stored_event);
+        }
 
         Ok(StreamData::new(events, stream_versions))
     }
@@ -242,19 +245,15 @@ where
 
         debug!("Writing events to {} streams", stream_events.len());
 
-        // Start transaction for atomicity
-        let mut tx = self.pool.begin().await.map_err(PostgresError::Connection)?;
-
+        // NO TRANSACTION - let PostgreSQL trigger handle atomicity
+        // Each INSERT is atomic by itself, trigger enforces version conflicts
         let mut result_versions = HashMap::new();
 
         for stream in stream_events {
             let stream_id = stream.stream_id.clone();
-            let new_version = self.write_stream_events(&mut tx, stream).await?;
+            let new_version = self.write_stream_events_direct(stream).await?;
             result_versions.insert(stream_id, new_version);
         }
-
-        // Commit transaction
-        tx.commit().await.map_err(PostgresError::Connection)?;
 
         debug!(
             "Successfully wrote events to {} streams",
@@ -275,32 +274,28 @@ where
         Ok(exists)
     }
 
-    #[instrument(skip(self))]
     async fn get_stream_version(
         &self,
         stream_id: &StreamId,
     ) -> EventStoreResult<Option<EventVersion>> {
-        let version: Option<i64> =
-            sqlx::query_scalar("SELECT current_version FROM event_streams WHERE stream_id = $1")
+        let max_version: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(event_version) FROM events WHERE stream_id = $1")
                 .bind(stream_id.as_ref())
                 .fetch_optional(self.pool.as_ref())
                 .await
-                .map_err(PostgresError::Connection)?;
+                .map_err(PostgresError::Connection)?
+                .flatten(); // MAX returns None if no rows, Some(None) if all NULL
 
-        match version {
-            Some(v) => {
-                let event_version = if v >= 0 {
-                    let v_u64 = u64::try_from(v).map_err(|_| {
-                        EventStoreError::SerializationFailed("Invalid version".to_string())
-                    })?;
-                    EventVersion::try_new(v_u64)
-                        .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?
-                } else {
-                    return Ok(None);
-                };
-                Ok(Some(event_version))
+        match max_version {
+            Some(v) if v >= 0 => {
+                let v_u64 = u64::try_from(v).map_err(|_| {
+                    EventStoreError::SerializationFailed("Invalid version".to_string())
+                })?;
+                Ok(Some(EventVersion::try_new(v_u64).map_err(|e| {
+                    EventStoreError::SerializationFailed(e.to_string())
+                })?))
             }
-            None => Ok(None),
+            _ => Ok(None), // No events for this stream
         }
     }
 
@@ -769,67 +764,11 @@ where
         + Eq
         + 'static,
 {
-    /// Get current versions for multiple streams
-    async fn get_stream_versions(
+    /// Write events to a single stream WITHOUT transaction - use direct pool access
+    /// The `PostgreSQL` trigger handles atomicity and version conflict detection
+    #[allow(dead_code)]
+    async fn write_stream_events_direct(
         &self,
-        stream_ids: &[StreamId],
-    ) -> EventStoreResult<HashMap<StreamId, EventVersion>> {
-        if stream_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let stream_id_strings: Vec<String> =
-            stream_ids.iter().map(|s| s.as_ref().to_string()).collect();
-
-        let rows = sqlx::query(
-            "SELECT stream_id, current_version FROM event_streams WHERE stream_id = ANY($1)",
-        )
-        .bind(&stream_id_strings)
-        .fetch_all(self.pool.as_ref())
-        .await
-        .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
-
-        let mut versions = HashMap::new();
-
-        for row in rows {
-            let stream_id_str: String = row
-                .try_get("stream_id")
-                .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
-            let version_raw: i64 = row
-                .try_get("current_version")
-                .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
-
-            let stream_id = StreamId::try_new(stream_id_str)
-                .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
-            let version = if version_raw >= 0 {
-                let version_u64 = u64::try_from(version_raw).map_err(|_| {
-                    EventStoreError::SerializationFailed("Invalid version".to_string())
-                })?;
-                EventVersion::try_new(version_u64)
-                    .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?
-            } else {
-                return Err(EventStoreError::SerializationFailed(
-                    "Negative version in database".to_string(),
-                ));
-            };
-
-            versions.insert(stream_id, version);
-        }
-
-        // For streams that don't exist yet, add initial version
-        for stream_id in stream_ids {
-            if !versions.contains_key(stream_id) {
-                versions.insert(stream_id.clone(), EventVersion::initial());
-            }
-        }
-
-        Ok(versions)
-    }
-
-    /// Write events to a single stream within a transaction
-    async fn write_stream_events(
-        &self,
-        tx: &mut Transaction<'_, sqlx::Postgres>,
         stream_events: StreamEvents<E>,
     ) -> EventStoreResult<EventVersion>
     where
@@ -844,117 +783,75 @@ where
         if events.is_empty() {
             // For read-only streams, just verify the version without locking
             let current_version = self
-                .verify_stream_version(tx, &stream_id, expected_version)
+                .verify_stream_version_direct(&stream_id, expected_version)
                 .await?;
             return Ok(current_version);
         }
 
-        // Get current version and validate expected version
-        let current_version = self
-            .get_current_version_for_update(tx, &stream_id, expected_version)
-            .await?;
+        // Calculate starting version - same logic as before
+        let starting_version = match expected_version {
+            ExpectedVersion::New => EventVersion::initial(),
+            ExpectedVersion::Exact(v) => v,
+            ExpectedVersion::Any => {
+                // Get current version from database
+                let current: Option<i64> = sqlx::query_scalar(
+                    "SELECT MAX(event_version) FROM events WHERE stream_id = $1",
+                )
+                .bind(stream_id.as_ref())
+                .fetch_optional(self.pool.as_ref())
+                .await
+                .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?
+                .flatten();
+
+                if let Some(v) = current {
+                    Self::convert_version(v)?
+                } else {
+                    EventVersion::initial()
+                }
+            }
+        };
 
         // Calculate new version
-        let current_value: u64 = current_version.into();
-        let new_version = EventVersion::try_new(current_value + events.len() as u64)
+        let starting_value: u64 = starting_version.into();
+        let new_version = EventVersion::try_new(starting_value + events.len() as u64)
             .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
 
-        // CRITICAL FIX: Reserve the version slot BEFORE inserting events
-        // This acts as our concurrency control lock - only one transaction can claim a version range
-        self.update_stream_version_if_current(tx, &stream_id, current_version, new_version)
-            .await?;
-
-        // Now that we've reserved the version slot, insert events using batch operation
-        // If this fails, the transaction will rollback and free the version slot
-        self.insert_events_batch(tx, &stream_id, current_version, &events)
-            .await?;
+        // Insert events directly to pool - trigger handles conflicts
+        self.insert_events_batch_direct(&stream_id, starting_version, &events)
+            .await
+            .map_err(|e| {
+                // Convert trigger errors back to VersionConflict for proper retry handling
+                if let EventStoreError::ConnectionFailed(msg) = &e {
+                    if msg.contains("Version conflict") || msg.contains("expected new stream") {
+                        return EventStoreError::VersionConflict {
+                            stream: stream_id.clone(),
+                            expected: starting_version,
+                            current: EventVersion::try_new(starting_value + 1)
+                                .unwrap_or(starting_version),
+                        };
+                    }
+                }
+                e
+            })?;
 
         Ok(new_version)
     }
 
-    /// Verify stream version for read-only access (no locking)
-    async fn verify_stream_version(
-        &self,
-        tx: &mut Transaction<'_, sqlx::Postgres>,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-    ) -> EventStoreResult<EventVersion> {
-        // Get current version without lock
-        let current_version: Option<i64> =
-            sqlx::query_scalar("SELECT current_version FROM event_streams WHERE stream_id = $1")
-                .bind(stream_id.as_ref())
-                .fetch_optional(tx.as_mut())
-                .await
-                .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
-
-        Self::verify_version_matches(stream_id, current_version, expected_version)
-    }
-
-    /// Get current version for a stream we're about to update
-    async fn get_current_version_for_update(
-        &self,
-        tx: &mut Transaction<'_, sqlx::Postgres>,
-        stream_id: &StreamId,
-        expected_version: ExpectedVersion,
-    ) -> EventStoreResult<EventVersion> {
-        // Get current version without lock
-        let current_version: Option<i64> =
-            sqlx::query_scalar("SELECT current_version FROM event_streams WHERE stream_id = $1")
-                .bind(stream_id.as_ref())
-                .fetch_optional(tx.as_mut())
-                .await
-                .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
-
-        // For new streams, create them if they don't exist
-        if current_version.is_none()
-            && matches!(
-                expected_version,
-                ExpectedVersion::New | ExpectedVersion::Any
-            )
-        {
-            // Try to insert the stream
-            let result = sqlx::query(
-                "INSERT INTO event_streams (stream_id, current_version) VALUES ($1, 0) ON CONFLICT (stream_id) DO NOTHING",
-            )
-            .bind(stream_id.as_ref())
-            .execute(tx.as_mut())
-            .await
-            .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
-
-            if result.rows_affected() == 1 {
-                // We created the stream
-                return Ok(EventVersion::initial());
-            }
-
-            // Stream was created concurrently, get its version
-            let current_version: Option<i64> = sqlx::query_scalar(
-                "SELECT current_version FROM event_streams WHERE stream_id = $1",
-            )
-            .bind(stream_id.as_ref())
-            .fetch_optional(tx.as_mut())
-            .await
-            .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
-
-            if expected_version == ExpectedVersion::New {
-                // We expected New but someone else created it
-                return Err(EventStoreError::VersionConflict {
-                    stream: stream_id.clone(),
-                    expected: EventVersion::initial(),
-                    current: Self::convert_version(current_version.unwrap_or(0))?,
-                });
-            }
-        }
-
-        Self::verify_version_matches(stream_id, current_version, expected_version)
-    }
-
     /// Verify that the actual version matches the expected version
+    #[allow(clippy::cognitive_complexity)]
     fn verify_version_matches(
         stream_id: &StreamId,
         current_version: Option<i64>,
         expected_version: ExpectedVersion,
     ) -> EventStoreResult<EventVersion> {
-        match (current_version, expected_version) {
+        debug!(
+            stream_id = %stream_id.as_ref(),
+            current = ?current_version,
+            expected = ?expected_version,
+            "Verifying version match"
+        );
+
+        let result = match (current_version, expected_version) {
             (None, ExpectedVersion::New) => {
                 // Stream doesn't exist and we expect it to be new - good
                 Ok(EventVersion::initial())
@@ -978,7 +875,6 @@ where
             }
             (Some(actual), ExpectedVersion::Exact(expected)) => {
                 let actual_version = Self::convert_version(actual)?;
-
                 if actual_version == expected {
                     Ok(actual_version)
                 } else {
@@ -993,7 +889,10 @@ where
                 let actual_version = Self::convert_version(actual)?;
                 Ok(actual_version)
             }
-        }
+        };
+
+        debug!(result = ?result, "Version verification complete");
+        result
     }
 
     /// Convert i64 version from database to `EventVersion`
@@ -1010,64 +909,27 @@ where
         }
     }
 
-    /// Update stream version using optimistic concurrency control (lock-free)
-    async fn update_stream_version_if_current(
+    /// Verify stream version without transaction
+    async fn verify_stream_version_direct(
         &self,
-        tx: &mut Transaction<'_, sqlx::Postgres>,
         stream_id: &StreamId,
-        current_version: EventVersion,
-        new_version: EventVersion,
-    ) -> EventStoreResult<()> {
-        let current_i64 = i64::try_from(u64::from(current_version))
-            .map_err(|_| EventStoreError::SerializationFailed("Version too large".to_string()))?;
-        let new_i64 = i64::try_from(u64::from(new_version))
-            .map_err(|_| EventStoreError::SerializationFailed("Version too large".to_string()))?;
+        expected_version: ExpectedVersion,
+    ) -> EventStoreResult<EventVersion> {
+        let current_version: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(event_version) FROM events WHERE stream_id = $1")
+                .bind(stream_id.as_ref())
+                .fetch_optional(self.pool.as_ref())
+                .await
+                .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?
+                .flatten();
 
-        // Use conditional UPDATE with WHERE clause for optimistic concurrency control
-        let result = sqlx::query(
-            "UPDATE event_streams 
-             SET current_version = $1, updated_at = NOW() 
-             WHERE stream_id = $2 AND current_version = $3",
-        )
-        .bind(new_i64)
-        .bind(stream_id.as_ref())
-        .bind(current_i64)
-        .execute(tx.as_mut())
-        .await
-        .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
-
-        // Check if the update succeeded
-        if result.rows_affected() == 0 {
-            // Version mismatch - someone else updated the stream
-            // Get the actual current version for the error message
-            let actual_version: Option<i64> = sqlx::query_scalar(
-                "SELECT current_version FROM event_streams WHERE stream_id = $1",
-            )
-            .bind(stream_id.as_ref())
-            .fetch_optional(tx.as_mut())
-            .await
-            .map_err(|e| EventStoreError::ConnectionFailed(e.to_string()))?;
-
-            let actual = actual_version
-                .map(|v| Self::convert_version(v))
-                .transpose()?
-                .unwrap_or_else(EventVersion::initial);
-
-            return Err(EventStoreError::VersionConflict {
-                stream: stream_id.clone(),
-                expected: current_version,
-                current: actual,
-            });
-        }
-
-        Ok(())
+        Self::verify_version_matches(stream_id, current_version, expected_version)
     }
 
-    /// Insert multiple events in a single batch operation for improved performance
+    /// Insert events directly to pool without transaction
     #[allow(clippy::too_many_lines)]
-    async fn insert_events_batch(
+    async fn insert_events_batch_direct(
         &self,
-        tx: &mut Transaction<'_, sqlx::Postgres>,
         stream_id: &StreamId,
         starting_version: EventVersion,
         events: &[EventToWrite<E>],
@@ -1075,30 +937,27 @@ where
     where
         E: serde::Serialize + Sync,
     {
-        // Process events in batches to avoid hitting PostgreSQL parameter limits
-        // PostgreSQL has a limit of 65535 parameters per query, and we use 9 parameters per event
-        const MAX_EVENTS_PER_BATCH: usize = 1000; // Conservative limit for safety
+        const MAX_EVENTS_PER_BATCH: usize = 1000;
 
         if events.is_empty() {
             return Ok(());
         }
 
-        let starting_version_u64: u64 = starting_version.into();
+        // Same logic as insert_events_batch but use pool directly instead of transaction
 
         for (batch_idx, batch) in events.chunks(MAX_EVENTS_PER_BATCH).enumerate() {
-            // Build the batch insert query
             let mut query = String::from(
                 "INSERT INTO events 
-                 (event_id, stream_id, event_version, event_type, event_data, metadata, causation_id, correlation_id, user_id) 
+                 (stream_id, event_version, event_type, event_data, metadata, causation_id, correlation_id, user_id) 
                  VALUES "
             );
 
             let mut values = Vec::new();
+            let starting_version_u64: u64 = starting_version.into();
             let batch_starting_version =
                 starting_version_u64 + (batch_idx * MAX_EVENTS_PER_BATCH) as u64;
 
             // Prepare all data for this batch
-            let mut event_ids = Vec::with_capacity(batch.len());
             let mut stream_ids = Vec::with_capacity(batch.len());
             let mut versions = Vec::with_capacity(batch.len());
             let mut event_types = Vec::with_capacity(batch.len());
@@ -1109,7 +968,6 @@ where
             let mut user_ids = Vec::with_capacity(batch.len());
 
             for (i, event) in batch.iter().enumerate() {
-                // Calculate version for this event
                 let event_version = EventVersion::try_new(batch_starting_version + i as u64 + 1)
                     .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
 
@@ -1123,7 +981,7 @@ where
                     None
                 };
 
-                // Extract metadata fields for indexing
+                // Extract metadata fields
                 let (causation_id, correlation_id, user_id) =
                     event
                         .metadata
@@ -1147,9 +1005,9 @@ where
                 })?;
 
                 // Build the value placeholder for this event
-                let param_offset = i * 9;
+                let param_offset = i * 8;
                 values.push(format!(
-                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
                     param_offset + 1,
                     param_offset + 2,
                     param_offset + 3,
@@ -1157,12 +1015,10 @@ where
                     param_offset + 5,
                     param_offset + 6,
                     param_offset + 7,
-                    param_offset + 8,
-                    param_offset + 9
+                    param_offset + 8
                 ));
 
                 // Collect values
-                event_ids.push(*event.event_id);
                 stream_ids.push(stream_id.as_ref().to_string());
                 versions.push({
                     let version_value: u64 = event_version.into();
@@ -1172,7 +1028,7 @@ where
                         )
                     })?
                 });
-                event_types.push("generic".to_string()); // TODO: Add event type detection
+                event_types.push("generic".to_string());
                 event_data_values.push(event_data);
                 metadata_values.push(metadata_json);
                 causation_ids.push(causation_id);
@@ -1183,13 +1039,12 @@ where
             // Complete the query
             query.push_str(&values.join(", "));
 
-            // Create and execute the batch insert query
+            // Create and execute the batch insert query directly on pool
             let mut sqlx_query = sqlx::query(&query);
 
             // Bind all values in the correct order
             for i in 0..batch.len() {
                 sqlx_query = sqlx_query
-                    .bind(event_ids[i])
                     .bind(&stream_ids[i])
                     .bind(versions[i])
                     .bind(&event_types[i])
@@ -1200,17 +1055,35 @@ where
                     .bind(&user_ids[i]);
             }
 
-            sqlx_query.execute(tx.as_mut()).await.map_err(|e| {
+            sqlx_query.execute(self.pool.as_ref()).await.map_err(|e| {
                 e.as_database_error().map_or_else(
                     || EventStoreError::ConnectionFailed(e.to_string()),
                     |db_err| {
-                        if db_err.is_unique_violation() {
-                            // Find which event ID was duplicate - in batch insert,
-                            // we don't know exactly which one, so report the first
-                            EventStoreError::DuplicateEventId(batch[0].event_id)
-                        } else {
-                            EventStoreError::ConnectionFailed(e.to_string())
-                        }
+                        db_err.code().map_or_else(
+                            || EventStoreError::ConnectionFailed(e.to_string()),
+                            |code| {
+                                if code == "40001" {
+                                    // Serialization failure from our trigger
+                                    EventStoreError::VersionConflict {
+                                        stream: stream_id.clone(),
+                                        expected: starting_version,
+                                        current: EventVersion::initial(),
+                                    }
+                                } else if db_err.is_unique_violation() {
+                                    // Unique constraint violation on (stream_id, event_version)
+                                    EventStoreError::VersionConflict {
+                                        stream: stream_id.clone(),
+                                        expected: starting_version,
+                                        current: EventVersion::try_new(
+                                            u64::from(starting_version) + 1,
+                                        )
+                                        .unwrap_or(starting_version),
+                                    }
+                                } else {
+                                    EventStoreError::ConnectionFailed(e.to_string())
+                                }
+                            },
+                        )
                     },
                 )
             })?;
