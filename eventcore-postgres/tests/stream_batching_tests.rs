@@ -16,7 +16,8 @@ use eventcore::{
 };
 use eventcore_postgres::{PostgresConfig, PostgresConfigBuilder, PostgresEventStore};
 use serde::{Deserialize, Serialize};
-use testcontainers::{core::WaitFor, runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt};
+use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::{NoContext, Timestamp, Uuid};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum TestEvent {
@@ -24,43 +25,16 @@ enum TestEvent {
     Updated { id: String, value: i32 },
 }
 
-async fn setup_test_store() -> (
-    PostgresEventStore<TestEvent>,
-    Option<ContainerAsync<GenericImage>>,
-) {
-    // Check if running in CI with existing PostgreSQL service
-    if let Ok(test_db_url) = std::env::var("TEST_DATABASE_URL") {
-        let config = PostgresConfigBuilder::new()
-            .database_url(test_db_url)
-            .max_connections(5)
-            .connect_timeout(Duration::from_secs(5))
-            .read_batch_size(100) // Small batch size for testing
-            .build();
-
-        let store = PostgresEventStore::new(config).await.unwrap();
-        store.initialize().await.unwrap();
-
-        return (store, None);
-    }
-
-    // Fall back to testcontainers for local development
-    let postgres_image = GenericImage::new("postgres", "16-alpine").with_wait_for(
-        WaitFor::message_on_stderr("database system is ready to accept connections"),
-    );
-
-    let container = postgres_image
-        .with_env_var("POSTGRES_USER", "postgres")
-        .with_env_var("POSTGRES_PASSWORD", "postgres")
-        .with_env_var("POSTGRES_DB", "postgres")
-        .start()
-        .await
-        .unwrap();
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
+/// Setup `PostgreSQL` connection using Docker Compose database
+/// This ensures consistency between local development, CI, and integration tests
+async fn setup_test_store() -> PostgresEventStore<TestEvent> {
+    // Use the same test database that Docker Compose provides
+    let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:postgres@localhost:5433/eventcore_test".to_string()
+    });
 
     let config = PostgresConfigBuilder::new()
-        .database_url(format!(
-            "postgres://postgres:postgres@localhost:{port}/postgres"
-        ))
+        .database_url(database_url)
         .max_connections(5)
         .connect_timeout(Duration::from_secs(5))
         .read_batch_size(100) // Small batch size for testing
@@ -69,10 +43,25 @@ async fn setup_test_store() -> (
     let store = PostgresEventStore::new(config).await.unwrap();
     store.initialize().await.unwrap();
 
-    // Give PostgreSQL a moment to fully initialize
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    store
+}
 
-    (store, Some(container))
+/// Create a unique stream ID for test isolation
+fn unique_stream_id(prefix: &str) -> StreamId {
+    let unique_id = Uuid::new_v7(Timestamp::now(NoContext)).simple().to_string();
+    let thread_id = std::thread::current().id();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    StreamId::try_new(format!(
+        "{}-{:?}-{}-{}",
+        prefix,
+        thread_id,
+        nanos,
+        &unique_id[..8]
+    ))
+    .unwrap()
 }
 
 async fn create_test_events(count: usize, _stream_id: &StreamId) -> Vec<EventToWrite<TestEvent>> {
@@ -105,10 +94,10 @@ async fn test_read_batch_size_configuration() {
 
 #[tokio::test]
 async fn test_batch_size_limits_results() {
-    let (store, _container) = setup_test_store().await;
+    let store = setup_test_store().await;
 
     // Create more events than the batch size
-    let stream_id = StreamId::try_new("test-stream").unwrap();
+    let stream_id = unique_stream_id("test-stream");
     let events = create_test_events(200, &stream_id).await;
 
     store
@@ -146,12 +135,12 @@ async fn test_batch_size_limits_results() {
 
 #[tokio::test]
 async fn test_paginated_reading() {
-    let (store, _container) = setup_test_store().await;
+    let store = setup_test_store().await;
 
     // Create events across multiple streams
-    let stream1 = StreamId::try_new("stream-1").unwrap();
-    let stream2 = StreamId::try_new("stream-2").unwrap();
-    let stream3 = StreamId::try_new("stream-3").unwrap();
+    let stream1 = unique_stream_id("stream-1");
+    let stream2 = unique_stream_id("stream-2");
+    let stream3 = unique_stream_id("stream-3");
 
     let events1 = create_test_events(50, &stream1).await;
     let events2 = create_test_events(50, &stream2).await;
@@ -226,9 +215,9 @@ async fn test_paginated_reading() {
 
 #[tokio::test]
 async fn test_paginated_reading_with_filters() {
-    let (store, _container) = setup_test_store().await;
+    let store = setup_test_store().await;
 
-    let stream_id = StreamId::try_new("filtered-stream").unwrap();
+    let stream_id = unique_stream_id("filtered-stream");
     let events = create_test_events(100, &stream_id).await;
 
     store
@@ -287,7 +276,7 @@ async fn test_paginated_reading_with_filters() {
 
 #[tokio::test]
 async fn test_multi_stream_batch_performance() {
-    let (store, _container) = setup_test_store().await;
+    let store = setup_test_store().await;
 
     // Create many streams
     let stream_count = 50;
@@ -296,7 +285,7 @@ async fn test_multi_stream_batch_performance() {
     let mut writes = Vec::new();
 
     for i in 0..stream_count {
-        let stream_id = StreamId::try_new(format!("perf-stream-{i}")).unwrap();
+        let stream_id = unique_stream_id(&format!("perf-stream-{i}"));
         stream_ids.push(stream_id.clone());
 
         let events = create_test_events(events_per_stream, &stream_id).await;
@@ -331,11 +320,11 @@ async fn test_multi_stream_batch_performance() {
 
 #[tokio::test]
 async fn test_empty_stream_handling_with_batching() {
-    let (store, _container) = setup_test_store().await;
+    let store = setup_test_store().await;
 
     // Mix of empty and non-empty streams
-    let empty_stream = StreamId::try_new("empty-stream").unwrap();
-    let stream_with_data = StreamId::try_new("data-stream").unwrap();
+    let empty_stream = unique_stream_id("empty-stream");
+    let stream_with_data = unique_stream_id("data-stream");
 
     // Only write to one stream
     let events = create_test_events(50, &stream_with_data).await;
@@ -361,9 +350,9 @@ async fn test_empty_stream_handling_with_batching() {
 
 #[tokio::test]
 async fn test_continuation_token_consistency() {
-    let (store, _container) = setup_test_store().await;
+    let store = setup_test_store().await;
 
-    let stream_id = StreamId::try_new("token-test").unwrap();
+    let stream_id = unique_stream_id("token-test");
     let events = create_test_events(30, &stream_id).await;
 
     store

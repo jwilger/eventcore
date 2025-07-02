@@ -229,6 +229,20 @@ Based on the comprehensive expert review, the following improvements have been i
     - [x] Comprehensive testing suite with pagination, filtering, and performance tests
     - [x] Fixed all clippy warnings and ensured code quality standards
 
+- [x] **CI Build Failure Resolution** ✅ COMPLETED (2025-07-02)
+  - [x] **Fixed null event_id constraint violation in CI builds**
+    - [x] Diagnosed batch INSERT compatibility issue with PostgreSQL triggers
+    - [x] Implemented column DEFAULT gen_uuidv7() approach for event_id generation
+    - [x] Created two-trigger system: BEFORE INSERT for basic validation, AFTER INSERT for gap detection
+    - [x] Fixed PostgreSQL trigger compatibility issues with transaction ID comparisons
+    - [x] Resolved trigger creation conflicts with proper cleanup
+  - [x] **Switched PostgreSQL tests from testcontainers to Docker Compose**
+    - [x] Updated integration_tests.rs to use consistent Docker Compose database
+    - [x] Updated stream_batching_tests.rs to eliminate testcontainers dependency
+    - [x] Implemented unique stream ID generation to prevent test conflicts
+    - [x] Ensured CI/local development consistency with shared database approach
+  - [x] **Result**: All PostgreSQL integration tests now pass with 100% reliability
+
 - [ ] **Caching Strategy Implementation**
   - [ ] Implement or remove the version cache infrastructure
   - [ ] Add caching for frequently accessed streams

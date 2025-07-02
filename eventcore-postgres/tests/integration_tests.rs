@@ -10,44 +10,17 @@ use eventcore::{
 };
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
 use serde::{Deserialize, Serialize};
-use testcontainers::{core::WaitFor, runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt};
+use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::{NoContext, Timestamp, Uuid};
+/// Setup `PostgreSQL` connection using Docker Compose database
+/// This ensures consistency between local development, CI, and integration tests
+fn setup_postgres_config() -> PostgresConfig {
+    // Use the same test database that Docker Compose provides
+    let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:postgres@localhost:5433/eventcore_test".to_string()
+    });
 
-// Test container setup
-const POSTGRES_VERSION: &str = "16-alpine";
-const POSTGRES_USER: &str = "postgres";
-const POSTGRES_PASSWORD: &str = "postgres";
-const POSTGRES_DB: &str = "eventcore_test";
-
-async fn setup_postgres_container() -> (Option<ContainerAsync<GenericImage>>, PostgresConfig) {
-    // Check if running in CI with existing PostgreSQL service
-    if let Ok(test_db_url) = std::env::var("TEST_DATABASE_URL") {
-        // Use the existing CI PostgreSQL service
-        let config = PostgresConfig::new(test_db_url);
-        return (None, config);
-    }
-
-    // Fall back to testcontainers for local development
-    let postgres_image = GenericImage::new("postgres", POSTGRES_VERSION).with_wait_for(
-        WaitFor::message_on_stderr("database system is ready to accept connections"),
-    );
-
-    let container = postgres_image
-        .with_env_var("POSTGRES_USER", POSTGRES_USER)
-        .with_env_var("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
-        .with_env_var("POSTGRES_DB", POSTGRES_DB)
-        .start()
-        .await
-        .unwrap();
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
-
-    let config = PostgresConfig::new(format!(
-        "postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@localhost:{port}/{POSTGRES_DB}"
-    ));
-
-    // Give PostgreSQL a moment to fully initialize
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-    (Some(container), config)
+    PostgresConfig::new(database_url)
 }
 
 // Test events and commands
@@ -210,7 +183,7 @@ impl Command for TransferBetweenCountersCommand {
 // Integration tests
 #[tokio::test]
 async fn test_concurrent_command_execution() {
-    let (_container, config) = setup_postgres_container().await;
+    let config = setup_postgres_config();
 
     // Initialize event store
     let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
@@ -291,7 +264,7 @@ async fn test_concurrent_command_execution() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn test_multi_stream_atomicity() {
-    let (_container, config) = setup_postgres_container().await;
+    let config = setup_postgres_config();
 
     // Initialize event store
     let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
@@ -450,7 +423,7 @@ async fn test_multi_stream_atomicity() {
 
 #[tokio::test]
 async fn test_transaction_isolation() {
-    let (_container, config) = setup_postgres_container().await;
+    let config = setup_postgres_config();
 
     // Initialize event store
     let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
@@ -581,14 +554,26 @@ async fn test_transaction_isolation() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn test_batch_event_insertion() {
-    let (_container, config) = setup_postgres_container().await;
+    let config = setup_postgres_config();
 
     // Initialize event store
     let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
     event_store.initialize().await.unwrap();
 
     // Test small batch (under MAX_EVENTS_PER_BATCH limit)
-    let stream_id = StreamId::try_new("batch-test-small").unwrap();
+    let unique_id = Uuid::new_v7(Timestamp::now(NoContext)).simple().to_string();
+    let thread_id = std::thread::current().id();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    let stream_id = StreamId::try_new(format!(
+        "batch-test-small-{:?}-{}-{}",
+        thread_id,
+        nanos,
+        &unique_id[..8]
+    ))
+    .unwrap();
     let mut events = Vec::new();
     for i in 0..10 {
         let event = eventcore::EventToWrite::new(
@@ -603,7 +588,13 @@ async fn test_batch_event_insertion() {
 
     let result = event_store.write_events_multi(vec![stream_events]).await;
 
-    assert!(result.is_ok(), "Small batch write should succeed");
+    if let Err(ref e) = result {
+        eprintln!("Write error: {e:?}");
+    }
+    assert!(
+        result.is_ok(),
+        "Small batch write should succeed: {result:?}"
+    );
     let versions = result.unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(
@@ -621,7 +612,18 @@ async fn test_batch_event_insertion() {
     assert_eq!(stream_data.events.len(), 10, "Should have 10 events");
 
     // Test large batch (exceeds MAX_EVENTS_PER_BATCH, will be split)
-    let large_stream_id = StreamId::try_new("batch-test-large").unwrap();
+    let large_unique_id = Uuid::new_v7(Timestamp::now(NoContext)).simple().to_string();
+    let large_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    let large_stream_id = StreamId::try_new(format!(
+        "batch-test-large-{:?}-{}-{}",
+        thread_id,
+        large_nanos,
+        &large_unique_id[..8]
+    ))
+    .unwrap();
     let mut large_events = Vec::new();
     for i in 0..2500 {
         // 2500 events to test batch splitting
@@ -669,8 +671,30 @@ async fn test_batch_event_insertion() {
     );
 
     // Test multi-stream batch operation
-    let stream1 = StreamId::try_new("batch-multi-1").unwrap();
-    let stream2 = StreamId::try_new("batch-multi-2").unwrap();
+    let multi_unique_id1 = Uuid::new_v7(Timestamp::now(NoContext)).simple().to_string();
+    let multi_unique_id2 = Uuid::new_v7(Timestamp::now(NoContext)).simple().to_string();
+    let multi_nanos1 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    let multi_nanos2 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    let stream1 = StreamId::try_new(format!(
+        "batch-multi-1-{:?}-{}-{}",
+        thread_id,
+        multi_nanos1,
+        &multi_unique_id1[..8]
+    ))
+    .unwrap();
+    let stream2 = StreamId::try_new(format!(
+        "batch-multi-2-{:?}-{}-{}",
+        thread_id,
+        multi_nanos2,
+        &multi_unique_id2[..8]
+    ))
+    .unwrap();
 
     let stream1_batch = eventcore::StreamEvents::new(
         stream1.clone(),
@@ -710,9 +734,12 @@ async fn test_batch_event_insertion() {
         .write_events_multi(vec![stream1_batch, stream2_batch])
         .await;
 
+    if let Err(ref e) = multi_result {
+        eprintln!("Multi-stream write error: {e:?}");
+    }
     assert!(
         multi_result.is_ok(),
-        "Multi-stream batch write should succeed"
+        "Multi-stream batch write should succeed: {multi_result:?}"
     );
     let multi_versions = multi_result.unwrap();
     assert_eq!(multi_versions.len(), 2);
@@ -728,14 +755,26 @@ async fn test_batch_event_insertion() {
 
 #[tokio::test]
 async fn test_batch_insertion_performance() {
-    let (_container, config) = setup_postgres_container().await;
+    let config = setup_postgres_config();
 
     // Initialize event store
     let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
     event_store.initialize().await.unwrap();
 
     // Measure performance of batch insertion
-    let stream_id = StreamId::try_new("batch-perf-test").unwrap();
+    let perf_unique_id = Uuid::new_v7(Timestamp::now(NoContext)).simple().to_string();
+    let thread_id = std::thread::current().id();
+    let perf_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    let stream_id = StreamId::try_new(format!(
+        "batch-perf-test-{:?}-{}-{}",
+        thread_id,
+        perf_nanos,
+        &perf_unique_id[..8]
+    ))
+    .unwrap();
 
     // Create 1000 events for batch insertion
     let mut events = Vec::new();
@@ -756,7 +795,13 @@ async fn test_batch_insertion_performance() {
     let result = event_store.write_events_multi(vec![stream_events]).await;
     let duration = start.elapsed();
 
-    assert!(result.is_ok(), "Batch performance test should succeed");
+    if let Err(ref e) = result {
+        eprintln!("Batch performance test error: {e:?}");
+    }
+    assert!(
+        result.is_ok(),
+        "Batch performance test should succeed: {result:?}"
+    );
 
     let events_per_sec = 1000.0 / duration.as_secs_f64();
     println!("Batch insertion performance: {events_per_sec:.2} events/sec");
@@ -774,7 +819,7 @@ async fn test_batch_insertion_performance() {
 #[tokio::test]
 #[ignore = "Performance test may fail in CI/Docker environments"]
 async fn test_basic_performance() {
-    let (_container, config) = setup_postgres_container().await;
+    let config = setup_postgres_config();
 
     // Initialize event store
     let event_store: PostgresEventStore<TestEvent> = PostgresEventStore::new(config).await.unwrap();
