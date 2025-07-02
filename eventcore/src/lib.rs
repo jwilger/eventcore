@@ -1095,6 +1095,9 @@ mod type_registry;
 mod types;
 mod utils;
 
+// Feature modules
+pub mod cqrs;
+
 // Public API exports
 pub use command::{Command, CommandResult, ReadStreams, StreamResolver, StreamWrite};
 pub use errors::{
@@ -1214,6 +1217,12 @@ pub mod prelude {
         EventId, EventMetadata, EventStore, EventToWrite, EventVersion, ExecutionOptions,
         ExpectedVersion, ProjectionResult, ReadOptions, StoredEvent, StreamData, StreamEvents,
         StreamId, Timestamp,
+    };
+
+    // Re-export CQRS types for convenience
+    pub use crate::cqrs::{
+        CqrsProjection, CqrsProjectionRunner, CqrsResult, QueryBuilder, ReadModelStore,
+        RebuildCoordinator,
     };
 
     // Re-export macros for convenience
