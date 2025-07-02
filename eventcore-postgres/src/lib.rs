@@ -707,7 +707,8 @@ where
     /// Verify that required database schema exists
     async fn verify_schema(&self) -> Result<SchemaStatus, PostgresError> {
         let has_events_table = self.table_exists("events").await?;
-        let has_streams_table = self.table_exists("event_streams").await?;
+        // Note: event_streams table is no longer used as of migration 007
+        let has_streams_table = false;
         let has_subscriptions_table = self
             .table_exists("subscription_checkpoints")
             .await
@@ -717,7 +718,7 @@ where
             has_events_table,
             has_streams_table,
             has_subscriptions_table,
-            is_complete: has_events_table && has_streams_table,
+            is_complete: has_events_table,
         })
     }
 
