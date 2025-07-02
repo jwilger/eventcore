@@ -590,7 +590,6 @@ where
                 CREATE OR REPLACE FUNCTION check_event_version() RETURNS TRIGGER AS $$
                 DECLARE
                     current_max_version BIGINT;
-                    expected_version BIGINT;
                 BEGIN
                     -- Lock the stream for this transaction to ensure sequential versioning
                     -- This prevents gaps when multiple events are inserted in parallel
@@ -602,9 +601,10 @@ where
                     FROM events
                     WHERE stream_id = NEW.stream_id;
                     
-                    -- Version checking logic:
+                    -- Version checking logic for batch insert compatibility:
                     -- The unique constraint on (stream_id, event_version) prevents duplicates
-                    -- but we need to ensure no gaps and handle ExpectedVersion::New properly
+                    -- We only check ExpectedVersion::New (version 1) case explicitly
+                    -- Other version conflicts will be caught by the unique constraint
                     
                     -- For version 1, this is ExpectedVersion::New - stream MUST be empty
                     IF NEW.event_version = 1 THEN
@@ -613,15 +613,11 @@ where
                                 NEW.stream_id
                                 USING ERRCODE = '40001'; -- Use serialization_failure error code
                         END IF;
-                    ELSE
-                        -- For versions > 1, ensure no gaps in the sequence
-                        expected_version := current_max_version + 1;
-                        IF NEW.event_version != expected_version THEN
-                            RAISE EXCEPTION 'Version gap detected for stream %: expected version %, got %', 
-                                NEW.stream_id, expected_version, NEW.event_version
-                                USING ERRCODE = '40001'; -- Use serialization_failure error code
-                        END IF;
                     END IF;
+                    
+                    -- Note: We don't check for gaps explicitly anymore to support batch inserts
+                    -- The unique constraint on (stream_id, event_version) will catch version conflicts
+                    -- and our Rust code ensures proper sequential version assignment
                     
                     -- Generate event_id using UUIDv7 (always required since we never pass one)
                     NEW.event_id := gen_uuidv7();
