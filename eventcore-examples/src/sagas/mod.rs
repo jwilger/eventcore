@@ -35,27 +35,27 @@
 //!
 //! ## Architecture
 //!
-//! ```
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                    Saga Coordinator                              │
-//! │  ┌─────────────────────────────────────────────────────────────┐ │
-//! │  │              OrderFulfillmentSaga                           │ │
-//! │  │  • Orchestrates entire workflow                            │ │
-//! │  │  • Handles state transitions                               │ │
-//! │  │  • Triggers compensation on failure                        │ │
-//! │  └─────────────────────────────────────────────────────────────┘ │
-//! └─────────────────────────────────────────────────────────────────┘
-//!                                 │
-//!          ┌──────────────────────┼──────────────────────┐
-//!          │                      │                      │
-//!  ┌───────▼────────┐   ┌─────────▼────────┐   ┌────────▼────────┐
-//!  │    Payment     │   │    Inventory     │   │    Shipping     │
-//!  │    Service     │   │    Service       │   │    Service      │
-//!  │                │   │                  │   │                 │
-//!  │ • Authorize    │   │ • Check Stock    │   │ • Create        │
-//!  │ • Capture      │   │ • Reserve Items  │   │   Shipment      │
-//!  │ • Refund       │   │ • Release Items  │   │ • Dispatch      │
-//!  └────────────────┘   └──────────────────┘   └─────────────────┘
+//! ```text
+//! +---------------------------------------------------------------+
+//! |                    Saga Coordinator                          |
+//! |  +--------------------------------------------------------+   |
+//! |  |              OrderFulfillmentSaga                     |   |
+//! |  |  • Orchestrates entire workflow                      |   |
+//! |  |  • Handles state transitions                         |   |
+//! |  |  • Triggers compensation on failure                  |   |
+//! |  +--------------------------------------------------------+   |
+//! +---------------------------------------------------------------+
+//!                                 |
+//!          +----------------------+----------------------+
+//!          |                      |                      |
+//!  +-------v--------+   +---------v--------+   +--------v--------+
+//!  |    Payment     |   |    Inventory     |   |    Shipping     |
+//!  |    Service     |   |    Service       |   |    Service      |
+//!  |                |   |                  |   |                 |
+//!  | • Authorize    |   | • Check Stock    |   | • Create        |
+//!  | • Capture      |   | • Reserve Items  |   |   Shipment      |
+//!  | • Refund       |   | • Release Items  |   | • Dispatch      |
+//!  +----------------+   +------------------+   +-----------------+
 //! ```
 //!
 //! Each service manages its own event streams while the saga coordinator
