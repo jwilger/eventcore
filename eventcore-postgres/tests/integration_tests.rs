@@ -653,8 +653,13 @@ async fn test_batch_event_insertion() {
     );
 
     // Verify all events were written for large batch
+    // Need to specify max_events to override the default batch size
+    let read_all_options = eventcore::ReadOptions {
+        max_events: Some(3000), // More than the 2500 we wrote
+        ..Default::default()
+    };
     let large_stream_data = event_store
-        .read_streams(&[large_stream_id.clone()], &read_options)
+        .read_streams(&[large_stream_id.clone()], &read_all_options)
         .await
         .unwrap();
     assert_eq!(

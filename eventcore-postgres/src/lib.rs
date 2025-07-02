@@ -22,7 +22,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use chrono::{DateTime, Utc};
-use eventcore::EventStoreError;
+use eventcore::{EventId, EventStoreError, ReadOptions, StoredEvent, StreamId};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use thiserror::Error;
 use tracing::{debug, info, instrument};
@@ -125,6 +125,10 @@ pub struct PostgresConfig {
 
     /// Interval for periodic health checks
     pub health_check_interval: Duration,
+
+    /// Batch size for reading events from multiple streams
+    /// This controls how many events are fetched in a single query
+    pub read_batch_size: usize,
 }
 
 impl PostgresConfig {
@@ -153,6 +157,7 @@ impl Default for PostgresConfig {
             retry_max_delay: Duration::from_secs(5), // Maximum 5 second delay
             enable_recovery: true, // Enable automatic connection recovery
             health_check_interval: Duration::from_secs(30), // Check health every 30 seconds
+            read_batch_size: 1000, // Default batch size for multi-stream reads
         }
     }
 }
@@ -523,6 +528,15 @@ where
             .await
             .map_err(PostgresError::Connection)?;
 
+            // Create optimized index for multi-stream reads using ANY($1) pattern
+            // This composite index supports the common multi-stream read pattern
+            sqlx::query(
+                "CREATE INDEX IF NOT EXISTS idx_events_multistream_any ON events(stream_id, event_id)",
+            )
+            .execute(self.pool.as_ref())
+            .await
+            .map_err(PostgresError::Connection)?;
+
             // Enable pgcrypto extension for random bytes generation
             sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto")
                 .execute(self.pool.as_ref())
@@ -824,6 +838,71 @@ where
 
         (task, stop_tx)
     }
+
+    /// Read events from multiple streams with pagination support.
+    ///
+    /// This method is designed for efficiently processing large result sets
+    /// without loading all events into memory at once.
+    ///
+    /// # Arguments
+    /// * `stream_ids` - The streams to read from
+    /// * `options` - Read options (version filters, max events)
+    /// * `continuation_token` - Optional continuation token from previous page
+    ///
+    /// # Returns
+    /// A tuple containing:
+    /// * Vector of events for this page
+    /// * Optional continuation token for the next page (None if no more results)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use eventcore_postgres::PostgresEventStore;
+    /// # use eventcore::{EventId, ReadOptions, StreamId};
+    /// # async fn example<E>(store: &PostgresEventStore<E>) -> Result<(), Box<dyn std::error::Error>>
+    /// # where E: serde::Serialize + for<'de> serde::de::Deserialize<'de> + Send + Sync + Clone + std::fmt::Debug + PartialEq + Eq + 'static
+    /// # {
+    /// let stream_ids = vec![StreamId::try_new("stream-1")?, StreamId::try_new("stream-2")?];
+    /// let options = ReadOptions::default();
+    ///
+    /// let mut continuation = None;
+    /// loop {
+    ///     let (events, next_token) = store.read_paginated(&stream_ids, &options, continuation).await?;
+    ///     
+    ///     // Process events for this page
+    ///     for event in events {
+    ///         println!("Processing event: {:?}", event.event_id);
+    ///     }
+    ///     
+    ///     // Check if there are more pages
+    ///     match next_token {
+    ///         Some(token) => continuation = Some(token),
+    ///         None => break, // No more pages
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn read_paginated(
+        &self,
+        stream_ids: &[StreamId],
+        options: &ReadOptions,
+        continuation_token: Option<EventId>,
+    ) -> Result<(Vec<StoredEvent<E>>, Option<EventId>), EventStoreError>
+    where
+        E: Serialize
+            + for<'de> Deserialize<'de>
+            + Send
+            + Sync
+            + Clone
+            + std::fmt::Debug
+            + PartialEq
+            + Eq
+            + 'static,
+    {
+        // Delegate to the implementation
+        self.read_streams_paginated_impl(stream_ids, options, continuation_token)
+            .await
+    }
 }
 
 // EventStore implementation is now in the event_store module
@@ -931,6 +1010,13 @@ impl PostgresConfigBuilder {
         self
     }
 
+    /// Set the read batch size for multi-stream queries
+    #[must_use]
+    pub const fn read_batch_size(mut self, size: usize) -> Self {
+        self.config.read_batch_size = size;
+        self
+    }
+
     /// Build the configuration
     pub fn build(self) -> PostgresConfig {
         self.config
@@ -962,6 +1048,7 @@ mod tests {
         assert_eq!(config.min_connections, 2); // Updated for performance
         assert_eq!(config.connect_timeout, Duration::from_secs(10)); // Updated for performance
         assert!(!config.test_before_acquire); // Updated for performance
+        assert_eq!(config.read_batch_size, 1000); // Default batch size
     }
 
     #[test]
@@ -972,6 +1059,7 @@ mod tests {
             .min_connections(2)
             .connect_timeout(Duration::from_secs(10))
             .test_before_acquire(false)
+            .read_batch_size(2000)
             .build();
 
         assert_eq!(config.database_url, "postgres://user:pass@localhost/test");
@@ -979,6 +1067,7 @@ mod tests {
         assert_eq!(config.min_connections, 2);
         assert_eq!(config.connect_timeout, Duration::from_secs(10));
         assert!(!config.test_before_acquire);
+        assert_eq!(config.read_batch_size, 2000);
     }
 
     #[test]
@@ -1015,6 +1104,7 @@ mod tests {
             retry_max_delay: Duration::from_secs(10),
             enable_recovery: false,
             health_check_interval: Duration::from_secs(60),
+            read_batch_size: 500,
         };
 
         assert_eq!(config.max_connections, 50);

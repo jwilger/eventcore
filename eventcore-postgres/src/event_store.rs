@@ -163,11 +163,10 @@ where
         // Order by event_id for timestamp-based ordering
         query.push_str(" ORDER BY event_id");
 
-        // Add limit
-        if let Some(_max_events) = options.max_events {
-            use std::fmt::Write;
-            write!(&mut query, " LIMIT ${param_count}").expect("Write to string");
-        }
+        // Add limit - use the configured batch size if no explicit limit is provided
+        let effective_limit = options.max_events.unwrap_or(self.config.read_batch_size);
+        use std::fmt::Write;
+        write!(&mut query, " LIMIT ${param_count}").expect("Write to string");
 
         let stream_id_strings: Vec<String> =
             stream_ids.iter().map(|s| s.as_ref().to_string()).collect();
@@ -191,12 +190,10 @@ where
             sqlx_query = sqlx_query.bind(version_i64);
         }
 
-        if let Some(max_events) = options.max_events {
-            let max_events_i64 = i64::try_from(max_events).map_err(|_| {
-                EventStoreError::SerializationFailed("Max events too large".to_string())
-            })?;
-            sqlx_query = sqlx_query.bind(max_events_i64);
-        }
+        // Always bind the limit parameter
+        let limit_i64 = i64::try_from(effective_limit)
+            .map_err(|_| EventStoreError::SerializationFailed("Limit too large".to_string()))?;
+        sqlx_query = sqlx_query.bind(limit_i64);
 
         let rows = sqlx_query
             .fetch_all(self.pool.as_ref())
@@ -306,6 +303,137 @@ where
     ) -> EventStoreResult<Box<dyn Subscription<Event = Self::Event>>> {
         let subscription = PostgresSubscription::new(self.clone(), options);
         Ok(Box::new(subscription))
+    }
+}
+
+// Inherent impl block for additional methods
+impl<E> PostgresEventStore<E>
+where
+    E: Serialize
+        + for<'de> Deserialize<'de>
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + 'static,
+{
+    /// Read streams with pagination support for large result sets
+    /// Returns events and a continuation token for the next page
+    pub async fn read_streams_paginated_impl(
+        &self,
+        stream_ids: &[StreamId],
+        options: &ReadOptions,
+        continuation_token: Option<EventId>,
+    ) -> EventStoreResult<(Vec<StoredEvent<E>>, Option<EventId>)> {
+        if stream_ids.is_empty() {
+            return Ok((Vec::new(), None));
+        }
+
+        debug!(
+            "Reading {} streams with pagination, continuation: {:?}",
+            stream_ids.len(),
+            continuation_token
+        );
+
+        // Build query with continuation support
+        let mut query = String::from(
+            "SELECT event_id, stream_id, event_version, event_type, event_data, metadata, 
+             causation_id, correlation_id, user_id, created_at
+             FROM events
+             WHERE stream_id = ANY($1)",
+        );
+
+        let mut param_count = 2;
+
+        // Add continuation token filter if provided
+        if continuation_token.is_some() {
+            use std::fmt::Write;
+            write!(&mut query, " AND event_id > ${param_count}").expect("Write to string");
+            param_count += 1;
+        }
+
+        // Add version filtering
+        if let Some(_from_version) = options.from_version {
+            use std::fmt::Write;
+            write!(&mut query, " AND event_version >= ${param_count}").expect("Write to string");
+            param_count += 1;
+        }
+
+        if let Some(_to_version) = options.to_version {
+            use std::fmt::Write;
+            write!(&mut query, " AND event_version <= ${param_count}").expect("Write to string");
+            param_count += 1;
+        }
+
+        // Order by event_id for consistent pagination
+        query.push_str(" ORDER BY event_id");
+
+        // Add limit - use configured batch size for pagination
+        let effective_limit = options.max_events.unwrap_or(self.config.read_batch_size);
+        {
+            use std::fmt::Write;
+            write!(&mut query, " LIMIT ${param_count}").expect("Write to string");
+        }
+
+        let stream_id_strings: Vec<String> =
+            stream_ids.iter().map(|s| s.as_ref().to_string()).collect();
+
+        // Build and execute query
+        let mut sqlx_query = sqlx::query(&query).bind(&stream_id_strings);
+
+        if let Some(token) = &continuation_token {
+            sqlx_query = sqlx_query.bind(token.as_ref());
+        }
+
+        if let Some(from_version) = options.from_version {
+            let version_value: u64 = from_version.into();
+            let version_i64 = i64::try_from(version_value).map_err(|_| {
+                EventStoreError::SerializationFailed("Version too large".to_string())
+            })?;
+            sqlx_query = sqlx_query.bind(version_i64);
+        }
+
+        if let Some(to_version) = options.to_version {
+            let version_value: u64 = to_version.into();
+            let version_i64 = i64::try_from(version_value).map_err(|_| {
+                EventStoreError::SerializationFailed("Version too large".to_string())
+            })?;
+            sqlx_query = sqlx_query.bind(version_i64);
+        }
+
+        let limit_i64 = i64::try_from(effective_limit)
+            .map_err(|_| EventStoreError::SerializationFailed("Limit too large".to_string()))?;
+        sqlx_query = sqlx_query.bind(limit_i64);
+
+        let rows = sqlx_query
+            .fetch_all(self.pool.as_ref())
+            .await
+            .map_err(PostgresError::Connection)?;
+
+        debug!("Retrieved {} events from database", rows.len());
+
+        // Convert rows to events
+        let mut events = Vec::new();
+        let mut last_event_id = None;
+
+        for row in rows {
+            let event_row = EventRow::try_from(row)
+                .map_err(|e| EventStoreError::SerializationFailed(e.to_string()))?;
+            let stored_event = event_row.to_stored_event::<E>()?;
+            last_event_id = Some(stored_event.event_id);
+            events.push(stored_event);
+        }
+
+        // Determine if there are more results
+        let continuation = if events.len() == effective_limit {
+            last_event_id
+        } else {
+            None
+        };
+
+        Ok((events, continuation))
     }
 }
 
@@ -495,7 +623,7 @@ where
         let read_options = ReadOptions {
             from_version: None,
             to_version: None,
-            max_events: Some(1000),
+            max_events: Some(self.event_store.config.read_batch_size),
         };
 
         let stream_data = self
@@ -520,12 +648,16 @@ where
 
     /// Gets all stream IDs from the database.
     async fn get_all_stream_ids(&self) -> SubscriptionResult<Vec<StreamId>> {
-        let rows = sqlx::query("SELECT DISTINCT stream_id FROM events LIMIT 1000")
+        let query_str = format!(
+            "SELECT DISTINCT stream_id FROM events LIMIT {}",
+            self.event_store.config.read_batch_size
+        );
+        let rows = sqlx::query(&query_str)
             .fetch_all(self.event_store.pool.as_ref())
             .await
             .map_err(|e| {
                 SubscriptionError::EventStore(EventStoreError::Internal(format!(
-                    "Failed to fetch stream IDs from database for subscription processing (query: 'SELECT DISTINCT stream_id FROM events LIMIT 1000'): {e}"
+                    "Failed to fetch stream IDs from database for subscription processing (query: '{query_str}'): {e}"
                 )))
             })?;
 
@@ -549,7 +681,7 @@ where
         let read_options = ReadOptions {
             from_version: None,
             to_version: None,
-            max_events: None,
+            max_events: Some(self.event_store.config.read_batch_size),
         };
 
         let stream_data = self
