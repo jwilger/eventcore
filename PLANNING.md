@@ -262,6 +262,7 @@ Based on the comprehensive expert review, the following improvements have been i
   - [x] Improve error messages with more context
   - [x] Add more detailed usage examples
   - [x] Create migration guides from traditional event sourcing
+  - [x] Remove unnecessary explanatory comments from documentation that explain EventCore's automatic behavior
 
 ### 15.9 CQRS Integration and Advanced Features
 
