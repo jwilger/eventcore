@@ -42,12 +42,11 @@ async fn transfer_money(from: AccountId, to: AccountId, amount: Money) {
 use eventcore::{prelude::*, require, emit};
 use eventcore_macros::Command;
 
-// EventCore: Dynamic boundaries with zero boilerplate
 #[derive(Command)]
 struct TransferMoney {
-    #[stream]  // Automatically part of consistency boundary
+    #[stream]
     from_account: StreamId,
-    #[stream]  // Automatically part of consistency boundary  
+    #[stream]
     to_account: StreamId,
     amount: Money,
 }
@@ -57,20 +56,16 @@ impl Command for TransferMoney {
     type Input = Self;
     type State = AccountBalances;
     type Event = BankingEvent;
-    type StreamSet = TransferMoneyStreamSet; // Auto-generated!
-    
-    // read_streams() is auto-generated from #[stream] fields!
+    type StreamSet = TransferMoneyStreamSet;
     
     async fn handle(&self, read_streams: ReadStreams, state: State, input: Input, _: &mut StreamResolver) -> CommandResult<...> {
-        // Clean validation with require! macro
         require!(state.balance(&input.from_account) >= input.amount, "Insufficient funds");
         
-        // Type-safe event generation with emit! macro
         let mut events = vec![];
         emit!(events, &read_streams, input.from_account, MoneyWithdrawn { amount: input.amount });
         emit!(events, &read_streams, input.to_account, MoneyDeposited { amount: input.amount });
         
-        Ok(events)  // ✅ Atomic, ✅ Type-safe, ✅ Zero boilerplate
+        Ok(events)
     }
 }
 ```
@@ -144,7 +139,6 @@ struct ProcessLoanApplication {
     loan_application: StreamId,
     #[stream]
     applicant_account: StreamId,
-    // Discover credit check streams dynamically in handle()
 }
 ```
 
@@ -154,28 +148,21 @@ struct ProcessLoanApplication {
 
 1. **Basic CRUD Applications**:
    ```rust
-   // If this is your complexity level, use a traditional database
    struct User {
        name: String,
        email: String,
    }
-   
-   // EventCore is overkill for simple create/update/delete
    ```
 
 2. **Single-Entity Operations Only**:
    ```rust
-   // Use a traditional event sourcing library instead
    struct ShoppingCart {
        items: Vec<Item>,
-       // No cross-entity operations needed
    }
    ```
 
 3. **Read-Heavy Applications**:
    ```rust
-   // Consider CQRS with projections instead
-   // EventCore excels at complex writes, not optimized reads
    ```
 
 4. **Team Learning Event Sourcing**:

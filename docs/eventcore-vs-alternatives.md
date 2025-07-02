@@ -78,19 +78,16 @@ impl Command for TransferMoney {
     type Input = Self;
     type State = AccountBalances;
     type Event = BankingEvent;
-    type StreamSet = TransferMoneyStreamSet; // Auto-generated!
-    
-    // read_streams() is auto-generated from #[stream] fields!
+    type StreamSet = TransferMoneyStreamSet;
     
     async fn handle(&self, read_streams: ReadStreams, state: State, input: Input, _: &mut StreamResolver) -> CommandResult<...> {
-        // Clean business logic with helper macros
         require!(state.balance(&input.from_account) >= input.amount, "Insufficient funds");
         
         let mut events = vec![];
         emit!(events, &read_streams, input.from_account, MoneyWithdrawn { amount: input.amount });
         emit!(events, &read_streams, input.to_account, MoneyDeposited { amount: input.amount });
         
-        Ok(events)  // Atomic across both accounts - no saga needed!
+        Ok(events)
     }
 }
 ```
@@ -154,7 +151,6 @@ public class TransferSaga {
 
 **EventCore**:
 ```rust
-// Simple command with flexible boundaries and zero boilerplate
 #[derive(Command)]
 struct TransferMoney {
     #[stream]
@@ -163,11 +159,6 @@ struct TransferMoney {
     to_account: StreamId,
     amount: Money,
 }
-
-// That's it! The macro generates:
-// - StreamSet type for compile-time safety
-// - read_streams() method from #[stream] fields
-// - All the boilerplate you'd normally write
     
     // No saga needed - atomic operation
 }

@@ -30,7 +30,6 @@ use eventcore::{prelude::*, require, emit};
 use eventcore_macros::Command;
 use eventcore_postgres::PostgresEventStore;
 
-// Define your command with automatic stream detection
 #[derive(Command)]
 struct TransferMoney {
     #[stream]
@@ -40,16 +39,14 @@ struct TransferMoney {
     amount: Money,
 }
 
-// Implement just the business logic - no boilerplate!
 #[async_trait]
 impl Command for TransferMoney {
     type Input = Self;
     type State = AccountBalances;
     type Event = BankingEvent;
-    type StreamSet = TransferMoneyStreamSet; // Auto-generated!
+    type StreamSet = TransferMoneyStreamSet;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-        // Update state from events
         match &event.payload {
             BankingEvent::MoneyTransferred { from, to, amount } => {
                 state.debit(from, *amount);
@@ -65,7 +62,6 @@ impl Command for TransferMoney {
         input: Self::Input,
         _: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
-        // Clean business logic with helper macros
         require!(state.balance(&input.from_account) >= input.amount, "Insufficient funds");
         
         let mut events = vec![];
@@ -79,7 +75,6 @@ impl Command for TransferMoney {
     }
 }
 
-// Execute with zero boilerplate
 let store = PostgresEventStore::new(config).await?;
 let executor = CommandExecutor::new(store);
 
@@ -100,17 +95,12 @@ The `#[derive(Command)]` macro automatically detects streams from `#[stream]` fi
 ```rust
 #[derive(Command)]
 struct TransferMoney {
-    #[stream]  // Automatically included in read_streams()
+    #[stream]
     from_account: StreamId,
-    #[stream]  // Automatically included in read_streams()
+    #[stream]
     to_account: StreamId,
-    amount: Money,  // Regular field, not a stream
+    amount: Money,
 }
-
-// The macro generates:
-// - TransferMoneyStreamSet type for compile-time safety
-// - read_streams() method returning marked fields
-// - Stream access validation at compile time
 ```
 
 ### Dynamic Stream Discovery
@@ -118,16 +108,12 @@ Discover additional streams during execution:
 
 ```rust
 async fn handle(...) -> CommandResult<Vec<StreamWrite<...>>> {
-    // Start with streams from #[derive(Command)]
     require!(state.is_valid(), "Invalid state");
     
-    // Dynamically add more streams based on business logic
     if state.requires_approval() {
         stream_resolver.add_streams(vec![approval_stream()]);
-        // EventCore will re-execute with expanded stream set
     }
     
-    // Use emit! helper for clean event generation
     let mut events = vec![];
     emit!(events, &read_streams, input.account, AccountEvent::Updated { ... });
     Ok(events)
@@ -135,12 +121,8 @@ async fn handle(...) -> CommandResult<Vec<StreamWrite<...>>> {
 ```
 
 ### Built-in Concurrency Control
-Optimistic locking prevents conflicts automatically:
 
-```rust
-// EventCore handles version checking for all read streams
-// Conflicts trigger automatic retries with backoff
-```
+Optimistic locking prevents conflicts automatically. Just execute your commands - version checking and retries are handled transparently.
 
 ## Architecture
 
