@@ -139,6 +139,7 @@ See [eventcore-examples/](eventcore-examples/) for complete working examples:
 
 - **Banking**: Account transfers with balance tracking
 - **E-commerce**: Order workflow with inventory management
+- **Sagas**: Order fulfillment with distributed transaction coordination
 
 ## Documentation
 

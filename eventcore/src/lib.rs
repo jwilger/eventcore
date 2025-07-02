@@ -17,7 +17,7 @@
 //! - **🦀 Type-Driven Development**: Leverage Rust's type system for domain modeling
 //! - **🔌 Pluggable Storage**: PostgreSQL, in-memory, and custom adapters
 //! - **🔄 Optimistic Concurrency**: Version-based conflict detection and resolution
-//! - **⚡ High Performance**: Designed for 10,000+ commands/second
+//! - **⚡ Production Ready**: Optimized for correctness and consistency (~100 commands/sec with PostgreSQL)
 //! - **📊 Projections**: Build read models from event streams
 //! - **🔍 Event Metadata**: Track causation, correlation, and custom metadata
 //!

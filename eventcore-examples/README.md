@@ -52,6 +52,31 @@ cargo run --example ecommerce
 - `src/ecommerce/projections/` - Inventory and analytics
 - `src/ecommerce/types.rs` - Domain modeling
 
+### 3. Order Fulfillment Saga
+
+Complete distributed transaction coordination using the saga pattern.
+
+**Key concepts demonstrated:**
+- Multi-stream saga orchestration
+- Distributed transaction coordination
+- Compensation logic for failure scenarios
+- Type-safe workflow state management
+
+**Run the example:**
+```bash
+# Start PostgreSQL  
+docker-compose up -d
+
+# Run saga demonstration
+cargo run --bin sagas
+```
+
+**Key files:**
+- `src/sagas/commands.rs` - Saga coordinator and service commands
+- `src/sagas/types.rs` - Type-safe domain modeling with validation
+- `src/sagas/events.rs` - Comprehensive event definitions
+- `src/sagas/README.md` - Detailed saga pattern documentation
+
 ## Code Walkthrough
 
 ### Type-Safe Domain Modeling

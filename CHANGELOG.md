@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PostgreSQL adapter with full type safety
 - In-memory event store adapter for testing
 - Comprehensive benchmarking suite
-- Complete examples for banking and e-commerce domains
+- Complete examples for banking, e-commerce, and saga pattern domains
 - Property-based testing throughout the codebase
 - Extensive monitoring and observability features
 - Projection system with checkpointing and recovery
@@ -117,6 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Examples** (`eventcore-examples`)
   - Banking domain with money transfers
   - E-commerce domain with order management
+  - Order fulfillment saga with distributed transaction coordination
   - Complete integration tests
   - Usage patterns and best practices
 

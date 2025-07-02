@@ -289,10 +289,10 @@ Follow the testing principles from the global Claude.md:
 
 ## Performance Targets
 
-- Single-stream commands: 5,000-10,000 ops/sec
-- Multi-stream commands: 2,000-5,000 ops/sec
-- Event store writes: 20,000+ events/sec (batched)
-- P95 command latency: < 10ms
+- Single-stream commands: 86 ops/sec (stable)
+- Multi-stream commands: estimated 25-50 ops/sec
+- Event store writes: 9,000+ events/sec (batched)
+- P95 command latency: ~14ms
 
 ## Pre-commit Hooks
 

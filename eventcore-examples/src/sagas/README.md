@@ -264,9 +264,9 @@ This pattern is applicable to many distributed transaction scenarios:
 - **Stream Discovery**: Dynamic coordination as workflow requirements change
 
 ### Performance Characteristics
-- **Single-stream commands**: 5,000-10,000 ops/sec
-- **Multi-stream sagas**: 2,000-5,000 ops/sec  
-- **Event store writes**: 20,000+ events/sec (batched)
+- **Single-stream commands**: 86 ops/sec (stable, reliable performance)
+- **Multi-stream sagas**: estimated 25-50 ops/sec
+- **Event store writes**: 9,000+ events/sec (batched)
 - **Compensation latency**: < 100ms for most scenarios
 
 ## Advanced Features

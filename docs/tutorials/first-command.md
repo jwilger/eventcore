@@ -14,7 +14,7 @@ eventcore-memory = "0.1"  # For testing
 tokio = { version = "1.0", features = ["full"] }
 async-trait = "0.1"
 serde = { version = "1.0", features = ["derive"] }
-nutype = { version = "0.4", features = ["serde"] }  # For validated types
+nutype = { version = "0.6.1", features = ["serde"] }  # For validated types
 ```
 
 ## Step 1: Define Your Domain Events
