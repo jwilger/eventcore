@@ -220,7 +220,8 @@ async fn test_concurrent_command_execution() {
     let command = IncrementCounterCommand;
 
     // Create a shared stream ID for concurrent operations
-    let stream_id = StreamId::try_new("counter-1").unwrap();
+    let test_id = uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext));
+    let stream_id = StreamId::try_new(format!("counter-1-{test_id}")).unwrap();
 
     // Execute multiple commands concurrently
     let mut handles = vec![];
@@ -298,9 +299,10 @@ async fn test_multi_stream_atomicity() {
 
     let executor = CommandExecutor::new(event_store);
 
-    // Initialize two counters
-    let counter1_id = StreamId::try_new("counter-1").unwrap();
-    let counter2_id = StreamId::try_new("counter-2").unwrap();
+    // Initialize two counters with unique IDs to avoid conflicts between test runs
+    let test_id = uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext));
+    let counter1_id = StreamId::try_new(format!("counter-1-{test_id}")).unwrap();
+    let counter2_id = StreamId::try_new(format!("counter-2-{test_id}")).unwrap();
 
     // Set up initial state for counter1
     let increment_cmd = IncrementCounterCommand;
