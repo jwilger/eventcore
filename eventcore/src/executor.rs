@@ -1,4 +1,12 @@
-use crate::command::{Command, CommandResult, ReadStreams, StreamResolver};
+pub mod typestate;
+
+#[cfg(test)]
+mod typestate_compile_tests;
+
+use crate::command::{Command, CommandResult, StreamResolver};
+
+#[cfg(test)]
+use crate::command::ReadStreams;
 
 #[cfg(test)]
 use crate::command::StreamWrite;
@@ -564,9 +572,9 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event> + Clone,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
         // Wrap the execution with overall command timeout if specified
         #[allow(clippy::option_if_let_else)] // The match is clearer than map_or here
@@ -603,9 +611,9 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event> + Clone,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
         match &options.retry_config {
             Some(retry_config) => {
@@ -674,9 +682,9 @@ where
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
-        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event> + Clone,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
         let mut stream_ids = command.read_streams(&input);
         let mut stream_resolver = StreamResolver::new();
@@ -733,39 +741,15 @@ where
                     })?
             };
 
-            // Reconstruct state from all events
-            let mut state = C::State::default();
-            let events: Vec<_> = stream_data.events().collect();
-            let mut converted_events = Vec::with_capacity(events.len());
+            // Create type-safe execution scope
+            let scope = typestate::ExecutionScope::<typestate::states::StreamsRead, C, ES>::new(
+                stream_data.clone(),
+                stream_ids.clone(),
+                options.context.clone(),
+            );
 
-            for event in events {
-                match Self::try_convert_event::<C>(&event.payload) {
-                    Ok(command_event) => {
-                        let stored_event = crate::event_store::StoredEvent::new(
-                            event.event_id,
-                            event.stream_id.clone(),
-                            event.event_version,
-                            event.timestamp,
-                            command_event,
-                            event.metadata.clone(),
-                        );
-                        converted_events.push(stored_event);
-                    }
-                    Err(conversion_error) => {
-                        // Log event conversion failures - this might be why state isn't rebuilt correctly
-                        warn!(
-                            event_id = %event.event_id,
-                            stream_id = %event.stream_id,
-                            error = %conversion_error,
-                            "Failed to convert event - skipping state application"
-                        );
-                    }
-                }
-            }
-
-            for stored_event in &converted_events {
-                command.apply(&mut state, stored_event);
-            }
+            // Reconstruct state using the scope
+            let scope_with_state = scope.reconstruct_state(command);
 
             info!(
                 applied_events = stream_data.len(),
@@ -773,11 +757,8 @@ where
             );
 
             // Execute command business logic
-            let read_streams = ReadStreams::new(stream_ids.clone());
-            let initial_additional_count = stream_resolver.additional_streams().len();
-
-            let stream_writes = command
-                .handle(read_streams, state, input.clone(), &mut stream_resolver)
+            let scope_with_writes = scope_with_state
+                .execute_command(command, input.clone(), &mut stream_resolver)
                 .await
                 .map_err(|err| {
                     warn!(error = %err, "Command business logic failed");
@@ -785,50 +766,27 @@ where
                 })?;
 
             // Check if command requested additional streams
-            if stream_resolver.additional_streams().len() > initial_additional_count {
-                // Command requested more streams, add them and loop again
-                let new_streams: Vec<_> = stream_resolver
-                    .additional_streams()
-                    .iter()
-                    .filter(|s| !stream_ids.contains(s))
-                    .cloned()
-                    .collect();
-
-                if !new_streams.is_empty() {
-                    info!(
-                        new_streams_count = new_streams.len(),
-                        "Command requested additional streams, re-reading"
-                    );
-                    stream_ids.extend(new_streams);
-                    continue; // Go back to the top of the loop
-                }
+            let new_streams = scope_with_writes.needs_additional_streams(&stream_resolver);
+            if !new_streams.is_empty() {
+                info!(
+                    new_streams_count = new_streams.len(),
+                    "Command requested additional streams, re-reading"
+                );
+                stream_ids.extend(new_streams);
+                continue; // Go back to the top of the loop
             }
 
             // No additional streams requested, we can proceed with writing
-            let stream_writes_count = stream_writes.len();
+            let stream_writes_count = scope_with_writes.write_count();
             info!(
                 events_to_write = stream_writes_count,
                 final_streams_count = stream_ids.len(),
                 "Command execution complete, writing events"
             );
 
-            // Convert StreamWrite instances to (StreamId, Event) pairs
-            let events_to_write: Vec<(StreamId, C::Event)> = stream_writes
-                .into_iter()
-                .map(super::command::StreamWrite::into_parts)
-                .collect();
-
-            // Use the SAME stream data that was used to build state for version consistency
-            // This prevents race conditions where state is built from version X but writes use version Y
-            let final_stream_data = &stream_data;
-
-            // Write events with complete concurrency control
-            let stream_events = Self::prepare_stream_events_with_complete_concurrency_control::<C>(
-                events_to_write,
-                final_stream_data,
-                &stream_ids,
-                &options.context,
-            );
+            // Use the type-safe scope to prepare stream events
+            // This GUARANTEES we use the same stream data that was used for state reconstruction
+            let stream_events = scope_with_writes.prepare_stream_events();
 
             let result_versions = if let Some(timeout) = options.event_store_timeout {
                 if let Ok(result) = tokio::time::timeout(
@@ -1108,9 +1066,9 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event> + Clone,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
         let mut last_error = None;
 
@@ -1516,6 +1474,150 @@ impl Default for CommandExecutorBuilder<()> {
     }
 }
 
+impl<ES> CommandExecutor<ES>
+where
+    ES: EventStore,
+{
+    /// Execute a command using type-safe execution scope.
+    ///
+    /// This method uses the typestate pattern to ensure that the same `StreamData`
+    /// is used for both state reconstruction and event writing, making race conditions
+    /// impossible at compile time.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `C` - The command type to execute
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - The command instance
+    /// * `input` - The command's input data
+    /// * `options` - Execution options
+    ///
+    /// # Returns
+    ///
+    /// A result containing a map of stream IDs to their new versions.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = executor.execute_type_safe(&command, input, ExecutionOptions::default()).await?;
+    /// ```
+    #[instrument(
+        skip(self, command, input, options),
+        fields(
+            command_type = std::any::type_name::<C>(),
+            correlation_id = %options.context.correlation_id,
+            user_id = options.context.user_id.as_deref().unwrap_or("anonymous"),
+            type_safe_execution = true
+        )
+    )]
+    pub async fn execute_type_safe<C>(
+        &self,
+        command: &C,
+        input: C::Input,
+        options: ExecutionOptions,
+    ) -> CommandResult<HashMap<StreamId, EventVersion>>
+    where
+        C: Command,
+        C::Event: Clone
+            + PartialEq
+            + Eq
+            + for<'a> TryFrom<&'a ES::Event>
+            + serde::Serialize
+            + Send
+            + Sync,
+        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
+    {
+        let mut stream_ids = command.read_streams(&input);
+        let mut stream_resolver = StreamResolver::new();
+        let mut iteration = 0;
+        let max_iterations = options.max_stream_discovery_iterations;
+
+        loop {
+            iteration += 1;
+            if iteration > max_iterations {
+                return Err(CommandError::ValidationFailed(format!(
+                    "Command '{}' exceeded maximum stream discovery iterations ({max_iterations})",
+                    std::any::type_name::<C>()
+                )));
+            }
+
+            info!(
+                iteration,
+                streams_count = stream_ids.len(),
+                "Starting stream discovery iteration"
+            );
+
+            // Read streams and create type-safe execution scope
+            let stream_data = self
+                .read_streams_with_circuit_breaker(&stream_ids, &ReadOptions::new(), &options)
+                .await
+                .map_err(CommandError::from)?;
+
+            // Create type-safe execution scope
+            let scope = typestate::ExecutionScope::<typestate::states::StreamsRead, C, ES>::new(
+                stream_data,
+                stream_ids.clone(),
+                options.context.clone(),
+            );
+
+            // Reconstruct state using the scope
+            let scope_with_state = scope.reconstruct_state(command);
+
+            // Check if we need additional streams
+            let additional_streams = scope_with_state.needs_additional_streams(&stream_resolver);
+            if !additional_streams.is_empty() {
+                info!(
+                    new_streams_count = additional_streams.len(),
+                    "Command requested additional streams, re-reading"
+                );
+                stream_ids.extend(additional_streams);
+                continue;
+            }
+
+            // Execute command
+            let scope_with_writes = scope_with_state
+                .execute_command(command, input.clone(), &mut stream_resolver)
+                .await?;
+
+            // Check again for additional streams after execution
+            let new_additional = stream_resolver
+                .additional_streams()
+                .iter()
+                .filter(|s| !stream_ids.contains(s))
+                .cloned()
+                .collect::<Vec<_>>();
+
+            if !new_additional.is_empty() {
+                info!(
+                    new_streams_count = new_additional.len(),
+                    "Command requested additional streams after execution, re-reading"
+                );
+                stream_ids.extend(new_additional);
+                continue;
+            }
+
+            // Prepare stream events using the type-safe scope
+            let stream_events = scope_with_writes.prepare_stream_events();
+
+            // Write events
+            let result_versions = self
+                .write_events_with_circuit_breaker(&stream_events, &options)
+                .await
+                .map_err(CommandError::from)?;
+
+            info!(
+                written_streams = result_versions.len(),
+                "Command execution completed successfully"
+            );
+
+            return Ok(result_versions);
+        }
+    }
+}
+
 /// Extension trait for `CommandExecutor` to provide simplified execution methods.
 ///
 /// This trait provides convenience methods that use sensible defaults for common
@@ -1560,9 +1662,9 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event> + Clone,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
         self.execute(command, input, ExecutionOptions::default())
             .await
@@ -1605,9 +1707,9 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event> + Clone,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
         self.execute(command, input, ExecutionOptions::new().without_retry())
             .await
@@ -1655,9 +1757,9 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event> + Clone,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
         let options = ExecutionOptions::default().with_correlation_id(correlation_id);
         self.execute(command, input, options).await
@@ -1705,9 +1807,9 @@ where
     where
         C: Command,
         C::Input: Clone,
-        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event> + Clone,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
         let options = ExecutionOptions::default().with_user_id(Some(user_id));
         self.execute(command, input, options).await
@@ -1948,7 +2050,7 @@ mod tests {
     }
 
     // Create a simple mock event type for testing
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
     struct MockEvent(String);
 
     // Custom error type for testing that implements Display
