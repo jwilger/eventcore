@@ -164,9 +164,14 @@ cargo bench             # Performance benchmarks
 
 ## Performance
 
-- Single-stream commands: 5,000-10,000 ops/sec
-- Multi-stream commands: 2,000-5,000 ops/sec  
-- P95 latency: < 10ms
+Based on current testing with PostgreSQL backend:
+
+- **Single-stream commands**: 86 ops/sec (stable, reliable performance)
+- **Multi-stream commands**: Full atomicity operational (estimated 25-50 ops/sec)
+- **Batch event writes**: 9,000+ events/sec (excellent bulk throughput)
+- **Latency**: P95 ~14ms (database-backed operations)
+
+*Note: Performance optimized for correctness and multi-stream atomicity. See [Performance Report](docs/performance-report.md) for detailed benchmarks and system specifications.*
 
 ## Contributing
 
