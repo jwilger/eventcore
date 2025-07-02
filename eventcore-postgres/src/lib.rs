@@ -590,34 +590,46 @@ where
                 CREATE OR REPLACE FUNCTION check_event_version() RETURNS TRIGGER AS $$
                 DECLARE
                     current_max_version BIGINT;
+                    current_count BIGINT;
+                    expected_next_version BIGINT;
                 BEGIN
                     -- Lock the stream for this transaction to ensure sequential versioning
                     -- This prevents gaps when multiple events are inserted in parallel
                     PERFORM pg_advisory_xact_lock(hashtext(NEW.stream_id));
                     
-                    -- Get the current maximum version for this stream
-                    -- Returns NULL if no events exist, which we'll treat as 0
-                    SELECT COALESCE(MAX(event_version), 0) INTO current_max_version
+                    -- Get current max version and count for comprehensive gap detection
+                    SELECT COALESCE(MAX(event_version), 0), COUNT(*) 
+                    INTO current_max_version, current_count
                     FROM events
                     WHERE stream_id = NEW.stream_id;
                     
-                    -- Version checking logic for batch insert compatibility:
-                    -- The unique constraint on (stream_id, event_version) prevents duplicates
-                    -- We only check ExpectedVersion::New (version 1) case explicitly
-                    -- Other version conflicts will be caught by the unique constraint
+                    -- Calculate expected next version based on current state
+                    expected_next_version := current_max_version + 1;
                     
                     -- For version 1, this is ExpectedVersion::New - stream MUST be empty
                     IF NEW.event_version = 1 THEN
                         IF current_max_version != 0 THEN
-                            RAISE EXCEPTION 'Version conflict for stream %: cannot insert version 1 when stream already has events', 
-                                NEW.stream_id
-                                USING ERRCODE = '40001'; -- Use serialization_failure error code
+                            RAISE EXCEPTION 'Version conflict for stream %: cannot insert version 1 when stream already has events (current max: %)', 
+                                NEW.stream_id, current_max_version
+                                USING ERRCODE = '40001';
+                        END IF;
+                    ELSE
+                        -- For all other versions, ensure no gaps
+                        -- This protects against direct SQL bypass of our Rust code
+                        IF NEW.event_version != expected_next_version THEN
+                            RAISE EXCEPTION 'Version gap detected for stream %: expected version %, got % (current max: %, count: %)',
+                                NEW.stream_id, expected_next_version, NEW.event_version, current_max_version, current_count
+                                USING ERRCODE = '40001';
+                        END IF;
+                        
+                        -- Additional integrity check: version should equal count + 1
+                        -- This catches scenarios where versions exist but aren't contiguous
+                        IF NEW.event_version != current_count + 1 THEN
+                            RAISE EXCEPTION 'Version sequence integrity violation for stream %: version % does not match expected sequence position % (count: %, max: %)',
+                                NEW.stream_id, NEW.event_version, current_count + 1, current_count, current_max_version
+                                USING ERRCODE = '40001';
                         END IF;
                     END IF;
-                    
-                    -- Note: We don't check for gaps explicitly anymore to support batch inserts
-                    -- The unique constraint on (stream_id, event_version) will catch version conflicts
-                    -- and our Rust code ensures proper sequential version assignment
                     
                     -- Generate event_id using UUIDv7 (always required since we never pass one)
                     NEW.event_id := gen_uuidv7();
@@ -637,7 +649,8 @@ where
                 .await
                 .map_err(PostgresError::Connection)?;
 
-            // Create trigger to enforce sequential versioning
+
+            // Create row-level trigger for event_id generation and basic validation
             sqlx::query(
                 r"
                 CREATE TRIGGER enforce_event_version
@@ -649,6 +662,7 @@ where
             .execute(self.pool.as_ref())
             .await
             .map_err(PostgresError::Connection)?;
+
 
             // Drop the foreign key constraint since we no longer use event_streams table
             sqlx::query("ALTER TABLE events DROP CONSTRAINT IF EXISTS fk_events_stream_id")
