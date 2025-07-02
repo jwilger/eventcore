@@ -175,6 +175,8 @@ ALTER SYSTEM SET max_parallel_workers_per_gather = 4;
 ALTER SYSTEM SET random_page_cost = 1.1;
 ```
 
+For information about how EventCore leverages PostgreSQL prepared statements for optimal performance, see [Prepared Statement Performance](docs/prepared-statement-performance.md).
+
 ### Monitoring
 
 The adapter provides comprehensive connection pool monitoring:
