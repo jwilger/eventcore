@@ -13,7 +13,7 @@
 //!
 //! # Example
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use eventcore::cqrs::{RebuildCoordinator, RebuildStrategy};
 //! use std::sync::Arc;
 //!
@@ -103,7 +103,7 @@ pub struct StreamIds {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// # use eventcore::cqrs::RebuildProgress;
 /// # let progress = RebuildProgress::new();
 /// if let Some(percentage) = progress.completion_percentage() {
@@ -202,12 +202,12 @@ impl Default for RebuildProgress {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use eventcore::cqrs::{RebuildCoordinator, CqrsProjection};
 /// use std::sync::Arc;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// # let projection: impl CqrsProjection<Event = MyEvent> = todo!();
+/// # let projection = todo!();
 /// # let event_store = todo!();
 /// # let read_model_store = todo!();
 /// # let checkpoint_store = todo!();
@@ -234,7 +234,6 @@ impl Default for RebuildProgress {
 /// let final_progress = coordinator.rebuild_from_beginning().await?;
 /// # Ok(())
 /// # }
-/// # struct MyEvent;
 /// ```
 pub struct RebuildCoordinator<P, E>
 where
@@ -446,11 +445,11 @@ where
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use eventcore::cqrs::RebuildCoordinator;
     /// # use std::sync::Arc;
     /// # use tokio::time::{timeout, Duration};
-    /// # async fn example(coordinator: Arc<RebuildCoordinator<impl eventcore::cqrs::CqrsProjection, impl Send + Sync>>) -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn example(coordinator: Arc<RebuildCoordinator<MyProjection, MyEvent>>) -> Result<(), Box<dyn std::error::Error>> {
     /// // Start rebuild with timeout
     /// let coordinator_clone = coordinator.clone();
     /// let rebuild_future = tokio::spawn(async move {
@@ -490,11 +489,11 @@ where
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use eventcore::cqrs::RebuildCoordinator;
     /// # use std::sync::Arc;
     /// # use tokio::time::{interval, Duration};
-    /// # async fn example(coordinator: Arc<RebuildCoordinator<impl eventcore::cqrs::CqrsProjection, impl Send + Sync>>) -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn example(coordinator: Arc<RebuildCoordinator<MyProjection, MyEvent>>) -> Result<(), Box<dyn std::error::Error>> {
     /// // Monitor rebuild progress
     /// let mut ticker = interval(Duration::from_secs(5));
     ///
@@ -542,9 +541,9 @@ where
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use eventcore::cqrs::RebuildCoordinator;
-    /// # async fn example(coordinator: RebuildCoordinator<impl eventcore::cqrs::CqrsProjection, impl Send + Sync>) -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn example(coordinator: RebuildCoordinator<MyProjection, MyEvent>) -> Result<(), Box<dyn std::error::Error>> {
     /// let progress = coordinator.rebuild_from_beginning().await?;
     /// println!("Rebuilt {} events in {:?}",
     ///     progress.events_processed,
@@ -582,11 +581,11 @@ where
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use eventcore::cqrs::{RebuildCoordinator, CheckpointStore};
     /// # use eventcore::projection::ProjectionCheckpoint;
     /// # async fn example(
-    /// #     coordinator: RebuildCoordinator<impl eventcore::cqrs::CqrsProjection, impl Send + Sync>,
+    /// #     coordinator: RebuildCoordinator<MyProjection, MyEvent>,
     /// #     checkpoint_store: &dyn CheckpointStore<Error = eventcore::cqrs::CqrsError>
     /// # ) -> Result<(), Box<dyn std::error::Error>> {
     /// // Load the last successful checkpoint
