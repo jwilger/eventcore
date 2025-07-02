@@ -1,7 +1,48 @@
 //! Projection rebuild and migration support for CQRS.
 //!
-//! This module provides functionality for rebuilding projections from scratch,
-//! migrating between versions, and monitoring rebuild progress.
+//! This module provides comprehensive functionality for rebuilding projections in production
+//! systems, including progress tracking, cancellation support, and various rebuild strategies.
+//!
+//! # Overview
+//!
+//! Projection rebuilds are necessary when:
+//! - Deploying new projections that need to process historical events
+//! - Fixing bugs in projection logic that require reprocessing
+//! - Updating read model schemas or data structures
+//! - Recovering from data corruption or storage failures
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use eventcore::cqrs::{RebuildCoordinator, RebuildStrategy};
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let projection = todo!();
+//! # let event_store = todo!();
+//! # let read_model_store = todo!();
+//! # let checkpoint_store = todo!();
+//! // Create a rebuild coordinator
+//! let coordinator = RebuildCoordinator::new(
+//!     projection,
+//!     event_store,
+//!     read_model_store,
+//!     checkpoint_store,
+//! );
+//!
+//! // Start rebuild from beginning
+//! let progress = coordinator.rebuild_from_beginning().await?;
+//! println!("Rebuilt {} events, updated {} models",
+//!     progress.events_processed,
+//!     progress.models_updated
+//! );
+//!
+//! // Or rebuild from a checkpoint
+//! let checkpoint = checkpoint_store.load("my-projection").await?.unwrap();
+//! let progress = coordinator.rebuild_from_checkpoint(checkpoint).await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use super::{CheckpointStore, CqrsError, CqrsProjection, CqrsResult, ReadModelStore};
 use crate::{
@@ -23,15 +64,25 @@ use tokio::sync::RwLock;
 use tracing::{info, instrument};
 
 /// Strategy for rebuilding projections.
+///
+/// Different strategies are suitable for different scenarios:
+/// - `FromBeginning`: Complete rebuild, useful for new projections or major fixes
+/// - `FromCheckpoint`: Resume from a saved position, useful for incremental rebuilds
+/// - `FromEvent`: Start from a specific event, useful when you know the exact problem point
+/// - `SpecificStreams`: Rebuild only certain streams (future functionality)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RebuildStrategy {
-    /// Rebuild from the beginning of all streams
+    /// Rebuild from the beginning of all streams.
+    /// This will clear all existing read models and checkpoints before starting.
     FromBeginning,
-    /// Rebuild from a specific checkpoint
+    /// Rebuild from a specific checkpoint.
+    /// Useful for resuming interrupted rebuilds or incremental updates.
     FromCheckpoint(ProjectionCheckpoint),
-    /// Rebuild from a specific event ID
+    /// Rebuild from a specific event ID.
+    /// All events after this ID will be processed.
     FromEvent(EventId),
-    /// Rebuild only specific streams
+    /// Rebuild only specific streams (planned functionality).
+    /// This allows targeted rebuilds without affecting other data.
     SpecificStreams(StreamIds),
 }
 
@@ -43,6 +94,23 @@ pub struct StreamIds {
 }
 
 /// Progress tracking for projection rebuilds.
+///
+/// Provides detailed information about the rebuild process, including:
+/// - Event processing statistics
+/// - Performance metrics
+/// - Completion estimates
+/// - Error tracking
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use eventcore::cqrs::RebuildProgress;
+/// # let progress = RebuildProgress::new();
+/// if let Some(percentage) = progress.completion_percentage() {
+///     println!("Progress: {:.1}%", percentage);
+/// }
+/// println!("Processing rate: {:.0} events/sec", progress.events_per_second);
+/// ```
 #[derive(Debug, Clone)]
 pub struct RebuildProgress {
     /// Total number of events to process (if known)
@@ -119,6 +187,55 @@ impl Default for RebuildProgress {
 }
 
 /// Coordinates projection rebuilds with progress tracking and error recovery.
+///
+/// The `RebuildCoordinator` manages the entire rebuild process, including:
+/// - Subscribing to events from the event store
+/// - Processing events through the projection
+/// - Updating read models and checkpoints
+/// - Tracking progress and handling cancellation
+/// - Error recovery and retry logic
+///
+/// # Type Parameters
+///
+/// - `P`: The projection type implementing `CqrsProjection`
+/// - `E`: The event type
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use eventcore::cqrs::{RebuildCoordinator, CqrsProjection};
+/// use std::sync::Arc;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// # let projection: impl CqrsProjection<Event = MyEvent> = todo!();
+/// # let event_store = todo!();
+/// # let read_model_store = todo!();
+/// # let checkpoint_store = todo!();
+/// let coordinator = RebuildCoordinator::new(
+///     projection,
+///     Arc::new(event_store),
+///     Arc::new(read_model_store),
+///     Arc::new(checkpoint_store),
+/// );
+///
+/// // Monitor progress while rebuilding
+/// let coordinator = Arc::new(coordinator);
+/// let monitor = coordinator.clone();
+///
+/// tokio::spawn(async move {
+///     loop {
+///         let progress = monitor.get_progress().await;
+///         if !progress.is_running { break; }
+///         println!("Progress: {} events", progress.events_processed);
+///         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+///     }
+/// });
+///
+/// let final_progress = coordinator.rebuild_from_beginning().await?;
+/// # Ok(())
+/// # }
+/// # struct MyEvent;
+/// ```
 pub struct RebuildCoordinator<P, E>
 where
     P: CqrsProjection<Event = E>,
@@ -318,22 +435,189 @@ where
     }
 
     /// Cancels an ongoing rebuild.
+    ///
+    /// This method signals the rebuild process to stop at the next safe point.
+    /// The rebuild will:
+    /// 1. Complete processing of the current event
+    /// 2. Save a checkpoint at the current position
+    /// 3. Return with a cancellation error
+    ///
+    /// The rebuild can be resumed later from the saved checkpoint.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use eventcore::cqrs::RebuildCoordinator;
+    /// # use std::sync::Arc;
+    /// # use tokio::time::{timeout, Duration};
+    /// # async fn example(coordinator: Arc<RebuildCoordinator<impl eventcore::cqrs::CqrsProjection, impl Send + Sync>>) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Start rebuild with timeout
+    /// let coordinator_clone = coordinator.clone();
+    /// let rebuild_future = tokio::spawn(async move {
+    ///     coordinator_clone.rebuild_from_beginning().await
+    /// });
+    ///
+    /// // Cancel if it takes too long
+    /// match timeout(Duration::from_secs(300), rebuild_future).await {
+    ///     Ok(result) => result??,
+    ///     Err(_) => {
+    ///         println!("Rebuild taking too long, cancelling...");
+    ///         coordinator.cancel();
+    ///         Err("Rebuild timeout")?
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Thread Safety
+    ///
+    /// This method is thread-safe and can be called from any thread or task.
     pub fn cancel(&self) {
         info!("Cancelling projection rebuild");
         self.is_cancelled.store(true, Ordering::SeqCst);
     }
 
     /// Gets the current rebuild progress.
+    ///
+    /// Returns a snapshot of the current rebuild progress, including:
+    /// - Number of events processed
+    /// - Number of read models updated
+    /// - Processing rate (events per second)
+    /// - Completion percentage (if total event count is known)
+    /// - Estimated time to completion
+    /// - Current running status
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use eventcore::cqrs::RebuildCoordinator;
+    /// # use std::sync::Arc;
+    /// # use tokio::time::{interval, Duration};
+    /// # async fn example(coordinator: Arc<RebuildCoordinator<impl eventcore::cqrs::CqrsProjection, impl Send + Sync>>) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Monitor rebuild progress
+    /// let mut ticker = interval(Duration::from_secs(5));
+    ///
+    /// loop {
+    ///     ticker.tick().await;
+    ///     
+    ///     let progress = coordinator.get_progress().await;
+    ///     
+    ///     if !progress.is_running {
+    ///         if let Some(error) = progress.error {
+    ///             eprintln!("Rebuild failed: {}", error);
+    ///         } else {
+    ///             println!("Rebuild completed successfully!");
+    ///         }
+    ///         break;
+    ///     }
+    ///     
+    ///     println!("Progress: {} events @ {:.0} events/sec",
+    ///         progress.events_processed,
+    ///         progress.events_per_second
+    ///     );
+    ///     
+    ///     if let Some(pct) = progress.completion_percentage() {
+    ///         println!("  {:.1}% complete", pct);
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Thread Safety
+    ///
+    /// This method is thread-safe and provides a consistent snapshot of the progress.
     pub async fn get_progress(&self) -> RebuildProgress {
         self.progress.read().await.clone()
     }
 
-    /// Rebuilds from the beginning.
+    /// Rebuilds the projection from the beginning.
+    ///
+    /// This method performs a complete rebuild by:
+    /// 1. Clearing all existing read models and checkpoints
+    /// 2. Subscribing to events from the very beginning
+    /// 3. Processing all events in order
+    /// 4. Updating read models and checkpoints as it progresses
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use eventcore::cqrs::RebuildCoordinator;
+    /// # async fn example(coordinator: RebuildCoordinator<impl eventcore::cqrs::CqrsProjection, impl Send + Sync>) -> Result<(), Box<dyn std::error::Error>> {
+    /// let progress = coordinator.rebuild_from_beginning().await?;
+    /// println!("Rebuilt {} events in {:?}",
+    ///     progress.events_processed,
+    ///     progress.elapsed()
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// Returns `RebuildProgress` with final statistics on success, or a `CqrsError` on failure.
+    ///
+    /// # Errors
+    ///
+    /// - `CqrsError::Rebuild` if unable to clear existing data
+    /// - `CqrsError::Rebuild` if subscription creation fails
+    /// - `CqrsError::Rebuild` if the rebuild is cancelled
     pub async fn rebuild_from_beginning(&self) -> CqrsResult<RebuildProgress> {
         self.rebuild(RebuildStrategy::FromBeginning).await
     }
 
-    /// Rebuilds from a specific checkpoint.
+    /// Rebuilds the projection from a specific checkpoint.
+    ///
+    /// This method performs an incremental rebuild by:
+    /// 1. Starting from the provided checkpoint position
+    /// 2. Processing only events after that checkpoint
+    /// 3. Updating affected read models
+    /// 4. Preserving read models that don't need updates
+    ///
+    /// This is useful for:
+    /// - Resuming interrupted rebuilds
+    /// - Fixing issues that only affect recent events
+    /// - Implementing scheduled incremental updates
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use eventcore::cqrs::{RebuildCoordinator, CheckpointStore};
+    /// # use eventcore::projection::ProjectionCheckpoint;
+    /// # async fn example(
+    /// #     coordinator: RebuildCoordinator<impl eventcore::cqrs::CqrsProjection, impl Send + Sync>,
+    /// #     checkpoint_store: &dyn CheckpointStore<Error = eventcore::cqrs::CqrsError>
+    /// # ) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Load the last successful checkpoint
+    /// let checkpoint = checkpoint_store
+    ///     .load("my-projection")
+    ///     .await?
+    ///     .unwrap_or_else(|| ProjectionCheckpoint::initial());
+    ///
+    /// // Resume from that point
+    /// let progress = coordinator
+    ///     .rebuild_from_checkpoint(checkpoint)
+    ///     .await?;
+    ///     
+    /// println!("Processed {} new events", progress.events_processed);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Parameters
+    ///
+    /// - `checkpoint`: The checkpoint to resume from. Must contain a valid `last_event_id`.
+    ///
+    /// # Returns
+    ///
+    /// Returns `RebuildProgress` with statistics since the checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// - `CqrsError::Rebuild` if the checkpoint has no `last_event_id`
+    /// - `CqrsError::Rebuild` if subscription creation fails
+    /// - `CqrsError::Rebuild` if the rebuild is cancelled
     pub async fn rebuild_from_checkpoint(
         &self,
         checkpoint: ProjectionCheckpoint,
