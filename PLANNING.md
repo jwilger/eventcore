@@ -236,12 +236,13 @@ Based on the comprehensive expert review, the following improvements have been i
     - [x] Created two-trigger system: BEFORE INSERT for basic validation, AFTER INSERT for gap detection
     - [x] Fixed PostgreSQL trigger compatibility issues with transaction ID comparisons
     - [x] Resolved trigger creation conflicts with proper cleanup
+    - [x] **Fixed function dependency order**: Create gen_uuidv7() function before events table creation
   - [x] **Switched PostgreSQL tests from testcontainers to Docker Compose**
     - [x] Updated integration_tests.rs to use consistent Docker Compose database
     - [x] Updated stream_batching_tests.rs to eliminate testcontainers dependency
     - [x] Implemented unique stream ID generation to prevent test conflicts
     - [x] Ensured CI/local development consistency with shared database approach
-  - [x] **Result**: All PostgreSQL integration tests now pass with 100% reliability
+  - [x] **Result**: Fixed critical CI issue where CREATE TABLE referenced non-existent gen_uuidv7() function
 
 - [ ] **Caching Strategy Implementation**
   - [ ] Implement or remove the version cache infrastructure

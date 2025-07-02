@@ -488,7 +488,54 @@ where
 
         // We have the lock, proceed with initialization
         let result = async {
-            // Create events table
+            // Enable pgcrypto extension for random bytes generation (must be first)
+            sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+                .execute(self.pool.as_ref())
+                .await
+                .map_err(PostgresError::Connection)?;
+
+            // Create function to generate UUIDv7 (must be before table creation)
+            sqlx::query(
+                r"
+                CREATE OR REPLACE FUNCTION gen_uuidv7() RETURNS UUID AS $$
+                DECLARE
+                    unix_ts_ms BIGINT;
+                    uuid_bytes BYTEA;
+                BEGIN
+                    -- Get current timestamp in milliseconds since Unix epoch
+                    unix_ts_ms := (extract(epoch from clock_timestamp()) * 1000)::BIGINT;
+                    
+                    -- Create a 16-byte UUID:
+                    -- Bytes 0-5: 48-bit big-endian timestamp (milliseconds since Unix epoch)
+                    -- Bytes 6-7: 4-bit version (0111) + 12 random bits  
+                    -- Bytes 8-9: 2-bit variant (10) + 14 random bits
+                    -- Bytes 10-15: 48 random bits
+                    
+                    -- Build the UUID byte by byte
+                    uuid_bytes := 
+                        -- Timestamp: 48 bits, big-endian
+                        substring(int8send(unix_ts_ms) from 3 for 6) ||
+                        -- Version (0111 = 7) + random: 16 bits
+                        -- First byte: 0111RRRR (where R is random)
+                        set_byte(gen_random_bytes(1), 0, (get_byte(gen_random_bytes(1), 0) & 15) | 112) ||
+                        -- Second byte: all random
+                        gen_random_bytes(1) ||
+                        -- Variant (10) + random: 16 bits  
+                        -- First byte: 10RRRRRR (where R is random)
+                        set_byte(gen_random_bytes(1), 0, (get_byte(gen_random_bytes(1), 0) & 63) | 128) ||
+                        -- Remaining 7 bytes: all random
+                        gen_random_bytes(7);
+                    
+                    RETURN encode(uuid_bytes, 'hex')::UUID;
+                END;
+                $$ LANGUAGE plpgsql VOLATILE;
+                ",
+            )
+            .execute(self.pool.as_ref())
+            .await
+            .map_err(PostgresError::Connection)?;
+
+            // Create events table (now that the function exists)
             sqlx::query(
                 r"
                 CREATE TABLE IF NOT EXISTS events (
@@ -537,54 +584,7 @@ where
             .await
             .map_err(PostgresError::Connection)?;
 
-            // Enable pgcrypto extension for random bytes generation
-            sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-                .execute(self.pool.as_ref())
-                .await
-                .map_err(PostgresError::Connection)?;
-
-            // Create function to generate UUIDv7
-            sqlx::query(
-                r"
-                CREATE OR REPLACE FUNCTION gen_uuidv7() RETURNS UUID AS $$
-                DECLARE
-                    unix_ts_ms BIGINT;
-                    uuid_bytes BYTEA;
-                BEGIN
-                    -- Get current timestamp in milliseconds since Unix epoch
-                    unix_ts_ms := (extract(epoch from clock_timestamp()) * 1000)::BIGINT;
-                    
-                    -- Create a 16-byte UUID:
-                    -- Bytes 0-5: 48-bit big-endian timestamp (milliseconds since Unix epoch)
-                    -- Bytes 6-7: 4-bit version (0111) + 12 random bits  
-                    -- Bytes 8-9: 2-bit variant (10) + 14 random bits
-                    -- Bytes 10-15: 48 random bits
-                    
-                    -- Build the UUID byte by byte
-                    uuid_bytes := 
-                        -- Timestamp: 48 bits, big-endian
-                        substring(int8send(unix_ts_ms) from 3 for 6) ||
-                        -- Version (0111 = 7) + random: 16 bits
-                        -- First byte: 0111RRRR (where R is random)
-                        set_byte(gen_random_bytes(1), 0, (get_byte(gen_random_bytes(1), 0) & 15) | 112) ||
-                        -- Second byte: all random
-                        gen_random_bytes(1) ||
-                        -- Variant (10) + random: 16 bits  
-                        -- First byte: 10RRRRRR (where R is random)
-                        set_byte(gen_random_bytes(1), 0, (get_byte(gen_random_bytes(1), 0) & 63) | 128) ||
-                        -- Remaining 7 bytes: all random
-                        gen_random_bytes(7);
-                    
-                    RETURN encode(uuid_bytes, 'hex')::UUID;
-                END;
-                $$ LANGUAGE plpgsql VOLATILE;
-                ",
-            )
-            .execute(self.pool.as_ref())
-            .await
-            .map_err(PostgresError::Connection)?;
-
-            // Migrate existing tables to have default event_id generation
+            // Migrate existing tables to have default event_id generation (for upgrading existing installations)
             sqlx::query("ALTER TABLE events ALTER COLUMN event_id SET DEFAULT gen_uuidv7()")
                 .execute(self.pool.as_ref())
                 .await
