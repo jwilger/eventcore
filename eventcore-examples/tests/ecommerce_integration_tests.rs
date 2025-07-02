@@ -176,8 +176,12 @@ async fn test_complete_order_workflow() {
         eventcore::StreamId::try_new(format!("order-{order_id}")).unwrap(),
     ];
 
+    let read_options = ReadOptions {
+        max_events: Some(5000), // Ensure we read all events from the test streams
+        ..ReadOptions::default()
+    };
     let stream_data = event_store
-        .read_streams(&streams, &ReadOptions::default())
+        .read_streams(&streams, &read_options)
         .await
         .unwrap();
     let events: Vec<_> = stream_data.events().collect();
@@ -294,8 +298,12 @@ async fn test_inventory_projection() {
         eventcore::StreamId::try_new(format!("product-{}", mouse.id)).unwrap(),
     ];
 
+    let read_options = ReadOptions {
+        max_events: Some(5000), // Ensure we read all events from the test streams
+        ..ReadOptions::default()
+    };
     let stream_data = event_store
-        .read_streams(&streams, &ReadOptions::default())
+        .read_streams(&streams, &read_options)
         .await
         .unwrap();
 
@@ -524,8 +532,12 @@ async fn test_order_summary_projection() {
         eventcore::StreamId::try_new(format!("order-{order_id3}")).unwrap(),
     ];
 
+    let read_options = ReadOptions {
+        max_events: Some(5000), // Ensure we read all events from the test streams
+        ..ReadOptions::default()
+    };
     let stream_data = event_store
-        .read_streams(&streams, &ReadOptions::default())
+        .read_streams(&streams, &read_options)
         .await
         .unwrap();
 
@@ -781,8 +793,12 @@ async fn test_order_cancellation_releases_inventory() {
                 eventcore::StreamId::try_new(format!("product-{}", product.id)).unwrap(),
             ];
 
+            let read_options = ReadOptions {
+                max_events: Some(5000), // Ensure we read all events from the test streams
+                ..ReadOptions::default()
+            };
             let stream_data = event_store
-                .read_streams(&streams, &ReadOptions::default())
+                .read_streams(&streams, &read_options)
                 .await
                 .unwrap();
 
@@ -820,8 +836,12 @@ async fn test_order_cancellation_releases_inventory() {
         eventcore::StreamId::try_new(format!("product-{}", product.id)).unwrap(),
     ];
 
+    let read_options = ReadOptions {
+        max_events: Some(5000), // Ensure we read all events from the test streams
+        ..ReadOptions::default()
+    };
     let stream_data = event_store
-        .read_streams(&streams, &ReadOptions::default())
+        .read_streams(&streams, &read_options)
         .await
         .unwrap();
 
