@@ -26,49 +26,111 @@ eventcore-postgres = "0.1"  # or your preferred adapter
 ```
 
 ```rust
-use eventcore::{Command, EventStore, CommandExecutor};
+use eventcore::{prelude::*, require, emit};
+use eventcore_macros::Command;
 use eventcore_postgres::PostgresEventStore;
 
-// Define your command with type-safe inputs
+// Define your command with automatic stream detection
 #[derive(Command)]
 struct TransferMoney {
-    from: AccountId,
-    to: AccountId,
+    #[stream]
+    from_account: StreamId,
+    #[stream]
+    to_account: StreamId,
     amount: Money,
 }
 
-// Execute with automatic stream handling
+// Implement just the business logic - no boilerplate!
+#[async_trait]
+impl Command for TransferMoney {
+    type Input = Self;
+    type State = AccountBalances;
+    type Event = BankingEvent;
+    type StreamSet = TransferMoneyStreamSet; // Auto-generated!
+
+    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+        // Update state from events
+        match &event.payload {
+            BankingEvent::MoneyTransferred { from, to, amount } => {
+                state.debit(from, *amount);
+                state.credit(to, *amount);
+            }
+        }
+    }
+
+    async fn handle(
+        &self,
+        read_streams: ReadStreams<Self::StreamSet>,
+        state: Self::State,
+        input: Self::Input,
+        _: &mut StreamResolver,
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+        // Clean business logic with helper macros
+        require!(state.balance(&input.from_account) >= input.amount, "Insufficient funds");
+        
+        let mut events = vec![];
+        emit!(events, &read_streams, input.from_account, BankingEvent::MoneyTransferred {
+            from: input.from_account.to_string(),
+            to: input.to_account.to_string(),
+            amount: input.amount,
+        });
+        
+        Ok(events)
+    }
+}
+
+// Execute with zero boilerplate
 let store = PostgresEventStore::new(config).await?;
 let executor = CommandExecutor::new(store);
 
-let result = executor.execute(TransferMoney {
-    from: AccountId::new("alice")?,
-    to: AccountId::new("bob")?,
-    amount: Money::dollars(100)?,
-}).await?;
+let command = TransferMoney {
+    from_account: StreamId::try_new("account-alice")?,
+    to_account: StreamId::try_new("account-bob")?,
+    amount: Money::from_cents(10000)?,
+};
+
+let result = executor.execute(&command, command).await?;
 ```
 
 ## Key Features
 
 ### Type-Safe Stream Access
-Commands declare their streams - the compiler ensures you can't write to undeclared streams:
+The `#[derive(Command)]` macro automatically detects streams from `#[stream]` fields:
 
 ```rust
-fn read_streams(&self) -> Vec<StreamId> {
-    vec![self.from.stream_id(), self.to.stream_id()]
+#[derive(Command)]
+struct TransferMoney {
+    #[stream]  // Automatically included in read_streams()
+    from_account: StreamId,
+    #[stream]  // Automatically included in read_streams()
+    to_account: StreamId,
+    amount: Money,  // Regular field, not a stream
 }
 
-// In handle(): Can only write to declared streams
-let event = StreamWrite::new(&read_streams, stream, event)?;
+// The macro generates:
+// - TransferMoneyStreamSet type for compile-time safety
+// - read_streams() method returning marked fields
+// - Stream access validation at compile time
 ```
 
 ### Dynamic Stream Discovery
-Discover streams during execution without two-phase commits:
+Discover additional streams during execution:
 
 ```rust
-// Analyze state, then request more streams
-if state.requires_approval {
-    stream_resolver.add_streams(vec![approval_stream]);
+async fn handle(...) -> CommandResult<Vec<StreamWrite<...>>> {
+    // Start with streams from #[derive(Command)]
+    require!(state.is_valid(), "Invalid state");
+    
+    // Dynamically add more streams based on business logic
+    if state.requires_approval() {
+        stream_resolver.add_streams(vec![approval_stream()]);
+        // EventCore will re-execute with expanded stream set
+    }
+    
+    // Use emit! helper for clean event generation
+    let mut events = vec![];
+    emit!(events, &read_streams, input.account, AccountEvent::Updated { ... });
+    Ok(events)
 }
 ```
 

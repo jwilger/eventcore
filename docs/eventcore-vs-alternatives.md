@@ -60,19 +60,37 @@ public class TransferSaga : Saga<TransferSagaData>
 
 **EventCore (multi-entity operation)**:
 ```rust
-// EventCore: Single atomic command
+use eventcore::{prelude::*, require, emit};
+use eventcore_macros::Command;
+
+// EventCore: Single atomic command with zero boilerplate
+#[derive(Command)]
+struct TransferMoney {
+    #[stream]  // Auto-included in consistency boundary
+    from_account: StreamId,
+    #[stream]  // Auto-included in consistency boundary
+    to_account: StreamId,
+    amount: Money,
+}
+
 #[async_trait]
 impl Command for TransferMoney {
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.from.stream_id(), input.to.stream_id()]
-    }
+    type Input = Self;
+    type State = AccountBalances;
+    type Event = BankingEvent;
+    type StreamSet = TransferMoneyStreamSet; // Auto-generated!
     
-    async fn handle(&self, streams: ReadStreams, ...) -> CommandResult<...> {
-        // Atomic across both accounts - no saga needed
-        Ok(vec![
-            StreamWrite::new(&streams, input.from, MoneyWithdrawn { amount }),
-            StreamWrite::new(&streams, input.to, MoneyDeposited { amount }),
-        ])
+    // read_streams() is auto-generated from #[stream] fields!
+    
+    async fn handle(&self, read_streams: ReadStreams, state: State, input: Input, _: &mut StreamResolver) -> CommandResult<...> {
+        // Clean business logic with helper macros
+        require!(state.balance(&input.from_account) >= input.amount, "Insufficient funds");
+        
+        let mut events = vec![];
+        emit!(events, &read_streams, input.from_account, MoneyWithdrawn { amount: input.amount });
+        emit!(events, &read_streams, input.to_account, MoneyDeposited { amount: input.amount });
+        
+        Ok(events)  // Atomic across both accounts - no saga needed!
     }
 }
 ```
@@ -104,7 +122,8 @@ impl Command for TransferMoney {
 - **Multi-stream atomicity** without saga complexity
 - **Type safety** with Rust's compile-time guarantees
 - **Simpler mental model** - commands define their own boundaries
-- **Less boilerplate** - no aggregate classes or complex configuration
+- **Minimal boilerplate** - `#[derive(Command)]` eliminates repetitive code
+- **Clean business logic** - `require!` and `emit!` macros improve readability
 
 ### Architecture Comparison
 
@@ -135,18 +154,20 @@ public class TransferSaga {
 
 **EventCore**:
 ```rust
-// Simple command with flexible boundaries
+// Simple command with flexible boundaries and zero boilerplate
+#[derive(Command)]
 struct TransferMoney {
-    from: AccountId,
-    to: AccountId,
+    #[stream]
+    from_account: StreamId,
+    #[stream]
+    to_account: StreamId,
     amount: Money,
 }
 
-impl Command for TransferMoney {
-    // Define boundary dynamically per operation
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.from.stream_id(), input.to.stream_id()]
-    }
+// That's it! The macro generates:
+// - StreamSet type for compile-time safety
+// - read_streams() method from #[stream] fields
+// - All the boilerplate you'd normally write
     
     // No saga needed - atomic operation
 }

@@ -39,28 +39,38 @@ async fn transfer_money(from: AccountId, to: AccountId, amount: Money) {
 
 **EventCore Solution**:
 ```rust
-// EventCore: Dynamic boundaries per operation
+use eventcore::{prelude::*, require, emit};
+use eventcore_macros::Command;
+
+// EventCore: Dynamic boundaries with zero boilerplate
 #[derive(Command)]
 struct TransferMoney {
-    from: AccountId,
-    to: AccountId,
+    #[stream]  // Automatically part of consistency boundary
+    from_account: StreamId,
+    #[stream]  // Automatically part of consistency boundary  
+    to_account: StreamId,
     amount: Money,
 }
 
+#[async_trait]
 impl Command for TransferMoney {
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        // Define consistency boundary for THIS operation
-        vec![input.from.stream_id(), input.to.stream_id()]
-    }
+    type Input = Self;
+    type State = AccountBalances;
+    type Event = BankingEvent;
+    type StreamSet = TransferMoneyStreamSet; // Auto-generated!
     
-    async fn handle(&self, streams: ReadStreams, ...) -> CommandResult<...> {
-        // ✅ Atomic across both accounts
-        // ✅ No distributed transaction needed
-        // ✅ No saga complexity
-        Ok(vec![
-            StreamWrite::new(&streams, input.from.stream_id(), MoneyWithdrawn { amount }),
-            StreamWrite::new(&streams, input.to.stream_id(), MoneyDeposited { amount }),
-        ])
+    // read_streams() is auto-generated from #[stream] fields!
+    
+    async fn handle(&self, read_streams: ReadStreams, state: State, input: Input, _: &mut StreamResolver) -> CommandResult<...> {
+        // Clean validation with require! macro
+        require!(state.balance(&input.from_account) >= input.amount, "Insufficient funds");
+        
+        // Type-safe event generation with emit! macro
+        let mut events = vec![];
+        emit!(events, &read_streams, input.from_account, MoneyWithdrawn { amount: input.amount });
+        emit!(events, &read_streams, input.to_account, MoneyDeposited { amount: input.amount });
+        
+        Ok(events)  // ✅ Atomic, ✅ Type-safe, ✅ Zero boilerplate
     }
 }
 ```
@@ -70,8 +80,9 @@ impl Command for TransferMoney {
 1. **Dynamic Consistency Boundaries**: Each command defines its own consistency scope
 2. **No Distributed Transactions**: Multi-entity operations are atomic at the database level
 3. **Type Safety**: Compiler prevents writing to undeclared streams
-4. **Zero Boilerplate**: No aggregate classes or entity management
-5. **Stream Discovery**: Commands can discover additional streams during execution
+4. **Zero Boilerplate**: `#[derive(Command)]` macro eliminates repetitive code
+5. **Clean Business Logic**: `require!` and `emit!` macros make code readable
+6. **Stream Discovery**: Commands can discover additional streams during execution
 
 ## When to Choose EventCore
 
@@ -108,13 +119,33 @@ impl Command for TransferMoney {
 **Migration Path**:
 ```rust
 // Phase 1: Start with simple operations
-struct CreateAccount { ... }  // Single stream
+#[derive(Command)]
+struct CreateAccount {
+    #[stream]
+    account_id: StreamId,
+    owner_name: String,
+    initial_balance: Money,
+}
 
 // Phase 2: Add cross-entity operations naturally
-struct TransferBetweenAccounts { ... }  // Multi-stream
+#[derive(Command)]
+struct TransferBetweenAccounts {
+    #[stream]
+    from_account: StreamId,
+    #[stream]
+    to_account: StreamId,
+    amount: Money,
+}
 
-// Phase 3: Complex workflows
-struct ProcessLoanApplication { ... }  // Dynamic discovery
+// Phase 3: Complex workflows with dynamic discovery
+#[derive(Command)]
+struct ProcessLoanApplication {
+    #[stream]
+    loan_application: StreamId,
+    #[stream]
+    applicant_account: StreamId,
+    // Discover credit check streams dynamically in handle()
+}
 ```
 
 ### ❌ Poor Fit: Simple Applications
@@ -283,11 +314,12 @@ Before choosing EventCore, ask:
 
 If EventCore seems right for your use case:
 
-1. **Read the [First Command Tutorial](docs/tutorials/first-command.md)**
-2. **Try the [Banking Example](eventcore-examples/src/banking/)**
-3. **Start with single-stream commands**
-4. **Gradually add multi-stream operations**
-5. **Join the community** for support and feedback
+1. **Read the [First Command Tutorial](tutorials/first-command.md)** - Learn the `#[derive(Command)]` macro
+2. **Explore the [Macro DSL Tutorial](tutorials/macro-dsl.md)** - Master `require!` and `emit!` helpers
+3. **Try the [Banking Example](../eventcore-examples/src/banking/)** - See real-world patterns
+4. **Start with single-stream commands** - Use `#[stream]` on one field
+5. **Gradually add multi-stream operations** - Add more `#[stream]` fields as needed
+6. **Join the community** for support and feedback
 
 ## Conclusion
 
