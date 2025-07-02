@@ -11,7 +11,7 @@ publish = false
 
 [dependencies]
 # Core dependencies
-eventcore = { path = "../eventcore" }
+eventcore = { path = "../eventcore", features = ["testing"] }
 eventcore-postgres = { path = "../eventcore-postgres" }
 eventcore-memory = { path = "../eventcore-memory" }
 tokio = { workspace = true }

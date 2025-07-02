@@ -11,6 +11,9 @@
 #![allow(clippy::missing_const_for_fn)]
 #![allow(clippy::use_self)]
 #![allow(clippy::pedantic)]
+#![allow(clippy::redundant_clone)]
+#![allow(clippy::clone_on_copy)]
+#![allow(missing_docs)]
 
 /// Banking example: Account management and money transfers with type-safe domain modeling
 pub mod banking;

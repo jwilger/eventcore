@@ -306,7 +306,7 @@ Based on the comprehensive expert review, the following improvements have been i
   - [x] Update API documentation with rebuild-related types
 
 - [ ] **Advanced Example Applications**
-  - [ ] Complete long-running saga example
+  - [x] Complete long-running saga example
   - [ ] Add performance testing example application
   - [ ] Create distributed system example
   - [ ] Add real-time collaboration example
