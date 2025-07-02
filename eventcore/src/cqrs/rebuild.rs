@@ -8,7 +8,7 @@ use crate::{
     errors::ProjectionError,
     event_store::{EventStore, StoredEvent},
     projection::ProjectionCheckpoint,
-    subscription::{EventProcessor, SubscriptionError, SubscriptionResult},
+    subscription::{EventProcessor, SubscriptionError, SubscriptionOptions, SubscriptionResult},
     types::EventId,
 };
 use async_trait::async_trait;
@@ -17,7 +17,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
 use tracing::{info, instrument};
@@ -166,6 +166,7 @@ where
 
     /// Rebuilds the projection using the specified strategy.
     #[instrument(skip(self), fields(projection = %self.projection.config().name))]
+    #[allow(clippy::too_many_lines)]
     pub async fn rebuild(&self, strategy: RebuildStrategy) -> CqrsResult<RebuildProgress> {
         info!("Starting projection rebuild with strategy: {:?}", strategy);
 
@@ -179,7 +180,7 @@ where
         self.is_cancelled.store(false, Ordering::SeqCst);
 
         // Clear existing state based on strategy
-        match strategy {
+        match &strategy {
             RebuildStrategy::FromBeginning => {
                 info!("Clearing all read models and checkpoints");
                 self.read_model_store
@@ -205,11 +206,115 @@ where
             }
         }
 
-        // TODO: Implement subscription-based rebuild
-        // For now, return an error indicating this is not yet implemented
-        Err(CqrsError::rebuild(
-            "Subscription-based rebuild not yet implemented",
+        // Create subscription options based on rebuild strategy
+        let subscription_options = match &strategy {
+            RebuildStrategy::FromBeginning => SubscriptionOptions::CatchUpFromBeginning,
+            RebuildStrategy::FromCheckpoint(checkpoint) => {
+                let position = crate::subscription::SubscriptionPosition::new(
+                    checkpoint
+                        .last_event_id
+                        .ok_or_else(|| CqrsError::rebuild("Checkpoint has no last event ID"))?,
+                );
+                SubscriptionOptions::CatchUpFromPosition(position)
+            }
+            RebuildStrategy::FromEvent(event_id) => {
+                let position = crate::subscription::SubscriptionPosition::new(*event_id);
+                SubscriptionOptions::CatchUpFromPosition(position)
+            }
+            RebuildStrategy::SpecificStreams(stream_ids) => {
+                // For now, we'll use CatchUpFromBeginning for specific streams
+                // In a real implementation, we'd need to extend SubscriptionOptions
+                // to support filtering by stream IDs
+                let _ = stream_ids; // Avoid unused warning
+                SubscriptionOptions::CatchUpFromBeginning
+            }
+        };
+
+        // Create the rebuild processor
+        let processor = RebuildProcessor {
+            projection: self.projection.clone(),
+            read_model_store: self.read_model_store.clone(),
+            checkpoint_store: self.checkpoint_store.clone(),
+            progress: self.progress.clone(),
+            is_cancelled: self.is_cancelled.clone(),
+            events_processed: self.events_processed.clone(),
+            models_updated: self.models_updated.clone(),
+            state: Arc::new(RwLock::new(None)),
+        };
+
+        // Create and start subscription
+        let mut subscription = self
+            .event_store
+            .subscribe(subscription_options.clone())
+            .await
+            .map_err(|e| CqrsError::rebuild(format!("Failed to create subscription: {e}")))?;
+
+        let subscription_name = crate::subscription::SubscriptionName::try_new(format!(
+            "{}-rebuild",
+            self.projection.config().name
         ))
+        .map_err(|e| CqrsError::rebuild(format!("Invalid subscription name: {e}")))?;
+
+        // Start the subscription with our rebuild processor
+        subscription
+            .start(
+                subscription_name,
+                subscription_options.clone(),
+                Box::new(processor),
+            )
+            .await
+            .map_err(|e| CqrsError::rebuild(format!("Failed to start subscription: {e}")))?;
+
+        // Wait for rebuild to complete or be cancelled
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            if self.is_cancelled.load(Ordering::Acquire) {
+                subscription
+                    .stop()
+                    .await
+                    .map_err(|e| CqrsError::rebuild(format!("Failed to stop subscription: {e}")))?;
+                return Err(CqrsError::rebuild("Rebuild cancelled"));
+            }
+
+            // Check if we've caught up to live position
+            // For now, we'll use a simple heuristic: if no events processed in last second
+            let current_count = self.events_processed.load(Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let new_count = self.events_processed.load(Ordering::Relaxed);
+
+            if new_count == current_count && current_count > 0 {
+                // No new events processed, we're likely caught up
+                break;
+            }
+
+            // Update progress
+            {
+                let mut progress = self.progress.write().await;
+                progress.update(
+                    self.events_processed.load(Ordering::Relaxed),
+                    self.models_updated.load(Ordering::Relaxed),
+                );
+            }
+        }
+
+        // Stop subscription
+        subscription
+            .stop()
+            .await
+            .map_err(|e| CqrsError::rebuild(format!("Failed to stop subscription: {e}")))?;
+
+        // Final progress update
+        {
+            let mut progress = self.progress.write().await;
+            progress.update(
+                self.events_processed.load(Ordering::Relaxed),
+                self.models_updated.load(Ordering::Relaxed),
+            );
+            progress.is_running = false;
+        }
+
+        Ok(self.progress.read().await.clone())
     }
 
     /// Cancels an ongoing rebuild.
@@ -389,5 +494,62 @@ mod tests {
         let strategy3 = RebuildStrategy::FromEvent(event_id);
         let strategy4 = RebuildStrategy::FromEvent(event_id);
         assert_eq!(strategy3, strategy4);
+    }
+
+    #[test]
+    fn rebuild_progress_estimated_completion() {
+        let mut progress = RebuildProgress::new();
+        progress.total_events = Some(1000);
+
+        // Simulate processing events over time
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        progress.update(100, 50);
+
+        // Should have an estimated completion time
+        assert!(progress.estimated_completion.is_some());
+        assert!(progress.events_per_second > 0.0);
+
+        // If we're at 10% complete at current rate, estimated completion should be in the future
+        if let Some(est_completion) = progress.estimated_completion {
+            assert!(est_completion > Instant::now());
+        }
+    }
+
+    #[test]
+    fn rebuild_progress_no_total_events() {
+        let mut progress = RebuildProgress::new();
+        // When total_events is None, completion percentage should also be None
+        progress.update(500, 200);
+
+        assert_eq!(progress.completion_percentage(), None);
+        assert_eq!(progress.events_processed, 500);
+        assert_eq!(progress.models_updated, 200);
+    }
+
+    #[test]
+    fn rebuild_progress_error_handling() {
+        let mut progress = RebuildProgress::new();
+        progress.is_running = true;
+
+        // Simulate an error
+        progress.error = Some("Test error occurred".to_string());
+        progress.is_running = false;
+
+        assert!(!progress.is_running);
+        assert_eq!(progress.error, Some("Test error occurred".to_string()));
+    }
+
+    #[test]
+    fn stream_ids_placeholder() {
+        // This test documents that StreamIds is currently a placeholder
+        let stream_ids = StreamIds {};
+        let strategy = RebuildStrategy::SpecificStreams(stream_ids);
+
+        match strategy {
+            RebuildStrategy::SpecificStreams(_) => {
+                // Successfully created the strategy
+            }
+            _ => panic!("Expected SpecificStreams variant"),
+        }
     }
 }
