@@ -401,3 +401,28 @@ Your todo list should ALWAYS follow this pattern:
 2. "Update @PLANNING.md to mark completed tasks"
 3. "Run all tests and make a commit if they all pass"
 4. "Push changes to remote repository, monitor CI workflow..."
+
+## Notification Sound
+
+**IMPORTANT**: Claude should play a notification sound every time it finishes tasks and is waiting for user input. This helps the user know when Claude has completed its work.
+
+To play a notification sound on NixOS with PipeWire:
+```bash
+python3 -c "
+import wave, struct, math
+
+# Create a simple beep WAV file
+sample_rate = 44100
+duration = 0.5
+frequency = 440
+
+with wave.open('/tmp/beep.wav', 'wb') as wav:
+    wav.setnchannels(1)
+    wav.setsampwidth(2)
+    wav.setframerate(sample_rate)
+    
+    for i in range(int(sample_rate * duration)):
+        value = int(32767.0 * math.sin(2.0 * math.pi * frequency * i / sample_rate))
+        wav.writeframesraw(struct.pack('<h', value))
+" && pw-play /tmp/beep.wav
+```

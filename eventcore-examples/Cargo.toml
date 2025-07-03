@@ -33,6 +33,7 @@ regex = "1.11.1"
 rust_decimal = { version = "1.37.0", features = ["serde"] }
 rust_decimal_macros = "1.37.0"
 anyhow = "1.0.95"
+rand = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -62,6 +63,10 @@ workspace = true
 [[example]]
 name = "simplified_command"
 path = "src/simplified_command_example.rs"
+
+[[example]]
+name = "distributed_ecommerce"
+path = "src/distributed_ecommerce_example.rs"
 
 # Temporarily disabled until Command API migration is complete
 # [[bench]]
