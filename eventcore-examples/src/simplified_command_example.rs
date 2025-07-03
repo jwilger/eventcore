@@ -1,11 +1,14 @@
 //! Example demonstrating the simplified Command derive macro
 //!
 //! Shows how #[derive(Command)] now automatically generates:
-//! - type StreamSet = CommandNameStreamSet;
-//! - fn read_streams() implementation
-//! - StreamSet type definition
+//! - type `StreamSet` = `CommandNameStreamSet`;
+//! - fn `read_streams()` implementation
+//! - `StreamSet` type definition
 //!
 //! Commands are now always their own input - no separate Input type needed
+
+#![allow(missing_docs)]
+#![allow(clippy::use_self)]
 
 use async_trait::async_trait;
 use eventcore::{prelude::*, CommandLogic, ReadStreams, StreamWrite};
@@ -156,7 +159,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Execute the command - no separate input needed
-    let result = executor.execute(command, Default::default()).await?;
+    let result = executor
+        .execute(command, ExecutionOptions::default())
+        .await?;
     println!("Transfer successful! Generated {} events", result.len());
 
     Ok(())

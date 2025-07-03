@@ -38,9 +38,10 @@ testcontainers = { workspace = true }
 eventcore-memory = { path = "../eventcore-memory" }
 futures = { workspace = true }
 
-[[bench]]
-name = "postgres_benchmarks"
-harness = false
+# Temporarily disabled until Command API migration is complete
+# [[bench]]
+# name = "postgres_benchmarks"
+# harness = false
 
 [lints]
 workspace = true

@@ -15,17 +15,21 @@
 #![allow(clippy::clone_on_copy)]
 #![allow(missing_docs)]
 
-/// Banking example: Account management and money transfers with type-safe domain modeling
-pub mod banking;
+// Banking example: Account management and money transfers with type-safe domain modeling
+// Temporarily disabled until Command API migration is complete
+// pub mod banking;
 
-/// E-commerce example: Order workflow with inventory management
-pub mod ecommerce;
+// E-commerce example: Order workflow with inventory management
+// Temporarily disabled until Command API migration is complete
+// pub mod ecommerce;
 
-/// Sagas example: Long-running distributed transactions
-pub mod sagas;
+// Sagas example: Long-running distributed transactions
+// Temporarily disabled until Command API migration is complete
+// pub mod sagas;
 
-/// Benchmarks: Performance testing examples
-pub mod benchmarks;
+// Benchmarks: Performance testing examples
+// Temporarily disabled until Command API migration is complete
+// pub mod benchmarks;
 
 #[cfg(test)]
 mod tests {

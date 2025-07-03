@@ -14,7 +14,7 @@ use criterion::{
     Throughput,
 };
 use eventcore::{
-    Command, CommandExecutor, CommandResult, EventId, EventMetadata, EventStore, EventToWrite,
+    CommandExecutor, CommandResult, EventId, EventMetadata, EventStore, EventToWrite,
     ExpectedVersion, ReadStreams, StoredEvent, StreamEvents, StreamId, StreamWrite,
 };
 use eventcore_memory::InMemoryEventStore;
@@ -36,6 +36,10 @@ impl Money {
         Self(cents)
     }
 
+    pub fn cents(&self) -> i64 {
+        self.0
+    }
+
     pub fn subtract(&self, other: &Self) -> Option<Self> {
         if self.0 >= other.0 {
             Some(Self(self.0 - other.0))
@@ -46,10 +50,6 @@ impl Money {
 
     pub fn add(&self, other: &Self) -> Self {
         Self(self.0 + other.0)
-    }
-
-    pub fn cents(&self) -> i64 {
-        self.0
     }
 }
 
@@ -114,11 +114,8 @@ impl From<BankingEvent> for serde_json::Value {
 // ============================================================================
 
 /// Realistic banking transfer command for workload testing
-#[derive(Debug, Clone)]
-pub struct RealisticTransferCommand;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransferInput {
+pub struct RealisticTransferCommand {
     pub transfer_id: TransferId,
     pub from_account: AccountId,
     pub to_account: AccountId,
@@ -131,20 +128,22 @@ pub struct BankingState {
     pub completed_transfers: HashMap<TransferId, bool>,
 }
 
-#[async_trait::async_trait]
-impl Command for RealisticTransferCommand {
-    type Input = TransferInput;
-    type State = BankingState;
-    type Event = BankingEvent;
+impl eventcore::CommandStreams for RealisticTransferCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+    fn read_streams(&self) -> Vec<StreamId> {
         vec![
-            StreamId::try_new(format!("account-{}", input.from_account.0)).unwrap(),
-            StreamId::try_new(format!("account-{}", input.to_account.0)).unwrap(),
+            StreamId::try_new(format!("account-{}", self.from_account.0)).unwrap(),
+            StreamId::try_new(format!("account-{}", self.to_account.0)).unwrap(),
             StreamId::try_new("transfers".to_string()).unwrap(),
         ]
     }
+}
+
+#[async_trait::async_trait]
+impl eventcore::CommandLogic for RealisticTransferCommand {
+    type State = BankingState;
+    type Event = BankingEvent;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -175,54 +174,53 @@ impl Command for RealisticTransferCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check for idempotency
-        if state.completed_transfers.contains_key(&input.transfer_id) {
+        if state.completed_transfers.contains_key(&self.transfer_id) {
             return Ok(vec![]);
         }
 
         // Realistic business logic validation
-        let from_balance = state.balances.get(&input.from_account).ok_or_else(|| {
+        let from_balance = state.balances.get(&self.from_account).ok_or_else(|| {
             eventcore::CommandError::BusinessRuleViolation(format!(
                 "Account {} not found",
-                input.from_account.0
+                self.from_account.0
             ))
         })?;
 
-        if !state.balances.contains_key(&input.to_account) {
+        if !state.balances.contains_key(&self.to_account) {
             return Err(eventcore::CommandError::BusinessRuleViolation(format!(
                 "Account {} not found",
-                input.to_account.0
+                self.to_account.0
             )));
         }
 
-        if from_balance.subtract(&input.amount).is_none() {
+        if from_balance.subtract(&self.amount).is_none() {
             return Err(eventcore::CommandError::BusinessRuleViolation(format!(
                 "Insufficient funds: balance {}, requested {}",
                 from_balance.cents(),
-                input.amount.cents()
+                self.amount.cents()
             )));
         }
 
         let event = BankingEvent::MoneyTransferred {
-            transfer_id: input.transfer_id,
-            from_account: input.from_account.clone(),
-            to_account: input.to_account.clone(),
-            amount: input.amount,
+            transfer_id: self.transfer_id.clone(),
+            from_account: self.from_account.clone(),
+            to_account: self.to_account.clone(),
+            amount: self.amount,
         };
 
         // Write to all three streams atomically
         Ok(vec![
             StreamWrite::new(
                 &read_streams,
-                StreamId::try_new(format!("account-{}", input.from_account.0)).unwrap(),
+                StreamId::try_new(format!("account-{}", self.from_account.0)).unwrap(),
                 event.clone(),
             )?,
             StreamWrite::new(
                 &read_streams,
-                StreamId::try_new(format!("account-{}", input.to_account.0)).unwrap(),
+                StreamId::try_new(format!("account-{}", self.to_account.0)).unwrap(),
                 event.clone(),
             )?,
             StreamWrite::new(
@@ -317,11 +315,8 @@ impl From<EcommerceEvent> for serde_json::Value {
 // ============================================================================
 
 /// Realistic e-commerce order command with dynamic stream discovery
-#[derive(Debug, Clone)]
-pub struct RealisticAddItemCommand;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AddItemInput {
+pub struct RealisticAddItemCommand {
     pub order_id: OrderId,
     pub item: OrderItem,
 }
@@ -333,20 +328,22 @@ pub struct EcommerceState {
     pub inventory: HashMap<ProductId, u32>,
 }
 
-#[async_trait::async_trait]
-impl Command for RealisticAddItemCommand {
-    type Input = AddItemInput;
-    type State = EcommerceState;
-    type Event = EcommerceEvent;
+impl eventcore::CommandStreams for RealisticAddItemCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+    fn read_streams(&self) -> Vec<StreamId> {
         vec![
-            StreamId::try_new(format!("order-{}", input.order_id.0)).unwrap(),
-            StreamId::try_new(format!("product-{}", input.item.product_id.0)).unwrap(),
+            StreamId::try_new(format!("order-{}", self.order_id.0)).unwrap(),
+            StreamId::try_new(format!("product-{}", self.item.product_id.0)).unwrap(),
             StreamId::try_new("inventory".to_string()).unwrap(),
         ]
     }
+}
+
+#[async_trait::async_trait]
+impl eventcore::CommandLogic for RealisticAddItemCommand {
+    type State = EcommerceState;
+    type Event = EcommerceEvent;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -382,52 +379,51 @@ impl Command for RealisticAddItemCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Realistic business logic validation
-        if !state.orders.contains_key(&input.order_id) {
+        if !state.orders.contains_key(&self.order_id) {
             return Err(eventcore::CommandError::BusinessRuleViolation(format!(
                 "Order {} does not exist",
-                input.order_id.0
+                self.order_id.0
             )));
         }
 
-        if state.order_status.get(&input.order_id) != Some(&OrderStatus::Draft) {
+        if state.order_status.get(&self.order_id) != Some(&OrderStatus::Draft) {
             return Err(eventcore::CommandError::BusinessRuleViolation(
                 "Cannot add items to non-draft order".to_string(),
             ));
         }
 
-        let available_inventory = state.inventory.get(&input.item.product_id).unwrap_or(&0);
-        if *available_inventory < input.item.quantity {
+        let available_inventory = state.inventory.get(&self.item.product_id).unwrap_or(&0);
+        if *available_inventory < self.item.quantity {
             return Err(eventcore::CommandError::BusinessRuleViolation(format!(
                 "Insufficient inventory: available {}, requested {}",
-                available_inventory, input.item.quantity
+                available_inventory, self.item.quantity
             )));
         }
 
         let item_event = EcommerceEvent::ItemAddedToOrder {
-            order_id: input.order_id.clone(),
-            item: input.item.clone(),
+            order_id: self.order_id.clone(),
+            item: self.item.clone(),
         };
 
         let inventory_event = EcommerceEvent::InventoryReserved {
-            product_id: input.item.product_id.clone(),
-            quantity: input.item.quantity,
-            order_id: input.order_id.clone(),
+            product_id: self.item.product_id.clone(),
+            quantity: self.item.quantity,
+            order_id: self.order_id.clone(),
         };
 
         // Write to multiple streams atomically
         Ok(vec![
             StreamWrite::new(
                 &read_streams,
-                StreamId::try_new(format!("order-{}", input.order_id.0)).unwrap(),
+                StreamId::try_new(format!("order-{}", self.order_id.0)).unwrap(),
                 item_event,
             )?,
             StreamWrite::new(
                 &read_streams,
-                StreamId::try_new(format!("product-{}", input.item.product_id.0)).unwrap(),
+                StreamId::try_new(format!("product-{}", self.item.product_id.0)).unwrap(),
                 inventory_event.clone(),
             )?,
             StreamWrite::new(
@@ -487,10 +483,9 @@ fn bench_banking_workload(c: &mut Criterion) {
                     }
 
                     // Benchmark: perform a realistic transfer
-                    let command = RealisticTransferCommand;
                     let from_idx = 0;
                     let to_idx = account_count.min(2) - 1; // Avoid out of bounds
-                    let input = TransferInput {
+                    let command = RealisticTransferCommand {
                         transfer_id: TransferId::generate(),
                         from_account: accounts[from_idx].clone(),
                         to_account: accounts[to_idx].clone(),
@@ -499,7 +494,7 @@ fn bench_banking_workload(c: &mut Criterion) {
 
                     black_box(
                         executor
-                            .execute(&command, input, eventcore::ExecutionOptions::default())
+                            .execute(command, eventcore::ExecutionOptions::default())
                             .await
                             .unwrap(),
                     )
@@ -583,9 +578,8 @@ fn bench_ecommerce_workload(c: &mut Criterion) {
                     }
 
                     // Benchmark: add item to order (realistic multi-stream operation)
-                    let command = RealisticAddItemCommand;
                     let product_idx = 0; // Use first product
-                    let input = AddItemInput {
+                    let command = RealisticAddItemCommand {
                         order_id: order_id.clone(),
                         item: OrderItem {
                             product_id: products[product_idx].clone(),
@@ -596,7 +590,7 @@ fn bench_ecommerce_workload(c: &mut Criterion) {
 
                     // This should fail due to insufficient inventory, but that's realistic
                     let result = executor
-                        .execute(&command, input, eventcore::ExecutionOptions::default())
+                        .execute(command, eventcore::ExecutionOptions::default())
                         .await;
                     black_box(result)
                 });
@@ -664,8 +658,7 @@ fn bench_mixed_workload(c: &mut Criterion) {
                 .unwrap();
 
             // Execute banking transfer
-            let banking_command = RealisticTransferCommand;
-            let transfer_input = TransferInput {
+            let banking_command = RealisticTransferCommand {
                 transfer_id: TransferId::generate(),
                 from_account: account1,
                 to_account: account2,
@@ -673,17 +666,12 @@ fn bench_mixed_workload(c: &mut Criterion) {
             };
 
             let banking_result = executor
-                .execute(
-                    &banking_command,
-                    transfer_input,
-                    eventcore::ExecutionOptions::default(),
-                )
+                .execute(banking_command, eventcore::ExecutionOptions::default())
                 .await
                 .unwrap();
 
             // Execute e-commerce operation (will fail due to no inventory, but measures overhead)
-            let ecommerce_command = RealisticAddItemCommand;
-            let item_input = AddItemInput {
+            let ecommerce_command = RealisticAddItemCommand {
                 order_id,
                 item: OrderItem {
                     product_id: ProductId::generate(),
@@ -693,11 +681,7 @@ fn bench_mixed_workload(c: &mut Criterion) {
             };
 
             let ecommerce_result = executor
-                .execute(
-                    &ecommerce_command,
-                    item_input,
-                    eventcore::ExecutionOptions::default(),
-                )
+                .execute(ecommerce_command, eventcore::ExecutionOptions::default())
                 .await;
 
             black_box((banking_result, ecommerce_result))
@@ -775,8 +759,8 @@ fn bench_stream_discovery_workload(c: &mut Criterion) {
                     // Benchmark: execute command that would trigger dynamic stream discovery
                     // In a real scenario, this would be a cancel order command that needs to
                     // read all product streams to release inventory
-                    let command = RealisticAddItemCommand; // Simulates multi-stream access
-                    let input = AddItemInput {
+                    let command = RealisticAddItemCommand {
+                        // Simulates multi-stream access
                         order_id,
                         item: OrderItem {
                             product_id: ProductId::generate(),
@@ -786,7 +770,7 @@ fn bench_stream_discovery_workload(c: &mut Criterion) {
                     };
 
                     let result = executor
-                        .execute(&command, input, eventcore::ExecutionOptions::default())
+                        .execute(command, eventcore::ExecutionOptions::default())
                         .await;
 
                     black_box(result)

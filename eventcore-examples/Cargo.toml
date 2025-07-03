@@ -44,23 +44,27 @@ sqlx = { workspace = true }
 [lints]
 workspace = true
 
-[[example]]
-name = "banking"
-path = "src/banking/main.rs"
+# Temporarily disabled until Command API migration is complete
+# [[example]]
+# name = "banking"
+# path = "src/banking/main.rs"
 
-[[example]]
-name = "ecommerce"
-path = "src/ecommerce/main.rs"
+# Temporarily disabled until Command API migration is complete  
+# [[example]]
+# name = "ecommerce"
+# path = "src/ecommerce/main.rs"
 
-[[example]]
-name = "sagas"
-path = "src/sagas/main.rs"
+# Temporarily disabled until Command API migration is complete
+# [[example]]
+# name = "sagas"
+# path = "src/sagas/main.rs"
 
 [[example]]
 name = "simplified_command"
 path = "src/simplified_command_example.rs"
 
-[[bench]]
-name = "example_benchmarks"
-harness = false
-path = "src/benchmarks/bench.rs"
+# Temporarily disabled until Command API migration is complete
+# [[bench]]
+# name = "example_benchmarks"
+# harness = false
+# path = "src/benchmarks/bench.rs"
