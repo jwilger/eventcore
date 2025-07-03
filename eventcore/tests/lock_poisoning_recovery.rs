@@ -357,7 +357,7 @@ async fn test_command_executor_propagates_panics() {
 
     // This will panic and the panic will propagate
     let _panic_result = executor
-        .execute(&panic_command, ExecutionOptions::default())
+        .execute(panic_command, ExecutionOptions::default())
         .await;
 }
 
@@ -451,9 +451,7 @@ async fn test_system_recovery_after_panic() {
         value: "recovery-test".to_string(),
     };
 
-    let result = executor
-        .execute(&command, ExecutionOptions::default())
-        .await;
+    let result = executor.execute(command, ExecutionOptions::default()).await;
     assert!(
         result.is_ok(),
         "Should be able to execute commands after panic in another task"

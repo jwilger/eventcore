@@ -126,7 +126,7 @@ async fn main() -> Result<()> {
     )?;
 
     match executor
-        .execute(&invalid_transfer, ExecutionOptions::default())
+        .execute(invalid_transfer, ExecutionOptions::default())
         .await
     {
         Ok(_) => panic!("Transfer should have failed"),

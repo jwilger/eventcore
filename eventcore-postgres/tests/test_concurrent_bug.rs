@@ -1,8 +1,8 @@
 //! Tests for concurrent stream creation and optimistic concurrency control.
 
 use eventcore::{
-    CommandError, CommandExecutor, CommandResult, EventStore, ExecutionOptions,
-    ReadStreams, StoredEvent, StreamId, StreamResolver, StreamWrite,
+    CommandError, CommandExecutor, CommandResult, EventStore, ExecutionOptions, ReadStreams,
+    StoredEvent, StreamId, StreamResolver, StreamWrite,
 };
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
 use serde::{Deserialize, Serialize};
@@ -71,7 +71,9 @@ impl eventcore::CommandLogic for CreateCommand {
         Ok(vec![StreamWrite::new(
             &read_streams,
             self.stream_id.clone(),
-            TestEvent::Created { value: self.value.clone() },
+            TestEvent::Created {
+                value: self.value.clone(),
+            },
         )?])
     }
 }
@@ -130,7 +132,7 @@ async fn test_concurrent_creation_with_retry() {
                 value: "value1".to_string(),
             };
             let result = executor1
-                .execute(&command, ExecutionOptions::default())
+                .execute(command, ExecutionOptions::default())
                 .await;
             result
         });
@@ -147,7 +149,7 @@ async fn test_concurrent_creation_with_retry() {
                 value: "value2".to_string(),
             };
             let result = executor2
-                .execute(&command, ExecutionOptions::default())
+                .execute(command, ExecutionOptions::default())
                 .await;
             result
         });
@@ -231,7 +233,7 @@ async fn test_concurrent_creation_stress() {
                 value: format!("value{i}"),
             };
             executor_clone
-                .execute(&command, ExecutionOptions::default())
+                .execute(command, ExecutionOptions::default())
                 .await
         });
         handles.push(handle);

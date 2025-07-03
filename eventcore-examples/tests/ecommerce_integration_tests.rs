@@ -122,10 +122,7 @@ async fn test_complete_order_workflow() {
     );
 
     executor
-        .execute(
-            add_product_command,
-            ExecutionOptions::default(),
-        )
+        .execute(add_product_command, ExecutionOptions::default())
         .await
         .unwrap();
 
@@ -479,7 +476,7 @@ async fn test_order_summary_projection() {
 
     executor
         .execute(
-            &CancelOrderCommand::new(
+            CancelOrderCommand::new(
                 order_id3.clone(),
                 "Test cancellation".to_string(),
                 catalog_stream.clone(),
@@ -547,7 +544,7 @@ async fn test_business_rule_violations() {
     let product = create_test_product("DUPLICATE", 9999, "Duplicate Test").unwrap();
     executor
         .execute(
-            &AddProductCommand::new(
+            AddProductCommand::new(
                 product.clone(),
                 Quantity::new(5).unwrap(),
                 catalog_stream1.clone(),
@@ -574,7 +571,7 @@ async fn test_business_rule_violations() {
     let product2 = create_test_product("PRODUCT02", 4999, "Test Product 2").unwrap();
     executor
         .execute(
-            &AddProductCommand::new(
+            AddProductCommand::new(
                 product2.clone(),
                 Quantity::new(10).unwrap(),
                 catalog_stream2.clone(),
@@ -601,7 +598,7 @@ async fn test_business_rule_violations() {
     let product3 = create_test_product("PRODUCT03", 2999, "Low Stock Product").unwrap();
     executor
         .execute(
-            &AddProductCommand::new(
+            AddProductCommand::new(
                 product3.clone(),
                 Quantity::new(2).unwrap(),
                 catalog_stream3.clone(),
@@ -673,7 +670,7 @@ async fn test_order_cancellation_releases_inventory() {
 
     executor
         .execute(
-            &AddProductCommand::new(
+            AddProductCommand::new(
                 product.clone(),
                 Quantity::new(5).unwrap(),
                 catalog_stream.clone(),
@@ -726,7 +723,7 @@ async fn test_order_cancellation_releases_inventory() {
     // This is expected and correct behavior - PostgreSQL is properly detecting concurrent access
     match executor
         .execute(
-            &CancelOrderCommand::new(
+            CancelOrderCommand::new(
                 order_id,
                 "Customer changed mind".to_string(),
                 catalog_stream.clone(),
@@ -826,7 +823,7 @@ async fn test_concurrent_inventory_operations() {
     let product = create_test_product("CONCURRENT", 9999, "Concurrent Test Product").unwrap();
     executor
         .execute(
-            &AddProductCommand::new(
+            AddProductCommand::new(
                 product.clone(),
                 Quantity::new(5).unwrap(),
                 catalog_stream.clone(),

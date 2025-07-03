@@ -315,12 +315,11 @@ async fn test_concurrent_memory_usage() {
             tokio::spawn(async move {
                 for j in 0..10 {
                     let stream_id = StreamId::try_new(format!("concurrent-{}-{}", i, j)).unwrap();
-                    let command = CreateDataCommand;
-                    let input = CreateDataInput {
+                    let command = CreateDataCommand {
                         stream_id,
                         data_size: 1024,
                     };
-                    let _ = executor.execute(&command, input, Default::default()).await;
+                    let _ = executor.execute(command, Default::default()).await;
                 }
             })
         })
@@ -359,12 +358,11 @@ mod memory_profiling {
             // Run operations
             for i in 0..1000 {
                 let stream_id = StreamId::try_new(format!("profile-{}-{}", phase, i)).unwrap();
-                let command = CreateDataCommand;
-                let input = CreateDataInput {
+                let command = CreateDataCommand {
                     stream_id,
                     data_size: 4096,
                 };
-                let _ = executor.execute(&command, input, Default::default()).await;
+                let _ = executor.execute(command, Default::default()).await;
             }
 
             let phase_end = get_net_allocations();

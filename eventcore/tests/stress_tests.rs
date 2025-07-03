@@ -424,14 +424,13 @@ async fn stress_test_concurrent_stream_discovery() {
             let executor = Arc::new(executor.clone());
             tokio::spawn(async move {
                 // Each task will work with different streams
-                let command = IncrementCounterCommand;
-                let input = IncrementCounterInput {
+                let command = IncrementCounterCommand {
                     stream_id: StreamId::try_new(format!("dynamic-stream-{}", i)).unwrap(),
                     amount: 1,
                 };
 
                 executor
-                    .execute(&command, input, Default::default())
+                    .execute(command, Default::default())
                     .await
                     .expect("Command should succeed");
             })
@@ -464,15 +463,13 @@ async fn measure_command_latency(
     let mut latencies = Vec::with_capacity(num_operations);
 
     for i in 0..num_operations {
-        let stream_id = StreamId::try_new(format!("latency-test-{}", i)).unwrap();
-        let command = IncrementCounterCommand;
-        let input = IncrementCounterInput {
-            stream_id,
+        let command = IncrementCounterCommand {
+            stream_id: StreamId::try_new(format!("latency-test-{}", i)).unwrap(),
             amount: 1,
         };
 
         let start = Instant::now();
-        let _ = executor.execute(&command, input, Default::default()).await;
+        let _ = executor.execute(command, Default::default()).await;
         let latency = start.elapsed();
 
         latencies.push(latency.as_micros() as f64 / 1000.0); // Convert to milliseconds

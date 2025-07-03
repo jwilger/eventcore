@@ -388,7 +388,7 @@ impl eventcore::CommandLogic for FinancialTransactionCommand {
                 &read_streams,
                 stream_id,
                 RealisticEvent::TransactionCompleted {
-                    id: self.transaction_id,
+                    id: self.transaction_id.clone(),
                 },
             )?);
         }
@@ -520,14 +520,14 @@ impl eventcore::CommandLogic for EcommerceOrderCommand {
         )?);
 
         // Reserve inventory for each product
-        for (product_id, quantity) in self.products {
+        for (product_id, quantity) in &self.products {
             let product_stream = StreamId::try_new(format!("product-{}", product_id)).unwrap();
             events.push(StreamWrite::new(
                 &read_streams,
                 product_stream,
                 RealisticEvent::StockReserved {
-                    product: product_id,
-                    quantity,
+                    product: product_id.clone(),
+                    quantity: *quantity,
                     order: self.order_id.clone(),
                 },
             )?);
@@ -685,7 +685,7 @@ impl PostgresPerformanceTestRunner {
 
             let result = self
                 .executor
-                .execute(&command, ExecutionOptions::default())
+                .execute(command, ExecutionOptions::default())
                 .await;
             let duration = op_start.elapsed();
 
@@ -723,7 +723,7 @@ impl PostgresPerformanceTestRunner {
 
             let result = self
                 .executor
-                .execute(&command, ExecutionOptions::default())
+                .execute(command, ExecutionOptions::default())
                 .await;
             let duration = op_start.elapsed();
 

@@ -199,7 +199,7 @@ async fn test_command_handle_error_during_retry_is_propagated() {
     let command = FailOnRetryCommand::new(stream_id);
 
     let result = executor
-        .execute(&command, ExecutionOptions::default())
+        .execute(command.clone(), ExecutionOptions::default())
         .await;
 
     eprintln!("Final result: {result:?}");

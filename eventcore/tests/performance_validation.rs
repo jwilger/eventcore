@@ -230,7 +230,7 @@ async fn measure_single_stream_performance(
             value: i as u64,
         };
 
-        match executor.execute(&command, ExecutionOptions::default()).await {
+        match executor.execute(command, ExecutionOptions::default()).await {
             Ok(_) => {
                 let latency = op_start.elapsed();
                 latencies.push(latency.as_micros() as f64 / 1000.0);
@@ -304,7 +304,7 @@ async fn measure_multi_stream_performance(
             value: i as u64,
         };
 
-        match executor.execute(&command, ExecutionOptions::default()).await {
+        match executor.execute(command, ExecutionOptions::default()).await {
             Ok(_) => {
                 let latency = op_start.elapsed();
                 latencies.push(latency.as_micros() as f64 / 1000.0);

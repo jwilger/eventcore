@@ -19,8 +19,8 @@
 
 use async_trait::async_trait;
 use eventcore::{
-    Command, CommandError, CommandExecutor, EventStore, ExecutionOptions, ReadOptions, ReadStreams,
-    RetryConfig, StreamId, StreamResolver, StreamWrite,
+    CommandError, CommandExecutor, CommandLogic, CommandStreams, EventStore, ExecutionOptions,
+    ReadOptions, ReadStreams, RetryConfig, StreamId, StreamResolver, StreamWrite,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
@@ -113,9 +113,9 @@ enum ConcurrentTestEvent {
     },
 }
 
-impl TryFrom<&ConcurrentTestEvent> for ConcurrentTestEvent {
+impl<'a> TryFrom<&'a ConcurrentTestEvent> for ConcurrentTestEvent {
     type Error = std::convert::Infallible;
-    fn try_from(value: &ConcurrentTestEvent) -> Result<Self, Self::Error> {
+    fn try_from(value: &'a ConcurrentTestEvent) -> Result<Self, Self::Error> {
         Ok(value.clone())
     }
 }
@@ -144,25 +144,24 @@ struct ResourceState {
 /// Multi-stream counter increment command.
 /// This tests basic multi-stream atomic operations.
 #[derive(Debug, Clone)]
-struct MultiStreamIncrementCommand;
-
-#[derive(Debug, Clone)]
-struct MultiStreamIncrementInput {
+struct MultiStreamIncrementCommand {
     stream_ids: Vec<StreamId>,
     amount: u64,
     operation_id: String,
 }
 
-#[async_trait]
-impl Command for MultiStreamIncrementCommand {
-    type Input = MultiStreamIncrementInput;
-    type State = HashMap<StreamId, CounterState>;
-    type Event = ConcurrentTestEvent;
+impl CommandStreams for MultiStreamIncrementCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        input.stream_ids.clone()
+    fn read_streams(&self) -> Vec<StreamId> {
+        self.stream_ids.clone()
     }
+}
+
+#[async_trait]
+impl CommandLogic for MultiStreamIncrementCommand {
+    type State = HashMap<StreamId, CounterState>;
+    type Event = ConcurrentTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         let counter_state = state.entry(event.stream_id.clone()).or_default();
@@ -190,31 +189,27 @@ impl Command for MultiStreamIncrementCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
         // Check for duplicate operation
         for counter_state in state.values() {
-            if counter_state
-                .operation_history
-                .contains(&input.operation_id)
-            {
+            if counter_state.operation_history.contains(&self.operation_id) {
                 return Err(CommandError::BusinessRuleViolation(format!(
                     "Operation {} already executed",
-                    input.operation_id
+                    self.operation_id
                 )));
             }
         }
 
         // Create events for all streams atomically
         let mut events = Vec::new();
-        for stream_id in input.stream_ids {
+        for stream_id in &self.stream_ids {
             events.push(StreamWrite::new(
                 &read_streams,
-                stream_id,
+                stream_id.clone(),
                 ConcurrentTestEvent::CounterIncremented {
-                    amount: input.amount,
-                    operation_id: input.operation_id.clone(),
+                    amount: self.amount,
+                    operation_id: self.operation_id.clone(),
                 },
             )?);
         }
@@ -226,26 +221,25 @@ impl Command for MultiStreamIncrementCommand {
 /// Transfer command that operates on multiple streams atomically.
 /// This tests complex multi-stream transactions.
 #[derive(Debug, Clone)]
-struct TransferCommand;
-
-#[derive(Debug, Clone)]
-struct TransferInput {
+struct TransferCommand {
     from_stream: StreamId,
     to_stream: StreamId,
     amount: u64,
     transfer_id: String,
 }
 
-#[async_trait]
-impl Command for TransferCommand {
-    type Input = TransferInput;
-    type State = HashMap<StreamId, CounterState>;
-    type Event = ConcurrentTestEvent;
+impl CommandStreams for TransferCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.from_stream.clone(), input.to_stream.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.from_stream.clone(), self.to_stream.clone()]
     }
+}
+
+#[async_trait]
+impl CommandLogic for TransferCommand {
+    type State = HashMap<StreamId, CounterState>;
+    type Event = ConcurrentTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         let counter_state = state.entry(event.stream_id.clone()).or_default();
@@ -274,31 +268,30 @@ impl Command for TransferCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
         // Check if transfer already executed
-        if let Some(from_state) = state.get(&input.from_stream) {
-            if from_state.operation_history.contains(&input.transfer_id) {
+        if let Some(from_state) = state.get(&self.from_stream) {
+            if from_state.operation_history.contains(&self.transfer_id) {
                 return Err(CommandError::BusinessRuleViolation(format!(
                     "Transfer {} already executed",
-                    input.transfer_id
+                    self.transfer_id
                 )));
             }
         }
 
         // Validate source has sufficient balance
-        let from_balance = state.get(&input.from_stream).map(|s| s.value).unwrap_or(0);
-        if from_balance < input.amount {
+        let from_balance = state.get(&self.from_stream).map(|s| s.value).unwrap_or(0);
+        if from_balance < self.amount {
             return Ok(vec![StreamWrite::new(
                 &read_streams,
-                input.from_stream.clone(),
+                self.from_stream.clone(),
                 ConcurrentTestEvent::TransferFailed {
-                    from: input.from_stream.as_ref().to_string(),
-                    to: input.to_stream.as_ref().to_string(),
-                    amount: input.amount,
-                    transfer_id: input.transfer_id,
-                    reason: format!("Insufficient balance: {} < {}", from_balance, input.amount),
+                    from: self.from_stream.as_ref().to_string(),
+                    to: self.to_stream.as_ref().to_string(),
+                    amount: self.amount,
+                    transfer_id: self.transfer_id.clone(),
+                    reason: format!("Insufficient balance: {} < {}", from_balance, self.amount),
                 },
             )?]);
         }
@@ -307,28 +300,28 @@ impl Command for TransferCommand {
         Ok(vec![
             StreamWrite::new(
                 &read_streams,
-                input.from_stream.clone(),
+                self.from_stream.clone(),
                 ConcurrentTestEvent::CounterDecremented {
-                    amount: input.amount,
-                    operation_id: input.transfer_id.clone(),
+                    amount: self.amount,
+                    operation_id: self.transfer_id.clone(),
                 },
             )?,
             StreamWrite::new(
                 &read_streams,
-                input.to_stream.clone(),
+                self.to_stream.clone(),
                 ConcurrentTestEvent::CounterIncremented {
-                    amount: input.amount,
-                    operation_id: input.transfer_id.clone(),
+                    amount: self.amount,
+                    operation_id: self.transfer_id.clone(),
                 },
             )?,
             StreamWrite::new(
                 &read_streams,
-                input.from_stream.clone(),
+                self.from_stream.clone(),
                 ConcurrentTestEvent::TransferCompleted {
-                    from: input.from_stream.as_ref().to_string(),
-                    to: input.to_stream.as_ref().to_string(),
-                    amount: input.amount,
-                    transfer_id: input.transfer_id,
+                    from: self.from_stream.as_ref().to_string(),
+                    to: self.to_stream.as_ref().to_string(),
+                    amount: self.amount,
+                    transfer_id: self.transfer_id.clone(),
                 },
             )?,
         ])
@@ -340,26 +333,24 @@ impl Command for TransferCommand {
 #[derive(Debug, Clone)]
 struct AllocateResourceCommand {
     max_capacities: Arc<RwLock<HashMap<String, u32>>>,
-}
-
-#[derive(Debug, Clone)]
-struct AllocateResourceInput {
     resource_stream: StreamId,
     resource_type: String,
     amount: u32,
     holder_id: String,
 }
 
-#[async_trait]
-impl Command for AllocateResourceCommand {
-    type Input = AllocateResourceInput;
-    type State = ResourceState;
-    type Event = ConcurrentTestEvent;
+impl CommandStreams for AllocateResourceCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.resource_stream.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.resource_stream.clone()]
     }
+}
+
+#[async_trait]
+impl CommandLogic for AllocateResourceCommand {
+    type State = ResourceState;
+    type Event = ConcurrentTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         match &event.payload {
@@ -398,7 +389,6 @@ impl Command for AllocateResourceCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         mut state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
         // Get max capacity for this resource type
@@ -406,36 +396,36 @@ impl Command for AllocateResourceCommand {
             .max_capacities
             .read()
             .await
-            .get(&input.resource_type)
+            .get(&self.resource_type)
             .copied()
             .unwrap_or(100); // Default capacity
 
         state
             .capacities
-            .insert(input.resource_type.clone(), max_capacity);
+            .insert(self.resource_type.clone(), max_capacity);
 
         // Calculate current total allocation
         let current_total: u32 = state
             .allocations
-            .get(&input.resource_type)
+            .get(&self.resource_type)
             .map(|allocs| allocs.values().sum())
             .unwrap_or(0);
 
         // Check if allocation would exceed capacity
-        if current_total + input.amount > max_capacity {
+        if current_total + self.amount > max_capacity {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Resource allocation would exceed capacity: {} + {} > {}",
-                current_total, input.amount, max_capacity
+                current_total, self.amount, max_capacity
             )));
         }
 
         Ok(vec![StreamWrite::new(
             &read_streams,
-            input.resource_stream,
+            self.resource_stream.clone(),
             ConcurrentTestEvent::ResourceAllocated {
-                resource_type: input.resource_type,
-                amount: input.amount,
-                holder_id: input.holder_id,
+                resource_type: self.resource_type.clone(),
+                amount: self.amount,
+                holder_id: self.holder_id.clone(),
             },
         )?])
     }
@@ -444,25 +434,24 @@ impl Command for AllocateResourceCommand {
 /// Dynamic stream discovery command.
 /// This tests commands that dynamically add streams during execution.
 #[derive(Debug, Clone)]
-struct DynamicStreamCommand;
-
-#[derive(Debug, Clone)]
-struct DynamicStreamInput {
+struct DynamicStreamCommand {
     initial_stream: StreamId,
     entity_id: String,
     related_entities: Vec<String>,
 }
 
-#[async_trait]
-impl Command for DynamicStreamCommand {
-    type Input = DynamicStreamInput;
-    type State = EntityState;
-    type Event = ConcurrentTestEvent;
+impl CommandStreams for DynamicStreamCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.initial_stream.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.initial_stream.clone()]
     }
+}
+
+#[async_trait]
+impl CommandLogic for DynamicStreamCommand {
+    type State = EntityState;
+    type Event = ConcurrentTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         match &event.payload {
@@ -491,12 +480,11 @@ impl Command for DynamicStreamCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         stream_resolver: &mut StreamResolver,
     ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
         // Check if any related entities exist and need to be read
         let mut need_discovery = false;
-        for entity_id in &input.related_entities {
+        for entity_id in &self.related_entities {
             if state.entities.contains_key(entity_id) {
                 need_discovery = true;
                 let stream_id = StreamId::try_new(format!("entity-{}", entity_id))
@@ -514,10 +502,10 @@ impl Command for DynamicStreamCommand {
         // All necessary streams have been read, execute the operation
         let events = vec![StreamWrite::new(
             &read_streams,
-            input.initial_stream,
+            self.initial_stream.clone(),
             ConcurrentTestEvent::EntityCreated {
-                entity_id: input.entity_id,
-                initial_value: input.related_entities.len() as u64,
+                entity_id: self.entity_id.clone(),
+                initial_value: self.related_entities.len() as u64,
             },
         )?];
 
@@ -531,7 +519,7 @@ async fn setup_test_streams(
     stream_values: Vec<(StreamId, u64)>,
 ) {
     for (stream_id, initial_value) in stream_values {
-        let input = MultiStreamIncrementInput {
+        let command = MultiStreamIncrementCommand {
             stream_ids: vec![stream_id],
             amount: initial_value,
             operation_id: format!(
@@ -541,11 +529,7 @@ async fn setup_test_streams(
         };
 
         executor
-            .execute(
-                &MultiStreamIncrementCommand,
-                input,
-                ExecutionOptions::default(),
-            )
+            .execute(command, ExecutionOptions::default())
             .await
             .unwrap();
     }
@@ -586,8 +570,7 @@ async fn test_concurrent_multi_stream_operations() {
         barrier1.wait().await;
         executor1
             .execute(
-                &MultiStreamIncrementCommand,
-                MultiStreamIncrementInput {
+                MultiStreamIncrementCommand {
                     stream_ids: vec![stream_a1, stream_b1],
                     amount: 10,
                     operation_id: "op1".to_string(),
@@ -607,8 +590,7 @@ async fn test_concurrent_multi_stream_operations() {
         barrier2.wait().await;
         executor2
             .execute(
-                &MultiStreamIncrementCommand,
-                MultiStreamIncrementInput {
+                MultiStreamIncrementCommand {
                     stream_ids: vec![stream_b2, stream_c2],
                     amount: 20,
                     operation_id: "op2".to_string(),
@@ -628,8 +610,7 @@ async fn test_concurrent_multi_stream_operations() {
         barrier3.wait().await;
         executor3
             .execute(
-                &MultiStreamIncrementCommand,
-                MultiStreamIncrementInput {
+                MultiStreamIncrementCommand {
                     stream_ids: vec![stream_a3, stream_c3],
                     amount: 30,
                     operation_id: "op3".to_string(),
@@ -721,8 +702,7 @@ async fn test_stream_isolation() {
 
             let result = executor
                 .execute(
-                    &MultiStreamIncrementCommand,
-                    MultiStreamIncrementInput {
+                    MultiStreamIncrementCommand {
                         stream_ids: streams,
                         amount: 10,
                         operation_id: format!("isolated-op-{i}"),
@@ -784,8 +764,7 @@ async fn test_high_contention_optimistic_concurrency() {
 
             let result = executor
                 .execute(
-                    &MultiStreamIncrementCommand,
-                    MultiStreamIncrementInput {
+                    MultiStreamIncrementCommand {
                         stream_ids: vec![stream],
                         amount: 1,
                         operation_id: format!("contention-op-{i}"),
@@ -838,9 +817,13 @@ async fn test_high_contention_optimistic_concurrency() {
         .unwrap();
 
     let mut state = HashMap::new();
-    let command = MultiStreamIncrementCommand;
+    let command = MultiStreamIncrementCommand {
+        stream_ids: vec![],
+        amount: 0,
+        operation_id: String::new(),
+    };
     for event in stream_data.events() {
-        command.apply(&mut state, event);
+        CommandLogic::apply(&command, &mut state, event);
     }
 
     // Final value should be initial value plus successful increments
@@ -887,8 +870,7 @@ async fn test_concurrent_transfers_atomicity() {
 
             let result = executor
                 .execute(
-                    &TransferCommand,
-                    TransferInput {
+                    TransferCommand {
                         from_stream: accounts[from_idx].clone(),
                         to_stream: accounts[to_idx].clone(),
                         amount: 10,
@@ -927,10 +909,15 @@ async fn test_concurrent_transfers_atomicity() {
 
     let mut total_balance = 0u64;
     let mut state = HashMap::new();
-    let command = TransferCommand;
+    let command = TransferCommand {
+        from_stream: StreamId::try_new("dummy").unwrap(),
+        to_stream: StreamId::try_new("dummy").unwrap(),
+        amount: 0,
+        transfer_id: String::new(),
+    };
 
     for event in stream_data.events() {
-        command.apply(&mut state, event);
+        CommandLogic::apply(&command, &mut state, event);
     }
 
     for (_, counter_state) in state {
@@ -977,14 +964,10 @@ async fn test_concurrent_resource_allocation() {
                 _ => unreachable!(),
             };
 
-            let command = AllocateResourceCommand {
-                max_capacities: capacities,
-            };
-
             executor
                 .execute(
-                    &command,
-                    AllocateResourceInput {
+                    AllocateResourceCommand {
+                        max_capacities: capacities,
                         resource_stream: stream,
                         resource_type: resource_type.to_string(),
                         amount,
@@ -1017,17 +1000,21 @@ async fn test_concurrent_resource_allocation() {
     // Verify allocations don't exceed capacity
     let stream_data = executor
         .event_store()
-        .read_streams(&[resource_stream], &ReadOptions::default())
+        .read_streams(&[resource_stream.clone()], &ReadOptions::default())
         .await
         .unwrap();
 
     let mut state = ResourceState::default();
     let command = AllocateResourceCommand {
         max_capacities: max_capacities.clone(),
+        resource_stream: resource_stream.clone(),
+        resource_type: String::new(),
+        amount: 0,
+        holder_id: String::new(),
     };
 
     for event in stream_data.events() {
-        command.apply(&mut state, event);
+        CommandLogic::apply(&command, &mut state, event);
     }
 
     // Check CPU allocations
@@ -1066,8 +1053,7 @@ async fn test_concurrent_dynamic_stream_discovery() {
     for i in 0..5 {
         executor
             .execute(
-                &DynamicStreamCommand,
-                DynamicStreamInput {
+                DynamicStreamCommand {
                     initial_stream: catalog_stream.clone(),
                     entity_id: format!("pre-entity-{i}"),
                     related_entities: vec![],
@@ -1099,8 +1085,7 @@ async fn test_concurrent_dynamic_stream_discovery() {
 
             executor
                 .execute(
-                    &DynamicStreamCommand,
-                    DynamicStreamInput {
+                    DynamicStreamCommand {
                         initial_stream: catalog,
                         entity_id: format!("new-entity-{i}"),
                         related_entities: related,
@@ -1154,8 +1139,7 @@ async fn test_retry_mechanism_under_contention() {
 
             let result = executor
                 .execute(
-                    &MultiStreamIncrementCommand,
-                    MultiStreamIncrementInput {
+                    MultiStreamIncrementCommand {
                         stream_ids: vec![stream],
                         amount: 1,
                         operation_id: format!("retry-op-{i}"),
@@ -1236,8 +1220,7 @@ async fn test_complex_transaction_rollback_scenarios() {
         barrier1.wait().await;
         executor1
             .execute(
-                &TransferCommand,
-                TransferInput {
+                TransferCommand {
                     from_stream: a1,
                     to_stream: b1,
                     amount: 60,
@@ -1258,8 +1241,7 @@ async fn test_complex_transaction_rollback_scenarios() {
         barrier2.wait().await;
         executor2
             .execute(
-                &TransferCommand,
-                TransferInput {
+                TransferCommand {
                     from_stream: b2,
                     to_stream: c2,
                     amount: 50,
@@ -1280,8 +1262,7 @@ async fn test_complex_transaction_rollback_scenarios() {
         barrier3.wait().await;
         executor3
             .execute(
-                &TransferCommand,
-                TransferInput {
+                TransferCommand {
                     from_stream: c3,
                     to_stream: a3,
                     amount: 30,
@@ -1310,11 +1291,16 @@ async fn test_complex_transaction_rollback_scenarios() {
         .await
         .unwrap();
 
-    let mut state = HashMap::new();
-    let command = TransferCommand;
+    let mut state: HashMap<StreamId, CounterState> = HashMap::new();
+    let command = TransferCommand {
+        from_stream: StreamId::try_new("dummy").unwrap(),
+        to_stream: StreamId::try_new("dummy").unwrap(),
+        amount: 0,
+        transfer_id: String::new(),
+    };
 
     for event in stream_data.events() {
-        command.apply(&mut state, event);
+        CommandLogic::apply(&command, &mut state, event);
     }
 
     let total_balance: u64 = state.values().map(|s| s.value).sum();
@@ -1353,8 +1339,7 @@ async fn test_concurrent_performance_characteristics() {
 
                 executor
                     .execute(
-                        &MultiStreamIncrementCommand,
-                        MultiStreamIncrementInput {
+                        MultiStreamIncrementCommand {
                             stream_ids: vec![stream],
                             amount: 1,
                             operation_id: format!("perf-op-{concurrency}-{i}"),

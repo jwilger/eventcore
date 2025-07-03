@@ -352,14 +352,14 @@ impl<S: EventStore<Event = PerfRegressionEvent> + Clone + 'static> PerformanceTe
         for i in 0..num_operations {
             let op_start = Instant::now();
 
-            let command = StreamDiscoveryCommand { 
+            let command = StreamDiscoveryCommand {
                 iterations: 3,
                 base_stream: StreamId::try_new(format!("discovery-base-{}", i)).unwrap(),
                 num_streams: 5,
             };
 
             executor
-                .execute(&command, ExecutionOptions::default())
+                .execute(command, ExecutionOptions::default())
                 .await?;
 
             let latency = op_start.elapsed();
@@ -435,7 +435,7 @@ impl<S: EventStore<Event = PerfRegressionEvent> + Clone + 'static> PerformanceTe
             };
 
             executor
-                .execute(&command, ExecutionOptions::default())
+                .execute(command, ExecutionOptions::default())
                 .await?;
 
             let latency = op_start.elapsed();
@@ -492,7 +492,7 @@ impl<S: EventStore<Event = PerfRegressionEvent> + Clone + 'static> PerformanceTe
                 for op_id in 0..ops_per_worker {
                     let op_start = Instant::now();
 
-                    let command = StreamDiscoveryCommand { 
+                    let command = StreamDiscoveryCommand {
                         iterations: 1,
                         base_stream: StreamId::try_new(format!(
                             "concurrent-{}-{}",
@@ -503,7 +503,7 @@ impl<S: EventStore<Event = PerfRegressionEvent> + Clone + 'static> PerformanceTe
                     };
 
                     if executor
-                        .execute(&command, ExecutionOptions::default())
+                        .execute(command, ExecutionOptions::default())
                         .await
                         .is_ok()
                     {
@@ -586,7 +586,7 @@ impl<S: EventStore<Event = PerfRegressionEvent> + Clone + 'static> PerformanceTe
                 streams: vec![stream_id.clone()],
             };
             executor
-                .execute(&command, ExecutionOptions::default())
+                .execute(command, ExecutionOptions::default())
                 .await?;
 
             cold_latencies.push(op_start.elapsed().as_micros() as f64 / 1000.0);
@@ -597,7 +597,7 @@ impl<S: EventStore<Event = PerfRegressionEvent> + Clone + 'static> PerformanceTe
                 streams: vec![stream_id],
             };
             executor
-                .execute(&command, ExecutionOptions::default())
+                .execute(command, ExecutionOptions::default())
                 .await?;
 
             warm_latencies.push(op_start.elapsed().as_micros() as f64 / 1000.0);

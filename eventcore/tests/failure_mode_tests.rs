@@ -3,6 +3,7 @@
 //! This module tests `EventCore`'s resilience under various failure conditions
 //! using the chaos testing framework to inject controlled failures.
 
+#![cfg(feature = "testing")]
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::cognitive_complexity)]
 #![allow(clippy::unnecessary_cast)]
@@ -20,8 +21,8 @@ use eventcore::testing::chaos::{
     ChaosEventStore, ChaosScenarioBuilder, FailurePolicy, FailureType, TargetOperations,
 };
 use eventcore::{
-    Command, CommandError, CommandExecutor, EventStore, ExecutionOptions, ReadOptions, ReadStreams,
-    RetryConfig, StreamId, StreamResolver, StreamWrite,
+    CommandError, CommandExecutor, CommandLogic, CommandStreams, EventStore, ExecutionOptions,
+    ReadOptions, ReadStreams, RetryConfig, StreamId, StreamResolver, StreamWrite,
 };
 use eventcore_memory::InMemoryEventStore;
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
@@ -68,24 +69,23 @@ struct TestState {
 
 /// Test command for failure scenarios.
 #[derive(Debug, Clone)]
-struct TestCommand;
-
-#[derive(Debug, Clone)]
-struct TestInput {
+struct TestCommand {
     stream_id: StreamId,
     new_value: u64,
 }
 
-#[async_trait]
-impl Command for TestCommand {
-    type Input = TestInput;
-    type State = TestState;
-    type Event = FailureTestEvent;
+impl CommandStreams for TestCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.stream_id.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.stream_id.clone()]
     }
+}
+
+#[async_trait]
+impl CommandLogic for TestCommand {
+    type State = TestState;
+    type Event = FailureTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         match &event.payload {
@@ -99,14 +99,13 @@ impl Command for TestCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
         Ok(vec![StreamWrite::new(
             &read_streams,
-            input.stream_id,
+            self.stream_id.clone(),
             FailureTestEvent::Updated {
-                new_value: input.new_value,
+                new_value: self.new_value,
             },
         )?])
     }
@@ -114,25 +113,24 @@ impl Command for TestCommand {
 
 /// Multi-stream transfer command for testing atomicity under failures.
 #[derive(Debug, Clone)]
-struct TransferCommand;
-
-#[derive(Debug, Clone)]
-struct TransferInput {
+struct TransferCommand {
     from_stream: StreamId,
     to_stream: StreamId,
     amount: u64,
 }
 
-#[async_trait]
-impl Command for TransferCommand {
-    type Input = TransferInput;
-    type State = HashMap<StreamId, TestState>;
-    type Event = FailureTestEvent;
+impl CommandStreams for TransferCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.from_stream.clone(), input.to_stream.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.from_stream.clone(), self.to_stream.clone()]
     }
+}
+
+#[async_trait]
+impl CommandLogic for TransferCommand {
+    type State = HashMap<StreamId, TestState>;
+    type Event = FailureTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         let stream_state = state.entry(event.stream_id.clone()).or_default();
@@ -149,12 +147,11 @@ impl Command for TransferCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
         // Check source has sufficient balance
-        let from_balance = state.get(&input.from_stream).map(|s| s.value).unwrap_or(0);
-        if from_balance < input.amount {
+        let from_balance = state.get(&self.from_stream).map(|s| s.value).unwrap_or(0);
+        if from_balance < self.amount {
             return Err(CommandError::BusinessRuleViolation(
                 "Insufficient balance".to_string(),
             ));
@@ -163,20 +160,20 @@ impl Command for TransferCommand {
         Ok(vec![
             StreamWrite::new(
                 &read_streams,
-                input.from_stream.clone(),
+                self.from_stream.clone(),
                 FailureTestEvent::Transferred {
-                    from: input.from_stream.as_ref().to_string(),
-                    to: input.to_stream.as_ref().to_string(),
-                    amount: input.amount,
+                    from: self.from_stream.as_ref().to_string(),
+                    to: self.to_stream.as_ref().to_string(),
+                    amount: self.amount,
                 },
             )?,
             StreamWrite::new(
                 &read_streams,
-                input.to_stream.clone(),
+                self.to_stream.clone(),
                 FailureTestEvent::Transferred {
-                    from: input.from_stream.as_ref().to_string(),
-                    to: input.to_stream.as_ref().to_string(),
-                    amount: input.amount,
+                    from: self.from_stream.as_ref().to_string(),
+                    to: self.to_stream.as_ref().to_string(),
+                    amount: self.amount,
                 },
             )?,
         ])
@@ -211,10 +208,8 @@ async fn test_database_connection_failures() {
         let recovered = recovered_count.clone();
 
         handles.push(tokio::spawn(async move {
-            let stream_id = StreamId::try_new(format!("test-stream-{}", i % 10)).unwrap();
-            let command = TestCommand;
-            let input = TestInput {
-                stream_id,
+            let command = TestCommand {
+                stream_id: StreamId::try_new(format!("test-stream-{}", i % 10)).unwrap(),
                 new_value: i as u64,
             };
 
@@ -228,8 +223,7 @@ async fn test_database_connection_failures() {
 
             let result = executor
                 .execute(
-                    &command,
-                    input.clone(),
+                    command.clone(),
                     ExecutionOptions::default().with_retry_config(retry_config),
                 )
                 .await;
@@ -240,9 +234,7 @@ async fn test_database_connection_failures() {
                 }
                 Err(CommandError::EventStore(_)) => {
                     // Try once more to simulate recovery
-                    let retry_result = executor
-                        .execute(&command, input, ExecutionOptions::default())
-                        .await;
+                    let retry_result = executor.execute(command, ExecutionOptions::default()).await;
 
                     if retry_result.is_ok() {
                         recovered.fetch_add(1, Ordering::Relaxed);
@@ -321,8 +313,7 @@ async fn test_concurrent_execution_with_failures() {
     for stream in &streams {
         executor
             .execute(
-                &TestCommand,
-                TestInput {
+                TestCommand {
                     stream_id: stream.clone(),
                     new_value: 100,
                 },
@@ -345,15 +336,12 @@ async fn test_concurrent_execution_with_failures() {
         handles.push(tokio::spawn(async move {
             barrier.wait().await;
 
-            let command = TestCommand;
-            let input = TestInput {
+            let command = TestCommand {
                 stream_id: stream,
                 new_value: 100 + i as u64,
             };
 
-            executor
-                .execute(&command, input, ExecutionOptions::default())
-                .await
+            executor.execute(command, ExecutionOptions::default()).await
         }));
     }
 
@@ -425,8 +413,7 @@ async fn test_timeout_scenarios() {
     chaos_store.set_enabled(false);
     executor
         .execute(
-            &TestCommand,
-            TestInput {
+            TestCommand {
                 stream_id: stream_id.clone(),
                 new_value: 42,
             },
@@ -443,8 +430,7 @@ async fn test_timeout_scenarios() {
     for i in 0..10 {
         let result = executor
             .execute(
-                &TestCommand,
-                TestInput {
+                TestCommand {
                     stream_id: stream_id.clone(),
                     new_value: 100 + i,
                 },
@@ -499,8 +485,7 @@ async fn test_network_partition_scenarios() {
     for stream in partition_a.iter().chain(partition_b.iter()) {
         let _ = executor
             .execute(
-                &TestCommand,
-                TestInput {
+                TestCommand {
                     stream_id: stream.clone(),
                     new_value: 1000,
                 },
@@ -517,8 +502,7 @@ async fn test_network_partition_scenarios() {
     for stream in &partition_a {
         let result = executor
             .execute(
-                &TestCommand,
-                TestInput {
+                TestCommand {
                     stream_id: stream.clone(),
                     new_value: 2000,
                 },
@@ -535,8 +519,7 @@ async fn test_network_partition_scenarios() {
     for stream in &partition_b {
         let result = executor
             .execute(
-                &TestCommand,
-                TestInput {
+                TestCommand {
                     stream_id: stream.clone(),
                     new_value: 2000,
                 },
@@ -585,8 +568,7 @@ async fn test_multi_stream_atomicity_with_failures() {
     for account in &[&account_a, &account_b] {
         executor
             .execute(
-                &TestCommand,
-                TestInput {
+                TestCommand {
                     stream_id: (*account).clone(),
                     new_value: 1000,
                 },
@@ -604,8 +586,7 @@ async fn test_multi_stream_atomicity_with_failures() {
     for _ in 0..20 {
         let result = executor
             .execute(
-                &TransferCommand,
-                TransferInput {
+                TransferCommand {
                     from_stream: account_a.clone(),
                     to_stream: account_b.clone(),
                     amount: 10,
@@ -667,8 +648,7 @@ async fn test_cascading_failure_prevention() {
     for i in 0..10 {
         let result = executor
             .execute(
-                &TestCommand,
-                TestInput {
+                TestCommand {
                     stream_id: stream_id.clone(),
                     new_value: i,
                 },
@@ -690,8 +670,7 @@ async fn test_cascading_failure_prevention() {
     for i in 10..20 {
         let result = executor_with_failures
             .execute(
-                &TestCommand,
-                TestInput {
+                TestCommand {
                     stream_id: stream_id.clone(),
                     new_value: i,
                 },
@@ -716,8 +695,7 @@ async fn test_cascading_failure_prevention() {
     for i in 20..30 {
         let result = executor
             .execute(
-                &TestCommand,
-                TestInput {
+                TestCommand {
                     stream_id: stream_id.clone(),
                     new_value: i,
                 },
@@ -757,8 +735,7 @@ async fn test_high_latency_degradation() {
         let start = std::time::Instant::now();
         let _ = executor
             .execute(
-                &TestCommand,
-                TestInput {
+                TestCommand {
                     stream_id: stream_id.clone(),
                     new_value: i,
                 },
@@ -826,8 +803,7 @@ async fn test_postgres_failure_scenarios() {
     for i in 0..50 {
         let result = executor
             .execute(
-                &TestCommand,
-                TestInput {
+                TestCommand {
                     stream_id: stream_id.clone(),
                     new_value: i,
                 },

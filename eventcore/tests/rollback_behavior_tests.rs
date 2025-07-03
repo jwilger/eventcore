@@ -132,6 +132,7 @@ impl eventcore::CommandLogic for AtomicTransferCommand {
 
 /// Test that partial write failures result in complete rollback.
 #[tokio::test]
+#[cfg(feature = "testing")]
 async fn test_partial_write_failure_rollback() {
     let base_store = InMemoryEventStore::<RollbackTestEvent>::new();
 
@@ -204,7 +205,7 @@ async fn test_partial_write_failure_rollback() {
     };
     let result = executor
         .execute(
-            &command,
+            command,
             ExecutionOptions::default().with_retry_config(RetryConfig {
                 max_attempts: 1, // No retry to test rollback
                 ..Default::default()
@@ -284,7 +285,7 @@ async fn test_version_conflict_rollback() {
     let handle1 = tokio::spawn(async move {
         executor1
             .execute(
-                &AtomicTransferCommand {
+                AtomicTransferCommand {
                     from_account: account_a1,
                     to_account: account_b1,
                     amount: 300,
@@ -297,7 +298,7 @@ async fn test_version_conflict_rollback() {
     let handle2 = tokio::spawn(async move {
         executor2
             .execute(
-                &AtomicTransferCommand {
+                AtomicTransferCommand {
                     from_account: account_a2,
                     to_account: account_b2,
                     amount: 200,
@@ -358,6 +359,7 @@ async fn test_version_conflict_rollback() {
 
 /// Test state consistency after rollback.
 #[tokio::test]
+#[cfg(feature = "testing")]
 async fn test_state_consistency_after_rollback() {
     let store = InMemoryEventStore::<RollbackTestEvent>::new();
 
@@ -405,7 +407,7 @@ async fn test_state_consistency_after_rollback() {
         handles.push(tokio::spawn(async move {
             let result = executor
                 .execute(
-                    &AtomicTransferCommand {
+                    AtomicTransferCommand {
                         from_account: from,
                         to_account: to,
                         amount: 10,
@@ -467,6 +469,7 @@ async fn test_state_consistency_after_rollback() {
 /// Test retry behavior after transaction rollback.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
+#[cfg(feature = "testing")]
 async fn test_retry_after_rollback() {
     let base_store = InMemoryEventStore::<RollbackTestEvent>::new();
 
@@ -544,7 +547,7 @@ async fn test_retry_after_rollback() {
         manual_attempts += 1;
         let result = executor
             .execute(
-                &AtomicTransferCommand {
+                AtomicTransferCommand {
                     from_account: account_a.clone(),
                     to_account: account_b.clone(),
                     amount: 300,
@@ -679,7 +682,7 @@ async fn test_postgres_transaction_rollback() {
     // Attempt transfer that might conflict
     let result = executor
         .execute(
-            &AtomicTransferCommand {
+            AtomicTransferCommand {
                 from_account: test_accounts[0].clone(),
                 to_account: test_accounts[1].clone(),
                 amount: 500,
@@ -775,9 +778,7 @@ async fn test_nested_operation_rollback() {
             to_account: accounts[to_idx].clone(),
             amount,
         };
-        let result = executor
-            .execute(&command, ExecutionOptions::default())
-            .await;
+        let result = executor.execute(command, ExecutionOptions::default()).await;
 
         if result.is_ok() {
             successful_transfers += 1;

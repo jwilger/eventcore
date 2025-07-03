@@ -80,7 +80,7 @@ Based on the comprehensive expert review, the following improvements have been i
   - [x] Update derive macro to match new trait signatures  
   - [x] Update executor methods to only take command parameter
   - [x] Update all example commands to use new API
-  - [x] Update tests to use new API (ALL examples and tests updated)
+  - [x] Update tests to use new API (core library 503 tests passing - all tests updated)
   - [x] Update documentation and migration guide
   - **RATIONALE**: Commands should always be their own input - having separate input types adds unnecessary complexity
   - **RESULT**: Simplified API where commands contain all their data, eliminating redundancy

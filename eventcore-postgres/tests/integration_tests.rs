@@ -202,9 +202,7 @@ async fn test_concurrent_command_execution() {
                 stream_id,
                 amount: i,
             };
-            executor
-                .execute(&command, ExecutionOptions::default())
-                .await
+            executor.execute(command, ExecutionOptions::default()).await
         });
 
         handles.push(handle);
@@ -274,7 +272,7 @@ async fn test_multi_stream_atomicity() {
         amount: 100,
     };
     executor
-        .execute(&increment_cmd, ExecutionOptions::default())
+        .execute(increment_cmd, ExecutionOptions::default())
         .await
         .unwrap();
 
@@ -285,7 +283,7 @@ async fn test_multi_stream_atomicity() {
         amount: 50,
     };
     let result = executor
-        .execute(&transfer_cmd, ExecutionOptions::default())
+        .execute(transfer_cmd, ExecutionOptions::default())
         .await;
 
     assert!(result.is_ok(), "Transfer should succeed");
@@ -359,7 +357,7 @@ async fn test_multi_stream_atomicity() {
         amount: 100, // More than available
     };
     let failing_result = executor
-        .execute(&failing_transfer_cmd, ExecutionOptions::default())
+        .execute(failing_transfer_cmd, ExecutionOptions::default())
         .await;
 
     assert!(
@@ -426,9 +424,7 @@ async fn test_transaction_isolation() {
 
         let handle = tokio::spawn(async move {
             let command = IncrementCounterCommand { stream_id, amount };
-            executor
-                .execute(&command, ExecutionOptions::default())
-                .await
+            executor.execute(command, ExecutionOptions::default()).await
         });
 
         handles.push(handle);
@@ -450,9 +446,7 @@ async fn test_transaction_isolation() {
                 stream_id,
                 amount: 5,
             };
-            executor
-                .execute(&command, ExecutionOptions::default())
-                .await
+            executor.execute(command, ExecutionOptions::default()).await
         });
 
         concurrent_handles.push(handle);
@@ -470,9 +464,7 @@ async fn test_transaction_isolation() {
                 to_stream,
                 amount: 5,
             };
-            executor
-                .execute(&command, ExecutionOptions::default())
-                .await
+            executor.execute(command, ExecutionOptions::default()).await
         });
 
         concurrent_handles.push(handle);
@@ -805,7 +797,7 @@ async fn test_basic_performance() {
             amount: i,
         };
         executor
-            .execute(&command, ExecutionOptions::default())
+            .execute(command, ExecutionOptions::default())
             .await
             .unwrap();
     }

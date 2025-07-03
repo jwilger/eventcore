@@ -1,8 +1,8 @@
 //! Tests for investigating duplicate event ID behavior in concurrent scenarios.
 
 use eventcore::{
-    Command, CommandError, CommandExecutor, CommandResult, ExecutionOptions, ReadStreams,
-    StoredEvent, StreamId, StreamResolver, StreamWrite,
+    CommandError, CommandExecutor, CommandLogic, CommandResult, CommandStreams, ExecutionOptions,
+    ReadStreams, StoredEvent, StreamId, StreamResolver, StreamWrite,
 };
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
 use serde::{Deserialize, Serialize};
@@ -27,25 +27,24 @@ struct TestState {
     current_value: u32,
 }
 
-#[derive(Debug)]
-struct SetValueCommand;
-
 #[derive(Debug, Clone)]
-struct SetValueInput {
+struct SetValueCommand {
     stream_id: StreamId,
     value: u32,
 }
 
-#[async_trait::async_trait]
-impl Command for SetValueCommand {
-    type Input = SetValueInput;
-    type State = TestState;
-    type Event = TestEvent;
+impl CommandStreams for SetValueCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.stream_id.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.stream_id.clone()]
     }
+}
+
+#[async_trait::async_trait]
+impl CommandLogic for SetValueCommand {
+    type State = TestState;
+    type Event = TestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -57,7 +56,6 @@ impl Command for SetValueCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
-        input: Self::Input,
         _resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Add a small delay to increase chance of concurrent writes
@@ -65,8 +63,8 @@ impl Command for SetValueCommand {
 
         Ok(vec![StreamWrite::new(
             &read_streams,
-            input.stream_id,
-            TestEvent::ValueSet { value: input.value },
+            self.stream_id.clone(),
+            TestEvent::ValueSet { value: self.value },
         )?])
     }
 }
@@ -114,8 +112,7 @@ async fn test_duplicate_event_id_investigation() {
             println!("Operation {i} starting");
             let result = executor
                 .execute(
-                    &SetValueCommand,
-                    SetValueInput { stream_id, value },
+                    SetValueCommand { stream_id, value },
                     ExecutionOptions::default(),
                 )
                 .await;

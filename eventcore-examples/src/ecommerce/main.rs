@@ -320,7 +320,7 @@ async fn main() -> Result<()> {
     info!("Testing duplicate product addition (should fail)");
     if let Err(e) = executor
         .execute(
-            &AddProductCommand,
+            AddProductCommand,
             AddProductInput::new(laptop.clone(), Quantity::new(5)?, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
@@ -342,7 +342,7 @@ async fn main() -> Result<()> {
 
     executor
         .execute(
-            &CreateOrderCommand,
+            CreateOrderCommand,
             CreateOrderInput::new(big_order_id.clone(), big_customer),
             ExecutionOptions::default(),
         )
@@ -356,7 +356,7 @@ async fn main() -> Result<()> {
 
     if let Err(e) = executor
         .execute(
-            &AddItemToOrderCommand,
+            AddItemToOrderCommand,
             AddItemToOrderInput::new(big_order_id, big_laptop_item, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
@@ -378,7 +378,7 @@ async fn main() -> Result<()> {
 
     executor
         .execute(
-            &CreateOrderCommand,
+            CreateOrderCommand,
             CreateOrderInput::new(empty_order_id.clone(), empty_customer),
             ExecutionOptions::default(),
         )
@@ -386,7 +386,7 @@ async fn main() -> Result<()> {
 
     if let Err(e) = executor
         .execute(
-            &PlaceOrderCommand,
+            PlaceOrderCommand,
             PlaceOrderInput::new(empty_order_id, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
