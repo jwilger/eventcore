@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use eventcore::{
-    Command, CommandError, CommandExecutor, CommandResult, ExecutionOptions, ReadStreams,
-    StoredEvent, StreamId, StreamResolver, StreamWrite,
+    CommandError, CommandExecutor, CommandLogic, CommandResult, CommandStreams, ExecutionOptions,
+    ReadStreams, StoredEvent, StreamId, StreamResolver, StreamWrite,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
@@ -37,36 +37,37 @@ struct TestState {
 }
 
 /// A command that tracks how many times it's executed
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TestCommand {
     execution_count: Arc<AtomicUsize>,
-}
-
-impl TestCommand {
-    fn new() -> Self {
-        Self {
-            execution_count: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct TestInput {
     stream_id: StreamId,
     command_id: usize,
     should_create: bool,
 }
 
-#[async_trait::async_trait]
-impl Command for TestCommand {
-    type Input = TestInput;
-    type State = TestState;
-    type Event = TestEvent;
+impl TestCommand {
+    fn new(stream_id: StreamId, command_id: usize, should_create: bool) -> Self {
+        Self {
+            execution_count: Arc::new(AtomicUsize::new(0)),
+            stream_id,
+            command_id,
+            should_create,
+        }
+    }
+}
+
+impl CommandStreams for TestCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.stream_id.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.stream_id.clone()]
     }
+}
+
+#[async_trait::async_trait]
+impl CommandLogic for TestCommand {
+    type State = TestState;
+    type Event = TestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -84,18 +85,17 @@ impl Command for TestCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Increment execution count every time handle is called
         let exec_count = self.execution_count.fetch_add(1, Ordering::SeqCst) + 1;
         eprintln!(
             "TestCommand execution #{} for command_id={}, state.exists={}, state.creation_id={:?}",
-            exec_count, input.command_id, state.exists, state.creation_id
+            exec_count, self.command_id, state.exists, state.creation_id
         );
 
         // Business logic: only allow creation if stream doesn't exist
-        if input.should_create {
+        if self.should_create {
             if state.exists {
                 // This is the key check - if we see the stream exists, we should fail
                 eprintln!("TestCommand: Stream exists, failing with BusinessRuleViolation");
@@ -107,9 +107,9 @@ impl Command for TestCommand {
             eprintln!("TestCommand: Stream doesn't exist, creating event");
             Ok(vec![StreamWrite::new(
                 &read_streams,
-                input.stream_id,
+                self.stream_id.clone(),
                 TestEvent::Created {
-                    id: input.command_id,
+                    id: self.command_id,
                 },
             )?])
         } else {
@@ -117,9 +117,9 @@ impl Command for TestCommand {
             eprintln!("TestCommand: Updating event");
             Ok(vec![StreamWrite::new(
                 &read_streams,
-                input.stream_id,
+                self.stream_id.clone(),
                 TestEvent::Updated {
-                    id: input.command_id,
+                    id: self.command_id,
                 },
             )?])
         }
@@ -139,34 +139,18 @@ async fn test_concurrent_creation_business_rule() {
     let executor1 = executor.clone();
     let stream_id1 = stream_id.clone();
     let handle1 = tokio::spawn(async move {
-        let command = TestCommand::new();
+        let command = TestCommand::new(stream_id1, 100, true);
         executor1
-            .execute(
-                &command,
-                TestInput {
-                    stream_id: stream_id1,
-                    command_id: 100,
-                    should_create: true,
-                },
-                ExecutionOptions::default(),
-            )
+            .execute(command, ExecutionOptions::default())
             .await
     });
 
     let executor2 = executor.clone();
     let stream_id2 = stream_id.clone();
     let handle2 = tokio::spawn(async move {
-        let command = TestCommand::new();
+        let command = TestCommand::new(stream_id2, 200, true);
         executor2
-            .execute(
-                &command,
-                TestInput {
-                    stream_id: stream_id2,
-                    command_id: 200,
-                    should_create: true,
-                },
-                ExecutionOptions::default(),
-            )
+            .execute(command, ExecutionOptions::default())
             .await
     });
 

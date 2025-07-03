@@ -78,22 +78,19 @@ async fn main() -> Result<()> {
     // Add products to catalog
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(laptop.clone(), Quantity::new(5)?, catalog_stream.clone()),
+            AddProductCommand::new(laptop.clone(), Quantity::new(5)?, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await?;
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(mouse.clone(), Quantity::new(25)?, catalog_stream.clone()),
+            AddProductCommand::new(mouse.clone(), Quantity::new(25)?, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await?;
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(keyboard.clone(), Quantity::new(15)?, catalog_stream.clone()),
+            AddProductCommand::new(keyboard.clone(), Quantity::new(15)?, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await?;
@@ -116,8 +113,7 @@ async fn main() -> Result<()> {
 
     executor
         .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(order_id.clone(), customer.clone()),
+            CreateOrderCommand::new(order_id.clone(), customer.clone()),
             ExecutionOptions::default(),
         )
         .await?;
@@ -131,15 +127,13 @@ async fn main() -> Result<()> {
 
     executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id.clone(), laptop_item, catalog_stream.clone()),
+            AddItemToOrderCommand::new(order_id.clone(), laptop_item, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await?;
     executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id.clone(), mouse_item, catalog_stream.clone()),
+            AddItemToOrderCommand::new(order_id.clone(), mouse_item, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await?;
@@ -148,8 +142,7 @@ async fn main() -> Result<()> {
     info!("Placing order {}", order_id);
     executor
         .execute(
-            &PlaceOrderCommand,
-            PlaceOrderInput::new(order_id.clone(), catalog_stream.clone()),
+            PlaceOrderCommand::new(order_id.clone(), catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await?;
@@ -166,8 +159,7 @@ async fn main() -> Result<()> {
     let order_id2 = OrderId::generate();
     executor
         .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(order_id2.clone(), customer2),
+            CreateOrderCommand::new(order_id2.clone(), customer2),
             ExecutionOptions::default(),
         )
         .await?;
@@ -176,15 +168,13 @@ async fn main() -> Result<()> {
 
     executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id2.clone(), keyboard_item, catalog_stream.clone()),
+            AddItemToOrderCommand::new(order_id2.clone(), keyboard_item, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await?;
     executor
         .execute(
-            &PlaceOrderCommand,
-            PlaceOrderInput::new(order_id2.clone(), catalog_stream.clone()),
+            PlaceOrderCommand::new(order_id2.clone(), catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await?;
@@ -201,8 +191,7 @@ async fn main() -> Result<()> {
     let order_id3 = OrderId::generate();
     executor
         .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(order_id3.clone(), customer3),
+            CreateOrderCommand::new(order_id3.clone(), customer3),
             ExecutionOptions::default(),
         )
         .await?;
@@ -211,8 +200,7 @@ async fn main() -> Result<()> {
 
     executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id3.clone(), laptop_item3, catalog_stream.clone()),
+            AddItemToOrderCommand::new(order_id3.clone(), laptop_item3, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await?;
@@ -221,8 +209,7 @@ async fn main() -> Result<()> {
     info!("Cancelling order {}", order_id3);
     executor
         .execute(
-            &CancelOrderCommand,
-            CancelOrderInput::new(
+            CancelOrderCommand::new(
                 order_id3,
                 "Customer changed mind".to_string(),
                 catalog_stream.clone(),

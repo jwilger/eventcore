@@ -133,13 +133,12 @@ impl<C: Command, ES: EventStore> ExecutionScopeWithState<C, ES> {
     pub async fn execute_command(
         self,
         command: &C,
-        input: C::Input,
         stream_resolver: &mut StreamResolver,
     ) -> Result<ExecutionScopeWithWrites<C, ES>, CommandError> {
         let read_streams = ReadStreams::new(self.scope.stream_ids.clone());
 
         let stream_writes = command
-            .handle(read_streams, self.state, input, stream_resolver)
+            .handle(read_streams, self.state, stream_resolver)
             .await?;
 
         Ok(ExecutionScope {
@@ -156,7 +155,7 @@ impl<C: Command, ES: EventStore> ExecutionScopeWithState<C, ES> {
     /// Check if additional streams were requested
     pub fn needs_additional_streams(&self, stream_resolver: &StreamResolver) -> Vec<StreamId> {
         stream_resolver
-            .additional_streams()
+            .additional_streams
             .iter()
             .filter(|s| !self.scope.stream_ids.contains(s))
             .cloned()
@@ -182,7 +181,7 @@ impl<C: Command, ES: EventStore> ExecutionScopeWithWrites<C, ES> {
     /// Check if additional streams were requested
     pub fn needs_additional_streams(&self, stream_resolver: &StreamResolver) -> Vec<StreamId> {
         stream_resolver
-            .additional_streams()
+            .additional_streams
             .iter()
             .filter(|s| !self.scope.stream_ids.contains(s))
             .cloned()

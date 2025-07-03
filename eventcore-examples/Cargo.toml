@@ -12,6 +12,7 @@ publish = false
 [dependencies]
 # Core dependencies
 eventcore = { path = "../eventcore", features = ["testing"] }
+eventcore-macros = { path = "../eventcore-macros" }
 eventcore-postgres = { path = "../eventcore-postgres" }
 eventcore-memory = { path = "../eventcore-memory" }
 tokio = { workspace = true }
@@ -54,6 +55,10 @@ path = "src/ecommerce/main.rs"
 [[example]]
 name = "sagas"
 path = "src/sagas/main.rs"
+
+[[example]]
+name = "simplified_command"
+path = "src/simplified_command_example.rs"
 
 [[bench]]
 name = "example_benchmarks"

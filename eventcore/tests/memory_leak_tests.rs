@@ -8,8 +8,8 @@
 #![allow(clippy::no_effect_underscore_binding)]
 
 use eventcore::{
-    Command, CommandError, CommandExecutor, EventId, EventStore, EventToWrite, ExpectedVersion,
-    ReadStreams, StreamEvents, StreamId, StreamResolver, StreamWrite,
+    CommandError, CommandExecutor, CommandLogic, CommandStreams, EventId, EventStore, EventToWrite,
+    ExpectedVersion, ReadStreams, StreamEvents, StreamId, StreamResolver, StreamWrite,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
@@ -49,24 +49,23 @@ struct MemoryTestState {
 }
 
 #[derive(Debug, Clone)]
-struct CreateDataCommand;
-
-#[derive(Debug, Clone)]
-struct CreateDataInput {
+struct CreateDataCommand {
     stream_id: StreamId,
     data_size: usize,
 }
 
-#[async_trait::async_trait]
-impl Command for CreateDataCommand {
-    type Input = CreateDataInput;
-    type State = MemoryTestState;
-    type Event = MemoryTestEvent;
+impl CommandStreams for CreateDataCommand {
     type StreamSet = (StreamId,);
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.stream_id.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.stream_id.clone()]
     }
+}
+
+#[async_trait::async_trait]
+impl CommandLogic for CreateDataCommand {
+    type State = MemoryTestState;
+    type Event = MemoryTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         match &event.payload {
@@ -83,13 +82,12 @@ impl Command for CreateDataCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
-        let data = vec![0u8; input.data_size];
+        let data = vec![0u8; self.data_size];
         let event = StreamWrite::new(
             &read_streams,
-            input.stream_id,
+            self.stream_id.clone(),
             MemoryTestEvent::DataCreated { data },
         )?;
 
@@ -108,12 +106,11 @@ async fn test_memory_leak_in_loop(
     // Warm-up phase to stabilize allocations
     for i in 0..10 {
         let stream_id = StreamId::try_new(format!("warmup-{}", i)).unwrap();
-        let command = CreateDataCommand;
-        let input = CreateDataInput {
+        let command = CreateDataCommand {
             stream_id,
             data_size: 1024,
         };
-        let _ = executor.execute(&command, input, Default::default()).await;
+        let _ = executor.execute(command, Default::default()).await;
     }
 
     // Allow garbage collection to run
@@ -125,13 +122,12 @@ async fn test_memory_leak_in_loop(
     // Run the actual test
     for i in 0..iterations {
         let stream_id = StreamId::try_new(format!("memory-test-{}", i)).unwrap();
-        let command = CreateDataCommand;
-        let input = CreateDataInput {
+        let command = CreateDataCommand {
             stream_id,
             data_size,
         };
 
-        let _ = executor.execute(&command, input, Default::default()).await;
+        let _ = executor.execute(command, Default::default()).await;
 
         // Occasionally yield to allow cleanup
         if i % 100 == 0 {

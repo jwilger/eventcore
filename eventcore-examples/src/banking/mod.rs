@@ -16,7 +16,7 @@ pub mod types;
 mod tests;
 
 // Re-export commonly used types
-pub use commands::{OpenAccountCommand, TransferMoneyCommand};
+pub use commands::{OpenAccount, TransferMoneyCommand};
 pub use events::{AccountOpened, MoneyTransferred};
 pub use projections::{AccountBalanceProjection, AccountBalanceProjectionImpl};
 pub use types::{AccountId, Money, TransferId};

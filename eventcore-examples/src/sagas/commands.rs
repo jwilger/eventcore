@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use eventcore::prelude::*;
-use eventcore::{ReadStreams, StreamResolver, StreamWrite};
+use eventcore::{CommandLogic, CommandStreams, ReadStreams, StreamResolver, StreamWrite};
 use std::collections::HashMap;
 
 use crate::sagas::{events::*, types::*};
@@ -20,10 +20,7 @@ use crate::sagas::{events::*, types::*};
 /// 2. Orchestrating the workflow steps
 /// 3. Handling failures with compensation logic
 #[derive(Debug, Clone)]
-pub struct OrderFulfillmentSaga;
-
-#[derive(Debug, Clone)]
-pub struct OrderFulfillmentInput {
+pub struct OrderFulfillmentSaga {
     pub order_id: OrderId,
     pub customer_id: CustomerId,
     pub items: Vec<OrderItem>,
@@ -43,21 +40,23 @@ pub struct OrderFulfillmentState {
 #[derive(Debug)]
 pub struct OrderFulfillmentStreamSet;
 
-#[async_trait]
-impl Command for OrderFulfillmentSaga {
-    type Input = OrderFulfillmentInput;
-    type State = OrderFulfillmentState;
-    type Event = SagaEvent;
+impl CommandStreams for OrderFulfillmentSaga {
     type StreamSet = OrderFulfillmentStreamSet;
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+    fn read_streams(&self) -> Vec<StreamId> {
         let saga_id = SagaId::generate(); // In practice, this would be deterministic
         vec![
             StreamId::try_new(format!("saga-{}", saga_id)).unwrap(),
-            StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
-            StreamId::try_new(format!("customer-{}", input.customer_id)).unwrap(),
+            StreamId::try_new(format!("order-{}", self.order_id)).unwrap(),
+            StreamId::try_new(format!("customer-{}", self.customer_id)).unwrap(),
         ]
     }
+}
+
+#[async_trait]
+impl CommandLogic for OrderFulfillmentSaga {
+    type State = OrderFulfillmentState;
+    type Event = SagaEvent;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -140,7 +139,6 @@ impl Command for OrderFulfillmentSaga {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         let saga_id = SagaId::generate();
@@ -152,7 +150,7 @@ impl Command for OrderFulfillmentSaga {
 
         // If saga doesn't exist, start it
         if state.saga.is_none() {
-            let total_amount = input
+            let total_amount = self
                 .items
                 .iter()
                 .map(|item| item.total_price())
@@ -166,8 +164,8 @@ impl Command for OrderFulfillmentSaga {
                 saga_stream.clone(),
                 SagaEvent::SagaStarted {
                     saga_id: saga_id.clone(),
-                    order_id: input.order_id.clone(),
-                    customer_id: input.customer_id.clone(),
+                    order_id: self.order_id.clone(),
+                    customer_id: self.customer_id.clone(),
                     total_amount,
                     started_at: now,
                 },
@@ -182,7 +180,7 @@ impl Command for OrderFulfillmentSaga {
                     saga_id: saga_id.clone(),
                     payment_id: payment_id.clone(),
                     amount: total_amount,
-                    method: input.payment_method.clone(),
+                    method: self.payment_method.clone(),
                 },
             )?);
 
@@ -208,7 +206,7 @@ impl Command for OrderFulfillmentSaga {
                         SagaEvent::PaymentCompleted {
                             saga_id: saga_id.clone(),
                             payment_id: saga.payment_id.as_ref().unwrap().clone(),
-                            amount: input
+                            amount: self
                                 .items
                                 .iter()
                                 .map(|item| item.total_price())
@@ -225,7 +223,7 @@ impl Command for OrderFulfillmentSaga {
                     saga_stream,
                     SagaEvent::InventoryReservationStarted {
                         saga_id: saga_id.clone(),
-                        items: input.items.clone(),
+                        items: self.items.clone(),
                     },
                 )?);
                 Ok(events)
@@ -239,7 +237,7 @@ impl Command for OrderFulfillmentSaga {
                     SagaEvent::ShippingArranged {
                         saga_id: saga_id.clone(),
                         shipment_id: shipment_id.clone(),
-                        address: input.shipping_address.clone(),
+                        address: self.shipping_address.clone(),
                         carrier: "Standard Carrier".to_string(),
                     },
                 )?);
@@ -303,10 +301,7 @@ impl Command for OrderFulfillmentSaga {
 // ============================================================================
 
 #[derive(Debug, Clone)]
-pub struct ProcessPaymentCommand;
-
-#[derive(Debug, Clone)]
-pub struct ProcessPaymentInput {
+pub struct ProcessPaymentCommand {
     pub payment_id: PaymentId,
     pub order_id: OrderId,
     pub amount: Money,
@@ -321,19 +316,21 @@ pub struct PaymentState {
 #[derive(Debug)]
 pub struct PaymentStreamSet;
 
-#[async_trait]
-impl Command for ProcessPaymentCommand {
-    type Input = ProcessPaymentInput;
-    type State = PaymentState;
-    type Event = PaymentEvent;
+impl CommandStreams for ProcessPaymentCommand {
     type StreamSet = PaymentStreamSet;
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+    fn read_streams(&self) -> Vec<StreamId> {
         vec![
-            StreamId::try_new(format!("payment-{}", input.payment_id)).unwrap(),
-            StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
+            StreamId::try_new(format!("payment-{}", self.payment_id)).unwrap(),
+            StreamId::try_new(format!("order-{}", self.order_id)).unwrap(),
         ]
     }
+}
+
+#[async_trait]
+impl CommandLogic for ProcessPaymentCommand {
+    type State = PaymentState;
+    type Event = PaymentEvent;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -370,10 +367,9 @@ impl Command for ProcessPaymentCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
-        let payment_stream = StreamId::try_new(format!("payment-{}", input.payment_id))
+        let payment_stream = StreamId::try_new(format!("payment-{}", self.payment_id))
             .map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
 
         let mut events = Vec::new();
@@ -385,10 +381,10 @@ impl Command for ProcessPaymentCommand {
                 &read_streams,
                 payment_stream.clone(),
                 PaymentEvent::PaymentAuthorized {
-                    payment_id: input.payment_id.clone(),
-                    order_id: input.order_id.clone(),
-                    amount: input.amount,
-                    method: input.method.clone(),
+                    payment_id: self.payment_id.clone(),
+                    order_id: self.order_id.clone(),
+                    amount: self.amount,
+                    method: self.method.clone(),
                     authorized_at: now,
                 },
             )?);
@@ -398,8 +394,8 @@ impl Command for ProcessPaymentCommand {
                 &read_streams,
                 payment_stream,
                 PaymentEvent::PaymentCaptured {
-                    payment_id: input.payment_id.clone(),
-                    amount: input.amount,
+                    payment_id: self.payment_id.clone(),
+                    amount: self.amount,
                     captured_at: now,
                 },
             )?);
@@ -414,10 +410,7 @@ impl Command for ProcessPaymentCommand {
 // ============================================================================
 
 #[derive(Debug, Clone)]
-pub struct ReserveInventoryCommand;
-
-#[derive(Debug, Clone)]
-pub struct ReserveInventoryInput {
+pub struct ReserveInventoryCommand {
     pub order_id: OrderId,
     pub items: Vec<OrderItem>,
 }
@@ -431,22 +424,24 @@ pub struct InventoryState {
 #[derive(Debug)]
 pub struct InventoryStreamSet;
 
-#[async_trait]
-impl Command for ReserveInventoryCommand {
-    type Input = ReserveInventoryInput;
-    type State = InventoryState;
-    type Event = InventoryEvent;
+impl CommandStreams for ReserveInventoryCommand {
     type StreamSet = InventoryStreamSet;
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        let mut streams = vec![StreamId::try_new(format!("order-{}", input.order_id)).unwrap()];
+    fn read_streams(&self) -> Vec<StreamId> {
+        let mut streams = vec![StreamId::try_new(format!("order-{}", self.order_id)).unwrap()];
 
-        for item in &input.items {
+        for item in &self.items {
             streams.push(StreamId::try_new(format!("inventory-{}", item.product_id)).unwrap());
         }
 
         streams
     }
+}
+
+#[async_trait]
+impl CommandLogic for ReserveInventoryCommand {
+    type State = InventoryState;
+    type Event = InventoryEvent;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -482,13 +477,12 @@ impl Command for ReserveInventoryCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         let mut events = Vec::new();
         let now = chrono::Utc::now();
 
-        for item in &input.items {
+        for item in &self.items {
             let inventory_stream = StreamId::try_new(format!("inventory-{}", item.product_id))
                 .map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
 
@@ -505,7 +499,7 @@ impl Command for ReserveInventoryCommand {
                         InventoryEvent::InventoryReserved {
                             product_id: item.product_id.clone(),
                             quantity: item.quantity,
-                            order_id: input.order_id.clone(),
+                            order_id: self.order_id.clone(),
                             reserved_at: now,
                         },
                     )?);
@@ -534,10 +528,7 @@ impl Command for ReserveInventoryCommand {
 // ============================================================================
 
 #[derive(Debug, Clone)]
-pub struct ArrangeShippingCommand;
-
-#[derive(Debug, Clone)]
-pub struct ArrangeShippingInput {
+pub struct ArrangeShippingCommand {
     pub order_id: OrderId,
     pub shipment_id: ShipmentId,
     pub address: ShippingAddress,
@@ -552,19 +543,21 @@ pub struct ShippingState {
 #[derive(Debug)]
 pub struct ShippingStreamSet;
 
-#[async_trait]
-impl Command for ArrangeShippingCommand {
-    type Input = ArrangeShippingInput;
-    type State = ShippingState;
-    type Event = ShippingEvent;
+impl CommandStreams for ArrangeShippingCommand {
     type StreamSet = ShippingStreamSet;
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+    fn read_streams(&self) -> Vec<StreamId> {
         vec![
-            StreamId::try_new(format!("shipment-{}", input.shipment_id)).unwrap(),
-            StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
+            StreamId::try_new(format!("shipment-{}", self.shipment_id)).unwrap(),
+            StreamId::try_new(format!("order-{}", self.order_id)).unwrap(),
         ]
     }
+}
+
+#[async_trait]
+impl CommandLogic for ArrangeShippingCommand {
+    type State = ShippingState;
+    type Event = ShippingEvent;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -598,10 +591,9 @@ impl Command for ArrangeShippingCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
-        let shipment_stream = StreamId::try_new(format!("shipment-{}", input.shipment_id))
+        let shipment_stream = StreamId::try_new(format!("shipment-{}", self.shipment_id))
             .map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
 
         let mut events = Vec::new();
@@ -613,9 +605,9 @@ impl Command for ArrangeShippingCommand {
                 &read_streams,
                 shipment_stream.clone(),
                 ShippingEvent::ShipmentCreated {
-                    shipment_id: input.shipment_id.clone(),
-                    order_id: input.order_id.clone(),
-                    address: input.address.clone(),
+                    shipment_id: self.shipment_id.clone(),
+                    order_id: self.order_id.clone(),
+                    address: self.address.clone(),
                     carrier: "Standard Carrier".to_string(),
                     created_at: now,
                 },
@@ -626,7 +618,7 @@ impl Command for ArrangeShippingCommand {
                 &read_streams,
                 shipment_stream,
                 ShippingEvent::ShipmentDispatched {
-                    shipment_id: input.shipment_id.clone(),
+                    shipment_id: self.shipment_id.clone(),
                     tracking_number: format!(
                         "TRK-{}",
                         uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))

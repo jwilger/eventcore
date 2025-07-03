@@ -115,7 +115,7 @@ async fn test_complete_order_workflow() {
 
     // Add product to catalog
     let product = create_test_product("LAPTOP01", 99999, "Gaming Laptop").unwrap();
-    let add_product_input = AddProductInput::new(
+    let add_product_command = AddProductCommand::new(
         product.clone(),
         Quantity::new(10).unwrap(),
         catalog_stream.clone(),
@@ -123,8 +123,7 @@ async fn test_complete_order_workflow() {
 
     executor
         .execute(
-            &AddProductCommand,
-            add_product_input,
+            add_product_command,
             ExecutionOptions::default(),
         )
         .await
@@ -133,39 +132,27 @@ async fn test_complete_order_workflow() {
     // Create order
     let customer = create_test_customer("test@example.com", "Test Customer").unwrap();
     let order_id = create_unique_order_id("WORKFLOW1");
-    let create_order_input = CreateOrderInput::new(order_id.clone(), customer);
+    let create_order_command = CreateOrderCommand::new(order_id.clone(), customer);
 
     executor
-        .execute(
-            &CreateOrderCommand,
-            create_order_input,
-            ExecutionOptions::default(),
-        )
+        .execute(create_order_command, ExecutionOptions::default())
         .await
         .unwrap();
 
     // Add item to order
     let order_item = OrderItem::new(product.id.clone(), Quantity::new(2).unwrap(), product.price);
-    let add_item_input =
-        AddItemToOrderInput::new(order_id.clone(), order_item, catalog_stream.clone());
+    let add_item_command =
+        AddItemToOrderCommand::new(order_id.clone(), order_item, catalog_stream.clone());
 
     executor
-        .execute(
-            &AddItemToOrderCommand,
-            add_item_input,
-            ExecutionOptions::default(),
-        )
+        .execute(add_item_command, ExecutionOptions::default())
         .await
         .unwrap();
 
     // Place order
-    let place_order_input = PlaceOrderInput::new(order_id.clone(), catalog_stream.clone());
+    let place_order_command = PlaceOrderCommand::new(order_id.clone(), catalog_stream.clone());
     executor
-        .execute(
-            &PlaceOrderCommand,
-            place_order_input,
-            ExecutionOptions::default(),
-        )
+        .execute(place_order_command, ExecutionOptions::default())
         .await
         .unwrap();
 
@@ -233,8 +220,7 @@ async fn test_inventory_projection() {
 
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(
+            AddProductCommand::new(
                 laptop.clone(),
                 Quantity::new(10).unwrap(),
                 catalog_stream.clone(),
@@ -245,8 +231,7 @@ async fn test_inventory_projection() {
         .unwrap();
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(
+            AddProductCommand::new(
                 mouse.clone(),
                 Quantity::new(50).unwrap(),
                 catalog_stream.clone(),
@@ -259,21 +244,17 @@ async fn test_inventory_projection() {
     // Create and place an order
     let customer = create_test_customer("customer@example.com", "Customer").unwrap();
     let order_id = create_unique_order_id("INVPROJ1");
+    let create_order = CreateOrderCommand::new(order_id.clone(), customer);
 
     executor
-        .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(order_id.clone(), customer),
-            ExecutionOptions::default(),
-        )
+        .execute(create_order, ExecutionOptions::default())
         .await
         .unwrap();
 
     let laptop_item = OrderItem::new(laptop.id.clone(), Quantity::new(2).unwrap(), laptop.price);
     executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id.clone(), laptop_item, catalog_stream.clone()),
+            AddItemToOrderCommand::new(order_id.clone(), laptop_item, catalog_stream.clone()),
             retry_options.clone(),
         )
         .await
@@ -281,8 +262,7 @@ async fn test_inventory_projection() {
 
     executor
         .execute(
-            &PlaceOrderCommand,
-            PlaceOrderInput::new(order_id, catalog_stream.clone()),
+            PlaceOrderCommand::new(order_id, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await
@@ -363,8 +343,7 @@ async fn test_order_summary_projection() {
 
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(
+            AddProductCommand::new(
                 product1.clone(),
                 Quantity::new(100).unwrap(),
                 catalog_stream.clone(),
@@ -375,8 +354,7 @@ async fn test_order_summary_projection() {
         .unwrap();
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(
+            AddProductCommand::new(
                 product2.clone(),
                 Quantity::new(100).unwrap(),
                 catalog_stream.clone(),
@@ -387,8 +365,7 @@ async fn test_order_summary_projection() {
         .unwrap();
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(
+            AddProductCommand::new(
                 product3.clone(),
                 Quantity::new(100).unwrap(),
                 catalog_stream.clone(),
@@ -407,8 +384,7 @@ async fn test_order_summary_projection() {
     let order_id1 = create_unique_order_id("SUMPROJ1");
     executor
         .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(order_id1.clone(), customer1),
+            CreateOrderCommand::new(order_id1.clone(), customer1),
             retry_options.clone(),
         )
         .await
@@ -420,16 +396,14 @@ async fn test_order_summary_projection() {
     );
     executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id1.clone(), item1, catalog_stream.clone()),
+            AddItemToOrderCommand::new(order_id1.clone(), item1, catalog_stream.clone()),
             retry_options.clone(),
         )
         .await
         .unwrap();
     executor
         .execute(
-            &PlaceOrderCommand,
-            PlaceOrderInput::new(order_id1.clone(), catalog_stream.clone()),
+            PlaceOrderCommand::new(order_id1.clone(), catalog_stream.clone()),
             retry_options.clone(),
         )
         .await
@@ -439,8 +413,7 @@ async fn test_order_summary_projection() {
     let order_id2 = create_unique_order_id("SUMPROJ2");
     executor
         .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(order_id2.clone(), customer2),
+            CreateOrderCommand::new(order_id2.clone(), customer2),
             retry_options.clone(),
         )
         .await
@@ -452,16 +425,14 @@ async fn test_order_summary_projection() {
     );
     executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id2.clone(), item2, catalog_stream.clone()),
+            AddItemToOrderCommand::new(order_id2.clone(), item2, catalog_stream.clone()),
             retry_options.clone(),
         )
         .await
         .unwrap();
     executor
         .execute(
-            &PlaceOrderCommand,
-            PlaceOrderInput::new(order_id2.clone(), catalog_stream.clone()),
+            PlaceOrderCommand::new(order_id2.clone(), catalog_stream.clone()),
             retry_options.clone(),
         )
         .await
@@ -471,8 +442,7 @@ async fn test_order_summary_projection() {
     let order_id3 = create_unique_order_id("SUMPROJ3");
     executor
         .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(order_id3.clone(), customer3),
+            CreateOrderCommand::new(order_id3.clone(), customer3),
             retry_options.clone(),
         )
         .await
@@ -484,8 +454,7 @@ async fn test_order_summary_projection() {
     );
     executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id3.clone(), item3, catalog_stream.clone()),
+            AddItemToOrderCommand::new(order_id3.clone(), item3, catalog_stream.clone()),
             retry_options.clone(),
         )
         .await
@@ -493,8 +462,7 @@ async fn test_order_summary_projection() {
     // First place the order before cancelling it
     executor
         .execute(
-            &PlaceOrderCommand,
-            PlaceOrderInput::new(order_id3.clone(), catalog_stream.clone()),
+            PlaceOrderCommand::new(order_id3.clone(), catalog_stream.clone()),
             retry_options.clone(),
         )
         .await
@@ -511,8 +479,7 @@ async fn test_order_summary_projection() {
 
     executor
         .execute(
-            &CancelOrderCommand,
-            CancelOrderInput::new(
+            &CancelOrderCommand::new(
                 order_id3.clone(),
                 "Test cancellation".to_string(),
                 catalog_stream.clone(),
@@ -580,8 +547,7 @@ async fn test_business_rule_violations() {
     let product = create_test_product("DUPLICATE", 9999, "Duplicate Test").unwrap();
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(
+            &AddProductCommand::new(
                 product.clone(),
                 Quantity::new(5).unwrap(),
                 catalog_stream1.clone(),
@@ -593,8 +559,7 @@ async fn test_business_rule_violations() {
 
     let result = executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(product, Quantity::new(5).unwrap(), catalog_stream1.clone()),
+            AddProductCommand::new(product, Quantity::new(5).unwrap(), catalog_stream1.clone()),
             ExecutionOptions::default(),
         )
         .await;
@@ -609,8 +574,7 @@ async fn test_business_rule_violations() {
     let product2 = create_test_product("PRODUCT02", 4999, "Test Product 2").unwrap();
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(
+            &AddProductCommand::new(
                 product2.clone(),
                 Quantity::new(10).unwrap(),
                 catalog_stream2.clone(),
@@ -623,8 +587,7 @@ async fn test_business_rule_violations() {
     let item = OrderItem::new(product2.id, Quantity::new(1).unwrap(), product2.price);
     let result = executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(non_existent_order_id, item, catalog_stream2.clone()),
+            AddItemToOrderCommand::new(non_existent_order_id, item, catalog_stream2.clone()),
             ExecutionOptions::default(),
         )
         .await;
@@ -638,8 +601,7 @@ async fn test_business_rule_violations() {
     let product3 = create_test_product("PRODUCT03", 2999, "Low Stock Product").unwrap();
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(
+            &AddProductCommand::new(
                 product3.clone(),
                 Quantity::new(2).unwrap(),
                 catalog_stream3.clone(),
@@ -653,8 +615,7 @@ async fn test_business_rule_violations() {
     let order_id = create_unique_order_id("LOWSTOCK");
     executor
         .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(order_id.clone(), customer),
+            CreateOrderCommand::new(order_id.clone(), customer),
             ExecutionOptions::default(),
         )
         .await
@@ -663,8 +624,7 @@ async fn test_business_rule_violations() {
     let large_item = OrderItem::new(product3.id, Quantity::new(10).unwrap(), product3.price);
     let result = executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id, large_item, catalog_stream3.clone()),
+            AddItemToOrderCommand::new(order_id, large_item, catalog_stream3.clone()),
             ExecutionOptions::default(),
         )
         .await;
@@ -679,8 +639,7 @@ async fn test_business_rule_violations() {
     let empty_order_id = create_unique_order_id("EMPTY001");
     executor
         .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(empty_order_id.clone(), customer2),
+            CreateOrderCommand::new(empty_order_id.clone(), customer2),
             ExecutionOptions::default(),
         )
         .await
@@ -688,8 +647,7 @@ async fn test_business_rule_violations() {
 
     let result = executor
         .execute(
-            &PlaceOrderCommand,
-            PlaceOrderInput::new(empty_order_id, catalog_stream4.clone()),
+            PlaceOrderCommand::new(empty_order_id, catalog_stream4.clone()),
             ExecutionOptions::default(),
         )
         .await;
@@ -715,8 +673,7 @@ async fn test_order_cancellation_releases_inventory() {
 
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(
+            &AddProductCommand::new(
                 product.clone(),
                 Quantity::new(5).unwrap(),
                 catalog_stream.clone(),
@@ -731,8 +688,7 @@ async fn test_order_cancellation_releases_inventory() {
     let order_id = create_unique_order_id("CANCEL01");
     executor
         .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(order_id.clone(), customer),
+            CreateOrderCommand::new(order_id.clone(), customer),
             ExecutionOptions::default(),
         )
         .await
@@ -741,8 +697,7 @@ async fn test_order_cancellation_releases_inventory() {
     let item = OrderItem::new(product.id.clone(), Quantity::new(3).unwrap(), product.price);
     executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id.clone(), item, catalog_stream.clone()),
+            AddItemToOrderCommand::new(order_id.clone(), item, catalog_stream.clone()),
             retry_options.clone(),
         )
         .await
@@ -751,8 +706,7 @@ async fn test_order_cancellation_releases_inventory() {
     // First place the order to ensure it's in a valid state
     executor
         .execute(
-            &PlaceOrderCommand,
-            PlaceOrderInput::new(order_id.clone(), catalog_stream.clone()),
+            PlaceOrderCommand::new(order_id.clone(), catalog_stream.clone()),
             retry_options.clone(),
         )
         .await
@@ -772,8 +726,7 @@ async fn test_order_cancellation_releases_inventory() {
     // This is expected and correct behavior - PostgreSQL is properly detecting concurrent access
     match executor
         .execute(
-            &CancelOrderCommand,
-            CancelOrderInput::new(
+            &CancelOrderCommand::new(
                 order_id,
                 "Customer changed mind".to_string(),
                 catalog_stream.clone(),
@@ -873,8 +826,7 @@ async fn test_concurrent_inventory_operations() {
     let product = create_test_product("CONCURRENT", 9999, "Concurrent Test Product").unwrap();
     executor
         .execute(
-            &AddProductCommand,
-            AddProductInput::new(
+            &AddProductCommand::new(
                 product.clone(),
                 Quantity::new(5).unwrap(),
                 catalog_stream.clone(),
@@ -895,16 +847,14 @@ async fn test_concurrent_inventory_operations() {
 
     executor
         .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(order_id1.clone(), customer1),
+            CreateOrderCommand::new(order_id1.clone(), customer1),
             ExecutionOptions::default(),
         )
         .await
         .unwrap();
     executor
         .execute(
-            &CreateOrderCommand,
-            CreateOrderInput::new(order_id2.clone(), customer2),
+            CreateOrderCommand::new(order_id2.clone(), customer2),
             ExecutionOptions::default(),
         )
         .await
@@ -914,8 +864,7 @@ async fn test_concurrent_inventory_operations() {
     let item1 = OrderItem::new(product.id.clone(), Quantity::new(4).unwrap(), product.price);
     let result1 = executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id1, item1, catalog_stream.clone()),
+            AddItemToOrderCommand::new(order_id1, item1, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await;
@@ -924,8 +873,7 @@ async fn test_concurrent_inventory_operations() {
     let item2 = OrderItem::new(product.id.clone(), Quantity::new(3).unwrap(), product.price);
     let result2 = executor
         .execute(
-            &AddItemToOrderCommand,
-            AddItemToOrderInput::new(order_id2, item2, catalog_stream.clone()),
+            AddItemToOrderCommand::new(order_id2, item2, catalog_stream.clone()),
             ExecutionOptions::default(),
         )
         .await;

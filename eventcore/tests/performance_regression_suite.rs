@@ -19,7 +19,7 @@
 
 use async_trait::async_trait;
 use eventcore::{
-    Command, CommandError, CommandExecutor, EventId, EventStore, EventToWrite, ExpectedVersion,
+    CommandExecutor, EventId, EventStore, EventToWrite, ExecutionOptions, ExpectedVersion,
     ReadStreams, StreamEvents, StreamId, StreamResolver, StreamWrite,
 };
 use eventcore_memory::InMemoryEventStore;
@@ -218,24 +218,22 @@ struct PerfRegressionState {
 #[derive(Debug, Clone)]
 struct StreamDiscoveryCommand {
     iterations: usize,
-}
-
-#[derive(Debug, Clone)]
-struct StreamDiscoveryInput {
     base_stream: StreamId,
     num_streams: usize,
 }
 
-#[async_trait]
-impl Command for StreamDiscoveryCommand {
-    type Input = StreamDiscoveryInput;
-    type State = PerfRegressionState;
-    type Event = PerfRegressionEvent;
+impl eventcore::CommandStreams for StreamDiscoveryCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.base_stream.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.base_stream.clone()]
     }
+}
+
+#[async_trait]
+impl eventcore::CommandLogic for StreamDiscoveryCommand {
+    type State = PerfRegressionState;
+    type Event = PerfRegressionEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         match &event.payload {
@@ -255,12 +253,11 @@ impl Command for StreamDiscoveryCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
-        input: Self::Input,
         stream_resolver: &mut StreamResolver,
-    ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
+    ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, eventcore::CommandError> {
         // Simulate dynamic stream discovery
         for i in 0..self.iterations {
-            let new_streams: Vec<StreamId> = (0..input.num_streams)
+            let new_streams: Vec<StreamId> = (0..self.num_streams)
                 .map(|j| StreamId::try_new(format!("discovered-{}-{}", i, j)).unwrap())
                 .collect();
             stream_resolver.add_streams(new_streams);
@@ -269,7 +266,7 @@ impl Command for StreamDiscoveryCommand {
         // Write a simple event
         Ok(vec![StreamWrite::new(
             &read_streams,
-            input.base_stream,
+            self.base_stream.clone(),
             PerfRegressionEvent::Created {
                 id: "test".to_string(),
                 data: "discovery complete".to_string(),
@@ -280,23 +277,22 @@ impl Command for StreamDiscoveryCommand {
 
 // Large state reconstruction command
 #[derive(Debug, Clone)]
-struct LargeStateCommand;
-
-#[derive(Debug, Clone)]
-struct LargeStateInput {
+struct LargeStateCommand {
     streams: Vec<StreamId>,
 }
 
-#[async_trait]
-impl Command for LargeStateCommand {
-    type Input = LargeStateInput;
-    type State = PerfRegressionState;
-    type Event = PerfRegressionEvent;
+impl eventcore::CommandStreams for LargeStateCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        input.streams.clone()
+    fn read_streams(&self) -> Vec<StreamId> {
+        self.streams.clone()
     }
+}
+
+#[async_trait]
+impl eventcore::CommandLogic for LargeStateCommand {
+    type State = PerfRegressionState;
+    type Event = PerfRegressionEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         match &event.payload {
@@ -316,15 +312,14 @@ impl Command for LargeStateCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
-    ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
+    ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, eventcore::CommandError> {
         // Command that processes large state
         let entity_count = state.entities.len();
 
         Ok(vec![StreamWrite::new(
             &read_streams,
-            input.streams[0].clone(),
+            self.streams[0].clone(),
             PerfRegressionEvent::Updated {
                 id: "summary".to_string(),
                 data: format!("Processed {} entities", entity_count),
@@ -357,14 +352,14 @@ impl<S: EventStore<Event = PerfRegressionEvent> + Clone + 'static> PerformanceTe
         for i in 0..num_operations {
             let op_start = Instant::now();
 
-            let command = StreamDiscoveryCommand { iterations: 3 };
-            let input = StreamDiscoveryInput {
+            let command = StreamDiscoveryCommand { 
+                iterations: 3,
                 base_stream: StreamId::try_new(format!("discovery-base-{}", i)).unwrap(),
                 num_streams: 5,
             };
 
             executor
-                .execute(&command, input, Default::default())
+                .execute(&command, ExecutionOptions::default())
                 .await?;
 
             let latency = op_start.elapsed();
@@ -433,15 +428,14 @@ impl<S: EventStore<Event = PerfRegressionEvent> + Clone + 'static> PerformanceTe
         for _ in 0..num_operations {
             let op_start = Instant::now();
 
-            let command = LargeStateCommand;
-            let input = LargeStateInput {
+            let command = LargeStateCommand {
                 streams: (0..num_streams)
                     .map(|i| StreamId::try_new(format!("large-state-{}", i)).unwrap())
                     .collect(),
             };
 
             executor
-                .execute(&command, input, Default::default())
+                .execute(&command, ExecutionOptions::default())
                 .await?;
 
             let latency = op_start.elapsed();
@@ -498,8 +492,8 @@ impl<S: EventStore<Event = PerfRegressionEvent> + Clone + 'static> PerformanceTe
                 for op_id in 0..ops_per_worker {
                     let op_start = Instant::now();
 
-                    let command = StreamDiscoveryCommand { iterations: 1 };
-                    let input = StreamDiscoveryInput {
+                    let command = StreamDiscoveryCommand { 
+                        iterations: 1,
                         base_stream: StreamId::try_new(format!(
                             "concurrent-{}-{}",
                             worker_id, op_id
@@ -509,7 +503,7 @@ impl<S: EventStore<Event = PerfRegressionEvent> + Clone + 'static> PerformanceTe
                     };
 
                     if executor
-                        .execute(&command, input, Default::default())
+                        .execute(&command, ExecutionOptions::default())
                         .await
                         .is_ok()
                     {
@@ -588,23 +582,22 @@ impl<S: EventStore<Event = PerfRegressionEvent> + Clone + 'static> PerformanceTe
             let executor = CommandExecutor::new(self.store.clone());
 
             let op_start = Instant::now();
-            let command = LargeStateCommand;
-            let input = LargeStateInput {
+            let command = LargeStateCommand {
                 streams: vec![stream_id.clone()],
             };
             executor
-                .execute(&command, input, Default::default())
+                .execute(&command, ExecutionOptions::default())
                 .await?;
 
             cold_latencies.push(op_start.elapsed().as_micros() as f64 / 1000.0);
 
             // Warm measurement (same stream)
             let op_start = Instant::now();
-            let input = LargeStateInput {
+            let command = LargeStateCommand {
                 streams: vec![stream_id],
             };
             executor
-                .execute(&command, input, Default::default())
+                .execute(&command, ExecutionOptions::default())
                 .await?;
 
             warm_latencies.push(op_start.elapsed().as_micros() as f64 / 1000.0);

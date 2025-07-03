@@ -808,6 +808,7 @@ dependencies = [
  "chrono",
  "criterion",
  "eventcore",
+ "eventcore-macros",
  "eventcore-memory",
  "eventcore-postgres",
  "insta",

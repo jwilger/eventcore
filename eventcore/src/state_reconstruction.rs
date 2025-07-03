@@ -264,7 +264,7 @@ mod tests {
     use std::collections::HashMap;
 
     // Mock command for testing
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct TestCommand;
 
     use async_trait::async_trait;
@@ -282,16 +282,18 @@ mod tests {
         Reset,
     }
 
-    #[async_trait]
-    impl Command for TestCommand {
-        type Input = ();
-        type State = TestState;
-        type Event = TestEvent;
+    impl crate::command::CommandStreams for TestCommand {
         type StreamSet = ();
 
-        fn read_streams(&self, _input: &Self::Input) -> Vec<StreamId> {
+        fn read_streams(&self) -> Vec<StreamId> {
             vec![StreamId::try_new("test-stream").unwrap()]
         }
+    }
+
+    #[async_trait]
+    impl crate::command::CommandLogic for TestCommand {
+        type State = TestState;
+        type Event = TestEvent;
 
         fn apply(
             &self,
@@ -312,7 +314,6 @@ mod tests {
             &self,
             _read_streams: crate::command::ReadStreams<Self::StreamSet>,
             _state: Self::State,
-            _input: Self::Input,
             _stream_resolver: &mut crate::command::StreamResolver,
         ) -> crate::command::CommandResult<
             Vec<crate::command::StreamWrite<Self::StreamSet, Self::Event>>,
@@ -627,8 +628,8 @@ mod tests {
             );
 
             // Apply the same event to two identical states
-            command.apply(&mut state1, &stored_event);
-            command.apply(&mut state2, &stored_event);
+            <TestCommand as crate::command::CommandLogic>::apply(&command, &mut state1, &stored_event);
+            <TestCommand as crate::command::CommandLogic>::apply(&command, &mut state2, &stored_event);
 
             // Results should be identical
             prop_assert_eq!(state1, state2);

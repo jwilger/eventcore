@@ -8,9 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use eventcore::{
-    Command, CommandError, CommandExecutor, CommandResult, EventStore, EventStoreError,
-    EventVersion, ExecutionOptions, ReadStreams, StoredEvent, StreamId, StreamResolver,
-    StreamWrite,
+    CommandError, CommandExecutor, CommandResult, EventStore, EventStoreError, EventVersion,
+    ExecutionOptions, ReadStreams, StoredEvent, StreamId, StreamResolver, StreamWrite,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
@@ -35,14 +34,16 @@ struct TestState {
 }
 
 /// A command that fails with `BusinessRuleViolation` after the first successful call
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FailOnRetryCommand {
+    stream_id: StreamId,
     handle_call_count: Arc<AtomicUsize>,
 }
 
 impl FailOnRetryCommand {
-    fn new() -> Self {
+    fn new(stream_id: StreamId) -> Self {
         Self {
+            stream_id,
             handle_call_count: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -52,21 +53,18 @@ impl FailOnRetryCommand {
     }
 }
 
-#[derive(Debug, Clone)]
-struct TestInput {
-    stream_id: StreamId,
+impl eventcore::CommandStreams for FailOnRetryCommand {
+    type StreamSet = ();
+
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.stream_id.clone()]
+    }
 }
 
 #[async_trait::async_trait]
-impl Command for FailOnRetryCommand {
-    type Input = TestInput;
+impl eventcore::CommandLogic for FailOnRetryCommand {
     type State = TestState;
     type Event = TestEvent;
-    type StreamSet = ();
-
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.stream_id.clone()]
-    }
 
     fn apply(&self, state: &mut Self::State, _event: &StoredEvent<Self::Event>) {
         state.exists = true;
@@ -76,7 +74,6 @@ impl Command for FailOnRetryCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         let call_count = self.handle_call_count.fetch_add(1, Ordering::SeqCst) + 1;
@@ -95,7 +92,7 @@ impl Command for FailOnRetryCommand {
         eprintln!("FailOnRetryCommand: Creating event");
         Ok(vec![StreamWrite::new(
             &read_streams,
-            input.stream_id,
+            self.stream_id.clone(),
             TestEvent::Created { id: 1 },
         )?])
     }
@@ -199,14 +196,10 @@ async fn test_command_handle_error_during_retry_is_propagated() {
     let event_store = ConflictOnFirstWriteStore::new();
     let executor = CommandExecutor::new(event_store);
     let stream_id = StreamId::try_new("test-stream").unwrap();
-    let command = FailOnRetryCommand::new();
+    let command = FailOnRetryCommand::new(stream_id);
 
     let result = executor
-        .execute(
-            &command,
-            TestInput { stream_id },
-            ExecutionOptions::default(),
-        )
+        .execute(&command, ExecutionOptions::default())
         .await;
 
     eprintln!("Final result: {result:?}");

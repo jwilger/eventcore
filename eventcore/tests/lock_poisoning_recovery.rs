@@ -9,7 +9,7 @@
 #![allow(clippy::use_self)]
 
 use eventcore::prelude::*;
-use eventcore::{ReadStreams, StreamResolver, StreamWrite};
+use eventcore::{CommandLogic, CommandStreams, ReadStreams, StreamResolver, StreamWrite};
 use eventcore_memory::InMemoryEventStore;
 use std::panic;
 use std::sync::{Arc, Mutex};
@@ -279,10 +279,7 @@ async fn test_command_executor_propagates_panics() {
     use async_trait::async_trait;
 
     #[derive(Debug, Clone)]
-    struct TestCommand;
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    struct TestInput {
+    struct TestCommand {
         stream_id: StreamId,
         value: String,
     }
@@ -306,16 +303,18 @@ async fn test_command_executor_propagates_panics() {
 
     struct TestStreamSet;
 
-    #[async_trait]
-    impl Command for TestCommand {
-        type Input = TestInput;
-        type State = TestState;
-        type Event = TestEvent;
+    impl CommandStreams for TestCommand {
         type StreamSet = TestStreamSet;
 
-        fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-            vec![input.stream_id.clone()]
+        fn read_streams(&self) -> Vec<StreamId> {
+            vec![self.stream_id.clone()]
         }
+    }
+
+    #[async_trait]
+    impl CommandLogic for TestCommand {
+        type State = TestState;
+        type Event = TestEvent;
 
         fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
             match &event.payload {
@@ -329,17 +328,18 @@ async fn test_command_executor_propagates_panics() {
             &self,
             read_streams: ReadStreams<Self::StreamSet>,
             _state: Self::State,
-            input: Self::Input,
             _resolver: &mut StreamResolver,
         ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
-            if input.value == "PANIC" {
+            if self.value == "PANIC" {
                 panic!("Intentional panic during command handling");
             }
 
             let event = StreamWrite::new(
                 &read_streams,
-                input.stream_id,
-                TestEvent::Created { value: input.value },
+                self.stream_id.clone(),
+                TestEvent::Created {
+                    value: self.value.clone(),
+                },
             )?;
 
             Ok(vec![event])
@@ -350,14 +350,14 @@ async fn test_command_executor_propagates_panics() {
     let executor = CommandExecutor::new(event_store);
 
     // Execute a command that will panic
-    let panic_input = TestInput {
+    let panic_command = TestCommand {
         stream_id: StreamId::try_new("test-stream").unwrap(),
         value: "PANIC".to_string(),
     };
 
     // This will panic and the panic will propagate
     let _panic_result = executor
-        .execute(&TestCommand, panic_input, ExecutionOptions::default())
+        .execute(&panic_command, ExecutionOptions::default())
         .await;
 }
 
@@ -367,10 +367,7 @@ async fn test_system_recovery_after_panic() {
     use async_trait::async_trait;
 
     #[derive(Debug, Clone)]
-    struct SafeCommand;
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    struct SafeInput {
+    struct SafeCommand {
         stream_id: StreamId,
         value: String,
     }
@@ -394,16 +391,18 @@ async fn test_system_recovery_after_panic() {
 
     struct SafeStreamSet;
 
-    #[async_trait]
-    impl Command for SafeCommand {
-        type Input = SafeInput;
-        type State = SafeState;
-        type Event = SafeEvent;
+    impl CommandStreams for SafeCommand {
         type StreamSet = SafeStreamSet;
 
-        fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-            vec![input.stream_id.clone()]
+        fn read_streams(&self) -> Vec<StreamId> {
+            vec![self.stream_id.clone()]
         }
+    }
+
+    #[async_trait]
+    impl CommandLogic for SafeCommand {
+        type State = SafeState;
+        type Event = SafeEvent;
 
         fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
             match &event.payload {
@@ -417,13 +416,14 @@ async fn test_system_recovery_after_panic() {
             &self,
             read_streams: ReadStreams<Self::StreamSet>,
             _state: Self::State,
-            input: Self::Input,
             _resolver: &mut StreamResolver,
         ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
             let event = StreamWrite::new(
                 &read_streams,
-                input.stream_id,
-                SafeEvent::Created { value: input.value },
+                self.stream_id.clone(),
+                SafeEvent::Created {
+                    value: self.value.clone(),
+                },
             )?;
 
             Ok(vec![event])
@@ -446,13 +446,13 @@ async fn test_system_recovery_after_panic() {
     let executor = CommandExecutor::new(event_store);
 
     // Execute a command - this should work despite the panic in another task
-    let input = SafeInput {
+    let command = SafeCommand {
         stream_id: StreamId::try_new("safe-stream").unwrap(),
         value: "recovery-test".to_string(),
     };
 
     let result = executor
-        .execute(&SafeCommand, input, ExecutionOptions::default())
+        .execute(&command, ExecutionOptions::default())
         .await;
     assert!(
         result.is_ok(),

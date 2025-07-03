@@ -16,8 +16,9 @@
 #![allow(dead_code)]
 
 use eventcore::{
-    Command, CommandError, CommandExecutor, EventId, EventStore, EventToWrite, ExecutionOptions,
-    ExpectedVersion, ReadStreams, StoredEvent, StreamEvents, StreamId, StreamResolver, StreamWrite,
+    CommandError, CommandExecutor, CommandResult, EventId, EventStore, EventToWrite,
+    ExecutionOptions, ExpectedVersion, ReadStreams, StoredEvent, StreamEvents, StreamId,
+    StreamResolver, StreamWrite,
 };
 use eventcore_postgres::PostgresEventStore;
 use serde::{Deserialize, Serialize};
@@ -269,10 +270,7 @@ impl TryFrom<&RealisticEvent> for RealisticEvent {
 
 // Single-stream command for financial transactions
 #[derive(Debug, Clone)]
-struct FinancialTransactionCommand;
-
-#[derive(Debug, Clone)]
-struct TransactionInput {
+struct FinancialTransactionCommand {
     account_id: String,
     transaction_id: String,
     amount: i64,
@@ -293,16 +291,18 @@ struct AccountState {
     pending_transactions: HashMap<String, i64>,
 }
 
-#[async_trait::async_trait]
-impl Command for FinancialTransactionCommand {
-    type Input = TransactionInput;
-    type State = AccountState;
-    type Event = RealisticEvent;
+impl eventcore::CommandStreams for FinancialTransactionCommand {
     type StreamSet = (StreamId,);
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![StreamId::try_new(format!("account-{}", input.account_id)).unwrap()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![StreamId::try_new(format!("account-{}", self.account_id)).unwrap()]
     }
+}
+
+#[async_trait::async_trait]
+impl eventcore::CommandLogic for FinancialTransactionCommand {
+    type State = AccountState;
+    type Event = RealisticEvent;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -329,9 +329,8 @@ impl Command for FinancialTransactionCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
-    ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Validate business rules
         if !state.is_active {
             return Err(CommandError::BusinessRuleViolation(
@@ -339,15 +338,15 @@ impl Command for FinancialTransactionCommand {
             ));
         }
 
-        match &input.transaction_type {
+        match &self.transaction_type {
             TransactionType::Withdrawal | TransactionType::Transfer { .. } => {
                 let pending_total: i64 = state.pending_transactions.values().sum();
                 let available_balance = state.balance + pending_total;
 
-                if available_balance < input.amount {
+                if available_balance < self.amount {
                     return Err(CommandError::BusinessRuleViolation(format!(
                         "Insufficient funds: available {}, requested {}",
-                        available_balance, input.amount
+                        available_balance, self.amount
                     )));
                 }
             }
@@ -356,21 +355,19 @@ impl Command for FinancialTransactionCommand {
 
         // Create transaction events
         let mut events = vec![];
-        let stream_id = StreamId::try_new(format!("account-{}", input.account_id)).unwrap();
+        let stream_id = StreamId::try_new(format!("account-{}", self.account_id)).unwrap();
 
-        let (from, to, amount) = match &input.transaction_type {
-            TransactionType::Deposit => (
-                "external".to_string(),
-                input.account_id.clone(),
-                input.amount,
-            ),
+        let (from, to, amount) = match &self.transaction_type {
+            TransactionType::Deposit => {
+                ("external".to_string(), self.account_id.clone(), self.amount)
+            }
             TransactionType::Withdrawal => (
-                input.account_id.clone(),
+                self.account_id.clone(),
                 "external".to_string(),
-                -input.amount,
+                -self.amount,
             ),
             TransactionType::Transfer { to_account } => {
-                (input.account_id.clone(), to_account.clone(), -input.amount)
+                (self.account_id.clone(), to_account.clone(), -self.amount)
             }
         };
 
@@ -378,7 +375,7 @@ impl Command for FinancialTransactionCommand {
             &read_streams,
             stream_id.clone(),
             RealisticEvent::TransactionInitiated {
-                id: input.transaction_id.clone(),
+                id: self.transaction_id.clone(),
                 from,
                 to,
                 amount,
@@ -386,12 +383,12 @@ impl Command for FinancialTransactionCommand {
         )?);
 
         // Simulate immediate completion for deposits
-        if matches!(input.transaction_type, TransactionType::Deposit) {
+        if matches!(self.transaction_type, TransactionType::Deposit) {
             events.push(StreamWrite::new(
                 &read_streams,
                 stream_id,
                 RealisticEvent::TransactionCompleted {
-                    id: input.transaction_id,
+                    id: self.transaction_id,
                 },
             )?);
         }
@@ -402,10 +399,7 @@ impl Command for FinancialTransactionCommand {
 
 // Multi-stream command for e-commerce orders
 #[derive(Debug, Clone)]
-struct EcommerceOrderCommand;
-
-#[derive(Debug, Clone)]
-struct OrderInput {
+struct EcommerceOrderCommand {
     order_id: String,
     customer_id: String,
     products: Vec<(String, u32)>, // (product_id, quantity)
@@ -426,26 +420,28 @@ enum OrderStatus {
     Cancelled,
 }
 
-#[async_trait::async_trait]
-impl Command for EcommerceOrderCommand {
-    type Input = OrderInput;
-    type State = OrderSystemState;
-    type Event = RealisticEvent;
+impl eventcore::CommandStreams for EcommerceOrderCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+    fn read_streams(&self) -> Vec<StreamId> {
         let mut streams = vec![
-            StreamId::try_new(format!("customer-{}", input.customer_id)).unwrap(),
-            StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
+            StreamId::try_new(format!("customer-{}", self.customer_id)).unwrap(),
+            StreamId::try_new(format!("order-{}", self.order_id)).unwrap(),
         ];
 
         // Add product streams
-        for (product_id, _) in &input.products {
+        for (product_id, _) in &self.products {
             streams.push(StreamId::try_new(format!("product-{}", product_id)).unwrap());
         }
 
         streams
     }
+}
+
+#[async_trait::async_trait]
+impl eventcore::CommandLogic for EcommerceOrderCommand {
+    type State = OrderSystemState;
+    type Event = RealisticEvent;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -486,19 +482,18 @@ impl Command for EcommerceOrderCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
-    ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check if order already exists
-        if state.order_status.contains_key(&input.order_id) {
+        if state.order_status.contains_key(&self.order_id) {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Order {} already exists",
-                input.order_id
+                self.order_id
             )));
         }
 
         // Validate inventory
-        for (product_id, quantity) in &input.products {
+        for (product_id, quantity) in &self.products {
             let available = state.inventory.get(product_id).copied().unwrap_or(1000); // Default stock
             if available < *quantity {
                 return Err(CommandError::BusinessRuleViolation(format!(
@@ -511,21 +506,21 @@ impl Command for EcommerceOrderCommand {
         let mut events = vec![];
 
         // Create order placed event
-        let order_stream = StreamId::try_new(format!("order-{}", input.order_id)).unwrap();
-        let product_ids: Vec<String> = input.products.iter().map(|(id, _)| id.clone()).collect();
+        let order_stream = StreamId::try_new(format!("order-{}", self.order_id)).unwrap();
+        let product_ids: Vec<String> = self.products.iter().map(|(id, _)| id.clone()).collect();
 
         events.push(StreamWrite::new(
             &read_streams,
             order_stream,
             RealisticEvent::OrderPlaced {
-                id: input.order_id.clone(),
-                customer: input.customer_id.clone(),
+                id: self.order_id.clone(),
+                customer: self.customer_id.clone(),
                 items: product_ids,
             },
         )?);
 
         // Reserve inventory for each product
-        for (product_id, quantity) in input.products {
+        for (product_id, quantity) in self.products {
             let product_stream = StreamId::try_new(format!("product-{}", product_id)).unwrap();
             events.push(StreamWrite::new(
                 &read_streams,
@@ -533,7 +528,7 @@ impl Command for EcommerceOrderCommand {
                 RealisticEvent::StockReserved {
                     product: product_id,
                     quantity,
-                    order: input.order_id.clone(),
+                    order: self.order_id.clone(),
                 },
             )?);
         }
@@ -670,8 +665,7 @@ impl PostgresPerformanceTestRunner {
         for i in 0..num_operations {
             let op_start = Instant::now();
 
-            let command = FinancialTransactionCommand;
-            let input = TransactionInput {
+            let command = FinancialTransactionCommand {
                 account_id: format!("acc{:04}", i % 20), // Rotate through 20 accounts (we only create 20)
                 transaction_id: format!(
                     "txn-{}",
@@ -691,7 +685,7 @@ impl PostgresPerformanceTestRunner {
 
             let result = self
                 .executor
-                .execute(&command, input, ExecutionOptions::default())
+                .execute(&command, ExecutionOptions::default())
                 .await;
             let duration = op_start.elapsed();
 
@@ -712,15 +706,13 @@ impl PostgresPerformanceTestRunner {
         for i in 0..num_operations {
             let op_start = Instant::now();
 
-            let command = EcommerceOrderCommand;
-
             // Create orders with 2-5 products each
             let num_products = 2 + (i % 4);
             let products: Vec<(String, u32)> = (0..num_products)
                 .map(|j| (format!("prod{:04}", (i + j) % 10), 1 + (j % 3) as u32)) // Use 10 products (we only create 10)
                 .collect();
 
-            let input = OrderInput {
+            let command = EcommerceOrderCommand {
                 order_id: format!(
                     "order-{}",
                     uuid::Uuid::new_v7(Timestamp::now(uuid::NoContext))
@@ -731,7 +723,7 @@ impl PostgresPerformanceTestRunner {
 
             let result = self
                 .executor
-                .execute(&command, input, ExecutionOptions::default())
+                .execute(&command, ExecutionOptions::default())
                 .await;
             let duration = op_start.elapsed();
 

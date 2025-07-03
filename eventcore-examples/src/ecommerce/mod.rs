@@ -62,8 +62,8 @@
 //!     Some("123 Main St".to_string()),
 //! );
 //!
-//! let create_order_input = CreateOrderInput::new(order_id.clone(), customer);
-//! executor.execute(&CreateOrderCommand, create_order_input, ExecutionOptions::default()).await?;
+//! let create_order = CreateOrderCommand::new(order_id.clone(), customer);
+//! executor.execute(&create_order, create_order.clone(), ExecutionOptions::default()).await?;
 //!
 //! // Add item to order
 //! let item = OrderItem::new(
@@ -76,8 +76,8 @@
 //! executor.execute(&AddItemToOrderCommand, add_item_input, ExecutionOptions::default()).await?;
 //!
 //! // Place the order
-//! let place_order_input = PlaceOrderInput::new(order_id, catalog_stream);
-//! executor.execute(&PlaceOrderCommand, place_order_input, ExecutionOptions::default()).await?;
+//! let place_order = PlaceOrderCommand::new(order_id, catalog_stream);
+//! executor.execute(&place_order, place_order.clone(), ExecutionOptions::default()).await?;
 //! # Ok(())
 //! # }
 //! ```

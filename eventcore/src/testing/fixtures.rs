@@ -3,7 +3,7 @@
 //! This module provides pre-configured test data and scenarios commonly needed
 //! in event sourcing tests.
 
-use crate::command::{Command, CommandResult, ReadStreams, StreamWrite};
+use crate::command::{CommandLogic, CommandResult, CommandStreams, ReadStreams, StreamWrite};
 use crate::errors::CommandError;
 use crate::event_store::{
     EventStore, EventToWrite, ReadOptions, StoredEvent as StoreStoredEvent, StreamData,
@@ -50,11 +50,8 @@ pub enum TestEvent {
 }
 
 /// A simple test command for demonstrating the command pattern.
-pub struct TestCommand;
-
-/// Input for the test command.
-#[derive(Debug, Clone)]
-pub struct TestCommandInput {
+#[derive(Clone)]
+pub struct TestCommand {
     /// The stream to operate on
     pub stream_id: StreamId,
     /// The action to perform
@@ -104,16 +101,18 @@ pub struct TestState {
     pub items: HashMap<String, String>,
 }
 
-#[async_trait]
-impl Command for TestCommand {
-    type Input = TestCommandInput;
-    type State = TestState;
-    type Event = TestEvent;
+impl CommandStreams for TestCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.stream_id.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.stream_id.clone()]
     }
+}
+
+#[async_trait]
+impl CommandLogic for TestCommand {
+    type State = TestState;
+    type Event = TestEvent;
 
     fn apply(
         &self,
@@ -140,48 +139,53 @@ impl Command for TestCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut crate::command::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
-        let event = match input.action {
+        let event = match &self.action {
             TestAction::Create { id, name } => {
-                if state.items.contains_key(&id) {
+                if state.items.contains_key(id) {
                     return Err(CommandError::BusinessRuleViolation(format!(
                         "Item {id} already exists"
                     )));
                 }
-                TestEvent::Created { id, name }
+                TestEvent::Created {
+                    id: id.clone(),
+                    name: name.clone(),
+                }
             }
             TestAction::Update { id, name } => {
-                if !state.items.contains_key(&id) {
+                if !state.items.contains_key(id) {
                     return Err(CommandError::BusinessRuleViolation(format!(
                         "Item {id} does not exist"
                     )));
                 }
-                TestEvent::Updated { id, name }
+                TestEvent::Updated {
+                    id: id.clone(),
+                    name: name.clone(),
+                }
             }
             TestAction::Delete { id } => {
-                if !state.items.contains_key(&id) {
+                if !state.items.contains_key(id) {
                     return Err(CommandError::BusinessRuleViolation(format!(
                         "Item {id} does not exist"
                     )));
                 }
-                TestEvent::Deleted { id }
+                TestEvent::Deleted { id: id.clone() }
             }
-            TestAction::Increment { amount } => TestEvent::Incremented { amount },
+            TestAction::Increment { amount } => TestEvent::Incremented { amount: *amount },
             TestAction::Decrement { amount } => {
                 if state.counter - amount < 0 {
                     return Err(CommandError::BusinessRuleViolation(
                         "Counter cannot go negative".to_string(),
                     ));
                 }
-                TestEvent::Decremented { amount }
+                TestEvent::Decremented { amount: *amount }
             }
         };
 
         Ok(vec![StreamWrite::new(
             &read_streams,
-            input.stream_id,
+            self.stream_id.clone(),
             event,
         )?])
     }
@@ -429,34 +433,34 @@ pub fn create_test_scenario() -> HashMap<StreamId, Vec<StoreStoredEvent<TestEven
     scenario
 }
 
-/// Creates a test command input for common scenarios.
-pub fn create_test_command_input(scenario: &str) -> TestCommandInput {
+/// Creates a test command for common scenarios.
+pub fn create_test_command_input(scenario: &str) -> TestCommand {
     match scenario {
-        "create" => TestCommandInput {
+        "create" => TestCommand {
             stream_id: StreamId::try_new("test-stream").unwrap(),
             action: TestAction::Create {
                 id: "item-1".to_string(),
                 name: "Test Item".to_string(),
             },
         },
-        "update" => TestCommandInput {
+        "update" => TestCommand {
             stream_id: StreamId::try_new("test-stream").unwrap(),
             action: TestAction::Update {
                 id: "item-1".to_string(),
                 name: "Updated Item".to_string(),
             },
         },
-        "delete" => TestCommandInput {
+        "delete" => TestCommand {
             stream_id: StreamId::try_new("test-stream").unwrap(),
             action: TestAction::Delete {
                 id: "item-1".to_string(),
             },
         },
-        "increment" => TestCommandInput {
+        "increment" => TestCommand {
             stream_id: StreamId::try_new("counter-stream").unwrap(),
             action: TestAction::Increment { amount: 10 },
         },
-        "decrement" => TestCommandInput {
+        "decrement" => TestCommand {
             stream_id: StreamId::try_new("counter-stream").unwrap(),
             action: TestAction::Decrement { amount: 5 },
         },
@@ -495,14 +499,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_command_create_success() {
-        let command = TestCommand;
-        let input = create_test_command_input("create");
+        let command = create_test_command_input("create");
         let state = TestState::default();
 
-        let read_streams = ReadStreams::new(vec![input.stream_id.clone()]);
+        let read_streams = ReadStreams::new(vec![command.stream_id.clone()]);
         let mut stream_resolver = crate::command::StreamResolver::new();
         let stream_writes = command
-            .handle(read_streams, state, input.clone(), &mut stream_resolver)
+            .handle(read_streams, state, &mut stream_resolver)
             .await
             .unwrap();
         let result: Vec<(StreamId, TestEvent)> = stream_writes
@@ -511,23 +514,26 @@ mod tests {
             .collect();
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].0, input.stream_id);
+        assert_eq!(result[0].0, command.stream_id);
         matches!(result[0].1, TestEvent::Created { .. });
     }
 
     #[tokio::test]
     async fn test_command_create_duplicate_fails() {
-        let command = TestCommand;
         let input = create_test_command_input("create");
+        let command = TestCommand {
+            stream_id: input.stream_id.clone(),
+            action: input.action,
+        };
         let mut state = TestState::default();
         state
             .items
             .insert("item-1".to_string(), "Existing".to_string());
 
-        let read_streams = ReadStreams::new(vec![input.stream_id.clone()]);
+        let read_streams = ReadStreams::new(vec![command.stream_id.clone()]);
         let mut stream_resolver = crate::command::StreamResolver::new();
         let result = command
-            .handle(read_streams, state, input, &mut stream_resolver)
+            .handle(read_streams, state, &mut stream_resolver)
             .await;
 
         assert!(matches!(
@@ -538,14 +544,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_command_decrement_negative_fails() {
-        let command = TestCommand;
         let input = create_test_command_input("decrement");
+        let command = TestCommand {
+            stream_id: input.stream_id.clone(),
+            action: input.action,
+        };
         let state = TestState::default(); // Counter starts at 0
 
-        let read_streams = ReadStreams::new(vec![input.stream_id.clone()]);
+        let read_streams = ReadStreams::new(vec![command.stream_id.clone()]);
         let mut stream_resolver = crate::command::StreamResolver::new();
         let result = command
-            .handle(read_streams, state, input, &mut stream_resolver)
+            .handle(read_streams, state, &mut stream_resolver)
             .await;
 
         assert!(matches!(

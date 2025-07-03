@@ -23,23 +23,16 @@ pub fn expand_derive_command(input: DeriveInput) -> Result<TokenStream> {
     // Generate read_streams implementation
     let read_streams_impl = generate_read_streams(&stream_fields);
 
-    // Generate partial Command trait implementation
+    // Generate the StreamSet type and complete CommandStreams implementation
     let expanded = quote! {
         #stream_set_type
 
-        impl #impl_generics eventcore::command::Command for #name #ty_generics #where_clause {
+        impl #impl_generics eventcore::CommandStreams for #name #ty_generics #where_clause {
             type StreamSet = #stream_set_name;
 
-            fn read_streams(&self, input: &Self::Input) -> Vec<eventcore::types::StreamId> {
+            fn read_streams(&self) -> Vec<eventcore::StreamId> {
                 #read_streams_impl
             }
-
-            // Other required methods must still be implemented manually:
-            // - type Input
-            // - type State
-            // - type Event
-            // - fn apply()
-            // - async fn handle()
         }
     };
 
@@ -56,7 +49,7 @@ fn generate_read_streams(stream_fields: &[(String, syn::Type)]) -> TokenStream {
         .iter()
         .map(|(field_name, _)| {
             let field = quote::format_ident!("{}", field_name);
-            quote! { input.#field.clone() }
+            quote! { self.#field.clone() }
         })
         .collect();
 
@@ -95,7 +88,7 @@ mod tests {
         // Verify read_streams implementation
         assert!(output_str.contains("fn read_streams"));
         // The vector syntax varies with formatting
-        assert!(output_str.contains("input.from_account") || output_str.contains("vec"));
+        assert!(output_str.contains("self.from_account") || output_str.contains("vec"));
     }
 
     #[test]

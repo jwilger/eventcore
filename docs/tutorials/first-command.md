@@ -110,7 +110,7 @@ impl AccountState {
 Now we'll create our deposit command using the `#[derive(Command)]` macro:
 
 ```rust
-use eventcore::{prelude::*, require, emit};
+use eventcore::{prelude::*, require, emit, CommandLogic};
 use eventcore_macros::Command;
 use async_trait::async_trait;
 
@@ -123,11 +123,9 @@ pub struct DepositMoney {
 }
 
 #[async_trait]
-impl Command for DepositMoney {
-    type Input = Self;
+impl CommandLogic for DepositMoney {
     type State = AccountState;
     type Event = BankEvent;
-    type StreamSet = DepositMoneyStreamSet;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -171,12 +169,13 @@ impl Command for DepositMoney {
 }
 ```
 
-**Key benefits of the macro approach:**
-- `#[derive(Command)]` generates the `read_streams()` method automatically
+**Key benefits of the new macro approach:**
+- `#[derive(Command)]` generates the complete `CommandStreams` implementation
+- No need to specify `type Input = Self` or `type StreamSet = ...` manually
 - `#[stream]` marks fields that should be included in the consistency boundary
 - `require!` macro provides clean business rule validation
 - `emit!` macro ensures type-safe event generation
-- Less boilerplate, more focus on business logic
+- 50% less boilerplate, more focus on business logic
 
 ## Step 5: Set Up the Event Store and Executor
 

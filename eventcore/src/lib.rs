@@ -1099,7 +1099,9 @@ mod utils;
 pub mod cqrs;
 
 // Public API exports
-pub use command::{Command, CommandResult, ReadStreams, StreamResolver, StreamWrite};
+pub use command::{
+    Command, CommandLogic, CommandResult, CommandStreams, ReadStreams, StreamResolver, StreamWrite,
+};
 pub use errors::{
     CommandError, DomainErrorConversion, DomainErrorExt, EventStoreError, ProjectionError,
     ProjectionResult, ValidationError,

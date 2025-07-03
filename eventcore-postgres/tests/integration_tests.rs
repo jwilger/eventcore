@@ -5,8 +5,8 @@
 
 use async_trait::async_trait;
 use eventcore::{
-    Command, CommandError, CommandExecutor, CommandResult, EventStore, ExecutionOptions,
-    ReadStreams, StreamId, StreamWrite,
+    CommandError, CommandExecutor, CommandResult, EventStore, ExecutionOptions, ReadStreams,
+    StreamId, StreamWrite,
 };
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
 use serde::{Deserialize, Serialize};
@@ -50,24 +50,23 @@ struct CounterState {
 }
 
 #[derive(Debug, Clone)]
-struct IncrementCounterCommand;
-
-#[derive(Debug, Clone)]
-struct IncrementCounterInput {
+struct IncrementCounterCommand {
     stream_id: StreamId,
     amount: u32,
 }
 
-#[async_trait]
-impl Command for IncrementCounterCommand {
-    type Input = IncrementCounterInput;
-    type State = CounterState;
-    type Event = TestEvent;
+impl eventcore::CommandStreams for IncrementCounterCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.stream_id.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.stream_id.clone()]
     }
+}
+
+#[async_trait]
+impl eventcore::CommandLogic for IncrementCounterCommand {
+    type State = CounterState;
+    type Event = TestEvent;
 
     fn apply(&self, state: &mut Self::State, stored_event: &eventcore::StoredEvent<Self::Event>) {
         match &stored_event.payload {
@@ -83,10 +82,9 @@ impl Command for IncrementCounterCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
-        if input.amount == 0 {
+        if self.amount == 0 {
             return Err(CommandError::ValidationFailed(
                 "Amount must be greater than 0".to_string(),
             ));
@@ -94,34 +92,33 @@ impl Command for IncrementCounterCommand {
 
         Ok(vec![StreamWrite::new(
             &read_streams,
-            input.stream_id,
+            self.stream_id.clone(),
             TestEvent::CounterIncremented {
-                amount: input.amount,
+                amount: self.amount,
             },
         )?])
     }
 }
 
 #[derive(Debug, Clone)]
-struct TransferBetweenCountersCommand;
-
-#[derive(Debug, Clone)]
-struct TransferBetweenCountersInput {
+struct TransferBetweenCountersCommand {
     from_stream: StreamId,
     to_stream: StreamId,
     amount: u32,
 }
 
-#[async_trait]
-impl Command for TransferBetweenCountersCommand {
-    type Input = TransferBetweenCountersInput;
-    type State = std::collections::HashMap<StreamId, CounterState>;
-    type Event = TestEvent;
+impl eventcore::CommandStreams for TransferBetweenCountersCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.from_stream.clone(), input.to_stream.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.from_stream.clone(), self.to_stream.clone()]
     }
+}
+
+#[async_trait]
+impl eventcore::CommandLogic for TransferBetweenCountersCommand {
+    type State = std::collections::HashMap<StreamId, CounterState>;
+    type Event = TestEvent;
 
     fn apply(&self, state: &mut Self::State, stored_event: &eventcore::StoredEvent<Self::Event>) {
         // Apply events to the appropriate stream's state
@@ -139,41 +136,40 @@ impl Command for TransferBetweenCountersCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         mut state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
-        if input.amount == 0 {
+        if self.amount == 0 {
             return Err(CommandError::ValidationFailed(
                 "Amount must be greater than 0".to_string(),
             ));
         }
 
         // Ensure we have entries for both streams
-        state.entry(input.from_stream.clone()).or_default();
-        state.entry(input.to_stream.clone()).or_default();
+        state.entry(self.from_stream.clone()).or_default();
+        state.entry(self.to_stream.clone()).or_default();
 
-        let from_balance = state.get(&input.from_stream).unwrap().value;
+        let from_balance = state.get(&self.from_stream).unwrap().value;
 
-        if from_balance < input.amount {
+        if from_balance < self.amount {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Insufficient balance: {} < {}",
-                from_balance, input.amount
+                from_balance, self.amount
             )));
         }
 
         Ok(vec![
             StreamWrite::new(
                 &read_streams,
-                input.from_stream,
+                self.from_stream.clone(),
                 TestEvent::CounterDecremented {
-                    amount: input.amount,
+                    amount: self.amount,
                 },
             )?,
             StreamWrite::new(
                 &read_streams,
-                input.to_stream,
+                self.to_stream.clone(),
                 TestEvent::CounterIncremented {
-                    amount: input.amount,
+                    amount: self.amount,
                 },
             )?,
         ])
@@ -190,7 +186,6 @@ async fn test_concurrent_command_execution() {
     event_store.initialize().await.unwrap();
 
     let executor = CommandExecutor::new(event_store);
-    let command = IncrementCounterCommand;
 
     // Create a shared stream ID for concurrent operations
     let test_id = uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext));
@@ -200,19 +195,15 @@ async fn test_concurrent_command_execution() {
     let mut handles = vec![];
     for i in 1..=10 {
         let executor = executor.clone();
-        let command = command.clone();
         let stream_id = stream_id.clone();
 
         let handle = tokio::spawn(async move {
+            let command = IncrementCounterCommand {
+                stream_id,
+                amount: i,
+            };
             executor
-                .execute(
-                    &command,
-                    IncrementCounterInput {
-                        stream_id,
-                        amount: i,
-                    },
-                    ExecutionOptions::default(),
-                )
+                .execute(&command, ExecutionOptions::default())
                 .await
         });
 
@@ -278,31 +269,23 @@ async fn test_multi_stream_atomicity() {
     let counter2_id = StreamId::try_new(format!("counter-2-{test_id}")).unwrap();
 
     // Set up initial state for counter1
-    let increment_cmd = IncrementCounterCommand;
+    let increment_cmd = IncrementCounterCommand {
+        stream_id: counter1_id.clone(),
+        amount: 100,
+    };
     executor
-        .execute(
-            &increment_cmd,
-            IncrementCounterInput {
-                stream_id: counter1_id.clone(),
-                amount: 100,
-            },
-            ExecutionOptions::default(),
-        )
+        .execute(&increment_cmd, ExecutionOptions::default())
         .await
         .unwrap();
 
     // Test successful transfer
-    let transfer_cmd = TransferBetweenCountersCommand;
+    let transfer_cmd = TransferBetweenCountersCommand {
+        from_stream: counter1_id.clone(),
+        to_stream: counter2_id.clone(),
+        amount: 50,
+    };
     let result = executor
-        .execute(
-            &transfer_cmd,
-            TransferBetweenCountersInput {
-                from_stream: counter1_id.clone(),
-                to_stream: counter2_id.clone(),
-                amount: 50,
-            },
-            ExecutionOptions::default(),
-        )
+        .execute(&transfer_cmd, ExecutionOptions::default())
         .await;
 
     assert!(result.is_ok(), "Transfer should succeed");
@@ -370,16 +353,13 @@ async fn test_multi_stream_atomicity() {
     );
 
     // Test failing transfer (insufficient funds)
+    let failing_transfer_cmd = TransferBetweenCountersCommand {
+        from_stream: counter1_id.clone(),
+        to_stream: counter2_id.clone(),
+        amount: 100, // More than available
+    };
     let failing_result = executor
-        .execute(
-            &transfer_cmd,
-            TransferBetweenCountersInput {
-                from_stream: counter1_id.clone(),
-                to_stream: counter2_id.clone(),
-                amount: 100, // More than available
-            },
-            ExecutionOptions::default(),
-        )
+        .execute(&failing_transfer_cmd, ExecutionOptions::default())
         .await;
 
     assert!(
@@ -445,13 +425,9 @@ async fn test_transaction_isolation() {
         let amount = (u32::try_from(i).unwrap() + 1) * 10;
 
         let handle = tokio::spawn(async move {
-            let command = IncrementCounterCommand;
+            let command = IncrementCounterCommand { stream_id, amount };
             executor
-                .execute(
-                    &command,
-                    IncrementCounterInput { stream_id, amount },
-                    ExecutionOptions::default(),
-                )
+                .execute(&command, ExecutionOptions::default())
                 .await
         });
 
@@ -470,16 +446,12 @@ async fn test_transaction_isolation() {
         let stream_id = stream_id.clone();
 
         let handle = tokio::spawn(async move {
-            let command = IncrementCounterCommand;
+            let command = IncrementCounterCommand {
+                stream_id,
+                amount: 5,
+            };
             executor
-                .execute(
-                    &command,
-                    IncrementCounterInput {
-                        stream_id,
-                        amount: 5,
-                    },
-                    ExecutionOptions::default(),
-                )
+                .execute(&command, ExecutionOptions::default())
                 .await
         });
 
@@ -493,17 +465,13 @@ async fn test_transaction_isolation() {
         let to_stream = stream_ids[i + 3].clone();
 
         let handle = tokio::spawn(async move {
-            let command = TransferBetweenCountersCommand;
+            let command = TransferBetweenCountersCommand {
+                from_stream,
+                to_stream,
+                amount: 5,
+            };
             executor
-                .execute(
-                    &command,
-                    TransferBetweenCountersInput {
-                        from_stream,
-                        to_stream,
-                        amount: 5,
-                    },
-                    ExecutionOptions::default(),
-                )
+                .execute(&command, ExecutionOptions::default())
                 .await
         });
 
@@ -826,22 +794,18 @@ async fn test_basic_performance() {
     event_store.initialize().await.unwrap();
 
     let executor = CommandExecutor::new(event_store);
-    let command = IncrementCounterCommand;
 
     // Measure time for sequential operations
     let stream_id = StreamId::try_new("perf-test").unwrap();
     let start = std::time::Instant::now();
 
     for i in 1..=100 {
+        let command = IncrementCounterCommand {
+            stream_id: stream_id.clone(),
+            amount: i,
+        };
         executor
-            .execute(
-                &command,
-                IncrementCounterInput {
-                    stream_id: stream_id.clone(),
-                    amount: i,
-                },
-                ExecutionOptions::default(),
-            )
+            .execute(&command, ExecutionOptions::default())
             .await
             .unwrap();
     }

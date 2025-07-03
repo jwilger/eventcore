@@ -13,18 +13,15 @@ use crate::ecommerce::{
 };
 use async_trait::async_trait;
 use eventcore::{
-    Command, CommandError, CommandResult, ReadStreams, StoredEvent, StreamId, StreamWrite,
+    CommandError, CommandLogic, CommandResult, CommandStreams, ReadStreams, StoredEvent, StreamId,
+    StreamWrite,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Command to add a new product to the catalog
-#[derive(Debug, Clone)]
-pub struct AddProductCommand;
-
-/// Input for adding a product to the catalog
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AddProductInput {
+pub struct AddProductCommand {
     /// The product to add
     pub product: Product,
     /// Initial inventory quantity
@@ -33,8 +30,8 @@ pub struct AddProductInput {
     pub catalog_stream: StreamId,
 }
 
-impl AddProductInput {
-    /// Create new input for adding a product
+impl AddProductCommand {
+    /// Create new command for adding a product
     pub fn new(product: Product, initial_inventory: Quantity, catalog_stream: StreamId) -> Self {
         Self {
             product,
@@ -53,19 +50,21 @@ pub struct ProductCatalogState {
     pub inventory: HashMap<ProductId, Quantity>,
 }
 
-#[async_trait]
-impl Command for AddProductCommand {
-    type Input = AddProductInput;
-    type State = ProductCatalogState;
-    type Event = EcommerceEvent;
+impl CommandStreams for AddProductCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+    fn read_streams(&self) -> Vec<StreamId> {
         vec![
-            StreamId::try_new(format!("product-{}", input.product.id)).unwrap(),
-            input.catalog_stream.clone(),
+            StreamId::try_new(format!("product-{}", self.product.id)).unwrap(),
+            self.catalog_stream.clone(),
         ]
     }
+}
+
+#[async_trait]
+impl CommandLogic for AddProductCommand {
+    type State = ProductCatalogState;
+    type Event = EcommerceEvent;
 
     fn apply(&self, state: &mut Self::State, stored_event: &StoredEvent<Self::Event>) {
         match &stored_event.payload {
@@ -90,48 +89,46 @@ impl Command for AddProductCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check if product already exists
-        if state.products.contains_key(&input.product.id) {
+        if state.products.contains_key(&self.product.id) {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Product {} already exists in catalog",
-                input.product.id
+                self.product.id
             )));
         }
 
         let event = EcommerceEvent::ProductAdded(ProductAddedEvent {
-            product: input.product.clone(),
-            initial_inventory: input.initial_inventory,
+            product: self.product.clone(),
+            initial_inventory: self.initial_inventory,
         });
 
         Ok(vec![
             StreamWrite::new(
                 &read_streams,
-                StreamId::try_new(format!("product-{}", input.product.id)).unwrap(),
+                StreamId::try_new(format!("product-{}", self.product.id)).unwrap(),
                 event.clone(),
             )?,
-            StreamWrite::new(&read_streams, input.catalog_stream, event)?,
+            StreamWrite::new(&read_streams, self.catalog_stream.clone(), event)?,
         ])
     }
 }
 
 /// Command to create a new order
-#[derive(Debug, Clone)]
-pub struct CreateOrderCommand;
-
-/// Input for creating an order
+///
+/// This command demonstrates the simplified pattern where the command struct
+/// serves as its own input type, with all fields being validated domain types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateOrderInput {
+pub struct CreateOrderCommand {
     /// The order identifier
     pub order_id: OrderId,
     /// Customer information
     pub customer: Customer,
 }
 
-impl CreateOrderInput {
-    /// Create new input for creating an order
+impl CreateOrderCommand {
+    /// Create new command for creating an order
     pub fn new(order_id: OrderId, customer: Customer) -> Self {
         Self { order_id, customer }
     }
@@ -150,16 +147,18 @@ pub struct OrderState {
     pub status: Option<crate::ecommerce::types::OrderStatus>,
 }
 
-#[async_trait]
-impl Command for CreateOrderCommand {
-    type Input = CreateOrderInput;
-    type State = OrderState;
-    type Event = EcommerceEvent;
+impl CommandStreams for CreateOrderCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![StreamId::try_new(format!("order-{}", input.order_id)).unwrap()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![StreamId::try_new(format!("order-{}", self.order_id)).unwrap()]
     }
+}
+
+#[async_trait]
+impl CommandLogic for CreateOrderCommand {
+    type State = OrderState;
+    type Event = EcommerceEvent;
 
     fn apply(&self, state: &mut Self::State, stored_event: &StoredEvent<Self::Event>) {
         match &stored_event.payload {
@@ -201,37 +200,32 @@ impl Command for CreateOrderCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check if order already exists
         if state.order_exists {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Order {} already exists",
-                input.order_id
+                self.order_id
             )));
         }
 
         let event = EcommerceEvent::OrderCreated(OrderCreatedEvent {
-            order_id: input.order_id.clone(),
-            customer: input.customer,
+            order_id: self.order_id.clone(),
+            customer: self.customer.clone(),
         });
 
         Ok(vec![StreamWrite::new(
             &read_streams,
-            StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
+            StreamId::try_new(format!("order-{}", self.order_id)).unwrap(),
             event,
         )?])
     }
 }
 
 /// Command to add an item to an order
-#[derive(Debug, Clone)]
-pub struct AddItemToOrderCommand;
-
-/// Input for adding an item to an order
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AddItemToOrderInput {
+pub struct AddItemToOrderCommand {
     /// The order identifier
     pub order_id: OrderId,
     /// The item to add
@@ -240,8 +234,8 @@ pub struct AddItemToOrderInput {
     pub catalog_stream: StreamId,
 }
 
-impl AddItemToOrderInput {
-    /// Create new input for adding an item to an order
+impl AddItemToOrderCommand {
+    /// Create new command for adding an item to an order
     pub fn new(order_id: OrderId, item: OrderItem, catalog_stream: StreamId) -> Self {
         Self {
             order_id,
@@ -260,20 +254,22 @@ pub struct OrderWithCatalogState {
     pub catalog: ProductCatalogState,
 }
 
-#[async_trait]
-impl Command for AddItemToOrderCommand {
-    type Input = AddItemToOrderInput;
-    type State = OrderWithCatalogState;
-    type Event = EcommerceEvent;
+impl CommandStreams for AddItemToOrderCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+    fn read_streams(&self) -> Vec<StreamId> {
         vec![
-            StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
-            StreamId::try_new(format!("product-{}", input.item.product_id)).unwrap(),
-            input.catalog_stream.clone(),
+            StreamId::try_new(format!("order-{}", self.order_id)).unwrap(),
+            StreamId::try_new(format!("product-{}", self.item.product_id)).unwrap(),
+            self.catalog_stream.clone(),
         ]
     }
+}
+
+#[async_trait]
+impl CommandLogic for AddItemToOrderCommand {
+    type State = OrderWithCatalogState;
+    type Event = EcommerceEvent;
 
     fn apply(&self, state: &mut Self::State, stored_event: &StoredEvent<Self::Event>) {
         // Apply order-related events to order state
@@ -338,29 +334,28 @@ impl Command for AddItemToOrderCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check if order exists and is in draft status
         if !state.order.order_exists {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Order {} does not exist",
-                input.order_id
+                self.order_id
             )));
         }
 
         if state.order.status != Some(crate::ecommerce::types::OrderStatus::Draft) {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Cannot add items to order {} - order is not in draft status",
-                input.order_id
+                self.order_id
             )));
         }
 
         // Check if product exists in catalog
-        if !state.catalog.products.contains_key(&input.item.product_id) {
+        if !state.catalog.products.contains_key(&self.item.product_id) {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Product {} does not exist in catalog",
-                input.item.product_id
+                self.item.product_id
             )));
         }
 
@@ -368,79 +363,79 @@ impl Command for AddItemToOrderCommand {
         let available_quantity_value = state
             .catalog
             .inventory
-            .get(&input.item.product_id)
+            .get(&self.item.product_id)
             .map_or(0, Quantity::value);
 
-        if input.item.quantity.value() > available_quantity_value {
+        if self.item.quantity.value() > available_quantity_value {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Insufficient inventory for product {}: requested {}, available {}",
-                input.item.product_id, input.item.quantity, available_quantity_value
+                self.item.product_id, self.item.quantity, available_quantity_value
             )));
         }
 
         // Check if item already exists in order
-        if state.order.items.contains_key(&input.item.product_id) {
+        if state.order.items.contains_key(&self.item.product_id) {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Product {} is already in order {}",
-                input.item.product_id, input.order_id
+                self.item.product_id, self.order_id
             )));
         }
 
         let event = EcommerceEvent::ItemAddedToOrder(ItemAddedToOrderEvent {
-            order_id: input.order_id.clone(),
-            item: input.item.clone(),
+            order_id: self.order_id.clone(),
+            item: self.item.clone(),
         });
 
         // Reserve inventory
-        let new_inventory_value = available_quantity_value - input.item.quantity.value();
+        let new_inventory_value = available_quantity_value - self.item.quantity.value();
         let new_inventory = Quantity::for_inventory(new_inventory_value)
             .map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
 
         let previous_quantity = state
             .catalog
             .inventory
-            .get(&input.item.product_id)
+            .get(&self.item.product_id)
             .copied()
             .unwrap_or_else(|| Quantity::for_inventory(0).unwrap());
 
         let inventory_event = EcommerceEvent::InventoryUpdated(InventoryUpdatedEvent {
-            product_id: input.item.product_id.clone(),
+            product_id: self.item.product_id.clone(),
             previous_quantity,
             new_quantity: new_inventory,
-            reason: format!("Reserved for order {}", input.order_id),
+            reason: format!("Reserved for order {}", self.order_id),
         });
 
         Ok(vec![
             StreamWrite::new(
                 &read_streams,
-                StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
+                StreamId::try_new(format!("order-{}", self.order_id)).unwrap(),
                 event,
             )?,
             StreamWrite::new(
                 &read_streams,
-                StreamId::try_new(format!("product-{}", input.item.product_id)).unwrap(),
+                StreamId::try_new(format!("product-{}", self.item.product_id)).unwrap(),
                 inventory_event.clone(),
             )?,
-            StreamWrite::new(&read_streams, input.catalog_stream, inventory_event)?,
+            StreamWrite::new(&read_streams, self.catalog_stream.clone(), inventory_event)?,
         ])
     }
 }
 
 /// Command to place an order
-#[derive(Debug, Clone)]
-pub struct PlaceOrderCommand;
-
-/// Input for placing an order
+///
+/// This command demonstrates the simplified pattern. Note that while the input
+/// includes a catalog_stream for consistency with the example, it's not actually
+/// used in read_streams since we only need to read/write the order stream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlaceOrderInput {
+pub struct PlaceOrderCommand {
     /// The order identifier
     pub order_id: OrderId,
-    /// The catalog stream to use
+    /// The catalog stream to use (kept for API compatibility but not used as a read stream)
     pub catalog_stream: StreamId,
 }
 
-impl PlaceOrderInput {
-    /// Create new input for placing an order
+impl PlaceOrderCommand {
+    /// Create new command for placing an order
     pub fn new(order_id: OrderId, catalog_stream: StreamId) -> Self {
         Self {
             order_id,
@@ -449,40 +444,73 @@ impl PlaceOrderInput {
     }
 }
 
-#[async_trait]
-impl Command for PlaceOrderCommand {
-    type Input = PlaceOrderInput;
-    type State = OrderState;
-    type Event = EcommerceEvent;
+impl CommandStreams for PlaceOrderCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![StreamId::try_new(format!("order-{}", input.order_id)).unwrap()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![StreamId::try_new(format!("order-{}", self.order_id)).unwrap()]
     }
+}
+
+#[async_trait]
+impl CommandLogic for PlaceOrderCommand {
+    type State = OrderState;
+    type Event = EcommerceEvent;
 
     fn apply(&self, state: &mut Self::State, stored_event: &StoredEvent<Self::Event>) {
-        CreateOrderCommand.apply(state, stored_event);
+        match &stored_event.payload {
+            EcommerceEvent::OrderCreated(event) => {
+                state.order_exists = true;
+                state.customer = Some(event.customer.clone());
+                state.status = Some(crate::ecommerce::types::OrderStatus::Draft);
+            }
+            EcommerceEvent::ItemAddedToOrder(event) => {
+                state
+                    .items
+                    .insert(event.item.product_id.clone(), event.item.clone());
+            }
+            EcommerceEvent::ItemRemovedFromOrder(event) => {
+                state.items.remove(&event.product_id);
+            }
+            EcommerceEvent::ItemQuantityUpdated(event) => {
+                if let Some(item) = state.items.get_mut(&event.product_id) {
+                    item.quantity = event.new_quantity;
+                }
+            }
+            EcommerceEvent::OrderPlaced(_) => {
+                state.status = Some(crate::ecommerce::types::OrderStatus::Placed);
+            }
+            EcommerceEvent::OrderCancelled(_) => {
+                state.status = Some(crate::ecommerce::types::OrderStatus::Cancelled);
+            }
+            EcommerceEvent::OrderShipped(_) => {
+                state.status = Some(crate::ecommerce::types::OrderStatus::Shipped);
+            }
+            EcommerceEvent::OrderDelivered(_) => {
+                state.status = Some(crate::ecommerce::types::OrderStatus::Delivered);
+            }
+            _ => {} // Ignore other events
+        }
     }
 
     async fn handle(
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Check if order exists and is in draft status
         if !state.order_exists {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Order {} does not exist",
-                input.order_id
+                self.order_id
             )));
         }
 
         if state.status != Some(crate::ecommerce::types::OrderStatus::Draft) {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Cannot place order {} - order is not in draft status",
-                input.order_id
+                self.order_id
             )));
         }
 
@@ -490,7 +518,7 @@ impl Command for PlaceOrderCommand {
         if state.items.is_empty() {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Cannot place order {} - order has no items",
-                input.order_id
+                self.order_id
             )));
         }
 
@@ -506,26 +534,22 @@ impl Command for PlaceOrderCommand {
         }
 
         let event = EcommerceEvent::OrderPlaced(OrderPlacedEvent {
-            order_id: input.order_id.clone(),
+            order_id: self.order_id.clone(),
             total_amount,
             placed_at: chrono::Utc::now(),
         });
 
         Ok(vec![StreamWrite::new(
             &read_streams,
-            StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
+            StreamId::try_new(format!("order-{}", self.order_id)).unwrap(),
             event,
         )?])
     }
 }
 
 /// Command to cancel an order
-#[derive(Debug, Clone)]
-pub struct CancelOrderCommand;
-
-/// Input for cancelling an order
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CancelOrderInput {
+pub struct CancelOrderCommand {
     /// The order identifier
     pub order_id: OrderId,
     /// Reason for cancellation
@@ -534,8 +558,8 @@ pub struct CancelOrderInput {
     pub catalog_stream: StreamId,
 }
 
-impl CancelOrderInput {
-    /// Create new input for cancelling an order
+impl CancelOrderCommand {
+    /// Create new command for cancelling an order
     pub fn new(order_id: OrderId, reason: String, catalog_stream: StreamId) -> Self {
         Self {
             order_id,
@@ -545,20 +569,22 @@ impl CancelOrderInput {
     }
 }
 
-#[async_trait]
-impl Command for CancelOrderCommand {
-    type Input = CancelOrderInput;
-    type State = OrderWithCatalogState;
-    type Event = EcommerceEvent;
+impl CommandStreams for CancelOrderCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+    fn read_streams(&self) -> Vec<StreamId> {
         // Initial streams: order and catalog
         vec![
-            StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
-            input.catalog_stream.clone(),
+            StreamId::try_new(format!("order-{}", self.order_id)).unwrap(),
+            self.catalog_stream.clone(),
         ]
     }
+}
+
+#[async_trait]
+impl CommandLogic for CancelOrderCommand {
+    type State = OrderWithCatalogState;
+    type Event = EcommerceEvent;
 
     fn apply(&self, state: &mut Self::State, stored_event: &StoredEvent<Self::Event>) {
         // Apply order-related events to order state
@@ -623,7 +649,6 @@ impl Command for CancelOrderCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         stream_resolver: &mut eventcore::StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Dynamically discover and request product streams for items in the order
@@ -648,7 +673,7 @@ impl Command for CancelOrderCommand {
         if !state.order.order_exists {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "Order {} does not exist",
-                input.order_id
+                self.order_id
             )));
         }
 
@@ -657,13 +682,13 @@ impl Command for CancelOrderCommand {
             Some(crate::ecommerce::types::OrderStatus::Cancelled) => {
                 return Err(CommandError::BusinessRuleViolation(format!(
                     "Order {} is already cancelled",
-                    input.order_id
+                    self.order_id
                 )));
             }
             Some(crate::ecommerce::types::OrderStatus::Delivered) => {
                 return Err(CommandError::BusinessRuleViolation(format!(
                     "Cannot cancel order {} - order has already been delivered",
-                    input.order_id
+                    self.order_id
                 )));
             }
             _ => {} // Order can be cancelled
@@ -695,7 +720,7 @@ impl Command for CancelOrderCommand {
                     product_id: item.product_id.clone(),
                     previous_quantity: current_inventory,
                     new_quantity: new_inventory,
-                    reason: format!("Released from cancelled order {}", input.order_id),
+                    reason: format!("Released from cancelled order {}", self.order_id),
                 });
 
                 // Write to both product stream and catalog stream since we now declare both
@@ -706,21 +731,21 @@ impl Command for CancelOrderCommand {
                 )?);
                 events.push(StreamWrite::new(
                     &read_streams,
-                    input.catalog_stream.clone(),
+                    self.catalog_stream.clone(),
                     inventory_event,
                 )?);
             }
         }
 
         let cancel_event = EcommerceEvent::OrderCancelled(OrderCancelledEvent {
-            order_id: input.order_id.clone(),
-            reason: input.reason,
+            order_id: self.order_id.clone(),
+            reason: self.reason.clone(),
             cancelled_at: chrono::Utc::now(),
         });
 
         events.push(StreamWrite::new(
             &read_streams,
-            StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
+            StreamId::try_new(format!("order-{}", self.order_id)).unwrap(),
             cancel_event,
         )?);
 
@@ -734,7 +759,7 @@ mod tests {
     use crate::ecommerce::types::*;
 
     #[test]
-    fn test_add_product_input_creation() {
+    fn test_add_product_command_creation() {
         let product = Product::new(
             ProductId::try_new("PRD-LAPTOP01".to_string()).unwrap(),
             Sku::try_new("LAPTOP-15".to_string()).unwrap(),
@@ -744,14 +769,14 @@ mod tests {
         );
 
         let catalog_stream = StreamId::try_new("test-catalog".to_string()).unwrap();
-        let input =
-            AddProductInput::new(product.clone(), Quantity::new(10).unwrap(), catalog_stream);
-        assert_eq!(input.product, product);
-        assert_eq!(input.initial_inventory.value(), 10);
+        let command =
+            AddProductCommand::new(product.clone(), Quantity::new(10).unwrap(), catalog_stream);
+        assert_eq!(command.product, product);
+        assert_eq!(command.initial_inventory.value(), 10);
     }
 
     #[test]
-    fn test_create_order_input_creation() {
+    fn test_create_order_command_creation() {
         let order_id = OrderId::generate();
         let customer = Customer::new(
             CustomerEmail::try_new("customer@example.com".to_string()).unwrap(),
@@ -759,13 +784,13 @@ mod tests {
             Some("123 Main St".to_string()),
         );
 
-        let input = CreateOrderInput::new(order_id.clone(), customer.clone());
-        assert_eq!(input.order_id, order_id);
-        assert_eq!(input.customer, customer);
+        let command = CreateOrderCommand::new(order_id.clone(), customer.clone());
+        assert_eq!(command.order_id, order_id);
+        assert_eq!(command.customer, customer);
     }
 
     #[test]
-    fn test_add_item_to_order_input_creation() {
+    fn test_add_item_to_order_command_creation() {
         let order_id = OrderId::generate();
         let item = OrderItem::new(
             ProductId::try_new("PRD-LAPTOP01".to_string()).unwrap(),
@@ -774,26 +799,26 @@ mod tests {
         );
 
         let catalog_stream = StreamId::try_new("test-catalog".to_string()).unwrap();
-        let input = AddItemToOrderInput::new(order_id.clone(), item.clone(), catalog_stream);
-        assert_eq!(input.order_id, order_id);
-        assert_eq!(input.item, item);
+        let command = AddItemToOrderCommand::new(order_id.clone(), item.clone(), catalog_stream);
+        assert_eq!(command.order_id, order_id);
+        assert_eq!(command.item, item);
     }
 
     #[test]
-    fn test_place_order_input_creation() {
+    fn test_place_order_command_creation() {
         let order_id = OrderId::generate();
         let catalog_stream = StreamId::try_new("test-catalog".to_string()).unwrap();
-        let input = PlaceOrderInput::new(order_id.clone(), catalog_stream);
-        assert_eq!(input.order_id, order_id);
+        let command = PlaceOrderCommand::new(order_id.clone(), catalog_stream);
+        assert_eq!(command.order_id, order_id);
     }
 
     #[test]
-    fn test_cancel_order_input_creation() {
+    fn test_cancel_order_command_creation() {
         let order_id = OrderId::generate();
         let reason = "Customer request".to_string();
         let catalog_stream = StreamId::try_new("test-catalog".to_string()).unwrap();
-        let input = CancelOrderInput::new(order_id.clone(), reason.clone(), catalog_stream);
-        assert_eq!(input.order_id, order_id);
-        assert_eq!(input.reason, reason);
+        let command = CancelOrderCommand::new(order_id.clone(), reason.clone(), catalog_stream);
+        assert_eq!(command.order_id, order_id);
+        assert_eq!(command.reason, reason);
     }
 }

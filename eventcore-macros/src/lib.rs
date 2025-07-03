@@ -12,15 +12,19 @@ mod utils;
 
 use command::expand_derive_command;
 
-/// Derive macro for implementing the Command trait.
+/// Derive macro for implementing the CommandStreams trait.
+///
+/// This macro generates a complete implementation of `CommandStreams` based on
+/// fields marked with `#[stream]`. You only need to implement `CommandLogic`
+/// for your domain logic.
 ///
 /// # Example
 ///
 /// ```ignore
 /// use eventcore_macros::Command;
-/// use eventcore::types::StreamId;
+/// use eventcore::{CommandLogic, prelude::*};
 ///
-/// #[derive(Command)]
+/// #[derive(Command, Clone)]
 /// struct TransferMoney {
 ///     #[stream]
 ///     from_account: StreamId,
@@ -28,12 +32,33 @@ use command::expand_derive_command;
 ///     to_account: StreamId,
 ///     amount: Money,
 /// }
+///
+/// #[async_trait]
+/// impl CommandLogic for TransferMoney {
+///     type State = AccountBalances;
+///     type Event = BankingEvent;
+///
+///     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+///         // Your event folding logic
+///     }
+///
+///     async fn handle(
+///         &self,
+///         read_streams: ReadStreams<Self::StreamSet>,
+///         state: Self::State,
+///         input: Self::Input,
+///         stream_resolver: &mut StreamResolver,
+///     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+///         // Your business logic
+///     }
+/// }
 /// ```
 ///
-/// This will automatically:
-/// - Generate a type-safe StreamSet type
-/// - Implement the `read_streams` method based on `#[stream]` attributes
-/// - Generate boilerplate for the Command trait implementation
+/// This automatically generates:
+/// - Complete `CommandStreams` trait implementation
+/// - `type Input = Self` (the command struct serves as input)
+/// - `type StreamSet = TransferMoneyStreamSet` (phantom type for stream access)
+/// - `fn read_streams()` implementation extracting from `#[stream]` fields
 #[proc_macro_derive(Command, attributes(stream))]
 pub fn derive_command(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

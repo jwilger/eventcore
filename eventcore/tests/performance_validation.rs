@@ -11,7 +11,7 @@
 #![allow(clippy::useless_let_if_seq)]
 
 use eventcore::{
-    Command, CommandError, CommandExecutor, EventId, EventStore, EventToWrite, ExpectedVersion,
+    CommandExecutor, EventId, EventStore, EventToWrite, ExecutionOptions, ExpectedVersion,
     ReadStreams, StreamEvents, StreamId, StreamResolver, StreamWrite,
 };
 use eventcore_memory::InMemoryEventStore;
@@ -50,25 +50,24 @@ struct PerfTestState {
 
 // Single-stream command for performance testing
 #[derive(Debug, Clone)]
-struct SingleStreamCommand;
-
-#[derive(Debug, Clone)]
-struct SingleStreamInput {
+struct SingleStreamCommand {
     stream_id: StreamId,
     entity_id: String,
     value: u64,
 }
 
-#[async_trait::async_trait]
-impl Command for SingleStreamCommand {
-    type Input = SingleStreamInput;
-    type State = PerfTestState;
-    type Event = PerfTestEvent;
+impl eventcore::CommandStreams for SingleStreamCommand {
     type StreamSet = (StreamId,);
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.stream_id.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.stream_id.clone()]
     }
+}
+
+#[async_trait::async_trait]
+impl eventcore::CommandLogic for SingleStreamCommand {
+    type State = PerfTestState;
+    type Event = PerfTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         match &event.payload {
@@ -88,23 +87,22 @@ impl Command for SingleStreamCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
-    ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
-        let event = if state.entities.contains_key(&input.entity_id) {
+    ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, eventcore::CommandError> {
+        let event = if state.entities.contains_key(&self.entity_id) {
             PerfTestEvent::Updated {
-                id: input.entity_id,
-                value: input.value,
+                id: self.entity_id.clone(),
+                value: self.value,
             }
         } else {
             PerfTestEvent::Created {
-                id: input.entity_id,
+                id: self.entity_id.clone(),
             }
         };
 
         Ok(vec![StreamWrite::new(
             &read_streams,
-            input.stream_id,
+            self.stream_id.clone(),
             event,
         )?])
     }
@@ -112,26 +110,25 @@ impl Command for SingleStreamCommand {
 
 // Multi-stream command for performance testing
 #[derive(Debug, Clone)]
-struct MultiStreamCommand;
-
-#[derive(Debug, Clone)]
-struct MultiStreamInput {
+struct MultiStreamCommand {
     source_stream: StreamId,
     target_stream: StreamId,
     entity_id: String,
     value: u64,
 }
 
-#[async_trait::async_trait]
-impl Command for MultiStreamCommand {
-    type Input = MultiStreamInput;
-    type State = PerfTestState;
-    type Event = PerfTestEvent;
+impl eventcore::CommandStreams for MultiStreamCommand {
     type StreamSet = (StreamId, StreamId);
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.source_stream.clone(), input.target_stream.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.source_stream.clone(), self.target_stream.clone()]
     }
+}
+
+#[async_trait::async_trait]
+impl eventcore::CommandLogic for MultiStreamCommand {
+    type State = PerfTestState;
+    type Event = PerfTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         match &event.payload {
@@ -151,25 +148,24 @@ impl Command for MultiStreamCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
-    ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
+    ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, eventcore::CommandError> {
         // Write to both streams
         let events = vec![
             StreamWrite::new(
                 &read_streams,
-                input.source_stream.clone(),
+                self.source_stream.clone(),
                 PerfTestEvent::Updated {
-                    id: input.entity_id.clone(),
-                    value: input.value,
+                    id: self.entity_id.clone(),
+                    value: self.value,
                 },
             )?,
             StreamWrite::new(
                 &read_streams,
-                input.target_stream,
+                self.target_stream.clone(),
                 PerfTestEvent::Updated {
-                    id: input.entity_id,
-                    value: input.value,
+                    id: self.entity_id.clone(),
+                    value: self.value,
                 },
             )?,
         ];
@@ -228,14 +224,13 @@ async fn measure_single_stream_performance(
     for i in 0..num_operations {
         let op_start = Instant::now();
 
-        let command = SingleStreamCommand;
-        let input = SingleStreamInput {
+        let command = SingleStreamCommand {
             stream_id: StreamId::try_new("perf-single-stream").unwrap(),
             entity_id: format!("entity-{}", i),
             value: i as u64,
         };
 
-        match executor.execute(&command, input, Default::default()).await {
+        match executor.execute(&command, ExecutionOptions::default()).await {
             Ok(_) => {
                 let latency = op_start.elapsed();
                 latencies.push(latency.as_micros() as f64 / 1000.0);
@@ -302,15 +297,14 @@ async fn measure_multi_stream_performance(
     for i in 0..num_operations {
         let op_start = Instant::now();
 
-        let command = MultiStreamCommand;
-        let input = MultiStreamInput {
+        let command = MultiStreamCommand {
             source_stream: StreamId::try_new("perf-source-stream").unwrap(),
             target_stream: StreamId::try_new("perf-target-stream").unwrap(),
             entity_id: format!("entity-{}", i),
             value: i as u64,
         };
 
-        match executor.execute(&command, input, Default::default()).await {
+        match executor.execute(&command, ExecutionOptions::default()).await {
             Ok(_) => {
                 let latency = op_start.elapsed();
                 latencies.push(latency.as_micros() as f64 / 1000.0);

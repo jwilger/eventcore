@@ -4,12 +4,6 @@ pub mod typestate;
 mod typestate_compile_tests;
 
 use crate::command::{Command, CommandResult, StreamResolver};
-
-#[cfg(test)]
-use crate::command::ReadStreams;
-
-#[cfg(test)]
-use crate::command::StreamWrite;
 use crate::errors::CommandError;
 use crate::event_store::{EventToWrite, ExpectedVersion, ReadOptions, StreamEvents};
 use crate::monitoring::resilience::{CircuitBreaker, CircuitBreakerConfig, CircuitResult};
@@ -112,10 +106,10 @@ impl Default for ExecutionContext {
 ///
 /// ```rust,ignore
 /// // Execute with default retry behavior
-/// executor.execute(&command, input, ExecutionOptions::default()).await?;
+/// executor.execute(command.with_input("test".to_string()), ExecutionOptions::default()).await?;
 ///
 /// // Execute without retry
-/// executor.execute(&command, input, ExecutionOptions::new().without_retry()).await?;
+/// executor.execute(command.with_input("test".to_string()), ExecutionOptions::new().without_retry()).await?;
 ///
 /// // Execute with custom retry configuration
 /// executor.execute(
@@ -533,7 +527,6 @@ where
     /// # Arguments
     ///
     /// * `command` - The command instance to execute
-    /// * `input` - The validated command input
     /// * `options` - Execution options including retry configuration and context
     ///
     /// # Returns
@@ -557,7 +550,7 @@ where
     ///     ExecutionOptions::new().without_retry()
     /// ).await?;
     /// ```
-    #[instrument(skip(self, command, input), fields(
+    #[instrument(skip(self, command), fields(
         command_type = std::any::type_name::<C>(),
         correlation_id = %options.context.correlation_id,
         user_id = options.context.user_id.as_deref().unwrap_or("anonymous"),
@@ -565,13 +558,11 @@ where
     ))]
     pub async fn execute<C>(
         &self,
-        command: &C,
-        input: C::Input,
+        command: C,
         options: ExecutionOptions,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
-        C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
@@ -581,7 +572,7 @@ where
         let result = if let Some(command_timeout) = options.command_timeout {
             if let Ok(result) = tokio::time::timeout(
                 command_timeout,
-                self.execute_without_timeout(command, input, &options),
+                self.execute_without_timeout(command, &options),
             )
             .await
             {
@@ -595,7 +586,7 @@ where
                 Err(CommandError::Timeout(command_timeout))
             }
         } else {
-            self.execute_without_timeout(command, input, &options).await
+            self.execute_without_timeout(command, &options).await
         };
 
         result
@@ -604,13 +595,11 @@ where
     /// Execute command without overall timeout (but still respecting event store timeouts)
     async fn execute_without_timeout<C>(
         &self,
-        command: &C,
-        input: C::Input,
+        command: C,
         options: &ExecutionOptions,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
-        C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
@@ -620,7 +609,6 @@ where
                 // Execute with retry logic
                 self.execute_with_retry_internal(
                     command,
-                    input,
                     options,
                     retry_config.clone(),
                     options.retry_policy.clone(),
@@ -629,7 +617,7 @@ where
             }
             None => {
                 // Execute without retry
-                self.execute_once(command, input, options).await
+                self.execute_once(command, options).await
             }
         }
     }
@@ -650,7 +638,6 @@ where
     /// # Arguments
     ///
     /// * `command` - The command instance to execute
-    /// * `input` - The validated command input
     /// * `context` - Execution context for tracing and auditing
     ///
     /// # Returns
@@ -665,7 +652,7 @@ where
     /// - Concurrency conflicts
     /// - Event store errors
     #[instrument(
-        skip(self, command, input, options),
+        skip(self, command, options),
         fields(
             command_type = std::any::type_name::<C>(),
             correlation_id = %options.context.correlation_id,
@@ -676,8 +663,7 @@ where
     #[allow(clippy::too_many_lines)]
     async fn execute_once<C>(
         &self,
-        command: &C,
-        input: C::Input,
+        command: C,
         options: &ExecutionOptions,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
@@ -686,7 +672,7 @@ where
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
-        let mut stream_ids = command.read_streams(&input);
+        let mut stream_ids = command.read_streams();
         let mut stream_resolver = StreamResolver::new();
         let mut iteration = 0;
         let max_iterations = options.max_stream_discovery_iterations;
@@ -749,7 +735,7 @@ where
             );
 
             // Reconstruct state using the scope
-            let scope_with_state = scope.reconstruct_state(command);
+            let scope_with_state = scope.reconstruct_state(&command);
 
             info!(
                 applied_events = stream_data.len(),
@@ -758,7 +744,7 @@ where
 
             // Execute command business logic
             let scope_with_writes = scope_with_state
-                .execute_command(command, input.clone(), &mut stream_resolver)
+                .execute_command(&command, &mut stream_resolver)
                 .await
                 .map_err(|err| {
                     warn!(error = %err, "Command business logic failed");
@@ -1029,8 +1015,7 @@ where
     ///
     /// # Arguments
     ///
-    /// * `command` - The command instance to execute
-    /// * `input` - The validated command input  
+    /// * `command` - The command instance to execute  
     /// * `context` - Execution context for tracing and auditing
     /// * `retry_config` - Configuration for retry behavior
     /// * `retry_policy` - Policy for determining which errors should trigger a retry
@@ -1047,7 +1032,7 @@ where
     /// - All retry attempts have been exhausted
     /// - A non-retryable error occurs during any attempt
     #[instrument(
-        skip(self, command, input, options),
+        skip(self, command, options),
         fields(
             command_type = std::any::type_name::<C>(),
             correlation_id = %options.context.correlation_id,
@@ -1057,15 +1042,13 @@ where
     )]
     async fn execute_with_retry_internal<C>(
         &self,
-        command: &C,
-        input: C::Input,
+        command: C,
         options: &ExecutionOptions,
         retry_config: RetryConfig,
         retry_policy: RetryPolicy,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
-        C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
@@ -1075,7 +1058,7 @@ where
         for attempt in 0..retry_config.max_attempts {
             info!(attempt = attempt + 1, "Attempting command execution");
 
-            match self.execute_once(command, input.clone(), options).await {
+            match self.execute_once(command.clone(), options).await {
                 Ok(result) => {
                     if attempt > 0 {
                         info!(attempt = attempt + 1, "Command succeeded after retry");
@@ -1504,7 +1487,7 @@ where
     /// let result = executor.execute_type_safe(&command, input, ExecutionOptions::default()).await?;
     /// ```
     #[instrument(
-        skip(self, command, input, options),
+        skip(self, command, options),
         fields(
             command_type = std::any::type_name::<C>(),
             correlation_id = %options.context.correlation_id,
@@ -1514,8 +1497,7 @@ where
     )]
     pub async fn execute_type_safe<C>(
         &self,
-        command: &C,
-        input: C::Input,
+        command: C,
         options: ExecutionOptions,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
@@ -1530,7 +1512,7 @@ where
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
-        let mut stream_ids = command.read_streams(&input);
+        let mut stream_ids = command.read_streams();
         let mut stream_resolver = StreamResolver::new();
         let mut iteration = 0;
         let max_iterations = options.max_stream_discovery_iterations;
@@ -1564,7 +1546,7 @@ where
             );
 
             // Reconstruct state using the scope
-            let scope_with_state = scope.reconstruct_state(command);
+            let scope_with_state = scope.reconstruct_state(&command);
 
             // Check if we need additional streams
             let additional_streams = scope_with_state.needs_additional_streams(&stream_resolver);
@@ -1579,15 +1561,14 @@ where
 
             // Execute command
             let scope_with_writes = scope_with_state
-                .execute_command(command, input.clone(), &mut stream_resolver)
+                .execute_command(&command, &mut stream_resolver)
                 .await?;
 
             // Check again for additional streams after execution
             let new_additional = stream_resolver
-                .additional_streams()
-                .iter()
+                .take_additional_streams()
+                .into_iter()
                 .filter(|s| !stream_ids.contains(s))
-                .cloned()
                 .collect::<Vec<_>>();
 
             if !new_additional.is_empty() {
@@ -1638,7 +1619,6 @@ where
     /// # Arguments
     ///
     /// * `command` - The command instance to execute
-    /// * `input` - The validated command input
     ///
     /// # Returns
     ///
@@ -1650,24 +1630,21 @@ where
     /// // Simple execution with defaults
     /// let result = executor.execute_simple(&command, input).await?;
     /// ```
-    #[instrument(skip(self, command, input), fields(
+    #[instrument(skip(self, command), fields(
         command_type = std::any::type_name::<C>(),
         simple_execution = true
     ))]
     pub async fn execute_simple<C>(
         &self,
-        command: &C,
-        input: C::Input,
+        command: C,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
-        C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
-        self.execute(command, input, ExecutionOptions::default())
-            .await
+        self.execute(command, ExecutionOptions::default()).await
     }
 
     /// Executes a command without retry logic.
@@ -1683,7 +1660,6 @@ where
     /// # Arguments
     ///
     /// * `command` - The command instance to execute
-    /// * `input` - The validated command input
     ///
     /// # Returns
     ///
@@ -1695,23 +1671,21 @@ where
     /// // Execute without retry
     /// let result = executor.execute_once_simple(&command, input).await?;
     /// ```
-    #[instrument(skip(self, command, input), fields(
+    #[instrument(skip(self, command), fields(
         command_type = std::any::type_name::<C>(),
         retry_disabled = true
     ))]
     pub async fn execute_once_simple<C>(
         &self,
-        command: &C,
-        input: C::Input,
+        command: C,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
-        C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
-        self.execute(command, input, ExecutionOptions::new().without_retry())
+        self.execute(command, ExecutionOptions::new().without_retry())
             .await
     }
 
@@ -1727,7 +1701,6 @@ where
     /// # Arguments
     ///
     /// * `command` - The command instance to execute
-    /// * `input` - The validated command input
     /// * `correlation_id` - The correlation ID for request tracing
     ///
     /// # Returns
@@ -1744,25 +1717,23 @@ where
     ///     "req-12345".to_string()
     /// ).await?;
     /// ```
-    #[instrument(skip(self, command, input), fields(
+    #[instrument(skip(self, command), fields(
         command_type = std::any::type_name::<C>(),
         correlation_id = %correlation_id
     ))]
     pub async fn execute_with_correlation<C>(
         &self,
-        command: &C,
-        input: C::Input,
+        command: C,
         correlation_id: String,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
-        C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
         let options = ExecutionOptions::default().with_correlation_id(correlation_id);
-        self.execute(command, input, options).await
+        self.execute(command, options).await
     }
 
     /// Executes a command with a custom user ID for auditing.
@@ -1777,7 +1748,6 @@ where
     /// # Arguments
     ///
     /// * `command` - The command instance to execute
-    /// * `input` - The validated command input
     /// * `user_id` - The user ID for auditing
     ///
     /// # Returns
@@ -1794,31 +1764,30 @@ where
     ///     "user123".to_string()
     /// ).await?;
     /// ```
-    #[instrument(skip(self, command, input), fields(
+    #[instrument(skip(self, command), fields(
         command_type = std::any::type_name::<C>(),
         user_id = %user_id
     ))]
     pub async fn execute_as_user<C>(
         &self,
-        command: &C,
-        input: C::Input,
+        command: C,
         user_id: String,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
     where
         C: Command,
-        C::Input: Clone,
         C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
         let options = ExecutionOptions::default().with_user_id(Some(user_id));
-        self.execute(command, input, options).await
+        self.execute(command, options).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command::{CommandLogic, CommandStreams, ReadStreams, StreamWrite};
     use crate::event_store::StoredEvent;
     use crate::types::Timestamp;
     use proptest::prelude::*;
@@ -2017,10 +1986,12 @@ mod tests {
     }
 
     /// Mock command for testing.
+    #[derive(Clone)]
     struct MockCommand {
         streams_to_read: Vec<StreamId>,
         events_to_write: Vec<(StreamId, String)>,
         should_fail: bool,
+        input_value: String,
     }
 
     impl MockCommand {
@@ -2029,6 +2000,7 @@ mod tests {
                 streams_to_read,
                 events_to_write,
                 should_fail: false,
+                input_value: String::new(),
             }
         }
 
@@ -2036,17 +2008,16 @@ mod tests {
             self.should_fail = true;
             self
         }
+
+        fn with_input(mut self, value: String) -> Self {
+            self.input_value = value;
+            self
+        }
     }
 
     #[derive(Default, Clone)]
     struct MockState {
         applied_events: Vec<String>,
-    }
-
-    #[derive(Clone)]
-    #[allow(dead_code)]
-    struct MockInput {
-        value: String,
     }
 
     // Create a simple mock event type for testing
@@ -2081,16 +2052,18 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl Command for MockCommand {
-        type Input = MockInput;
-        type State = MockState;
-        type Event = MockEvent;
+    impl CommandStreams for MockCommand {
         type StreamSet = ();
 
-        fn read_streams(&self, _input: &Self::Input) -> Vec<StreamId> {
+        fn read_streams(&self) -> Vec<StreamId> {
             self.streams_to_read.clone()
         }
+    }
+
+    #[async_trait]
+    impl CommandLogic for MockCommand {
+        type State = MockState;
+        type Event = MockEvent;
 
         fn apply(
             &self,
@@ -2104,7 +2077,6 @@ mod tests {
             &self,
             _read_streams: ReadStreams<Self::StreamSet>,
             _state: Self::State,
-            _input: Self::Input,
             _stream_resolver: &mut crate::command::StreamResolver,
         ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
             if self.should_fail {
@@ -2134,14 +2106,10 @@ mod tests {
             vec![stream_id.clone()],
             vec![(stream_id.clone(), "test-event".to_string())],
         )
-        .with_failure();
-        let input = MockInput {
-            value: "test".to_string(),
-        };
+        .with_failure()
+        .with_input("test".to_string());
 
-        let result = executor
-            .execute(&command, input, ExecutionOptions::default())
-            .await;
+        let result = executor.execute(command, ExecutionOptions::default()).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -2159,14 +2127,10 @@ mod tests {
         let command = MockCommand::new(
             vec![stream_id.clone()],
             vec![(stream_id.clone(), "test-event".to_string())],
-        );
-        let input = MockInput {
-            value: "test".to_string(),
-        };
+        )
+        .with_input("test".to_string());
 
-        let result = executor
-            .execute(&command, input, ExecutionOptions::default())
-            .await;
+        let result = executor.execute(command, ExecutionOptions::default()).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), CommandError::EventStore(_)));
     }
@@ -2182,18 +2146,12 @@ mod tests {
             vec![stream_id.clone()],
             vec![(stream_id.clone(), "test-event".to_string())],
         )
-        .with_failure(); // This creates a BusinessRuleViolation which shouldn't retry
-        let input = MockInput {
-            value: "test".to_string(),
-        };
+        .with_failure() // This creates a BusinessRuleViolation which shouldn't retry
+        .with_input("test".to_string());
         let context = ExecutionContext::default();
 
         let result = executor
-            .execute(
-                &command,
-                input,
-                ExecutionOptions::new().with_context(context),
-            )
+            .execute(command, ExecutionOptions::new().with_context(context))
             .await;
         assert!(result.is_err());
         assert!(matches!(
@@ -2625,12 +2583,10 @@ mod tests {
             let command = MockCommand::new(
                 vec![stream_id.clone()],
                 vec![(stream_id.clone(), "test-event".to_string())],
-            );
-            let input = MockInput {
-                value: "test".to_string(),
-            };
+            )
+            .with_input("test".to_string());
 
-            let result = executor.execute_simple(&command, input).await;
+            let result = executor.execute_simple(command).await;
             assert!(result.is_ok());
         }
 
@@ -2647,13 +2603,11 @@ mod tests {
                 vec![stream_id.clone()],
                 vec![(stream_id.clone(), "test-event".to_string())],
             )
-            .with_failure(); // This will fail immediately
-            let input = MockInput {
-                value: "test".to_string(),
-            };
+            .with_failure() // This will fail immediately
+            .with_input("test".to_string());
 
             // Should fail immediately without retry
-            let result = executor.execute_once_simple(&command, input).await;
+            let result = executor.execute_once_simple(command).await;
             assert!(result.is_err());
             assert!(matches!(
                 result.unwrap_err(),
@@ -2670,14 +2624,12 @@ mod tests {
             let command = MockCommand::new(
                 vec![stream_id.clone()],
                 vec![(stream_id.clone(), "test-event".to_string())],
-            );
-            let input = MockInput {
-                value: "test".to_string(),
-            };
+            )
+            .with_input("test".to_string());
             let correlation_id = "test-correlation-123".to_string();
 
             let result = executor
-                .execute_with_correlation(&command, input, correlation_id)
+                .execute_with_correlation(command, correlation_id)
                 .await;
             assert!(result.is_ok());
         }
@@ -2691,13 +2643,11 @@ mod tests {
             let command = MockCommand::new(
                 vec![stream_id.clone()],
                 vec![(stream_id.clone(), "test-event".to_string())],
-            );
-            let input = MockInput {
-                value: "test".to_string(),
-            };
+            )
+            .with_input("test".to_string());
             let user_id = "user-456".to_string();
 
-            let result = executor.execute_as_user(&command, input, user_id).await;
+            let result = executor.execute_as_user(command, user_id).await;
             assert!(result.is_ok());
         }
     }
@@ -2791,16 +2741,15 @@ mod tests {
                 vec![stream_id.clone()],
                 vec![(stream_id.clone(), "test-event".to_string())],
             );
-            let input = MockInput {
-                value: "test".to_string(),
-            };
 
             let options = ExecutionOptions::new()
                 .with_event_store_timeout(Some(Duration::from_millis(100))) // 100ms timeout
                 .without_retry();
 
             let start = Instant::now();
-            let result = executor.execute(&command, input, options).await;
+            let result = executor
+                .execute(command.with_input("test".to_string()), options)
+                .await;
             let elapsed = start.elapsed();
 
             assert!(result.is_err());
@@ -2824,16 +2773,15 @@ mod tests {
                 vec![stream_id.clone()],
                 vec![(stream_id.clone(), "test-event".to_string())],
             );
-            let input = MockInput {
-                value: "test".to_string(),
-            };
 
             let options = ExecutionOptions::new()
                 .with_event_store_timeout(Some(Duration::from_millis(100))) // 100ms timeout
                 .without_retry();
 
             let start = Instant::now();
-            let result = executor.execute(&command, input, options).await;
+            let result = executor
+                .execute(command.with_input("test".to_string()), options)
+                .await;
             let elapsed = start.elapsed();
 
             assert!(result.is_err());
@@ -2859,16 +2807,15 @@ mod tests {
                 vec![stream_id.clone()],
                 vec![(stream_id.clone(), "test-event".to_string())],
             );
-            let input = MockInput {
-                value: "test".to_string(),
-            };
 
             let options = ExecutionOptions::new()
                 .with_command_timeout(Some(Duration::from_millis(100))) // 100ms overall timeout
                 .without_retry();
 
             let start = Instant::now();
-            let result = executor.execute(&command, input, options).await;
+            let result = executor
+                .execute(command.with_input("test".to_string()), options)
+                .await;
             let elapsed = start.elapsed();
 
             assert!(result.is_err());
@@ -2892,16 +2839,15 @@ mod tests {
                 vec![stream_id.clone()],
                 vec![(stream_id.clone(), "test-event".to_string())],
             );
-            let input = MockInput {
-                value: "test".to_string(),
-            };
 
             let options = ExecutionOptions::new()
                 .with_event_store_timeout(Some(Duration::from_secs(10))) // Long event store timeout
                 .with_command_timeout(Some(Duration::from_millis(100))) // Short overall timeout
                 .without_retry();
 
-            let result = executor.execute(&command, input, options).await;
+            let result = executor
+                .execute(command.with_input("test".to_string()), options)
+                .await;
 
             assert!(result.is_err());
             match result.unwrap_err() {
@@ -2988,16 +2934,15 @@ mod tests {
                 vec![stream_id.clone()],
                 vec![(stream_id.clone(), "test-event".to_string())],
             );
-            let input = MockInput {
-                value: "test".to_string(),
-            };
 
             let options = ExecutionOptions::new()
                 .with_event_store_timeout(None) // No timeout
                 .with_command_timeout(None) // No timeout
                 .without_retry();
 
-            let result = executor.execute(&command, input, options).await;
+            let result = executor
+                .execute(command.with_input("test".to_string()), options)
+                .await;
 
             // Should succeed despite delay because no timeout is set
             assert!(result.is_ok());

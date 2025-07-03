@@ -13,7 +13,7 @@ pub fn generate_stream_set_type(
     // It's used at the type level for stream access control
     quote! {
         /// Type-safe stream set marker for this command.
-        #[derive(Debug, Clone, Copy, Default, Send, Sync)]
+        #[derive(Debug, Clone, Copy, Default)]
         pub struct #name;
     }
 }
@@ -32,8 +32,8 @@ mod tests {
         let output_str = output.to_string();
 
         assert!(output_str.contains("struct TestStreamSet"));
-        assert!(output_str.contains("Send"));
-        assert!(output_str.contains("Sync"));
+        assert!(output_str.contains("Debug"));
+        assert!(output_str.contains("Clone"));
     }
 
     #[test]

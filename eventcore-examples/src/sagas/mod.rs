@@ -71,8 +71,7 @@ pub mod types;
 
 // Re-export commonly used types
 pub use commands::{
-    ArrangeShippingCommand, ArrangeShippingInput, OrderFulfillmentInput, OrderFulfillmentSaga,
-    ProcessPaymentCommand, ProcessPaymentInput, ReserveInventoryCommand, ReserveInventoryInput,
+    ArrangeShippingCommand, OrderFulfillmentSaga, ProcessPaymentCommand, ReserveInventoryCommand,
 };
 
 pub use events::{InventoryEvent, OrderEvent, PaymentEvent, SagaEvent, ShippingEvent};
@@ -151,8 +150,8 @@ impl ProductId {
 }
 
 /// Create a sample order for testing and examples
-pub fn create_sample_order() -> OrderFulfillmentInput {
-    OrderFulfillmentInput {
+pub fn create_sample_order() -> OrderFulfillmentSaga {
+    OrderFulfillmentSaga {
         order_id: OrderId::for_test("sample"),
         customer_id: CustomerId::for_test("john-doe"),
         items: vec![

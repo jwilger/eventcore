@@ -55,6 +55,36 @@ Based on the comprehensive expert review, the following improvements have been i
   - [x] Update documentation to focus on the chosen approach
   - [x] Provide clear migration paths for existing code
 
+- [x] **Enhanced Command Derive Macro** (NEW - 2025-07-03)
+  - [x] Eliminate need for manual `type Input = Self;` declarations in simple commands
+  - [x] Remove boilerplate `type StreamSet = CommandNameStreamSet;` specifications  
+  - [x] Auto-generate `__derive_read_streams()` helper method from `#[stream]` fields
+  - [x] Create comprehensive documentation and examples demonstrating 50% boilerplate reduction
+  - [x] Maintain 100% backward compatibility with existing manual implementations
+  - **RESULT**: Command implementation now focuses primarily on domain logic rather than boilerplate
+
+- [x] **Command Trait Separation** (ENHANCED - 2025-07-03)
+  - [x] Split Command trait into CommandStreams (infrastructure) and CommandLogic (domain)
+  - [x] Update derive macro to generate complete CommandStreams implementation
+  - [x] Implement blanket implementation: `impl<T: CommandStreams + CommandLogic> Command for T`
+  - [x] Move ReadStreams, StreamWrite, and StreamResolver from command_old.rs to command.rs
+  - [x] Export CommandStreams and CommandLogic from lib.rs for public use
+  - [x] Create migration guide at docs/migration-guide-trait-separation.md
+  - [x] Update enhanced-command-macro.md documentation with new pattern
+  - [x] Update simplified_command_example.rs to demonstrate new pattern
+  - **RESULT**: Clean separation of concerns - derive macro handles all infrastructure, users focus on domain logic
+
+- [x] **Simplify Command API Further** (COMPLETED - 2025-07-03)
+  - [x] Remove `Input` associated type from CommandStreams trait
+  - [x] Update CommandLogic trait to remove input parameter from handle method
+  - [x] Update derive macro to match new trait signatures  
+  - [x] Update executor methods to only take command parameter
+  - [x] Update all example commands to use new API
+  - [x] Update tests to use new API (ALL examples and tests updated)
+  - [x] Update documentation and migration guide
+  - **RATIONALE**: Commands should always be their own input - having separate input types adds unnecessary complexity
+  - **RESULT**: Simplified API where commands contain all their data, eliminating redundancy
+
 - [x] **Remove Over-Engineering**
   - [x] Evaluate and remove other premature optimizations identified in review
   - [x] Simplify configuration options where possible
@@ -305,8 +335,8 @@ Based on the comprehensive expert review, the following improvements have been i
   - [x] Add code examples demonstrating rebuild features
   - [x] Update API documentation with rebuild-related types
 
-- [x] **Advanced Example Applications** ✅ COMPLETED
-  - [x] Complete long-running saga example
+- [ ] **Advanced Example Applications**
+  - [x] Complete long-running saga example ✅ COMPLETED
   - [ ] Add performance testing example application
   - [ ] Create distributed system example
   - [ ] Add real-time collaboration example

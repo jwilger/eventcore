@@ -31,7 +31,7 @@ Commands are the heart of EventCore. Each command:
 #### The Modern Way: Using Derive Macros
 
 ```rust
-use eventcore::{prelude::*, require, emit};
+use eventcore::{prelude::*, require, emit, CommandLogic};
 use eventcore_macros::Command;
 
 #[derive(Command)]
@@ -44,11 +44,9 @@ struct TransferMoney {
 }
 
 #[async_trait]
-impl Command for TransferMoney {
-    type Input = Self;  // The command is its own input
+impl CommandLogic for TransferMoney {
     type State = TransferState;
     type Event = BankingEvent;
-    type StreamSet = TransferMoneyStreamSet;
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
@@ -224,7 +222,11 @@ let result = executor.execute(&command, command).await?;
 
 - `require!(condition, message)` - Business rule validation
 - `emit!(events, read_streams, stream, event)` - Type-safe event generation
-- `#[derive(Command)]` - Automatic trait implementation with `#[stream]` field detection
+- `#[derive(Command)]` - Generates complete `CommandStreams` implementation:
+  - Automatically sets `type Input = Self`
+  - Creates `type StreamSet = CommandNameStreamSet`
+  - Implements `read_streams()` based on `#[stream]` fields
+  - Enables implementation of just `CommandLogic` trait for 50% less boilerplate
 
 ## Testing
 

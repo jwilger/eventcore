@@ -11,8 +11,8 @@
 #![allow(dead_code)]
 
 use eventcore::{
-    Command, CommandError, CommandExecutor, EventId, EventStore, EventToWrite, ExpectedVersion,
-    ReadStreams, StreamEvents, StreamId, StreamResolver, StreamWrite,
+    CommandError, CommandExecutor, CommandLogic, CommandStreams, EventId, EventStore, EventToWrite,
+    ExpectedVersion, ReadStreams, StreamEvents, StreamId, StreamResolver, StreamWrite,
 };
 use eventcore_memory::InMemoryEventStore;
 use eventcore_postgres::PostgresEventStore;
@@ -59,24 +59,23 @@ struct CounterState {
 }
 
 #[derive(Debug, Clone)]
-struct IncrementCounterCommand;
-
-#[derive(Debug, Clone)]
-struct IncrementCounterInput {
+struct IncrementCounterCommand {
     stream_id: StreamId,
     amount: u64,
 }
 
-#[async_trait::async_trait]
-impl Command for IncrementCounterCommand {
-    type Input = IncrementCounterInput;
-    type State = CounterState;
-    type Event = StressTestEvent;
+impl CommandStreams for IncrementCounterCommand {
     type StreamSet = (StreamId,);
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.stream_id.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.stream_id.clone()]
     }
+}
+
+#[async_trait::async_trait]
+impl CommandLogic for IncrementCounterCommand {
+    type State = CounterState;
+    type Event = StressTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         match &event.payload {
@@ -94,14 +93,13 @@ impl Command for IncrementCounterCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         _state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
         let event = StreamWrite::new(
             &read_streams,
-            input.stream_id,
+            self.stream_id.clone(),
             StressTestEvent::CounterIncremented {
-                amount: input.amount,
+                amount: self.amount,
             },
         )?;
 
@@ -115,28 +113,27 @@ struct TransferState {
 }
 
 #[derive(Debug, Clone)]
-struct TransferCommand;
-
-#[derive(Debug, Clone)]
-struct TransferInput {
+struct TransferCommand {
     from_account: String,
     to_account: String,
     amount: u64,
 }
 
-#[async_trait::async_trait]
-impl Command for TransferCommand {
-    type Input = TransferInput;
-    type State = TransferState;
-    type Event = StressTestEvent;
+impl CommandStreams for TransferCommand {
     type StreamSet = (StreamId, StreamId);
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
+    fn read_streams(&self) -> Vec<StreamId> {
         vec![
-            StreamId::try_new(format!("account-{}", input.from_account)).unwrap(),
-            StreamId::try_new(format!("account-{}", input.to_account)).unwrap(),
+            StreamId::try_new(format!("account-{}", self.from_account)).unwrap(),
+            StreamId::try_new(format!("account-{}", self.to_account)).unwrap(),
         ]
     }
+}
+
+#[async_trait::async_trait]
+impl CommandLogic for TransferCommand {
+    type State = TransferState;
+    type Event = StressTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         match &event.payload {
@@ -159,41 +156,40 @@ impl Command for TransferCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
         // Ensure accounts exist
-        if !state.accounts.contains_key(&input.from_account) {
+        if !state.accounts.contains_key(&self.from_account) {
             return Err(CommandError::ValidationFailed(format!(
                 "Account {} does not exist",
-                input.from_account
+                self.from_account
             )));
         }
-        if !state.accounts.contains_key(&input.to_account) {
+        if !state.accounts.contains_key(&self.to_account) {
             return Err(CommandError::ValidationFailed(format!(
                 "Account {} does not exist",
-                input.to_account
+                self.to_account
             )));
         }
 
         // Check balance
-        let from_balance = state.accounts.get(&input.from_account).unwrap();
-        if *from_balance < input.amount {
+        let from_balance = state.accounts.get(&self.from_account).unwrap();
+        if *from_balance < self.amount {
             return Err(CommandError::BusinessRuleViolation(
                 "Insufficient balance".to_string(),
             ));
         }
 
-        let from_stream = StreamId::try_new(format!("account-{}", input.from_account)).unwrap();
-        let _to_stream = StreamId::try_new(format!("account-{}", input.to_account)).unwrap();
+        let from_stream = StreamId::try_new(format!("account-{}", self.from_account)).unwrap();
+        let _to_stream = StreamId::try_new(format!("account-{}", self.to_account)).unwrap();
 
         let event = StreamWrite::new(
             &read_streams,
             from_stream,
             StressTestEvent::TransferCompleted {
-                from: input.from_account.clone(),
-                to: input.to_account.clone(),
-                amount: input.amount,
+                from: self.from_account.clone(),
+                to: self.to_account.clone(),
+                amount: self.amount,
             },
         )?;
 
@@ -222,13 +218,12 @@ async fn stress_test_concurrent_commands(
 
             tokio::spawn(async move {
                 for op_id in 0..operations_per_worker {
-                    let command = IncrementCounterCommand;
-                    let input = IncrementCounterInput {
+                    let command = IncrementCounterCommand {
                         stream_id: stream_id.clone(),
                         amount: 1,
                     };
 
-                    match executor.execute(&command, input, Default::default()).await {
+                    match executor.execute(command, Default::default()).await {
                         Ok(_) => {
                             successful_ops.fetch_add(1, Ordering::Relaxed);
                         }
@@ -299,14 +294,13 @@ async fn stress_test_multi_stream_transactions(
                 let from = rand::random::<usize>() % num_accounts;
                 let to = (from + 1 + rand::random::<usize>() % (num_accounts - 1)) % num_accounts;
 
-                let command = TransferCommand;
-                let input = TransferInput {
+                let command = TransferCommand {
                     from_account: from.to_string(),
                     to_account: to.to_string(),
                     amount: 10,
                 };
 
-                match executor.execute(&command, input, Default::default()).await {
+                match executor.execute(command, Default::default()).await {
                     Ok(_) => {
                         successful_transfers.fetch_add(1, Ordering::Relaxed);
                     }

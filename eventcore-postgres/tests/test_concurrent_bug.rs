@@ -1,7 +1,7 @@
 //! Tests for concurrent stream creation and optimistic concurrency control.
 
 use eventcore::{
-    Command, CommandError, CommandExecutor, CommandResult, EventStore, ExecutionOptions,
+    CommandError, CommandExecutor, CommandResult, EventStore, ExecutionOptions,
     ReadStreams, StoredEvent, StreamId, StreamResolver, StreamWrite,
 };
 use eventcore_postgres::{PostgresConfig, PostgresEventStore};
@@ -28,25 +28,24 @@ struct TestState {
     event_count: usize,
 }
 
-#[derive(Debug)]
-struct CreateCommand;
-
 #[derive(Debug, Clone)]
-struct CreateInput {
+struct CreateCommand {
     stream_id: StreamId,
     value: String,
 }
 
-#[async_trait::async_trait]
-impl Command for CreateCommand {
-    type Input = CreateInput;
-    type State = TestState;
-    type Event = TestEvent;
+impl eventcore::CommandStreams for CreateCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.stream_id.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.stream_id.clone()]
     }
+}
+
+#[async_trait::async_trait]
+impl eventcore::CommandLogic for CreateCommand {
+    type State = TestState;
+    type Event = TestEvent;
 
     fn apply(&self, state: &mut Self::State, _event: &StoredEvent<Self::Event>) {
         state.exists = true;
@@ -57,7 +56,6 @@ impl Command for CreateCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // This command models "create if not exists" behavior
@@ -72,8 +70,8 @@ impl Command for CreateCommand {
         // Try to create the stream with the first event
         Ok(vec![StreamWrite::new(
             &read_streams,
-            input.stream_id,
-            TestEvent::Created { value: input.value },
+            self.stream_id.clone(),
+            TestEvent::Created { value: self.value.clone() },
         )?])
     }
 }
@@ -127,15 +125,12 @@ async fn test_concurrent_creation_with_retry() {
             // Wait for both tasks to be ready
             barrier1.wait().await;
 
+            let command = CreateCommand {
+                stream_id: stream_id1.clone(),
+                value: "value1".to_string(),
+            };
             let result = executor1
-                .execute(
-                    &CreateCommand,
-                    CreateInput {
-                        stream_id: stream_id1.clone(),
-                        value: "value1".to_string(),
-                    },
-                    ExecutionOptions::default(),
-                )
+                .execute(&command, ExecutionOptions::default())
                 .await;
             result
         });
@@ -147,15 +142,12 @@ async fn test_concurrent_creation_with_retry() {
             // Wait for both tasks to be ready
             barrier2.wait().await;
 
+            let command = CreateCommand {
+                stream_id: stream_id2.clone(),
+                value: "value2".to_string(),
+            };
             let result = executor2
-                .execute(
-                    &CreateCommand,
-                    CreateInput {
-                        stream_id: stream_id2.clone(),
-                        value: "value2".to_string(),
-                    },
-                    ExecutionOptions::default(),
-                )
+                .execute(&command, ExecutionOptions::default())
                 .await;
             result
         });
@@ -234,15 +226,12 @@ async fn test_concurrent_creation_stress() {
         let executor_clone = executor.clone();
         let stream_id_clone = stream_id.clone();
         let handle = tokio::spawn(async move {
+            let command = CreateCommand {
+                stream_id: stream_id_clone,
+                value: format!("value{i}"),
+            };
             executor_clone
-                .execute(
-                    &CreateCommand,
-                    CreateInput {
-                        stream_id: stream_id_clone,
-                        value: format!("value{i}"),
-                    },
-                    ExecutionOptions::default(),
-                )
+                .execute(&command, ExecutionOptions::default())
                 .await
         });
         handles.push(handle);

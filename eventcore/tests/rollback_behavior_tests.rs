@@ -13,7 +13,7 @@ use eventcore::testing::chaos::{
     ChaosScenarioBuilder, FailurePolicy, FailureType, TargetOperations,
 };
 use eventcore::{
-    Command, CommandError, CommandExecutor, EventId, EventMetadata, EventStore, EventToWrite,
+    CommandError, CommandExecutor, EventId, EventMetadata, EventStore, EventToWrite,
     ExecutionOptions, ExpectedVersion, ReadOptions, ReadStreams, RetryConfig, StreamEvents,
     StreamId, StreamResolver, StreamWrite,
 };
@@ -61,25 +61,24 @@ struct AccountState {
 
 /// Multi-stream transfer command that should be atomic.
 #[derive(Debug, Clone)]
-struct AtomicTransferCommand;
-
-#[derive(Debug, Clone)]
-struct AtomicTransferInput {
+struct AtomicTransferCommand {
     from_account: StreamId,
     to_account: StreamId,
     amount: u64,
 }
 
-#[async_trait]
-impl Command for AtomicTransferCommand {
-    type Input = AtomicTransferInput;
-    type State = AccountState;
-    type Event = RollbackTestEvent;
+impl eventcore::CommandStreams for AtomicTransferCommand {
     type StreamSet = ();
 
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![input.from_account.clone(), input.to_account.clone()]
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.from_account.clone(), self.to_account.clone()]
     }
+}
+
+#[async_trait]
+impl eventcore::CommandLogic for AtomicTransferCommand {
+    type State = AccountState;
+    type Event = RollbackTestEvent;
 
     fn apply(&self, state: &mut Self::State, event: &eventcore::StoredEvent<Self::Event>) {
         match &event.payload {
@@ -97,37 +96,32 @@ impl Command for AtomicTransferCommand {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _stream_resolver: &mut StreamResolver,
     ) -> Result<Vec<StreamWrite<Self::StreamSet, Self::Event>>, CommandError> {
         // Check if source account has sufficient balance
-        let from_balance = state
-            .balances
-            .get(&input.from_account)
-            .copied()
-            .unwrap_or(0);
-        if from_balance < input.amount {
+        let from_balance = state.balances.get(&self.from_account).copied().unwrap_or(0);
+        if from_balance < self.amount {
             return Err(CommandError::ValidationFailed(
                 "Insufficient balance".to_string(),
             ));
         }
 
-        let to_balance = state.balances.get(&input.to_account).copied().unwrap_or(0);
+        let to_balance = state.balances.get(&self.to_account).copied().unwrap_or(0);
 
         // Create events for both accounts
         let events = vec![
             StreamWrite::new(
                 &read_streams,
-                input.from_account.clone(),
+                self.from_account.clone(),
                 RollbackTestEvent::BalanceUpdated {
-                    new_balance: from_balance - input.amount,
+                    new_balance: from_balance - self.amount,
                 },
             )?,
             StreamWrite::new(
                 &read_streams,
-                input.to_account.clone(),
+                self.to_account.clone(),
                 RollbackTestEvent::BalanceUpdated {
-                    new_balance: to_balance + input.amount,
+                    new_balance: to_balance + self.amount,
                 },
             )?,
         ];
@@ -203,14 +197,14 @@ async fn test_partial_write_failure_rollback() {
     let executor = CommandExecutor::new(chaos_store);
 
     // Attempt transfer that should fail and rollback
+    let command = AtomicTransferCommand {
+        from_account: account_a.clone(),
+        to_account: account_b.clone(),
+        amount: 300,
+    };
     let result = executor
         .execute(
-            &AtomicTransferCommand,
-            AtomicTransferInput {
-                from_account: account_a.clone(),
-                to_account: account_b.clone(),
-                amount: 300,
-            },
+            &command,
             ExecutionOptions::default().with_retry_config(RetryConfig {
                 max_attempts: 1, // No retry to test rollback
                 ..Default::default()
@@ -290,8 +284,7 @@ async fn test_version_conflict_rollback() {
     let handle1 = tokio::spawn(async move {
         executor1
             .execute(
-                &AtomicTransferCommand,
-                AtomicTransferInput {
+                &AtomicTransferCommand {
                     from_account: account_a1,
                     to_account: account_b1,
                     amount: 300,
@@ -304,8 +297,7 @@ async fn test_version_conflict_rollback() {
     let handle2 = tokio::spawn(async move {
         executor2
             .execute(
-                &AtomicTransferCommand,
-                AtomicTransferInput {
+                &AtomicTransferCommand {
                     from_account: account_a2,
                     to_account: account_b2,
                     amount: 200,
@@ -413,8 +405,7 @@ async fn test_state_consistency_after_rollback() {
         handles.push(tokio::spawn(async move {
             let result = executor
                 .execute(
-                    &AtomicTransferCommand,
-                    AtomicTransferInput {
+                    &AtomicTransferCommand {
                         from_account: from,
                         to_account: to,
                         amount: 10,
@@ -553,8 +544,7 @@ async fn test_retry_after_rollback() {
         manual_attempts += 1;
         let result = executor
             .execute(
-                &AtomicTransferCommand,
-                AtomicTransferInput {
+                &AtomicTransferCommand {
                     from_account: account_a.clone(),
                     to_account: account_b.clone(),
                     amount: 300,
@@ -689,8 +679,7 @@ async fn test_postgres_transaction_rollback() {
     // Attempt transfer that might conflict
     let result = executor
         .execute(
-            &AtomicTransferCommand,
-            AtomicTransferInput {
+            &AtomicTransferCommand {
                 from_account: test_accounts[0].clone(),
                 to_account: test_accounts[1].clone(),
                 amount: 500,
@@ -781,16 +770,13 @@ async fn test_nested_operation_rollback() {
     let mut successful_transfers = 0;
 
     for (from_idx, to_idx, amount) in transfers {
+        let command = AtomicTransferCommand {
+            from_account: accounts[from_idx].clone(),
+            to_account: accounts[to_idx].clone(),
+            amount,
+        };
         let result = executor
-            .execute(
-                &AtomicTransferCommand,
-                AtomicTransferInput {
-                    from_account: accounts[from_idx].clone(),
-                    to_account: accounts[to_idx].clone(),
-                    amount,
-                },
-                ExecutionOptions::default(),
-            )
+            .execute(&command, ExecutionOptions::default())
             .await;
 
         if result.is_ok() {

@@ -48,7 +48,6 @@ where
 impl<C, E> CommandTestHarness<C, E, E::Event>
 where
     C: Command + 'static,
-    C::Input: 'static,
     E: EventStore<Event = C::Event> + Clone + 'static,
     C::Event: Clone + Send + Sync + 'static,
 {
@@ -117,14 +116,14 @@ where
     }
 
     /// Executes the command and returns the result.
-    pub async fn execute(self, input: C::Input) -> CommandResult<Vec<(StreamId, C::Event)>> {
+    pub async fn execute(self) -> CommandResult<Vec<(StreamId, C::Event)>> {
         // Prepare the test environment
         self.prepare().await.map_err(CommandError::EventStore)?;
 
         let command = self.command.expect("Command not set");
 
         // Read the streams needed by the command
-        let stream_ids = command.read_streams(&input);
+        let stream_ids = command.read_streams();
         let stream_data = self
             .event_store
             .read_streams(&stream_ids, &ReadOptions::default())
@@ -141,7 +140,7 @@ where
         let read_streams = ReadStreams::new(stream_ids.clone());
         let mut stream_resolver = crate::command::StreamResolver::new();
         let stream_writes = command
-            .handle(read_streams, state, input, &mut stream_resolver)
+            .handle(read_streams, state, &mut stream_resolver)
             .await?;
 
         // Convert StreamWrite instances back to (StreamId, Event) pairs for compatibility
@@ -154,13 +153,14 @@ where
     /// Executes the command multiple times concurrently.
     ///
     /// Returns a vector of results from each execution.
+    #[allow(dead_code)]
     pub async fn execute_concurrent(
         self,
-        inputs: Vec<C::Input>,
+        count: usize,
     ) -> Vec<CommandResult<Vec<(StreamId, C::Event)>>> {
         // Prepare the test environment
         if let Err(e) = self.prepare().await {
-            return vec![Err(CommandError::EventStore(e)); inputs.len()];
+            return vec![Err(CommandError::EventStore(e)); count];
         }
 
         let command = Arc::new(self.command.expect("Command not set"));
@@ -168,13 +168,13 @@ where
 
         let mut handles = Vec::new();
 
-        for input in inputs {
+        for _ in 0..count {
             let command = command.clone();
             let event_store = event_store.clone();
 
             let handle = tokio::spawn(async move {
                 // Read the streams needed by the command
-                let stream_ids = command.read_streams(&input);
+                let stream_ids = command.read_streams();
                 let stream_data = match event_store
                     .read_streams(&stream_ids, &ReadOptions::default())
                     .await
@@ -193,7 +193,7 @@ where
                 let read_streams = ReadStreams::new(stream_ids.clone());
                 let mut stream_resolver = crate::command::StreamResolver::new();
                 let stream_writes = command
-                    .handle(read_streams, state, input, &mut stream_resolver)
+                    .handle(read_streams, state, &mut stream_resolver)
                     .await?;
 
                 // Convert StreamWrite instances back to (StreamId, Event) pairs for compatibility
@@ -218,8 +218,8 @@ where
     }
 
     /// Executes the command and verifies it fails with the expected error.
-    pub async fn execute_expecting_error(self, input: C::Input) -> CommandError {
-        match self.execute(input).await {
+    pub async fn execute_expecting_error(self) -> CommandError {
+        match self.execute().await {
             Ok(_) => panic!("Expected command to fail, but it succeeded"),
             Err(e) => e,
         }
@@ -247,7 +247,6 @@ struct StreamState<E> {
 impl<C> CommandTestScenarioBuilder<C>
 where
     C: Command + 'static,
-    C::Input: 'static,
 {
     /// Creates a new scenario builder.
     pub fn new() -> Self {
@@ -329,7 +328,6 @@ where
 impl<C> Default for CommandTestScenarioBuilder<C>
 where
     C: Command + 'static,
-    C::Input: 'static,
 {
     fn default() -> Self {
         Self::new()
@@ -461,7 +459,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::fixtures::{TestAction, TestCommand, TestCommandInput, TestEvent};
+    use crate::testing::fixtures::{TestAction, TestCommand, TestEvent};
 
     #[tokio::test]
     async fn test_mock_event_store() {
@@ -482,14 +480,13 @@ mod tests {
     #[tokio::test]
     async fn test_harness_with_mock_store() {
         let mock_store: MockEventStore<TestEvent> = MockEventStore::new();
-        let harness = CommandTestHarness::with_store(mock_store).with_command(TestCommand);
-
-        let input = TestCommandInput {
+        let command = TestCommand {
             stream_id: StreamId::try_new("test").unwrap(),
             action: TestAction::Increment { amount: 10 },
         };
+        let harness = CommandTestHarness::with_store(mock_store).with_command(command);
 
-        let result = harness.execute(input).await;
+        let result = harness.execute().await;
         assert!(result.is_ok());
 
         let events = result.unwrap();
@@ -500,8 +497,15 @@ mod tests {
     #[tokio::test]
     async fn test_scenario_builder_with_mock() {
         let mock_store: MockEventStore<TestEvent> = MockEventStore::new();
+        let command = TestCommand {
+            stream_id: StreamId::try_new("test-stream").unwrap(),
+            action: TestAction::Create {
+                id: "item-2".to_string(),
+                name: "Another Item".to_string(),
+            },
+        };
         let scenario = CommandTestScenarioBuilder::new()
-            .command(TestCommand)
+            .command(command)
             .stream(
                 "test-stream",
                 vec![TestEvent::Created {
@@ -511,15 +515,7 @@ mod tests {
             )
             .build(mock_store);
 
-        let input = TestCommandInput {
-            stream_id: StreamId::try_new("test-stream").unwrap(),
-            action: TestAction::Create {
-                id: "item-2".to_string(),
-                name: "Another Item".to_string(),
-            },
-        };
-
-        let result = scenario.execute(input).await;
+        let result = scenario.execute().await;
         assert!(result.is_ok());
     }
 }

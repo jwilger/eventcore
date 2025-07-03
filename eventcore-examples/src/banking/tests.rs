@@ -287,13 +287,13 @@ mod validation_tests {
 #[cfg(test)]
 mod command_validation_tests {
     use crate::banking::{
-        commands::{BankingError, OpenAccountInput, TransferMoneyInput},
+        commands::{BankingError, OpenAccount, TransferMoneyInput},
         types::{AccountHolder, AccountId, CustomerName, Money, TransferId},
     };
 
     #[test]
-    fn open_account_input_accepts_valid_data() {
-        let input = OpenAccountInput::new(
+    fn open_account_command_accepts_valid_data() {
+        let command = OpenAccount::new(
             AccountId::generate(),
             AccountHolder {
                 name: CustomerName::try_new("Test User".to_string()).unwrap(),
@@ -302,8 +302,8 @@ mod command_validation_tests {
             Money::from_cents(10000).unwrap(),
         );
 
-        // If construction succeeds, the input is valid
-        assert!(input.initial_deposit == Money::from_cents(10000).unwrap());
+        // If construction succeeds, the command is valid
+        assert!(command.initial_deposit == Money::from_cents(10000).unwrap());
     }
 
     #[test]

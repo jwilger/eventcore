@@ -8,7 +8,7 @@
 use anyhow::Result;
 use eventcore::{CommandExecutor, Event, EventStore, ExecutionOptions, Projection, ReadOptions};
 use eventcore_examples::banking::{
-    commands::{OpenAccountCommand, OpenAccountInput, TransferMoneyCommand, TransferMoneyInput},
+    commands::{OpenAccount, TransferMoneyCommand},
     events::BankingEvent,
     projections::AccountBalanceProjectionImpl,
     types::{AccountHolder, AccountId, CustomerName, Money, TransferId},
@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
 
     // Open Alice's account with $1000
     info!("Opening Alice's account with $1,000");
-    let open_alice = OpenAccountInput::new(
+    let open_alice = OpenAccount::new(
         alice_id.clone(),
         AccountHolder {
             name: CustomerName::try_new("Alice Smith".to_string())?,
@@ -49,12 +49,12 @@ async fn main() -> Result<()> {
     );
 
     executor
-        .execute(&OpenAccountCommand, open_alice, ExecutionOptions::default())
+        .execute(open_alice, ExecutionOptions::default())
         .await?;
 
     // Open Bob's account with $500
     info!("Opening Bob's account with $500");
-    let open_bob = OpenAccountInput::new(
+    let open_bob = OpenAccount::new(
         bob_id.clone(),
         AccountHolder {
             name: CustomerName::try_new("Bob Jones".to_string())?,
@@ -64,12 +64,12 @@ async fn main() -> Result<()> {
     );
 
     executor
-        .execute(&OpenAccountCommand, open_bob, ExecutionOptions::default())
+        .execute(open_bob, ExecutionOptions::default())
         .await?;
 
     // Transfer $200 from Alice to Bob
     info!("Transferring $200 from Alice to Bob");
-    let transfer = TransferMoneyInput::new(
+    let transfer = TransferMoneyCommand::new(
         TransferId::generate(),
         alice_id.clone(),
         bob_id.clone(),
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
     )?;
 
     executor
-        .execute(&TransferMoneyCommand, transfer, ExecutionOptions::default())
+        .execute(transfer, ExecutionOptions::default())
         .await?;
 
     // Create and update projection
@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
 
     // Try an invalid transfer (insufficient funds)
     info!("Attempting transfer with insufficient funds");
-    let invalid_transfer = TransferMoneyInput::new(
+    let invalid_transfer = TransferMoneyCommand::new(
         TransferId::generate(),
         alice_id.clone(),
         bob_id.clone(),
@@ -126,11 +126,7 @@ async fn main() -> Result<()> {
     )?;
 
     match executor
-        .execute(
-            &TransferMoneyCommand,
-            invalid_transfer,
-            ExecutionOptions::default(),
-        )
+        .execute(&invalid_transfer, ExecutionOptions::default())
         .await
     {
         Ok(_) => panic!("Transfer should have failed"),
