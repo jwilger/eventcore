@@ -1087,6 +1087,7 @@ mod metadata;
 mod monitoring;
 mod projection;
 mod projection_manager;
+mod projection_protocol;
 mod projection_runner;
 pub mod serialization;
 mod state_reconstruction;
@@ -1123,8 +1124,14 @@ pub use executor::{
     RetryPolicy,
 };
 pub use metadata::{CausationId, CorrelationId, EventMetadata, UserId};
-pub use projection::{Projection, ProjectionCheckpoint, ProjectionConfig, ProjectionStatus};
+pub use projection::{
+    InMemoryProjection, Projection, ProjectionCheckpoint, ProjectionConfig, ProjectionStatus,
+};
 pub use projection_manager::ProjectionManager;
+pub use projection_protocol::{
+    shutdown_with_checkpoint, Checkpointing, Processing, ProjectionProtocol, ProtocolPhase, Setup,
+    Shutdown,
+};
 pub use subscription::{
     Checkpoint, EventProcessor, Subscription, SubscriptionError, SubscriptionImpl,
     SubscriptionName, SubscriptionOptions, SubscriptionPosition, SubscriptionResult,
