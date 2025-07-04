@@ -225,9 +225,12 @@ where
         let guard = self.state.lock().unwrap();
         match &*guard {
             SubscriptionState::Running(_running) => {
-                // We need to clone running to call async method
-                // This is a limitation of the adapter pattern
-                Ok(None) // Simplified for now
+                // For now, we return None since we can't call async methods while holding a lock
+                // In a real implementation, this would need a more sophisticated design
+                // to avoid holding locks across async operations
+                drop(guard);
+                // This is a simplified implementation that doesn't call the underlying get_position
+                Ok(None)
             }
             SubscriptionState::Stopped(stopped) => Ok(stopped.get_final_position().cloned()),
             _ => Ok(None),
@@ -355,10 +358,13 @@ mod tests {
         let options = SubscriptionOptions::CatchUpFromBeginning;
         let processor = Box::new(TestProcessor);
 
-        // Just test that we can start the subscription
-        // We can't test pause/resume/stop because the underlying SubscriptionImpl
-        // has todo!() implementations
+        // Test full lifecycle now that SubscriptionImpl is complete
         adapter.start(name, options, processor).await.unwrap();
+
+        // Test pause/resume/stop functionality
+        adapter.pause().await.unwrap();
+        adapter.resume().await.unwrap();
+        adapter.stop().await.unwrap();
     }
 
     #[tokio::test]

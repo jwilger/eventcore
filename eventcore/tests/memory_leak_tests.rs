@@ -201,9 +201,10 @@ async fn test_projection_memory_usage() {
     use eventcore::{Projection, ProjectionResult};
     use std::collections::HashMap;
 
-    #[derive(Debug, Default, Clone)]
+    #[derive(Debug, Clone)]
     struct MemoryTrackingProjection {
         data: HashMap<String, Vec<u8>>,
+        config: eventcore::ProjectionConfig,
     }
 
     #[async_trait::async_trait]
@@ -212,7 +213,7 @@ async fn test_projection_memory_usage() {
         type Event = MemoryTestEvent;
 
         fn config(&self) -> &eventcore::ProjectionConfig {
-            todo!()
+            &self.config
         }
 
         async fn get_state(&self) -> ProjectionResult<Self::State> {
@@ -254,13 +255,19 @@ async fn test_projection_memory_usage() {
         }
 
         async fn initialize_state(&self) -> ProjectionResult<Self::State> {
-            Ok(Self::State::default())
+            Ok(Self::State {
+                data: HashMap::new(),
+                config: eventcore::ProjectionConfig::new("memory-tracking"),
+            })
         }
     }
 
     reset_allocation_tracking();
 
-    let mut projection = MemoryTrackingProjection::default();
+    let mut projection = MemoryTrackingProjection {
+        data: HashMap::new(),
+        config: eventcore::ProjectionConfig::new("memory-tracking"),
+    };
     let baseline = get_net_allocations();
 
     // Add and remove data multiple times

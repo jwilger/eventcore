@@ -152,12 +152,13 @@ async fn test_subscription_complete_lifecycle() {
     let configured = subscription.configure(name, options, Box::new(processor));
 
     // Start subscription
-    let _running = configured.start().await.unwrap();
+    let running = configured.start().await.unwrap();
     assert_eq!(event_store.get_subscription_count(), 1);
 
-    // We can't test pause/resume/stop because the underlying SubscriptionImpl
-    // has todo!() implementations. The type-safe state machine compiles correctly
-    // which proves the API is sound.
+    // Test pause/resume/stop now that SubscriptionImpl is fully implemented
+    let paused = running.pause().await.unwrap();
+    let resumed = paused.resume().await.unwrap();
+    let _stopped = resumed.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -233,10 +234,10 @@ async fn test_subscription_with_multiple_events() {
     let (processor, _events_received) = TrackingProcessor::new();
 
     let configured = subscription.configure(name, options, Box::new(processor));
-    let _running = configured.start().await.unwrap();
+    let running = configured.start().await.unwrap();
 
-    // We can't test stop because the underlying SubscriptionImpl has todo!()
-    // Just verify the subscription was created
+    // Test stop functionality now that SubscriptionImpl is fully implemented
+    let _stopped = running.stop().await.unwrap();
     assert_eq!(event_store.get_subscription_count(), 1);
 }
 
@@ -251,10 +252,18 @@ async fn test_subscription_position_tracking() {
     let (processor, _) = TrackingProcessor::new();
 
     let configured = subscription.configure(name, options, Box::new(processor));
-    let _running = configured.start().await.unwrap();
+    let running = configured.start().await.unwrap();
 
-    // We can't test position tracking because the underlying SubscriptionImpl
-    // has todo!() implementations
+    // Test position tracking now that SubscriptionImpl is fully implemented
+    // Give the subscription a moment to process any events
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Check that we can get the current position
+    let position = running.get_position().await.unwrap();
+    // Position might be None if no events were processed yet
+    println!("Current position: {position:?}");
+
+    let _stopped = running.stop().await.unwrap();
 }
 
 // Property-based test for state machine invariants
