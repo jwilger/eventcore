@@ -61,56 +61,8 @@ impl<C: Command> CommandExecution<BusinessLogicExecuted, C> {
 
 **Implementation Complexity**: MODERATE - Requires refactoring executor internals but maintains backward compatibility
 
-### 2. Permission-Based Event Store Access (MODERATE VALUE)
 
-**Current State**: EventStore operations have no compile-time access control.
-
-**Opportunity**: Introduce phantom types for read/write permissions:
-
-```rust
-// Permission phantom types
-pub struct ReadOnly;
-pub struct ReadWrite;
-
-// Permission-aware EventStore handle
-pub struct EventStoreHandle<P, ES: EventStore> {
-    store: ES,
-    _permission: PhantomData<P>,
-}
-
-// Read-only operations available to both permissions
-impl<P, ES: EventStore> EventStoreHandle<P, ES> {
-    pub async fn read_streams(&self, streams: &[StreamId]) -> Result<StreamData<ES::Event>> {
-        self.store.read_streams(streams).await
-    }
-}
-
-// Write operations only available with ReadWrite permission
-impl<ES: EventStore> EventStoreHandle<ReadWrite, ES> {
-    pub async fn write_events(&self, events: Vec<EventToWrite>) -> Result<()> {
-        self.store.write_events(events).await
-    }
-}
-
-// Usage in commands
-impl Command for ReadOnlyQuery {
-    type Permission = ReadOnly; // Compile-time guarantee: cannot write
-}
-
-impl Command for TransferMoney {
-    type Permission = ReadWrite; // Can read and write
-}
-```
-
-**Benefits**:
-- Compile-time prevention of unauthorized writes
-- Clear separation between queries and commands
-- Enables optimizations for read-only operations
-- Better security guarantees
-
-**Implementation Complexity**: LOW - Additive change, backward compatible with wrapper types
-
-### 3. Subscription Lifecycle Management (HIGH VALUE)
+### 2. Subscription Lifecycle Management (HIGH VALUE)
 
 **Current State**: Subscription state transitions handled at runtime with potential for invalid states.
 
@@ -164,7 +116,7 @@ impl<E> TypedSubscription<Paused, E> {
 
 **Implementation Complexity**: MODERATE - Requires subscription API redesign
 
-### 4. Projection Runner Protocol Phases (MODERATE VALUE)
+### 3. Projection Runner Protocol Phases (MODERATE VALUE)
 
 **Current State**: Projection runner manages complex state with runtime checks.
 
@@ -217,7 +169,7 @@ impl<P: Projection> ProjectionProtocol<Checkpointing, P> {
 
 **Implementation Complexity**: LOW - Can be implemented as wrapper around existing code
 
-### 5. Resource Acquisition and Release (LOW-MODERATE VALUE)
+### 4. Resource Acquisition and Release (LOW-MODERATE VALUE)
 
 **Current State**: Database connections and other resources managed with runtime checks.
 
@@ -270,7 +222,6 @@ impl<R> Resource<R, Released> {
 Based on value and complexity analysis:
 
 1. **IMMEDIATE (High Value, Low Complexity)**:
-   - Permission-Based Event Store Access
    - Projection Runner Protocol Phases
 
 2. **NEXT PHASE (High Value, Moderate Complexity)**:
