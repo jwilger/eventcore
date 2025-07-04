@@ -729,14 +729,17 @@ where
                     })?
             };
 
-            // Create type-safe execution scope
+            // Since we already have the stream data, we need to manually create the execution flow
+            // This is a special case for the executor which optimizes by reading streams in advance
+
+            // Create an execution scope compatible with existing typestate
             let scope = typestate::ExecutionScope::<typestate::states::StreamsRead, C, ES>::new(
                 stream_data.clone(),
                 stream_ids.clone(),
                 options.context.clone(),
             );
 
-            // Reconstruct state using the scope
+            // Reconstruct state
             let scope_with_state = scope.reconstruct_state(&command);
 
             info!(
@@ -773,7 +776,6 @@ where
             );
 
             // Use the type-safe scope to prepare stream events
-            // This GUARANTEES we use the same stream data that was used for state reconstruction
             let stream_events = scope_with_writes.prepare_stream_events();
 
             let result_versions = if let Some(timeout) = options.event_store_timeout {
