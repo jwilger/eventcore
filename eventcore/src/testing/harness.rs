@@ -451,7 +451,9 @@ where
     ) -> crate::errors::EventStoreResult<
         Box<dyn crate::subscription::Subscription<Event = Self::Event>>,
     > {
-        let subscription = crate::subscription::SubscriptionImpl::new();
+        // Create a subscription with a mock event store instance
+        let subscription =
+            crate::subscription::SubscriptionImpl::new(std::sync::Arc::new(Self::new()));
         Ok(Box::new(subscription))
     }
 }

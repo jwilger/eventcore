@@ -198,7 +198,8 @@ mod tests {
             _options: crate::subscription::SubscriptionOptions,
         ) -> Result<Box<dyn crate::subscription::Subscription<Event = Self::Event>>, EventStoreError>
         {
-            let subscription = crate::subscription::SubscriptionImpl::new();
+            let subscription =
+                crate::subscription::SubscriptionImpl::new(std::sync::Arc::new(Self));
             Ok(Box::new(subscription))
         }
     }

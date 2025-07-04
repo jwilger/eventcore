@@ -340,7 +340,7 @@ mod tests {
             _options: SubscriptionOptions,
         ) -> EventStoreResult<Box<dyn Subscription<Event = Self::Event>>> {
             Ok(Box::new(
-                crate::subscription::SubscriptionImpl::<TestEvent>::new(),
+                crate::subscription::SubscriptionImpl::<TestEvent>::new(std::sync::Arc::new(Self)),
             ))
         }
     }

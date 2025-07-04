@@ -7,8 +7,10 @@ use eventcore::{
     SubscriptionImpl, SubscriptionName, SubscriptionOptions, SubscriptionPosition,
     SubscriptionResult, Timestamp, TypedSubscription,
 };
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 // Test event type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,7 +132,9 @@ impl EventStore for ControllableEventStore {
             ));
         }
 
-        Ok(Box::new(SubscriptionImpl::<TestEvent>::new()))
+        Ok(Box::new(SubscriptionImpl::<TestEvent>::new(Arc::new(
+            Self::new(),
+        ))))
     }
 }
 

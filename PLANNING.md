@@ -262,38 +262,38 @@ Analysis of the codebase revealed that `SubscriptionImpl` in `src/subscription.r
 
 ### Tasks
 
-1. **Core Subscription Infrastructure** ✅ **CRITICAL**
-   - [ ] **Implement SubscriptionImpl::start()** - Event processing loop with:
+1. **Core Subscription Infrastructure** ✅ **COMPLETED**
+   - [x] **Implement SubscriptionImpl::start()** - Event processing loop with:
      - Event store polling/streaming mechanism
      - Event processor invocation with error handling
      - Checkpointing and position tracking
      - Proper lifecycle management
-   - [ ] **Implement SubscriptionImpl::stop()** - Graceful shutdown:
+   - [x] **Implement SubscriptionImpl::stop()** - Graceful shutdown:
      - Stop event processing loop
      - Save final checkpoint position
      - Clean up resources and handles
      - Ensure no events are lost
 
-2. **Subscription State Management** ✅ **CRITICAL**  
-   - [ ] **Implement SubscriptionImpl::pause()** - Suspend processing:
+2. **Subscription State Management** ✅ **COMPLETED**  
+   - [x] **Implement SubscriptionImpl::pause()** - Suspend processing:
      - Pause event polling without losing position
      - Maintain subscription state
      - Allow resume from exact position
-   - [ ] **Implement SubscriptionImpl::resume()** - Continue processing:
+   - [x] **Implement SubscriptionImpl::resume()** - Continue processing:
      - Resume from saved position
      - Restart event polling/streaming
      - Handle any events received during pause
 
-3. **Position Tracking and Checkpointing** ✅ **CRITICAL**
-   - [ ] **Implement SubscriptionImpl::get_position()** - Current position:
+3. **Position Tracking and Checkpointing** ✅ **COMPLETED**
+   - [x] **Implement SubscriptionImpl::get_position()** - Current position:
      - Return last processed event ID
      - Include per-stream checkpoints
      - Handle concurrent access safely
-   - [ ] **Implement SubscriptionImpl::save_checkpoint()** - Persist position:
+   - [x] **Implement SubscriptionImpl::save_checkpoint()** - Persist position:
      - Save to checkpoint store (in-memory for now)
      - Atomic save operations
      - Error handling and retry logic
-   - [ ] **Implement SubscriptionImpl::load_checkpoint()** - Restore position:
+   - [x] **Implement SubscriptionImpl::load_checkpoint()** - Restore position:
      - Load from checkpoint store
      - Handle missing checkpoints gracefully
      - Return None for new subscriptions

@@ -735,7 +735,8 @@ mod tests {
         ) -> crate::errors::EventStoreResult<
             Box<dyn crate::subscription::Subscription<Event = Self::Event>>,
         > {
-            let subscription = crate::subscription::SubscriptionImpl::new();
+            let subscription =
+                crate::subscription::SubscriptionImpl::new(std::sync::Arc::new(Self));
             Ok(Box::new(subscription))
         }
     }
