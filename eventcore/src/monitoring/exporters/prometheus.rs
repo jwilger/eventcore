@@ -53,13 +53,13 @@ impl PrometheusExporter {
     }
 
     /// Returns the Prometheus registry for advanced usage.
-    pub fn registry(&self) -> &Registry {
+    pub const fn registry(&self) -> &Registry {
         &self.registry
     }
 
     /// Helper to get or create a counter vector.
     fn get_or_create_counter(&self, name: &str, label_keys: &[&str]) -> CounterVec {
-        let metric_name = format!("eventcore_{}", name);
+        let metric_name = format!("eventcore_{name}");
 
         // Try to get existing counter
         if let Ok(counters) = self.counters.read() {
@@ -75,7 +75,7 @@ impl PrometheusExporter {
         let counter = register_counter_vec!(
             prometheus::opts!(
                 metric_name.clone(),
-                format!("EventCore counter metric: {}", name)
+                format!("EventCore counter metric: {name}")
             ),
             &all_labels
         )
@@ -84,7 +84,7 @@ impl PrometheusExporter {
             CounterVec::new(
                 prometheus::opts!(
                     metric_name.clone(),
-                    format!("EventCore counter metric: {}", name)
+                    format!("EventCore counter metric: {name}")
                 ),
                 &all_labels,
             )
@@ -104,7 +104,7 @@ impl PrometheusExporter {
 
     /// Helper to get or create a gauge vector.
     fn get_or_create_gauge(&self, name: &str, label_keys: &[&str]) -> GaugeVec {
-        let metric_name = format!("eventcore_{}", name);
+        let metric_name = format!("eventcore_{name}");
 
         // Try to get existing gauge
         if let Ok(gauges) = self.gauges.read() {
@@ -120,7 +120,7 @@ impl PrometheusExporter {
         let gauge = register_gauge_vec!(
             prometheus::opts!(
                 metric_name.clone(),
-                format!("EventCore gauge metric: {}", name)
+                format!("EventCore gauge metric: {name}")
             ),
             &all_labels
         )
@@ -129,7 +129,7 @@ impl PrometheusExporter {
             GaugeVec::new(
                 prometheus::opts!(
                     metric_name.clone(),
-                    format!("EventCore gauge metric: {}", name)
+                    format!("EventCore gauge metric: {name}")
                 ),
                 &all_labels,
             )
@@ -149,7 +149,7 @@ impl PrometheusExporter {
 
     /// Helper to get or create a histogram vector.
     fn get_or_create_histogram(&self, name: &str, label_keys: &[&str]) -> HistogramVec {
-        let metric_name = format!("eventcore_{}", name);
+        let metric_name = format!("eventcore_{name}");
 
         // Try to get existing histogram
         if let Ok(histograms) = self.histograms.read() {
@@ -168,7 +168,7 @@ impl PrometheusExporter {
         let histogram = HistogramVec::new(
             prometheus::histogram_opts!(
                 metric_name.clone(),
-                format!("EventCore histogram metric: {}", name),
+                format!("EventCore histogram metric: {name}"),
                 buckets
             ),
             &all_labels,

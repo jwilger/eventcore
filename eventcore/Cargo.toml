@@ -42,7 +42,7 @@ opentelemetry = { version = "0.27", features = ["metrics", "trace"], optional = 
 opentelemetry-otlp = { version = "0.27", optional = true }
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"], optional = true }
 tracing-opentelemetry = { version = "0.28", optional = true }
-prometheus = { version = "0.13", optional = true }
+prometheus = { version = "0.14", optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

@@ -27,6 +27,7 @@ impl OpenTelemetryExporter {
     }
 
     /// Internal constructor used by builder.
+    #[allow(clippy::missing_const_for_fn)]
     fn new(meter: Meter, config: ExporterConfig) -> Self {
         Self { meter, config }
     }
@@ -34,10 +35,7 @@ impl OpenTelemetryExporter {
 
 impl MetricsExporter for OpenTelemetryExporter {
     fn export_counter(&self, name: &str, value: u64, labels: &[(String, String)]) {
-        let counter = self
-            .meter
-            .u64_counter(format!("eventcore.{}", name))
-            .build();
+        let counter = self.meter.u64_counter(format!("eventcore.{name}")).build();
 
         let mut attributes = vec![
             KeyValue::new("service.name", self.config.service_name.clone()),
@@ -59,7 +57,7 @@ impl MetricsExporter for OpenTelemetryExporter {
     fn export_gauge(&self, name: &str, value: f64, labels: &[(String, String)]) {
         let gauge = self
             .meter
-            .f64_up_down_counter(format!("eventcore.{}", name))
+            .f64_up_down_counter(format!("eventcore.{name}"))
             .build();
 
         let mut attributes = vec![
@@ -84,7 +82,7 @@ impl MetricsExporter for OpenTelemetryExporter {
     fn export_histogram(&self, name: &str, value: Duration, labels: &[(String, String)]) {
         let histogram = self
             .meter
-            .f64_histogram(format!("eventcore.{}", name))
+            .f64_histogram(format!("eventcore.{name}"))
             .with_unit("ms")
             .build();
 
@@ -102,6 +100,7 @@ impl MetricsExporter for OpenTelemetryExporter {
             attributes.push(KeyValue::new(key.clone(), value.clone()));
         }
 
+        #[allow(clippy::cast_precision_loss)]
         histogram.record(value.as_millis() as f64, &attributes);
     }
 }
@@ -205,7 +204,7 @@ impl OpenTelemetryExporterBuilder {
 
         let meter_provider = SdkMeterProvider::builder()
             .with_reader(reader)
-            .with_resource(resource.clone())
+            .with_resource(resource)
             .build();
 
         let meter = meter_provider.meter("eventcore");
