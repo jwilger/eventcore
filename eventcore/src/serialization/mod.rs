@@ -158,10 +158,15 @@ pub struct SerializedEventEnvelope {
     pub stored_at: Timestamp,
 }
 
+pub mod bincode;
 pub mod compatibility;
 pub mod evolution;
+pub mod format;
 pub mod json;
+pub mod messagepack;
 
+#[allow(unused_imports)]
+pub use bincode::BincodeEventSerializer;
 #[allow(unused_imports)]
 pub use compatibility::{
     CompatibilityAnalysis, CompatibilityLevel, CompatibilityValidator, JsonSchema,
@@ -174,7 +179,11 @@ pub use evolution::{
     VersionedEvent,
 };
 #[allow(unused_imports)]
+pub use format::{FormatSerializer, SerializationFormat};
+#[allow(unused_imports)]
 pub use json::JsonEventSerializer;
+#[allow(unused_imports)]
+pub use messagepack::MessagePackEventSerializer;
 
 #[cfg(test)]
 mod tests;

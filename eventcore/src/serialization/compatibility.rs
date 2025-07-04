@@ -28,36 +28,52 @@ pub enum CompatibilityLevel {
 pub enum SchemaChange {
     /// A field was added with an optional default value
     FieldAdded {
+        /// Name of the added field
         field_name: String,
+        /// Type of the added field
         field_type: SchemaFieldType,
+        /// Default value for the field (if any)
         default_value: Option<Value>,
     },
     /// A field was removed
     FieldRemoved {
+        /// Name of the removed field
         field_name: String,
+        /// Type of the removed field
         field_type: SchemaFieldType,
     },
     /// A field was renamed
     FieldRenamed {
+        /// Original field name
         old_name: String,
+        /// New field name
         new_name: String,
+        /// Type of the field
         field_type: SchemaFieldType,
     },
     /// A field's type was changed
     FieldTypeChanged {
+        /// Name of the field
         field_name: String,
+        /// Original type
         old_type: SchemaFieldType,
+        /// New type
         new_type: SchemaFieldType,
     },
     /// A field was made optional or required
     FieldOptionalityChanged {
+        /// Name of the field
         field_name: String,
+        /// Type of the field
         field_type: SchemaFieldType,
+        /// Whether the field is now optional
         now_optional: bool,
     },
     /// A nested object structure was changed
     NestedStructureChanged {
+        /// Name of the nested field
         field_name: String,
+        /// Changes within the nested structure
         nested_changes: Vec<SchemaChange>,
     },
 }
@@ -65,12 +81,19 @@ pub enum SchemaChange {
 /// Simplified schema field type for compatibility analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaFieldType {
+    /// String type
     String,
+    /// Numeric type (integer or float)
     Number,
+    /// Boolean type
     Boolean,
+    /// Array type with element type
     Array(Box<SchemaFieldType>),
+    /// Object type with field definitions
     Object(HashMap<String, SchemaFieldType>),
+    /// Null type
     Null,
+    /// Union of multiple possible types
     Union(Vec<SchemaFieldType>),
 }
 
@@ -448,6 +471,7 @@ impl MigrationBuilder {
     }
 
     /// Adds a migration step to handle field addition.
+    #[must_use]
     pub fn add_field(mut self, field_name: &str, default_value: Value) -> Self {
         self.migrations
             .push(helpers::add_field(field_name, default_value));
@@ -455,12 +479,14 @@ impl MigrationBuilder {
     }
 
     /// Adds a migration step to handle field removal.
+    #[must_use]
     pub fn remove_field(mut self, field_name: &str) -> Self {
         self.migrations.push(helpers::remove_field(field_name));
         self
     }
 
     /// Adds a migration step to handle field renaming.
+    #[must_use]
     pub fn rename_field(mut self, old_name: &str, new_name: &str) -> Self {
         self.migrations
             .push(helpers::rename_field(old_name, new_name));
@@ -468,6 +494,7 @@ impl MigrationBuilder {
     }
 
     /// Adds a migration step to handle type conversion.
+    #[must_use]
     pub fn convert_field_type<F>(mut self, field_name: &str, converter: F) -> Self
     where
         F: Fn(Value) -> Result<Value, EventStoreError> + Send + Sync + 'static,
@@ -478,6 +505,7 @@ impl MigrationBuilder {
     }
 
     /// Adds a custom migration step.
+    #[must_use]
     pub fn add_custom_migration<F>(mut self, migration: F) -> Self
     where
         F: Fn(Value) -> Result<Value, EventStoreError> + Send + Sync + 'static,

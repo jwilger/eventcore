@@ -22,6 +22,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use chrono::{DateTime, Utc};
+use eventcore::serialization::SerializationFormat;
 use eventcore::{EventId, EventStoreError, ReadOptions, StoredEvent, StreamId};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use thiserror::Error;
@@ -129,6 +130,10 @@ pub struct PostgresConfig {
     /// Batch size for reading events from multiple streams
     /// This controls how many events are fetched in a single query
     pub read_batch_size: usize,
+
+    /// Serialization format to use for event payloads
+    /// Defaults to JSON for backward compatibility
+    pub serialization_format: SerializationFormat,
 }
 
 impl PostgresConfig {
@@ -158,6 +163,7 @@ impl Default for PostgresConfig {
             enable_recovery: true, // Enable automatic connection recovery
             health_check_interval: Duration::from_secs(30), // Check health every 30 seconds
             read_batch_size: 1000, // Default batch size for multi-stream reads
+            serialization_format: SerializationFormat::default(), // JSON by default
         }
     }
 }
@@ -255,7 +261,11 @@ impl From<PostgresError> for EventStoreError {
 }
 
 /// `PostgreSQL` event store implementation
-#[derive(Debug)]
+///
+/// TODO: The `serialization_format` configuration is currently stored but not used.
+/// The `PostgreSQL` adapter still uses hardcoded JSON serialization. Implementing
+/// pluggable serialization formats requires changes to the database schema and
+/// query logic to handle binary data instead of JSON columns.
 pub struct PostgresEventStore<E>
 where
     E: Send + Sync,
@@ -1186,6 +1196,7 @@ mod tests {
             enable_recovery: false,
             health_check_interval: Duration::from_secs(60),
             read_batch_size: 500,
+            serialization_format: SerializationFormat::Json,
         };
 
         assert_eq!(config.max_connections, 50);

@@ -1088,7 +1088,7 @@ mod monitoring;
 mod projection;
 mod projection_manager;
 mod projection_runner;
-mod serialization;
+pub mod serialization;
 mod state_reconstruction;
 mod subscription;
 mod type_registry;
