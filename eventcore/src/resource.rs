@@ -810,7 +810,7 @@ pub mod database {
             query: &str,
         ) -> ResourceResult<sqlx::postgres::PgQueryResult> {
             sqlx::query(query)
-                .execute(self.get_mut())
+                .execute(&mut **self.get_mut())
                 .await
                 .map_err(|e| ResourceError::InvalidState(format!("Query execution failed: {}", e)))
         }
@@ -819,7 +819,8 @@ pub mod database {
         ///
         /// Only available when the resource is acquired
         pub async fn begin_transaction(mut self) -> ResourceResult<DatabaseTransaction<'static>> {
-            let transaction = self.get_mut().begin().await.map_err(|e| {
+            let connection = self.get_mut();
+            let transaction = connection.begin().await.map_err(|e| {
                 ResourceError::InvalidState(format!("Failed to begin transaction: {}", e))
             })?;
 
