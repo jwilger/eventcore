@@ -6,7 +6,10 @@
 //! - Structured logging with correlation IDs
 //! - Health check functionality for system monitoring
 //! - Performance alerting and monitoring guidelines
+//! - Integration with external monitoring systems (OpenTelemetry, Prometheus)
 
+#[allow(missing_docs)]
+pub mod exporters;
 #[allow(missing_docs)]
 pub mod health;
 #[allow(missing_docs)]

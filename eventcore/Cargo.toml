@@ -37,6 +37,13 @@ miette = { version = "7.6.0", features = ["fancy"] }
 rmp-serde = "1.3.0"
 bincode = "1.3.3"
 
+# Observability integrations
+opentelemetry = { version = "0.27", features = ["metrics", "trace"], optional = true }
+opentelemetry-otlp = { version = "0.27", optional = true }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"], optional = true }
+tracing-opentelemetry = { version = "0.28", optional = true }
+prometheus = { version = "0.13", optional = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 tokio-test = { workspace = true }
@@ -47,10 +54,14 @@ tracing-test = "0.2.5"
 rand = { workspace = true }
 eventcore-memory = { path = "../eventcore-memory" }
 eventcore-postgres = { path = "../eventcore-postgres" }
+axum = { version = "0.8", features = ["tokio"] }
 
 [features]
 default = []
 testing = ["dep:proptest"]
+opentelemetry = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
+prometheus = ["dep:prometheus"]
+all-exporters = ["opentelemetry", "prometheus"]
 
 [lints]
 workspace = true
