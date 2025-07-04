@@ -149,6 +149,7 @@ See [eventcore-examples/](eventcore-examples/) for complete working examples:
 - **Banking**: Account transfers with balance tracking
 - **E-commerce**: Order workflow with inventory management
 - **Sagas**: Order fulfillment with distributed transaction coordination
+- **Web Framework Integration**: REST API with Axum (task management system)
 
 ## Documentation
 
@@ -156,6 +157,7 @@ See [eventcore-examples/](eventcore-examples/) for complete working examples:
 - [PostgreSQL Adapter](eventcore-postgres/README.md) - Production event store
 - [Testing Guide](eventcore-memory/README.md) - In-memory store for tests
 - [Examples](eventcore-examples/README.md) - Complete applications
+- [Web Framework Integration](docs/web-framework-integration.md) - Integration with Axum, Actix-web, and more
 
 ## Development
 
