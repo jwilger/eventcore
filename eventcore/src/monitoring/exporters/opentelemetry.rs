@@ -222,6 +222,7 @@ impl OpenTelemetryExporterBuilder {
 }
 
 /// Shutdown OpenTelemetry providers gracefully.
+#[allow(clippy::unused_async)]
 pub async fn shutdown() {
     // OpenTelemetry SDK now handles shutdown differently
     // The global meter provider is automatically shut down when dropped

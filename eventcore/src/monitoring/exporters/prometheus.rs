@@ -233,6 +233,7 @@ impl MetricsExporter for PrometheusExporter {
             values.push(v.as_str());
         }
 
+        #[allow(clippy::cast_precision_loss)]
         counter.with_label_values(&values).inc_by(value as f64);
     }
 
@@ -274,18 +275,10 @@ impl MetricsExporter for PrometheusExporter {
 }
 
 /// Builder for creating Prometheus exporters.
+#[derive(Default)]
 pub struct PrometheusExporterBuilder {
     registry: Option<Registry>,
     config: ExporterConfig,
-}
-
-impl Default for PrometheusExporterBuilder {
-    fn default() -> Self {
-        Self {
-            registry: None,
-            config: ExporterConfig::default(),
-        }
-    }
 }
 
 impl PrometheusExporterBuilder {
@@ -321,7 +314,7 @@ impl PrometheusExporterBuilder {
 
     /// Builds the Prometheus exporter.
     pub fn build(self) -> PrometheusExporter {
-        let registry = self.registry.unwrap_or_else(Registry::new);
+        let registry = self.registry.unwrap_or_default();
 
         info!(
             service_name = %self.config.service_name,
@@ -348,11 +341,12 @@ pub struct PrometheusMetricsHandler {
 
 impl PrometheusMetricsHandler {
     /// Creates a new metrics handler.
-    pub fn new(exporter: Arc<PrometheusExporter>) -> Self {
+    pub const fn new(exporter: Arc<PrometheusExporter>) -> Self {
         Self { exporter }
     }
 
     /// Handles a metrics request and returns the response body.
+    #[allow(clippy::unused_async)]
     pub async fn handle(&self) -> Result<String, Box<dyn std::error::Error>> {
         self.exporter.gather()
     }
