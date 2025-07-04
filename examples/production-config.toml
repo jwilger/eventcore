@@ -1,0 +1,222 @@
+# Production Configuration Example for EventCore Applications
+# 
+# This file demonstrates best practices for configuring EventCore
+# in production environments. Use environment variables to override
+# these values for different deployment environments.
+
+[database]
+# Database connection URL (override with DATABASE_URL env var)
+url = "postgres://eventcore:password@postgres:5432/eventcore"
+
+# Connection pool settings
+max_connections = 100      # Maximum connections in pool
+min_connections = 10       # Minimum idle connections
+connection_timeout = "30s" # Timeout for acquiring connection
+idle_timeout = "10m"       # Timeout for idle connections
+max_lifetime = "30m"       # Maximum lifetime of connections
+
+# Query settings
+statement_timeout = "30s"  # Maximum query execution time
+lock_timeout = "10s"       # Maximum time to wait for locks
+
+[server]
+# Server binding configuration
+host = "0.0.0.0"
+port = 8080
+
+# Worker configuration
+workers = 0  # 0 = number of CPU cores
+
+# Request handling
+request_timeout = "30s"
+body_limit = "10MB"
+shutdown_timeout = "30s"
+
+[monitoring]
+# Metrics endpoint
+metrics_host = "0.0.0.0"
+metrics_port = 9090
+metrics_path = "/metrics"
+
+# OpenTelemetry configuration
+[monitoring.opentelemetry]
+enabled = true
+endpoint = "http://otel-collector:4317"
+service_name = "eventcore-app"
+service_version = "1.0.0"
+environment = "production"
+sample_rate = 0.1  # Sample 10% of traces
+
+# Prometheus configuration
+[monitoring.prometheus]
+enabled = true
+namespace = "eventcore"
+subsystem = "app"
+buckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+
+# Health check configuration
+[monitoring.health]
+liveness_path = "/health/live"
+readiness_path = "/health/ready"
+startup_probe_delay = "10s"
+readiness_probe_interval = "5s"
+
+[resilience]
+# Circuit breaker configuration
+[resilience.circuit_breaker]
+enabled = true
+failure_threshold = 5      # Failures before opening
+success_threshold = 2      # Successes before closing
+timeout = "60s"           # Time before attempting to close
+half_open_requests = 3    # Requests allowed in half-open state
+
+# Retry configuration
+[resilience.retry]
+enabled = true
+max_attempts = 3
+initial_delay = "100ms"
+max_delay = "10s"
+multiplier = 2.0
+jitter = 0.1  # 10% jitter
+
+# Timeout configuration
+[resilience.timeouts]
+command_execution = "30s"
+database_query = "10s"
+http_request = "30s"
+
+# Rate limiting
+[resilience.rate_limit]
+enabled = true
+requests_per_second = 1000
+burst_size = 100
+by_ip = true
+by_user = true
+
+[logging]
+# Log level (trace, debug, info, warn, error)
+level = "info"
+
+# Structured logging
+format = "json"  # "json" or "pretty"
+include_timestamp = true
+include_target = true
+include_thread = true
+include_file = true
+include_line = true
+
+# Log filtering rules
+filters = [
+    "eventcore=debug",
+    "sqlx=warn",
+    "hyper=info",
+    "tower=info",
+]
+
+# Log sampling
+sampling_rate = 1.0  # Log 100% of messages
+
+[security]
+# TLS configuration
+[security.tls]
+enabled = true
+cert_file = "/etc/eventcore/tls/cert.pem"
+key_file = "/etc/eventcore/tls/key.pem"
+ca_file = "/etc/eventcore/tls/ca.pem"
+min_version = "1.2"
+ciphers = [
+    "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+    "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+    "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+    "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+]
+
+# Authentication
+[security.auth]
+enabled = true
+token_expiry = "1h"
+refresh_token_expiry = "7d"
+bcrypt_cost = 12
+
+# CORS configuration
+[security.cors]
+enabled = true
+allowed_origins = ["https://app.example.com"]
+allowed_methods = ["GET", "POST", "PUT", "DELETE"]
+allowed_headers = ["Content-Type", "Authorization"]
+max_age = "1h"
+
+[cache]
+# Command result caching
+[cache.command]
+enabled = false  # Enable only for idempotent commands
+ttl = "5m"
+max_size = "100MB"
+
+# Projection caching
+[cache.projection]
+enabled = true
+ttl = "1m"
+max_size = "500MB"
+
+[features]
+# Feature flags
+enable_experimental_features = false
+enable_debug_endpoints = false
+enable_profiling = false
+enable_request_logging = true
+enable_slow_query_logging = true
+slow_query_threshold = "1s"
+
+[maintenance]
+# Maintenance window configuration
+[maintenance.window]
+enabled = false
+start_time = "02:00"
+duration = "2h"
+timezone = "UTC"
+
+# Backup configuration
+[maintenance.backup]
+enabled = true
+schedule = "0 3 * * *"  # Daily at 3 AM
+retention_days = 30
+compression = true
+
+# Archival configuration
+[maintenance.archive]
+enabled = true
+older_than_days = 365
+batch_size = 1000
+schedule = "0 4 * * 0"  # Weekly on Sunday at 4 AM
+
+[limits]
+# Resource limits
+max_event_size = "1MB"
+max_stream_length = 1_000_000
+max_concurrent_commands = 1000
+max_projection_lag = "5m"
+
+# Rate limits per user
+commands_per_minute = 100
+events_per_minute = 1000
+queries_per_minute = 500
+
+[deployment]
+# Deployment metadata
+region = "us-west-2"
+availability_zone = "us-west-2a"
+cluster = "production"
+namespace = "default"
+replica_count = 3
+
+# Rolling update configuration
+[deployment.update]
+max_surge = 1
+max_unavailable = 0
+progress_deadline = "10m"
+
+# Pod disruption budget
+[deployment.pdb]
+min_available = 2
+max_unavailable = 1

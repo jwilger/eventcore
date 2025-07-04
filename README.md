@@ -159,6 +159,12 @@ See [eventcore-examples/](eventcore-examples/) for complete working examples:
 - [Examples](eventcore-examples/README.md) - Complete applications
 - [Web Framework Integration](docs/web-framework-integration.md) - Integration with Axum, Actix-web, and more
 
+### Production Guides
+
+- [Deployment Guide](docs/deployment-guide.md) - Docker, Kubernetes, and bare metal deployment
+- [Operations Guide](docs/operations-guide.md) - Day-to-day operations, monitoring, and troubleshooting
+- [Production Configuration](examples/production-config.rs) - Best practices for production config
+
 ## Development
 
 ```bash
