@@ -141,10 +141,10 @@ Advanced phantom types can provide compile-time guarantees for:
 ### Tasks
 
 1. **Codebase Analysis for Phantom Type Opportunities**
-   - [ ] Analyze command execution flow for state machine encoding opportunities
-   - [ ] Identify permission and access control patterns that could be type-encoded
-   - [ ] Find protocol/workflow patterns that could benefit from type-safe transitions
-   - [ ] Document resource lifecycle patterns that could use phantom types
+   - [x] Analyze command execution flow for state machine encoding opportunities
+   - [x] Identify permission and access control patterns that could be type-encoded
+   - [x] Find protocol/workflow patterns that could benefit from type-safe transitions
+   - [x] Document resource lifecycle patterns that could use phantom types
 
 2. **Implementation Priorities**
    - [ ] Create detailed implementation plan for each identified opportunity
@@ -213,6 +213,31 @@ impl Command<Validated> {
 - Easier refactoring with compiler-guided changes
 - Reduced testing burden for compile-time prevented errors
 - State machines and protocols enforced by type system
+
+## Phase 19: Dead Code Cleanup
+
+### Objective
+
+Identify and remove dead code, unused files, and obsolete modules to improve codebase maintainability.
+
+### Tasks
+
+1. **Dead Code Analysis**
+   - [ ] Search for unused files (e.g., `command_old.rs`)
+   - [ ] Identify unused imports and dependencies
+   - [ ] Find commented-out code blocks that should be removed
+   - [ ] Locate disabled tests and examples that are no longer relevant
+
+2. **Cleanup Actions**
+   - [ ] Remove identified dead code files
+   - [ ] Clean up unused imports and dependencies
+   - [ ] Remove or update outdated comments
+   - [ ] Update Cargo.toml files to remove unused dependencies
+
+3. **Validation**
+   - [ ] Ensure all tests still pass after cleanup
+   - [ ] Verify examples still compile and run
+   - [ ] Check that no active code was accidentally removed
 
 ## Development Process Rules
 
