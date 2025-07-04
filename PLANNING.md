@@ -242,7 +242,93 @@ impl Command<Validated> {
 - Reduced testing burden for compile-time prevented errors
 - State machines and protocols enforced by type system
 
-## Phase 19: Dead Code Cleanup
+## Phase 19: Complete Subscription System Implementation ✅ **HIGH PRIORITY**
+
+### Objective
+
+Complete the implementation of the subscription system by replacing all `todo!()` placeholders in `SubscriptionImpl` with fully functional event processing capabilities. This is critical infrastructure that the type-safe subscription system and projection rebuilds depend on.
+
+### Background
+
+Analysis of the codebase revealed that `SubscriptionImpl` in `src/subscription.rs` has all core methods stubbed out with `todo!()` placeholders:
+
+- `start()` - Begin event processing with proper event store integration
+- `stop()` - Cleanly shutdown subscription processing  
+- `pause()` - Temporarily suspend event processing
+- `resume()` - Continue paused event processing
+- `get_position()` - Return current subscription position for checkpointing
+- `save_checkpoint()` - Persist subscription position to storage
+- `load_checkpoint()` - Restore subscription position from storage
+
+### Tasks
+
+1. **Core Subscription Infrastructure** ✅ **CRITICAL**
+   - [ ] **Implement SubscriptionImpl::start()** - Event processing loop with:
+     - Event store polling/streaming mechanism
+     - Event processor invocation with error handling
+     - Checkpointing and position tracking
+     - Proper lifecycle management
+   - [ ] **Implement SubscriptionImpl::stop()** - Graceful shutdown:
+     - Stop event processing loop
+     - Save final checkpoint position
+     - Clean up resources and handles
+     - Ensure no events are lost
+
+2. **Subscription State Management** ✅ **CRITICAL**  
+   - [ ] **Implement SubscriptionImpl::pause()** - Suspend processing:
+     - Pause event polling without losing position
+     - Maintain subscription state
+     - Allow resume from exact position
+   - [ ] **Implement SubscriptionImpl::resume()** - Continue processing:
+     - Resume from saved position
+     - Restart event polling/streaming
+     - Handle any events received during pause
+
+3. **Position Tracking and Checkpointing** ✅ **CRITICAL**
+   - [ ] **Implement SubscriptionImpl::get_position()** - Current position:
+     - Return last processed event ID
+     - Include per-stream checkpoints
+     - Handle concurrent access safely
+   - [ ] **Implement SubscriptionImpl::save_checkpoint()** - Persist position:
+     - Save to checkpoint store (in-memory for now)
+     - Atomic save operations
+     - Error handling and retry logic
+   - [ ] **Implement SubscriptionImpl::load_checkpoint()** - Restore position:
+     - Load from checkpoint store
+     - Handle missing checkpoints gracefully
+     - Return None for new subscriptions
+
+4. **Integration and Testing**
+   - [ ] **Enable TypedSubscription tests** - Remove `todo!()` workarounds
+   - [ ] **Enable Subscription adapter tests** - Full lifecycle testing
+   - [ ] **Test projection rebuild functionality** - End-to-end workflows
+   - [ ] **Replace placeholder in memory_leak_tests.rs** - Minor cleanup
+
+### Implementation Strategy
+
+1. **Type-Driven Development**: Design internal state types that make invalid states impossible
+2. **Event Store Integration**: Use existing `EventStore` trait for event polling
+3. **Async Task Management**: Use `tokio::spawn` for background processing
+4. **Error Handling**: Use `SubscriptionResult<T>` consistently with proper error propagation
+5. **Concurrency**: Use `Arc` and `Mutex`/`RwLock` for shared state where needed
+
+### Expected Outcomes
+
+- **Functional Subscription System**: Real event processing instead of stubs
+- **Reliable Checkpointing**: Subscriptions can resume from exact positions
+- **Type-Safe State Transitions**: Phantom type system fully operational
+- **Production-Ready Rebuilds**: Projection rebuilds can process real events
+- **Test Coverage**: All subscription tests passing without workarounds
+
+### Implementation Priority
+
+This phase has **HIGH PRIORITY** because:
+- Multiple systems depend on functional subscriptions (typed subscriptions, rebuilds, projections)
+- Current `todo!()` placeholders prevent real-world usage
+- Type-safe subscription system is incomplete without working implementation
+- Projection rebuild system cannot function without event processing
+
+## Phase 20: Dead Code Cleanup
 
 ### Objective
 
