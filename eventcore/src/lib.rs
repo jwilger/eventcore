@@ -1092,6 +1092,8 @@ mod projection_runner;
 pub mod serialization;
 mod state_reconstruction;
 mod subscription;
+mod subscription_adapter;
+mod subscription_typestate;
 mod type_registry;
 mod types;
 mod utils;
@@ -1135,6 +1137,10 @@ pub use projection_protocol::{
 pub use subscription::{
     Checkpoint, EventProcessor, Subscription, SubscriptionError, SubscriptionImpl,
     SubscriptionName, SubscriptionOptions, SubscriptionPosition, SubscriptionResult,
+};
+pub use subscription_adapter::{create_typed_subscription, TypedSubscriptionAdapter};
+pub use subscription_typestate::{
+    Configured, Paused, Running, Stopped, TypedSubscription, Uninitialized,
 };
 pub use types::{EventId, EventVersion, StreamId, Timestamp};
 
