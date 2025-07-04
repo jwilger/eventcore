@@ -351,6 +351,57 @@ Based on the comprehensive expert review, the following improvements have been i
   - [x] Integrate with popular monitoring and observability tools
   - [x] Create deployment and operations guides
 
+### 15.11 Comprehensive Documentation Manual (NEW - 2025-07-04)
+
+**Create well-organized EventCore user manual and reference documentation**
+
+- [x] **Part 1: Introduction** ✅ COMPLETED
+  - [x] Welcome and overview
+  - [x] When to use EventCore (event sourcing as default)
+  - [x] Core concepts overview
+  - [x] Getting help section
+
+- [x] **Part 2: Getting Started** ✅ COMPLETED  
+  - [x] Quick start guide
+  - [x] Modeling with events
+  - [x] Creating commands with macros
+  - [x] Building projections
+  - [x] Testing strategies
+
+- [x] **Part 3: Core Concepts** ✅ COMPLETED (2025-07-04)
+  - [x] Commands and the macro system
+  - [x] Events and event stores
+  - [x] State reconstruction
+  - [x] Multi-stream atomicity
+  - [x] Error handling
+
+- [ ] **Part 4: Building Web APIs**
+  - [ ] Setting up HTTP endpoints
+  - [ ] Command handlers
+  - [ ] Query endpoints
+  - [ ] Authentication and authorization
+  - [ ] API versioning
+
+- [ ] **Part 5: Advanced Topics**
+  - [ ] Schema evolution
+  - [ ] Event versioning
+  - [ ] Long-running processes
+  - [ ] Distributed systems
+  - [ ] Performance optimization
+
+- [ ] **Part 6: Operations**
+  - [ ] Deployment strategies
+  - [ ] Monitoring and metrics
+  - [ ] Backup and recovery
+  - [ ] Troubleshooting
+  - [ ] Production checklist
+
+- [ ] **Part 7: Reference**
+  - [ ] API documentation
+  - [ ] Configuration reference
+  - [ ] Error reference
+  - [ ] Glossary
+
 ## Priority and Sequencing
 
 ### High Priority (Address First)
