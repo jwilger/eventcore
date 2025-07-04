@@ -10,28 +10,28 @@ repos:
 
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --workspace --all-targets -- -D warnings
+        entry: cargo clippy --workspace --all-targets --all-features -- -D warnings
         language: system
         files: \.(rs|toml)$
         pass_filenames: false
 
       - id: cargo-test
         name: cargo test
-        entry: cargo test --workspace --lib --bins
+        entry: cargo test --workspace --lib --bins --all-features
         language: system
         files: \.(rs|toml)$
         pass_filenames: false
 
       - id: cargo-test-integration
         name: cargo integration tests
-        entry: cargo test --workspace --test '*'
+        entry: cargo test --workspace --test '*' --all-features
         language: system
         files: \.(rs|toml)$
         pass_filenames: false
 
       - id: cargo-check
         name: cargo check
-        entry: cargo check --all-targets
+        entry: cargo check --all-targets --all-features
         language: system
         files: \.(rs|toml)$
         pass_filenames: false

@@ -625,8 +625,8 @@ impl<T, S> Resource<T, S> {
 /// Database connection resource implementation
 #[cfg(feature = "postgres")]
 pub mod database {
-    use super::*;
-    use sqlx::{Acquire, PgPool, Postgres, Transaction};
+    use super::{async_trait, states, Resource, ResourceError, ResourceManager, ResourceResult};
+    use sqlx::{PgPool, Postgres, Transaction};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -670,11 +670,9 @@ pub mod database {
 
         /// Check if health check is needed
         fn needs_health_check(&self) -> bool {
-            if let Ok(last_check) = self.last_health_check.lock() {
+            self.last_health_check.lock().map_or(true, |last_check| {
                 last_check.elapsed() > self.health_check_interval
-            } else {
-                true // If lock is poisoned, be conservative and check health
-            }
+            })
         }
 
         /// Perform health check and update timestamp
@@ -684,7 +682,7 @@ pub mod database {
                 .execute(self.pool.as_ref())
                 .await
                 .map_err(|e| {
-                    ResourceError::AcquisitionFailed(format!("Health check failed: {}", e))
+                    ResourceError::AcquisitionFailed(format!("Health check failed: {e}"))
                 })?;
 
             // Update health check timestamp
@@ -733,7 +731,7 @@ pub mod database {
 
             // Acquire a connection from the pool
             let connection = self.pool.acquire().await.map_err(|e| {
-                ResourceError::AcquisitionFailed(format!("Failed to acquire connection: {}", e))
+                ResourceError::AcquisitionFailed(format!("Failed to acquire connection: {e}"))
             })?;
 
             Ok(Resource::new(connection))
@@ -748,7 +746,7 @@ pub mod database {
 
             // Begin transaction
             let transaction = self.pool.begin().await.map_err(|e| {
-                ResourceError::AcquisitionFailed(format!("Failed to begin transaction: {}", e))
+                ResourceError::AcquisitionFailed(format!("Failed to begin transaction: {e}"))
             })?;
 
             Ok(Resource::new(transaction))
@@ -767,7 +765,7 @@ pub mod database {
             sqlx::query(query)
                 .execute(self.get().as_ref())
                 .await
-                .map_err(|e| ResourceError::InvalidState(format!("Query execution failed: {}", e)))
+                .map_err(|e| ResourceError::InvalidState(format!("Query execution failed: {e}")))
         }
 
         /// Fetch one row from a query
@@ -777,13 +775,13 @@ pub mod database {
             sqlx::query(query)
                 .fetch_one(self.get().as_ref())
                 .await
-                .map_err(|e| ResourceError::InvalidState(format!("Query fetch failed: {}", e)))
+                .map_err(|e| ResourceError::InvalidState(format!("Query fetch failed: {e}")))
         }
 
         /// Get the connection pool
         ///
         /// Only available when the resource is acquired
-        pub fn pool(&self) -> &Arc<PgPool> {
+        pub const fn pool(&self) -> &Arc<PgPool> {
             self.get()
         }
 
@@ -794,7 +792,7 @@ pub mod database {
             let pool = self.get();
             PoolStats {
                 size: pool.size(),
-                idle: pool.num_idle() as u32,
+                idle: u32::try_from(pool.num_idle()).unwrap_or(u32::MAX),
                 is_closed: pool.is_closed(),
             }
         }
@@ -812,25 +810,16 @@ pub mod database {
             sqlx::query(query)
                 .execute(&mut **self.get_mut())
                 .await
-                .map_err(|e| ResourceError::InvalidState(format!("Query execution failed: {}", e)))
+                .map_err(|e| ResourceError::InvalidState(format!("Query execution failed: {e}")))
         }
 
-        /// Begin a transaction using this connection
-        ///
-        /// Only available when the resource is acquired
-        pub async fn begin_transaction(mut self) -> ResourceResult<DatabaseTransaction<'static>> {
-            let connection = self.get_mut();
-            let transaction = connection.begin().await.map_err(|e| {
-                ResourceError::InvalidState(format!("Failed to begin transaction: {}", e))
-            })?;
-
-            // Note: This consumes the connection resource
-            Ok(Resource::new(transaction))
-        }
+        // Note: To begin a transaction, use DatabasePool::begin_transaction() instead.
+        // Pool connections should not create their own transactions as this can lead
+        // to lifetime issues and is not the recommended SQLx pattern.
     }
 
     /// Extension methods for database transaction resources
-    impl<'a> DatabaseTransaction<'a> {
+    impl DatabaseTransaction<'_> {
         /// Execute a query within the transaction
         ///
         /// Only available when the resource is acquired
@@ -841,9 +830,7 @@ pub mod database {
             sqlx::query(query)
                 .execute(&mut **self.get_mut())
                 .await
-                .map_err(|e| {
-                    ResourceError::InvalidState(format!("Transaction query failed: {}", e))
-                })
+                .map_err(|e| ResourceError::InvalidState(format!("Transaction query failed: {e}")))
         }
 
         /// Commit the transaction
@@ -852,7 +839,7 @@ pub mod database {
         /// Consumes the transaction and returns a released resource
         pub async fn commit(self) -> ResourceResult<Resource<(), states::Released>> {
             self.into_inner().commit().await.map_err(|e| {
-                ResourceError::ReleaseFailed(format!("Transaction commit failed: {}", e))
+                ResourceError::ReleaseFailed(format!("Transaction commit failed: {e}"))
             })?;
 
             Ok(Resource::new(()))
@@ -864,7 +851,7 @@ pub mod database {
         /// Consumes the transaction and returns a released resource
         pub async fn rollback(self) -> ResourceResult<Resource<(), states::Released>> {
             self.into_inner().rollback().await.map_err(|e| {
-                ResourceError::ReleaseFailed(format!("Transaction rollback failed: {}", e))
+                ResourceError::ReleaseFailed(format!("Transaction rollback failed: {e}"))
             })?;
 
             Ok(Resource::new(()))
@@ -973,9 +960,13 @@ pub mod locking {
 #[cfg(test)]
 mod tests {
     use super::states::*;
-    use super::*;
+    use super::{
+        global_leak_detector, locking, IsAcquired, IsReleasable, ManagedResource, Resource,
+        ResourceError, ResourceExt, ResourceLeakDetector, ResourceScope, TimedResourceGuard,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::time::{sleep, timeout};
 
     #[test]

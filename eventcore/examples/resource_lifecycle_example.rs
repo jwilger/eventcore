@@ -3,10 +3,13 @@
 //! This example demonstrates how to use `EventCore`'s phantom type resource management
 //! system to ensure safe resource acquisition and release with compile-time guarantees.
 
-use eventcore::resource::{global_leak_detector, locking::create_mutex_resource, ResourceResult};
+use eventcore::resource::{
+    global_leak_detector, locking::create_mutex_resource, ResourceError, ResourceExt,
+    ResourceResult,
+};
 
 #[cfg(feature = "postgres")]
-use eventcore::resource::database::{DatabaseResourceFactory, DatabaseResourceManager};
+use eventcore::resource::database::DatabaseResourceFactory;
 #[cfg(feature = "postgres")]
 use std::{sync::Arc, time::Duration};
 #[cfg(feature = "postgres")]
@@ -49,7 +52,7 @@ async fn basic_resource_example() -> ResourceResult<()> {
     println!("📈 Pool stats: {} total, {} idle", stats.size, stats.idle);
 
     // Explicitly release the resource
-    pool_resource.release().await?;
+    pool_resource.release()?;
     println!("🔓 Resource released");
 
     Ok(())
@@ -71,7 +74,7 @@ async fn scoped_resource_example() -> ResourceResult<()> {
         println!("✅ Database pool acquired and scoped");
 
         // Use the resource within the scope
-        scoped_resource.with_resource(|resource| {
+        scoped_resource.with_resource(|_resource| {
             println!("🔧 Using resource within scope");
             // Resource is guaranteed to be available here
         });
@@ -99,9 +102,10 @@ async fn timed_resource_example() -> ResourceResult<()> {
     println!("✅ Resource acquired with 2-second timeout");
 
     // Use the resource while it's valid
-    if let Some(resource) = timed_guard.get() {
+    if let Some(_resource) = timed_guard.get() {
         println!("🔧 Using timed resource");
-        let _ = resource.pool_stats();
+        // Use the resource for some operation
+        println!("🔧 Resource in use within timeout");
     }
 
     // Wait to demonstrate timeout
@@ -109,11 +113,11 @@ async fn timed_resource_example() -> ResourceResult<()> {
     sleep(Duration::from_secs(1)).await;
 
     if let Some(time_remaining) = timed_guard.time_remaining() {
-        println!("⏰ Time remaining: {:?}", time_remaining);
+        println!("⏰ Time remaining: {time_remaining:?}");
     }
 
     // Release before timeout
-    timed_guard.release().await?;
+    timed_guard.release()?;
     println!("🔓 Timed resource released before timeout");
 
     Ok(())
@@ -241,24 +245,24 @@ async fn error_handling_example() -> ResourceResult<()> {
             match resource.execute_query("INVALID SQL QUERY").await {
                 Ok(_) => println!("📊 Query executed successfully"),
                 Err(ResourceError::InvalidState(msg)) => {
-                    println!("❌ Query failed: {}", msg);
+                    println!("❌ Query failed: {msg}");
                     // Resource is still valid, can continue using it
                 }
                 Err(other) => {
-                    println!("❌ Unexpected error: {}", other);
+                    println!("❌ Unexpected error: {other}");
                     return Err(other);
                 }
             }
 
-            resource.release().await?;
+            resource.release()?;
             println!("🔓 Resource cleaned up after error");
         }
         Err(ResourceError::AcquisitionFailed(msg)) => {
-            println!("❌ Resource acquisition failed: {}", msg);
+            println!("❌ Resource acquisition failed: {msg}");
             // Handle acquisition failure gracefully
         }
         Err(other) => {
-            println!("❌ Unexpected acquisition error: {}", other);
+            println!("❌ Unexpected acquisition error: {other}");
             return Err(other);
         }
     }
@@ -281,13 +285,13 @@ async fn comprehensive_example() -> ResourceResult<()> {
     {
         let resource = resource_manager.acquire_pool().await?;
         let _stats = resource.pool_stats();
-        resource.release().await?;
+        resource.release()?;
     }
 
     // Pattern 2: Scoped automatic cleanup
     {
         let resource = resource_manager.acquire_pool().await?;
-        let scope = resource.scoped();
+        let _scope = resource.scoped();
         // Automatic cleanup when scope ends
     }
 
@@ -304,11 +308,12 @@ async fn comprehensive_example() -> ResourceResult<()> {
         let timed = resource.with_timeout(Duration::from_secs(5));
 
         // Use resource within timeout
-        if let Some(inner) = timed.get() {
-            let _stats = inner.pool_stats();
+        if let Some(_inner) = timed.get() {
+            // Use the resource for some operation
+            println!("🔧 Using resource within timed scope");
         }
 
-        timed.release().await?;
+        timed.release()?;
     }
 
     // Pattern 5: Transaction with automatic commit/rollback
@@ -322,7 +327,7 @@ async fn comprehensive_example() -> ResourceResult<()> {
     Ok(())
 }
 
-/// Mock function to create a PostgreSQL pool for demonstration
+/// Mock function to create a `PostgreSQL` pool for demonstration
 /// In real usage, you would use your actual database configuration
 #[cfg(feature = "postgres")]
 async fn create_mock_pool() -> ResourceResult<sqlx::PgPool> {
@@ -339,7 +344,7 @@ async fn create_mock_pool() -> ResourceResult<sqlx::PgPool> {
         .max_connections(5)
         .connect(&database_url)
         .await
-        .map_err(|e| ResourceError::AcquisitionFailed(format!("Failed to create pool: {}", e)))
+        .map_err(|e| ResourceError::AcquisitionFailed(format!("Failed to create pool: {e}")))
 }
 
 #[tokio::main]
@@ -357,25 +362,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         match basic_resource_example().await {
             Ok(()) => {}
-            Err(e) => println!("⚠️  Basic example failed (expected if no database): {}", e),
+            Err(e) => println!("⚠️  Basic example failed (expected if no database): {e}"),
         }
 
         match scoped_resource_example().await {
             Ok(()) => {}
-            Err(e) => println!("⚠️  Scoped example failed (expected if no database): {}", e),
+            Err(e) => println!("⚠️  Scoped example failed (expected if no database): {e}"),
         }
 
         match timed_resource_example().await {
             Ok(()) => {}
-            Err(e) => println!("⚠️  Timed example failed (expected if no database): {}", e),
+            Err(e) => println!("⚠️  Timed example failed (expected if no database): {e}"),
         }
 
         match managed_resource_example().await {
             Ok(()) => {}
-            Err(e) => println!(
-                "⚠️  Managed example failed (expected if no database): {}",
-                e
-            ),
+            Err(e) => println!("⚠️  Managed example failed (expected if no database): {e}"),
         }
     }
 
@@ -391,26 +393,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         match transaction_example().await {
             Ok(()) => {}
-            Err(e) => println!(
-                "⚠️  Transaction example failed (expected if no database): {}",
-                e
-            ),
+            Err(e) => println!("⚠️  Transaction example failed (expected if no database): {e}"),
         }
 
         match error_handling_example().await {
             Ok(()) => {}
-            Err(e) => println!(
-                "⚠️  Error handling example failed (expected if no database): {}",
-                e
-            ),
+            Err(e) => println!("⚠️  Error handling example failed (expected if no database): {e}"),
         }
 
         match comprehensive_example().await {
             Ok(()) => {}
-            Err(e) => println!(
-                "⚠️  Comprehensive example failed (expected if no database): {}",
-                e
-            ),
+            Err(e) => println!("⚠️  Comprehensive example failed (expected if no database): {e}"),
         }
     }
 
