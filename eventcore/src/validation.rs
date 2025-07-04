@@ -13,11 +13,17 @@
 //!
 //! # Usage
 //!
-//! ```rust
-//! use eventcore::validation::{ValidationCache, ValidationProfile, BusinessRule};
-//!
+//! ```rust,no_run
+//! # use eventcore::validation::{ValidationCache, ValidationProfile, BusinessRule, ValidationContext};
+//! # tokio_test::block_on(async {
+//! # let rule = BusinessRule::SufficientFunds {
+//! #     account_id: "account-123".to_string(),
+//! #     required_amount: 100,
+//! # };
+//! # let context = ValidationContext::new();
 //! let cache = ValidationCache::new(&ValidationProfile::HighPerformance);
-//! let result = cache.validate_business_rule(&rule, &context).await?;
+//! let result = cache.validate_business_rule(&rule, &context).await.unwrap();
+//! # });
 //! ```
 
 use crate::CommandError;
