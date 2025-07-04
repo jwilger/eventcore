@@ -1089,6 +1089,7 @@ mod projection;
 mod projection_manager;
 mod projection_protocol;
 mod projection_runner;
+pub mod resource;
 pub mod serialization;
 mod state_reconstruction;
 mod subscription;
@@ -1250,6 +1251,18 @@ pub mod prelude {
 
     // Re-export macros for convenience
     pub use crate::{emit, require};
+
+    // Re-export resource management for convenience
+    pub use crate::resource::{
+        global_leak_detector,
+        locking::{create_mutex_resource, MutexResource},
+        Resource, ResourceError, ResourceExt, ResourceResult, ResourceScope,
+    };
+
+    #[cfg(feature = "postgres")]
+    pub use crate::resource::database::{
+        DatabaseConnection, DatabasePool, DatabaseResourceManager, DatabaseTransaction,
+    };
 
     #[cfg(any(test, feature = "testing"))]
     pub use crate::testing::prelude::*;
