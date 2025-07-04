@@ -328,7 +328,7 @@ This phase has **HIGH PRIORITY** because:
 - Type-safe subscription system is incomplete without working implementation
 - Projection rebuild system cannot function without event processing
 
-## Phase 20: Dead Code Cleanup
+## Phase 20: Dead Code Cleanup ✅ **STARTED** 
 
 ### Objective
 
@@ -337,6 +337,11 @@ Identify and remove dead code, unused files, and obsolete modules to improve cod
 ### Tasks
 
 1. **Dead Code Analysis**
+   - [x] **Fixed critical CI compilation errors** - Resource.rs had compilation failures blocking all development
+     - Fixed missing `sqlx::Acquire` import for transaction support
+     - Fixed type mismatch: `pool.num_idle()` returns `usize` but `PoolStats.idle` expects `u32`
+     - Fixed mutability issue in `execute_query` method signature
+     - All tests passing and clippy clean
    - [ ] Search for unused files (e.g., `command_old.rs`)
    - [ ] Identify unused imports and dependencies
    - [ ] Find commented-out code blocks that should be removed
@@ -349,9 +354,19 @@ Identify and remove dead code, unused files, and obsolete modules to improve cod
    - [ ] Update Cargo.toml files to remove unused dependencies
 
 3. **Validation**
+   - [x] **CI Build Fixed** - All tests pass and clippy checks clean
    - [ ] Ensure all tests still pass after cleanup
    - [ ] Verify examples still compile and run
    - [ ] Check that no active code was accidentally removed
+
+### Critical CI Fix Completed ✅
+
+The previous commit introduced compilation errors in `eventcore/src/resource.rs` that broke CI:
+- **FIXED**: Missing `sqlx::Acquire` import preventing transaction creation
+- **FIXED**: Type conversion from `usize` to `u32` for pool statistics
+- **FIXED**: Method signature mutability for database query execution
+
+This was **HIGHEST PRIORITY** per development rules - broken CI builds must be fixed immediately before any other work.
 
 ## Development Process Rules
 

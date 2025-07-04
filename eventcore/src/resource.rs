@@ -626,7 +626,7 @@ impl<T, S> Resource<T, S> {
 #[cfg(feature = "postgres")]
 pub mod database {
     use super::*;
-    use sqlx::{PgPool, Postgres, Transaction};
+    use sqlx::{Acquire, PgPool, Postgres, Transaction};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -794,7 +794,7 @@ pub mod database {
             let pool = self.get();
             PoolStats {
                 size: pool.size(),
-                idle: pool.num_idle(),
+                idle: pool.num_idle() as u32,
                 is_closed: pool.is_closed(),
             }
         }
@@ -806,11 +806,11 @@ pub mod database {
         ///
         /// Only available when the resource is acquired
         pub async fn execute_query(
-            &self,
+            &mut self,
             query: &str,
         ) -> ResourceResult<sqlx::postgres::PgQueryResult> {
             sqlx::query(query)
-                .execute(&mut **self.get())
+                .execute(self.get_mut())
                 .await
                 .map_err(|e| ResourceError::InvalidState(format!("Query execution failed: {}", e)))
         }
