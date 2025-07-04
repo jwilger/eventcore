@@ -159,11 +159,34 @@ Advanced phantom types can provide compile-time guarantees for:
      - Timeline estimates and success criteria
      - Risk mitigation strategies
 
-3. **Prototype and Validate**
-   - [ ] Implement proof-of-concept for highest priority patterns
-   - [ ] Measure compile-time and runtime impact
-   - [ ] Gather feedback on API ergonomics
-   - [ ] Create migration guide for existing code
+3. **Implement Phantom Type Patterns**
+   
+   Priority 1: **Projection Runner Protocol Phases** (2-3 days)
+   - [ ] Define protocol phase types (Setup, Processing, Checkpointing, Shutdown)
+   - [ ] Create typed ProjectionProtocol struct with phantom type parameter
+   - [ ] Implement phase transitions with compile-time validation
+   - [ ] Migrate existing ProjectionRunner to use new protocol
+   - [ ] Add tests and update documentation
+   
+   Priority 2: **Enhanced Command Execution State Machine** (1 week)
+   - [ ] Extend existing typestate pattern with full lifecycle states
+   - [ ] Implement CommandExecution struct with phantom state parameter
+   - [ ] Create transition methods that validate preconditions at compile time
+   - [ ] Integrate with existing CommandExecutor
+   - [ ] Performance optimization and benchmarking
+   
+   Priority 3: **Subscription Lifecycle Management** (1 week)
+   - [ ] Define subscription state types (Uninitialized, Configured, Running, etc.)
+   - [ ] Create TypedSubscription with state parameter
+   - [ ] Implement state machine with valid transitions only
+   - [ ] Add migration strategy with adapter pattern
+   - [ ] Testing and integration with subscription manager
+   
+   Priority 4: **Resource Acquisition and Release** (3 days)
+   - [ ] Define resource protocol with Acquired/Released states
+   - [ ] Implement for database connections
+   - [ ] Add automatic cleanup and use-after-release prevention
+   - [ ] Create usage examples and documentation
 
 ### Example Pattern
 
