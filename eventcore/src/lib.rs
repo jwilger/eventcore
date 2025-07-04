@@ -1111,6 +1111,13 @@ pub use event_store::{
     EventStore, EventToWrite, ExpectedVersion, ReadOptions, StoredEvent, StreamData, StreamEvents,
 };
 pub use executor::{
+    config::{
+        BackoffMultiplier, CacheTtlSeconds, CommandTimeoutMs, EventStoreTimeoutMs, MaxCacheSize,
+        MaxRetryAttempts, MaxStreamDiscoveryIterations, PoolSize, QueryTimeoutSeconds,
+        RetryBaseDelayMs, RetryMaxDelayMs, ValidatedExecutionOptions, ValidatedOptimizationConfig,
+        ValidatedRetryConfig,
+    },
+    optimization::{CacheStats, OptimizationConfig, OptimizationLayer},
     CommandExecutor, CommandExecutorBuilder, ExecutionContext, ExecutionOptions, RetryConfig,
     RetryPolicy,
 };

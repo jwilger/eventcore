@@ -1,3 +1,5 @@
+pub mod config;
+pub mod optimization;
 pub mod typestate;
 
 #[cfg(test)]
