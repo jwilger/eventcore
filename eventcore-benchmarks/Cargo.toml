@@ -54,6 +54,10 @@ harness = false
 name = "realistic_workloads"
 harness = false
 
+[[bench]]
+name = "validation_optimization_bench"
+harness = false
+
 # Temporarily disabled until Command API migration is complete
 # [[bench]]
 # name = "stream_discovery_profiling"

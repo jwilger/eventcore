@@ -1094,6 +1094,7 @@ mod subscription;
 mod type_registry;
 mod types;
 mod utils;
+pub mod validation;
 
 // Feature modules
 pub mod cqrs;
