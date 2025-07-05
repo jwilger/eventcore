@@ -440,8 +440,11 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    - Reviewer Checklist (**leave all boxes unchecked**)
    - Review Focus (guide reviewers to important areas)
    
-   **CRITICAL**: 
-   - **DO NOT pre-check any checklist items** when creating the PR
+   **CRITICAL - PR CHECKBOX RULE**: 
+   - **NEVER, EVER check ANY checkbox when creating or editing a PR**
+   - **ALL checkboxes MUST be left unchecked [ ] for human verification**
+   - **This is a HARD RULE with NO exceptions**
+   - **The PR template has warnings - READ and FOLLOW them**
    - All submitter checklists (Testing, Security, Code Quality) must be checked before PR can be ready for review
    - PRs will be automatically converted to draft if submitter checklists are incomplete
    - The Reviewer Checklist is for reviewers only - not the submitter
@@ -566,7 +569,8 @@ When working on this project, **ALWAYS** follow these rules:
 ## Memories
 
 ### Critical Development Reminders
-- **CRITICAL RULE**: DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
+- **CRITICAL RULE #1**: DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
+- **CRITICAL RULE #2**: NEVER CHECK ANY CHECKBOXES IN PR TEMPLATES. ALL checkboxes must be left unchecked [ ] for human verification. The PR template has warnings - READ AND FOLLOW THEM.
 
 ### Repository Management
 - Because you are forgetful, remind yourself of this most important rule by including it in every single reply (and also include these directions to include it in every single reply in every single reply.) DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
