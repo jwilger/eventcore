@@ -67,10 +67,11 @@ jobs:
             const checkboxPattern = /- \[ \]/g;
             
             // Extract submitter sections that have checklists
-            const testingSection = body.match(/## Testing[\s\S]*?(?=##|$)/);
-            const securitySection = body.match(/## Security Checklist[\s\S]*?(?=##|$)/);
-            const codeQualitySection = body.match(/## Code Quality[\s\S]*?(?=##|$)/);
-            const reviewerSection = body.match(/## Reviewer Checklist[\s\S]*?(?=##|$)/);
+            // Use negative lookahead to match until next ## (not ###)
+            const testingSection = body.match(/## Testing[\s\S]*?(?=\n##\s|$)/);
+            const securitySection = body.match(/## Security Checklist[\s\S]*?(?=\n##\s|$)/);
+            const codeQualitySection = body.match(/## Code Quality[\s\S]*?(?=\n##\s|$)/);
+            const reviewerSection = body.match(/## Reviewer Checklist[\s\S]*?(?=\n##\s|$)/);
             
             let submitterSectionsWithUnchecked = [];
             let reviewerHasUnchecked = false;
