@@ -90,9 +90,12 @@ cargo bench --bench realistic_workloads -- --baseline main
 - [ ] Performance impact acceptable
 - [ ] Breaking changes justified
 
-## Pre-merge Checklist
+## Review Focus
 
-- [ ] CI passes on all platforms
-- [ ] Changelog updated (if applicable)
-- [ ] Version bumped (if releasing)
-- [ ] Squash commits or ensure clean history
+<!-- Guide reviewers to specific areas that need attention -->
+<!-- Examples:
+- Complex algorithm in src/executor/optimization.rs needs performance review
+- New error handling pattern in command.rs - looking for consistency feedback
+- Security implications of the new stream access pattern
+- API breaking changes in types.rs need careful consideration
+-->

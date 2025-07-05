@@ -161,6 +161,8 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Created PR validation workflow to enforce template usage
 - [x] Added compliance checklist reference to security manual
 - [x] Consolidated documentation to single source (symlinked docs/manual to website/src/manual)
+- [x] Updated PR template to remove redundant pre-merge checklist and add Review Focus section
+- [x] Updated PR validation workflow to require Review Focus section
 
 ## Development Process Rules
 
