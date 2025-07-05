@@ -2,6 +2,7 @@ pub mod config;
 pub mod context;
 pub mod optimization;
 pub mod retry;
+pub mod stream_discovery;
 pub mod typestate;
 
 #[cfg(test)]
@@ -20,44 +21,13 @@ use tracing::{info, instrument, warn};
 // Import types from the new modules
 pub use context::ExecutionContext;
 pub use retry::{RetryConfig, RetryPolicy};
+use stream_discovery::StreamDiscoveryContext;
 
 #[cfg(test)]
 use async_trait::async_trait;
 
 
 
-/// Context for managing stream discovery iteration state.
-#[derive(Debug, Clone)]
-struct StreamDiscoveryContext {
-    /// Current list of stream IDs being processed.
-    stream_ids: Vec<StreamId>,
-    /// Current iteration count.
-    iteration: usize,
-    /// Maximum allowed iterations before failing.
-    max_iterations: usize,
-}
-
-impl StreamDiscoveryContext {
-    /// Creates a new stream discovery context.
-    fn new(initial_streams: Vec<StreamId>, max_iterations: usize) -> Self {
-        Self {
-            stream_ids: initial_streams,
-            iteration: 0,
-            max_iterations,
-        }
-    }
-
-    /// Adds newly discovered streams and increments iteration count.
-    fn add_streams(&mut self, new_streams: Vec<StreamId>) {
-        self.stream_ids.extend(new_streams);
-        self.iteration += 1;
-    }
-
-    /// Increments the iteration counter for the current streams.
-    fn next_iteration(&mut self) {
-        self.iteration += 1;
-    }
-}
 
 /// Result of command execution containing events and optional additional streams.
 #[derive(Debug)]
@@ -673,14 +643,14 @@ where
             self.validate_iteration_limit::<C>(&context)?;
 
             info!(
-                iteration = context.iteration,
-                streams_count = context.stream_ids.len(),
+                iteration = context.iteration(),
+                streams_count = context.stream_ids().len(),
                 "Reading streams for command execution"
             );
 
             // Read streams with timeout and circuit breaker protection
             let stream_data = self.read_streams_with_timeout_and_circuit_breaker(
-                &context.stream_ids,
+                context.stream_ids(),
                 options,
             ).await?;
 
@@ -688,7 +658,7 @@ where
             let execution_result = self.execute_command_in_scope(
                 &command,
                 stream_data,
-                &context.stream_ids,
+                context.stream_ids(),
                 options,
                 &mut stream_resolver,
             ).await?;
@@ -715,12 +685,12 @@ where
         &self,
         context: &StreamDiscoveryContext,
     ) -> CommandResult<()> {
-        if context.iteration > context.max_iterations {
+        if context.iteration() > context.max_iterations() {
             return Err(CommandError::ValidationFailed(format!(
                 "Command '{}' exceeded maximum stream discovery iterations ({}). This suggests the command is continuously discovering new streams. Current streams: {:?}",
                 std::any::type_name::<C>(),
-                context.max_iterations,
-                context.stream_ids.iter().map(std::convert::AsRef::as_ref).collect::<Vec<_>>()
+                context.max_iterations(),
+                context.stream_ids().iter().map(std::convert::AsRef::as_ref).collect::<Vec<_>>()
             )));
         }
         Ok(())
@@ -1774,14 +1744,14 @@ where
             self.validate_iteration_limit::<C>(&context)?;
 
             info!(
-                iteration = context.iteration,
-                streams_count = context.stream_ids.len(),
+                iteration = context.iteration(),
+                streams_count = context.stream_ids().len(),
                 "Starting stream discovery iteration"
             );
 
             // Read streams with circuit breaker protection
             let stream_data = self.read_streams_with_circuit_breaker_only(
-                &context.stream_ids,
+                context.stream_ids(),
                 &options,
             ).await?;
 
@@ -1789,7 +1759,7 @@ where
             let execution_result = self.execute_command_in_type_safe_scope(
                 &command,
                 stream_data,
-                &context.stream_ids,
+                context.stream_ids(),
                 &options,
                 &mut stream_resolver,
             ).await?;

@@ -52,7 +52,7 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 - [ ] Split executor.rs into modules:
   - [ ] `executor/core.rs` - Core execution logic
   - [x] `executor/retry.rs` - Retry and circuit breaker logic (RetryConfig, RetryPolicy extracted)
-  - [ ] `executor/stream_discovery.rs` - Stream discovery iteration logic
+  - [x] `executor/stream_discovery.rs` - Stream discovery iteration logic (StreamDiscoveryContext extracted)
   - [ ] `executor/validation.rs` - Command validation
   - [x] `executor/context.rs` - Execution context management (ExecutionContext extracted)
 
