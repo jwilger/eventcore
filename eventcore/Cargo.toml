@@ -42,7 +42,7 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"], optio
 
 # Observability integrations
 opentelemetry = { version = "0.30", features = ["metrics", "trace"], optional = true }
-opentelemetry-otlp = { version = "0.30", optional = true }
+opentelemetry-otlp = { version = "0.30", features = ["grpc-tonic", "metrics"], optional = true }
 opentelemetry_sdk = { version = "0.30", features = ["rt-tokio"], optional = true }
 tracing-opentelemetry = { version = "0.31", optional = true }
 prometheus = { version = "0.14", optional = true }
