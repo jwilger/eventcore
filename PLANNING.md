@@ -179,6 +179,7 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Improved PR validation to auto-convert to draft if submitter checklists incomplete
 - [x] Reduced validation noise by skipping draft PRs and avoiding redundant comments
 - [x] Added debug logging to troubleshoot workflow section detection
+- [x] Fixed PR validation workflow to include synchronize trigger for new commits
 
 ## Pull Request Workflow
 
