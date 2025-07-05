@@ -49,7 +49,7 @@ use crate::{
     errors::ProjectionError,
     event_store::{EventStore, StoredEvent},
     projection::ProjectionCheckpoint,
-    subscription::{EventProcessor, SubscriptionError, SubscriptionOptions, SubscriptionResult},
+    subscription::{EventProcessor, SubscriptionError, SubscriptionResult},
     types::EventId,
 };
 use async_trait::async_trait;
@@ -280,6 +280,33 @@ where
         }
     }
 
+    /// Creates subscription options based on the rebuild strategy.
+    fn create_subscription_options(&self, strategy: &RebuildStrategy) -> CqrsResult<crate::subscription::SubscriptionOptions> {
+        let subscription_options = match strategy {
+            RebuildStrategy::FromBeginning => crate::subscription::SubscriptionOptions::CatchUpFromBeginning,
+            RebuildStrategy::FromCheckpoint(checkpoint) => {
+                let position = crate::subscription::SubscriptionPosition::new(
+                    checkpoint
+                        .last_event_id
+                        .ok_or_else(|| CqrsError::rebuild("Checkpoint has no last event ID"))?,
+                );
+                crate::subscription::SubscriptionOptions::CatchUpFromPosition(position)
+            }
+            RebuildStrategy::FromEvent(event_id) => {
+                let position = crate::subscription::SubscriptionPosition::new(*event_id);
+                crate::subscription::SubscriptionOptions::CatchUpFromPosition(position)
+            }
+            RebuildStrategy::SpecificStreams(stream_ids) => {
+                // For now, we'll use CatchUpFromBeginning for specific streams
+                // In a real implementation, we'd need to extend SubscriptionOptions
+                // to support filtering by stream IDs
+                let _ = stream_ids; // Avoid unused warning
+                crate::subscription::SubscriptionOptions::CatchUpFromBeginning
+            }
+        };
+        Ok(subscription_options)
+    }
+
     /// Clears existing state based on the rebuild strategy.
     async fn clear_existing_state(&self, strategy: &RebuildStrategy) -> CqrsResult<()> {
         match strategy {
@@ -368,28 +395,7 @@ where
         self.clear_existing_state(&strategy).await?;
 
         // Create subscription options based on rebuild strategy
-        let subscription_options = match &strategy {
-            RebuildStrategy::FromBeginning => SubscriptionOptions::CatchUpFromBeginning,
-            RebuildStrategy::FromCheckpoint(checkpoint) => {
-                let position = crate::subscription::SubscriptionPosition::new(
-                    checkpoint
-                        .last_event_id
-                        .ok_or_else(|| CqrsError::rebuild("Checkpoint has no last event ID"))?,
-                );
-                SubscriptionOptions::CatchUpFromPosition(position)
-            }
-            RebuildStrategy::FromEvent(event_id) => {
-                let position = crate::subscription::SubscriptionPosition::new(*event_id);
-                SubscriptionOptions::CatchUpFromPosition(position)
-            }
-            RebuildStrategy::SpecificStreams(stream_ids) => {
-                // For now, we'll use CatchUpFromBeginning for specific streams
-                // In a real implementation, we'd need to extend SubscriptionOptions
-                // to support filtering by stream IDs
-                let _ = stream_ids; // Avoid unused warning
-                SubscriptionOptions::CatchUpFromBeginning
-            }
-        };
+        let subscription_options = self.create_subscription_options(&strategy)?;
 
         // Create the rebuild processor
         let processor = RebuildProcessor {
