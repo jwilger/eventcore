@@ -170,6 +170,10 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Updated CLAUDE.md and PLANNING.md to document PR-based workflow and clarify that CI only runs on PRs
 - [x] Updated pre-commit hook to auto-format and stage files instead of failing
 - [x] Removed redundant "run all tests" requirement from commit process (pre-commit hooks handle this)
+- [x] Consolidated duplicate PR workflow sections in CLAUDE.md
+- [x] Added PR template requirements and validation workflow documentation
+- [x] Added PR feedback response process using gh GraphQL API for threaded replies
+- [x] Enhanced todo list structure documentation to reinforce workflow and prevent process drift
 
 ## Pull Request Workflow
 
@@ -187,9 +191,17 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
 1. Create a new branch from main
 2. Make your changes following development process rules
 3. Push your branch
-4. Create a PR using `mcp__github__create_pull_request`
+4. Create a PR using `mcp__github__create_pull_request` with **ALL template sections**:
+   - Description (what and why)
+   - Type of Change
+   - Testing checklist
+   - Performance Impact (if applicable)
+   - Security Checklist
+   - Code Quality checklist
+   - Reviewer Checklist
+   - Review Focus
 5. Monitor CI and address any failures
-6. Request reviews and address feedback
+6. Address review feedback by replying to comments with `-- @claude` signature
 7. Merge when approved and CI passes
 
 ## Development Process Rules
@@ -206,11 +218,22 @@ When working on this project, **ALWAYS** follow these rules:
 
 ### CRITICAL: Todo List Structure
 
+**This structure ensures Claude never forgets the development workflow:**
+
 Your todo list should ALWAYS follow this pattern:
-1. Implementation tasks...
-2. "Update @PLANNING.md to mark completed tasks"
-3. "Make a commit" (pre-commit hooks handle formatting and testing automatically)
-4. "Push changes to remote repository and create/update PR with GitHub MCP tools"
+1. Implementation/fix tasks (the actual work)
+2. "Update @PLANNING.md to mark completed tasks" 
+3. "Make a commit" (pre-commit hooks run all checks automatically)
+4. "Push changes and update PR"
+
+For PR feedback specifically:
+1. Address each piece of feedback
+2. "Reply to review comments using gh GraphQL API with -- @claude signature"
+3. "Update @PLANNING.md to mark completed tasks"
+4. "Make a commit"
+5. "Push changes and check for new PR feedback"
+
+**Why this matters**: The todo list tool reinforces our workflow at every step, preventing process drift as context grows.
 
 ### CI Monitoring Rules
 
