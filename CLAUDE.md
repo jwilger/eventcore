@@ -442,8 +442,9 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    
    **CRITICAL**: 
    - **DO NOT pre-check any checklist items** when creating the PR
-   - All checklists must be verified and checked by a human reviewer
-   - The PR validation workflow will **FAIL until all checklist items are checked**
+   - All submitter checklists (Testing, Security, Code Quality) must be checked before PR can be ready for review
+   - PRs will be automatically converted to draft if submitter checklists are incomplete
+   - The Reviewer Checklist is for reviewers only - not the submitter
    - This ensures human verification of all quality gates
 
 5. **CI runs automatically** on PR creation - no need to monitor before creating the PR

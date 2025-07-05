@@ -2,7 +2,7 @@ name: PR Validation
 
 on:
   pull_request:
-    types: [opened, edited, synchronize, ready_for_review]
+    types: [opened, edited, ready_for_review]
 
 permissions:
   pull-requests: write
@@ -19,6 +19,12 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const body = pr.body || '';
+            
+            // Skip validation for draft PRs
+            if (pr.draft) {
+              console.log('✅ Skipping validation for draft PR');
+              return;
+            }
             
             // Required sections from our template
             const requiredSections = [
@@ -57,61 +63,75 @@ jobs:
               return;
             }
             
-            // Check for empty checkboxes in ALL checklist sections (except Type of Change)
+            // Check for empty checkboxes in submitter sections (not Reviewer Checklist)
             const checkboxPattern = /- \[ \]/g;
             
-            // Extract all sections that have checklists
+            // Extract submitter sections that have checklists
             const testingSection = body.match(/## Testing[\s\S]*?(?=##|$)/);
             const securitySection = body.match(/## Security Checklist[\s\S]*?(?=##|$)/);
             const codeQualitySection = body.match(/## Code Quality[\s\S]*?(?=##|$)/);
             const reviewerSection = body.match(/## Reviewer Checklist[\s\S]*?(?=##|$)/);
             
-            let sectionsWithUnchecked = [];
+            let submitterSectionsWithUnchecked = [];
+            let reviewerHasUnchecked = false;
             
-            // Check each section for unchecked items
+            // Check submitter sections for unchecked items
             if (testingSection && testingSection[0].match(checkboxPattern)) {
-              sectionsWithUnchecked.push('Testing');
+              submitterSectionsWithUnchecked.push('Testing');
             }
             
             if (securitySection && securitySection[0].match(checkboxPattern)) {
-              sectionsWithUnchecked.push('Security Checklist');
+              submitterSectionsWithUnchecked.push('Security Checklist');
             }
             
             if (codeQualitySection && codeQualitySection[0].match(checkboxPattern)) {
-              sectionsWithUnchecked.push('Code Quality');
+              submitterSectionsWithUnchecked.push('Code Quality');
             }
             
+            // Check reviewer section separately
             if (reviewerSection && reviewerSection[0].match(checkboxPattern)) {
-              sectionsWithUnchecked.push('Reviewer Checklist');
+              reviewerHasUnchecked = true;
             }
             
-            if (sectionsWithUnchecked.length > 0) {
-              const errorMessage = `
-              ❌ **PR Validation Failed - Checklists Incomplete**
+            // If submitter sections have unchecked items, convert to draft
+            if (submitterSectionsWithUnchecked.length > 0) {
+              // Convert to draft
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                draft: true
+              });
               
-              All checklist items must be checked by a human reviewer before this PR can be merged.
+              const draftMessage = `
+              🔄 **PR Converted to Draft**
               
-              The following sections have unchecked items:
-              ${sectionsWithUnchecked.map(s => `- **${s}**`).join('\n')}
+              This PR has been automatically converted to draft status because the following submitter checklists have unchecked items:
+              ${submitterSectionsWithUnchecked.map(s => `- **${s}**`).join('\n')}
               
-              **Important**: 
-              - Do NOT pre-check items when creating the PR
-              - Each item must be manually verified by a human
-              - Check items even if they don't apply (to confirm human review)
-              - Only the "Type of Change" section is exempt from this requirement
+              **Next Steps:**
+              1. Review and check off all items in the submitter sections after verifying each one
+              2. Once all submitter checklists are complete, click "Ready for review"
+              3. The Reviewer Checklist should be completed by the reviewer, not the submitter
               
-              Please have a human reviewer check off all items after verifying each one.
+              **Note**: Each checkbox represents a quality gate that must be manually verified.
               `;
-              
-              core.setFailed(errorMessage);
               
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pr.number,
-                body: errorMessage
+                body: draftMessage
               });
+              
+              core.setFailed('PR converted to draft due to incomplete submitter checklists');
               return;
             }
             
-            console.log('✅ PR description follows template');
+            // If only reviewer checklist has unchecked items, that's expected - just fail the check
+            if (reviewerHasUnchecked) {
+              core.setFailed('Reviewer checklist incomplete - waiting for reviewer to complete');
+              return;
+            }
+            
+            console.log('✅ PR description follows template and all submitter checklists are complete');

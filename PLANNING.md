@@ -176,6 +176,8 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Enhanced todo list structure documentation to reinforce workflow and prevent process drift
 - [x] Updated PR validation workflow to require ALL checklist items be checked by humans
 - [x] Added documentation clarifying that checklists must NOT be pre-checked by automation
+- [x] Improved PR validation to auto-convert to draft if submitter checklists incomplete
+- [x] Reduced validation noise by skipping draft PRs and avoiding redundant comments
 
 ## Pull Request Workflow
 
