@@ -92,7 +92,7 @@ impl RetryStrategy {
 /// Add random jitter to prevent thundering herd effect
 fn add_jitter(delay: Duration) -> Duration {
     use rand::Rng;
-    let jitter_factor = rand::thread_rng().gen_range(0.8..1.2);
+    let jitter_factor = rand::rng().random_range(0.8..1.2);
     let jittered_ms = (delay.as_millis() as f64 * jitter_factor) as u64;
     Duration::from_millis(jittered_ms)
 }

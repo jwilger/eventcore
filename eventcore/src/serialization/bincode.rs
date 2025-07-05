@@ -55,7 +55,7 @@ impl EventSerializer for BincodeEventSerializer {
     where
         E: Serialize + Send + Sync,
     {
-        bincode::serialize(event).map_err(|e| {
+        bincode::serde::encode_to_vec(event, bincode::config::standard()).map_err(|e| {
             EventStoreError::SerializationFailed(format!(
                 "Failed to serialize event to Bincode: {e}"
             ))
@@ -66,11 +66,13 @@ impl EventSerializer for BincodeEventSerializer {
     where
         E: for<'de> Deserialize<'de> + Send + Sync,
     {
-        bincode::deserialize(data).map_err(|e| {
-            EventStoreError::DeserializationFailed(format!(
-                "Failed to deserialize event from Bincode: {e}"
-            ))
-        })
+        bincode::serde::decode_from_slice(data, bincode::config::standard())
+            .map(|(result, _)| result)
+            .map_err(|e| {
+                EventStoreError::DeserializationFailed(format!(
+                    "Failed to deserialize event from Bincode: {e}"
+                ))
+            })
     }
 
     async fn serialize_stored_event<E>(
@@ -96,7 +98,7 @@ impl EventSerializer for BincodeEventSerializer {
             stored_at: event.stored_at,
         };
 
-        bincode::serialize(&envelope).map_err(|e| {
+        bincode::serde::encode_to_vec(&envelope, bincode::config::standard()).map_err(|e| {
             EventStoreError::SerializationFailed(format!(
                 "Failed to serialize event envelope to Bincode: {e}"
             ))
@@ -111,11 +113,12 @@ impl EventSerializer for BincodeEventSerializer {
     where
         E: for<'de> Deserialize<'de> + Send + Sync + PartialEq + Eq,
     {
-        let envelope: SerializedEventEnvelope = bincode::deserialize(data).map_err(|e| {
-            EventStoreError::DeserializationFailed(format!(
-                "Failed to deserialize event envelope from Bincode: {e}"
-            ))
-        })?;
+        let (envelope, _): (SerializedEventEnvelope, _) =
+            bincode::serde::decode_from_slice(data, bincode::config::standard()).map_err(|e| {
+                EventStoreError::DeserializationFailed(format!(
+                    "Failed to deserialize event envelope from Bincode: {e}"
+                ))
+            })?;
 
         // Check if we need to migrate the event data
         let current_version = self.get_schema_version(&envelope.type_name);

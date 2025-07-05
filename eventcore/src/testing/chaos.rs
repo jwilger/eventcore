@@ -319,8 +319,8 @@ impl FailurePolicy {
 
     /// Determines if a failure should occur based on probability.
     fn should_fail(&self) -> bool {
-        let mut rng = rand::thread_rng();
-        let roll: f64 = rng.gen_range(0.0..100.0);
+        let mut rng = rand::rng();
+        let roll: f64 = rng.random_range(0.0..100.0);
         roll < self.probability.into_inner()
     }
 }
@@ -429,8 +429,8 @@ impl<S: EventStore> ChaosEventStore<S> {
                 if let PolicyConfig::Latency { base, jitter } = &policy.config {
                     let mut delay = Duration::from(*base);
                     if let Some(jitter) = jitter {
-                        let mut rng = rand::thread_rng();
-                        let jitter_ms = rng.gen_range(0..jitter.into_inner());
+                        let mut rng = rand::rng();
+                        let jitter_ms = rng.random_range(0..jitter.into_inner());
                         delay += Duration::from_millis(jitter_ms);
                     }
                     debug!("Chaos: Injecting latency of {:?}", delay);
