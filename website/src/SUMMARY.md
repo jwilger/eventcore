@@ -69,8 +69,3 @@
 - [Changelog](./changelog.md)
 - [License](./license.md)
 
----
-
-[GitHub](https://github.com/eventcore-rs/eventcore)
-[crates.io](https://crates.io/crates/eventcore)
-[Discord](https://discord.gg/eventcore)

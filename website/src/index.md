@@ -140,6 +140,12 @@ Join our growing community of developers building event-sourced systems:
 - 🐛 [Report Issues](https://github.com/eventcore-rs/eventcore/issues)
 - 🤝 [Contributing Guide](./contributing.html)
 
+## Resources
+
+- [GitHub Repository](https://github.com/eventcore-rs/eventcore)
+- [crates.io Package](https://crates.io/crates/eventcore)
+- [API Documentation](./api/eventcore/index.html)
+
 ## Supported By
 
 <div class="sponsors">
