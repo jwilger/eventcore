@@ -1,6 +1,7 @@
 ## Description
 
 <!-- Brief description of changes and motivation -->
+<!-- Note: GitHub Copilot will use the checklists below to guide its review -->
 
 ## Type of Change
 

@@ -163,6 +163,7 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Consolidated documentation to single source (symlinked docs/manual to website/src/manual)
 - [x] Updated PR template to remove redundant pre-merge checklist and add Review Focus section
 - [x] Updated PR validation workflow to require Review Focus section
+- [x] Added GitHub Copilot instructions for automated PR reviews aligned with our checklists
 
 ## Development Process Rules
 
