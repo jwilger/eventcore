@@ -3,7 +3,6 @@
 [![CI](https://github.com/jwilger/eventcore/workflows/CI/badge.svg)](https://github.com/jwilger/eventcore/actions)
 [![codecov](https://codecov.io/gh/jwilger/eventcore/branch/main/graph/badge.svg)](https://codecov.io/gh/jwilger/eventcore)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![License: Apache](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 A type-safe event sourcing library implementing **multi-stream event sourcing** with dynamic consistency boundaries - commands that can atomically read from and write to multiple event streams.
 
