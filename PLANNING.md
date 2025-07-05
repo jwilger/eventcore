@@ -47,18 +47,19 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 **Problem**: Massive single file containing multiple distinct responsibilities
 **Tasks**:
 - [x] Extract `execute_once` function (157 lines) - Split into pipeline stages (Implemented functional approach with type-state StreamDiscoveryContext)
-- [ ] Extract `execute_type_safe` function (139 lines) - Share common patterns
-- [ ] Extract `prepare_stream_events_with_complete_concurrency_control` function (140 lines) - Separate validation logic
+- [x] Extract `execute_type_safe` function (139 lines) - Share common patterns
+- [x] Extract `prepare_stream_events_with_complete_concurrency_control` function (140 lines) - Separate validation logic
 - [ ] Split executor.rs into modules:
   - [ ] `executor/core.rs` - Core execution logic
-  - [ ] `executor/retry.rs` - Retry and circuit breaker logic
-  - [x] `executor/stream_discovery.rs` - Stream discovery iteration logic (Created with type-state pattern)
-  - [ ] `executor/validation.rs` - Command validation
-  - [ ] `executor/context.rs` - Execution context management
+  - [x] `executor/retry.rs` - Retry and circuit breaker logic (RetryConfig, RetryPolicy extracted)
+  - [x] `executor/stream_discovery.rs` - Stream discovery iteration logic (StreamDiscoveryContext extracted)
+  - [x] `executor/validation.rs` - Command validation (validate_iteration_limit extracted)
+  - [x] `executor/context.rs` - Execution context management (ExecutionContext extracted)
 
 #### 2. Refactor cqrs/rebuild.rs::rebuild function (189 lines) - **HIGH**
 **Problem**: Complex rebuild logic with multiple responsibilities
 **Tasks**:
+- [x] Extract progress monitoring loop (wait_for_rebuild_completion method)
 - [ ] Extract event processing pipeline
 - [ ] Extract checkpoint management
 - [ ] Extract error handling patterns
@@ -102,6 +103,8 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 - Rebase feature branches onto the main branch before creating new PRs to ensure compatibility.
 - Resolve merge conflicts promptly and verify that all integration tests pass after resolving conflicts.
 
+**CRITICAL**: Claude must continue working through ALL refactoring tasks systematically without stopping. Always include "Review @PLANNING.md to identify next refactoring task and create new todo list to continue systematic refactoring" as the FINAL item in every refactoring todo list.
+
 1. **Start with executor.rs refactoring** - This is the most critical
 2. **Create feature branch for each refactoring** - Use descriptive names like `refactor-executor-extract-pipeline`
 3. **Chain PRs** - Each subsequent PR branches off the previous one
@@ -109,6 +112,7 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 5. **Ensure comprehensive tests** - All integration tests must pass
 6. **Document refactoring decisions** - Each PR should explain the refactoring rationale
 7. **Continue until all tasks complete** - Work through the entire list systematically
+8. **Never stop between refactoring tasks** - Always move immediately to the next task
 
 ### Testing Strategy for Refactoring
 
