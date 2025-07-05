@@ -100,26 +100,37 @@ pub struct AccountId(String);
 ### Multi-Stream Commands
 
 ```rust
-impl Command for TransferMoney {
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![
-            input.from.as_stream_id(),  // Source account
-            input.to.as_stream_id(),    // Destination account
-        ]
-    }
+#[derive(Command, Clone)]
+struct TransferMoney {
+    #[stream]
+    from: StreamId,  // Source account
+    #[stream]
+    to: StreamId,    // Destination account
+    amount: Money,
+}
 
-    async fn handle(...) -> CommandResult<Vec<StreamWrite<...>>> {
+#[async_trait]
+impl CommandLogic for TransferMoney {
+    type State = AccountState;
+    type Event = BankingEvent;
+
+    async fn handle(
+        &self,
+        read_streams: ReadStreams<Self::StreamSet>,
+        state: Self::State,
+        _: &mut StreamResolver,
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Validate business rules
-        if !state.has_sufficient_funds(&input.from, &input.amount) {
+        if !state.has_sufficient_funds(&self.from, &self.amount) {
             return Err(CommandError::InsufficientFunds);
         }
 
         // Return atomic events for both accounts
         Ok(vec![
-            StreamWrite::new(&read_streams, from_stream, 
-                MoneyWithdrawn { amount: input.amount })?,
-            StreamWrite::new(&read_streams, to_stream,
-                MoneyDeposited { amount: input.amount })?,
+            StreamWrite::new(&read_streams, self.from.clone(), 
+                MoneyWithdrawn { amount: self.amount })?,
+            StreamWrite::new(&read_streams, self.to.clone(),
+                MoneyDeposited { amount: self.amount })?,
         ])
     }
 }
@@ -128,22 +139,31 @@ impl Command for TransferMoney {
 ### Dynamic Stream Discovery
 
 ```rust
-impl Command for CancelOrder {
+#[derive(Command, Clone)]
+struct CancelOrder {
+    #[stream]
+    order_id: StreamId,
+}
+
+#[async_trait]
+impl CommandLogic for CancelOrder {
+    type State = OrderState;
+    type Event = OrderEvent;
+    
     async fn handle(
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<...>>> {
+    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // First execution: read order to find products
-        let order = state.orders.get(&input.order_id)
+        let order = state.orders.get(&self.order_id)
             .ok_or(CommandError::OrderNotFound)?;
 
         // Discover we need product streams
         let product_streams: Vec<StreamId> = order.items
             .keys()
-            .map(|id| id.as_stream_id())
+            .map(|id| StreamId::try_new(format!("product-{}", id)).unwrap())
             .collect();
             
         // Request additional streams
@@ -151,6 +171,7 @@ impl Command for CancelOrder {
         
         // Executor will re-run with all streams available
         // On second execution, we can update inventory
+        Ok(vec![]) // Events would be added here
     }
 }
 ```

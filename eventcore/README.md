@@ -63,25 +63,24 @@ impl CommandLogic for TransferMoney {
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
         state: Self::State,
-        input: Self::Input,
         _: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
-        require!(state.has_account(&input.from_account), "Source account not found");
-        require!(state.has_account(&input.to_account), "Target account not found");
-        require!(state.balance(&input.from_account) >= input.amount, "Insufficient funds");
+        require!(state.has_account(&self.from_account), "Source account not found");
+        require!(state.has_account(&self.to_account), "Target account not found");
+        require!(state.balance(&self.from_account) >= self.amount, "Insufficient funds");
 
         let mut events = vec![];
         
-        emit!(events, &read_streams, input.from_account, 
+        emit!(events, &read_streams, self.from_account, 
             BankingEvent::Withdrawn { 
-                account: input.from_account.to_string(), 
-                amount: input.amount 
+                account: self.from_account.to_string(), 
+                amount: self.amount 
             });
             
-        emit!(events, &read_streams, input.to_account,
+        emit!(events, &read_streams, self.to_account,
             BankingEvent::Deposited { 
-                account: input.to_account.to_string(), 
-                amount: input.amount 
+                account: self.to_account.to_string(), 
+                amount: self.amount 
             });
 
         Ok(events)
@@ -94,26 +93,28 @@ impl CommandLogic for TransferMoney {
 If you prefer explicit control, you can implement everything manually:
 
 ```rust
+#[derive(Clone)]
 struct TransferMoney {
-    from: AccountId,
-    to: AccountId,
+    from: StreamId,
+    to: StreamId,
     amount: Money,
 }
 
+// Manual implementation of CommandStreams
+impl CommandStreams for TransferMoney {
+    type StreamSet = (); // Your own phantom type
+    
+    fn read_streams(&self) -> Vec<StreamId> {
+        vec![self.from.clone(), self.to.clone()]
+    }
+}
+
+// Implementation of CommandLogic
 #[async_trait]
-impl Command for TransferMoney {
-    type Input = TransferMoney;
+impl CommandLogic for TransferMoney {
     type State = TransferState;
     type Event = BankingEvent;
-    type StreamSet = ();
-
-    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-        vec![
-            input.from.as_stream_id(),
-            input.to.as_stream_id(),
-        ]
-    }
-
+    
     // ... rest of implementation
 }
 ```
