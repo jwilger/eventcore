@@ -316,12 +316,12 @@ Follow the testing principles from the global Claude.md:
 
 The project uses pre-commit hooks that automatically run:
 
-1. `cargo fmt` - Code formatting
+1. `cargo fmt --all && git add -u` - Auto-formats code and stages changes (runs first)
 2. `cargo clippy` - Linting
 3. `cargo test` - All tests
 4. `cargo check` - Type checking
 
-These ensure code quality before commits.
+The formatting hook automatically fixes and stages formatting issues instead of failing, saving time during the commit process.
 
 ## Development Principles
 
@@ -357,36 +357,203 @@ cargo search <crate_name>
 
 This ensures we're using the most up-to-date and secure versions of all dependencies.
 
+## GitHub MCP Integration
+
+This project now uses GitHub MCP (Model Context Protocol) server for all GitHub interactions. **MCP tools are the primary and preferred way to interact with GitHub**, replacing gh CLI commands.
+
+### Available GitHub MCP Tools
+
+Key tools for development workflow:
+
+- **Workflow Management**:
+  - `mcp__github__list_workflow_runs` - List and monitor CI/CD runs
+  - `mcp__github__get_workflow_run` - Get detailed workflow status
+  - `mcp__github__list_workflow_jobs` - View individual job status
+  - `mcp__github__get_job_logs` - Retrieve logs for debugging failures
+  - `mcp__github__rerun_failed_jobs` - Re-run only failed jobs
+  - `mcp__github__rerun_workflow_run` - Re-run entire workflow
+
+- **Pull Request Management**:
+  - `mcp__github__create_pull_request` - Create new PRs
+  - `mcp__github__get_pull_request` - View PR details
+  - `mcp__github__update_pull_request` - Update PR title/description
+  - `mcp__github__merge_pull_request` - Merge approved PRs
+  - `mcp__github__request_copilot_review` - Request automated review
+
+- **Issue Management**:
+  - `mcp__github__create_issue` - Create new issues
+  - `mcp__github__update_issue` - Update issue status/labels
+  - `mcp__github__list_issues` - View open issues
+  - `mcp__github__add_issue_comment` - Add comments to issues
+
+- **Repository Operations**:
+  - `mcp__github__create_branch` - Create feature branches
+  - `mcp__github__push_files` - Push multiple files in one commit
+  - `mcp__github__get_file_contents` - Read files from GitHub
+  - `mcp__github__create_or_update_file` - Update single files
+
+### Why MCP Over gh CLI
+
+1. **Native Integration**: Direct API access without shell command overhead
+2. **Type Safety**: Structured parameters and responses
+3. **Better Error Handling**: Clear error messages and recovery options
+4. **Richer Data**: Full API responses with all metadata
+5. **Batch Operations**: Efficient multi-file operations
+
+## Pull Request Workflow
+
+This project uses a **pull request-based workflow**. Direct commits to the main branch are not allowed. All changes must go through pull requests for review and CI validation.
+
+### Branch Strategy
+
+1. **Create feature branches** for logical sets of related changes
+2. **Use descriptive branch names** that indicate the purpose (e.g., `add-snapshot-system`, `fix-connection-pool-timeout`)
+3. **Keep branches focused** - one conceptual change per PR makes reviews easier
+4. **Rebase on main** if your branch falls behind to avoid merge conflicts
+
+### PR Workflow Steps
+
+1. **Create a new branch** from main for your changes:
+   ```bash
+   git checkout main && git pull origin main
+   git checkout -b descriptive-branch-name
+   ```
+
+2. **Make your changes** following the development process rules below
+
+3. **Push your branch** when ready for review:
+   ```bash
+   git push -u origin descriptive-branch-name
+   ```
+
+4. **Create a Pull Request** using GitHub MCP tools:
+   ```
+   mcp__github__create_pull_request
+   ```
+   **IMPORTANT**: Your PR description MUST include all sections from the PR template (.github/pull_request_template.md):
+   - Description (what and why)
+   - Type of Change (select appropriate type only)
+   - Testing checklist (**leave all boxes unchecked**)
+   - Performance Impact (if applicable)
+   - Security Checklist (**leave all boxes unchecked**)
+   - Code Quality checklist (**leave all boxes unchecked**)
+   - Reviewer Checklist (**leave all boxes unchecked**)
+   - Review Focus (guide reviewers to important areas)
+   
+   **CRITICAL**: 
+   - **DO NOT pre-check any checklist items** when creating the PR
+   - All submitter checklists (Testing, Security, Code Quality) must be checked before PR can be ready for review
+   - PRs will be automatically converted to draft if submitter checklists are incomplete
+   - The Reviewer Checklist is for reviewers only - not the submitter
+   - This ensures human verification of all quality gates
+
+5. **CI runs automatically** on PR creation - no need to monitor before creating the PR
+
+6. **Address feedback** from reviews and CI failures
+
+7. **Merge** when approved and CI passes
+
+### CI Monitoring and Review
+
+After creating or updating a PR:
+
+1. **CI runs automatically on the PR** - No need to trigger manually
+2. **Use GitHub MCP tools to monitor the CI workflow** on your PR:
+   - `mcp__github__get_pull_request` - Check PR status including CI checks
+   - `mcp__github__list_workflow_runs` - List recent workflow runs
+   - `mcp__github__get_workflow_run` - Get details of a specific workflow run
+   - `mcp__github__list_workflow_jobs` - List jobs for a workflow run
+   - `mcp__github__get_job_logs` - Get logs for failed jobs
+3. **If the workflow fails** - Address the failures immediately before continuing
+4. **If the workflow passes** - PR is ready for review
+
+### Responding to PR Feedback
+
+When addressing PR review feedback:
+
+1. **First, get the review thread details** using GraphQL:
+   ```bash
+   gh api graphql -f query='
+   query {
+     repository(owner: "OWNER", name: "REPO") {
+       pullRequest(number: PR_NUMBER) {
+         reviewThreads(first: 50) {
+           nodes {
+             id
+             path
+             line
+             comments(first: 10) {
+               nodes {
+                 id
+                 author { login }
+                 body
+               }
+             }
+           }
+         }
+       }
+     }
+   }'
+   ```
+
+2. **Reply directly to the review thread** using the thread ID:
+   ```bash
+   gh api graphql -f query='
+   mutation {
+     addPullRequestReviewThreadReply(input: {
+       pullRequestReviewThreadId: "THREAD_ID",
+       body: "Your response here\n\n-- @claude"
+     }) {
+       comment { id body }
+     }
+   }'
+   ```
+
+3. **Always include in your response**:
+   - Explanation of what changes you made
+   - Or why you're NOT making the suggested change
+   - Sign with `-- @claude` to indicate automation
+   
+2. **Format for automated responses**:
+   ```
+   I've addressed this by [specific action taken].
+   
+   [Optional: Brief explanation of the change]
+   
+   -- @claude
+   ```
+
+3. **Check for new responses** after posting your reply:
+   - Use `mcp__github__get_issue_comments` to see if reviewers responded
+   - Continue the conversation until resolved
+   
+4. **Example response**:
+   ```
+   I've consolidated the duplicate PR workflow sections into a single 
+   comprehensive section under "Pull Request Workflow". This provides
+   clearer guidance for contributors.
+   
+   -- @claude
+   ```
+
+### Important Notes
+
+- **CI/CD workflows only run on PRs**, not on branch pushes
+- **The PR template must be filled out** - the PR validation workflow enforces this
+- **Request reviews** from maintainers or use `mcp__github__request_copilot_review` for automated review
+- **Keep PRs small and focused** for easier review
+- **All automated comments must be signed with `-- @claude`**
+
 ## Development Process Rules
 
 When working on this project, **ALWAYS** follow these rules:
 
 1. **Review @PLANNING.md** to discover the next task to work on.
-2. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
-3. **Insert a task to "Update @PLANNING.md to mark completed tasks"** before any commit task. This ensures our planning document stays in sync with actual progress.
-4. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
-5. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
-
-### CI Monitoring Rules
-
-After pushing changes:
-
-1. **Use `gh` CLI to monitor the CI workflow** - Watch for the workflow to complete
-2. **If the workflow fails** - Address the failures immediately before moving to the next task
-3. **If the workflow passes** - Only then proceed to review @PLANNING.md for the next task
-
-Example commands:
-
-```bash
-# List recent workflow runs
-gh run list --limit 5
-
-# Watch a specific workflow run
-gh run watch
-
-# View workflow run details if it fails
-gh run view
-```
+2. **Follow the Pull Request Workflow** (see section above) for all code changes.
+3. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
+4. **Insert a task to "Update @PLANNING.md to mark completed tasks"** before any commit task. This ensures our planning document stays in sync with actual progress.
+5. **Insert a task to "Make a commit"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure. Note: Pre-commit hooks will run all checks automatically.
+6. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository and create/update PR with GitHub MCP tools."
 
 ### Commit Rules
 
@@ -414,33 +581,19 @@ This ensures consistent code quality and maintains a clean commit history.
 
 ### CRITICAL: Todo List Structure
 
+**This structure ensures Claude never forgets the development workflow:**
+
 Your todo list should ALWAYS follow this pattern:
-1. Implementation tasks...
-2. "Update @PLANNING.md to mark completed tasks"
-3. "Run all tests and make a commit if they all pass"
-4. "Push changes to remote repository, monitor CI workflow..."
+1. Implementation/fix tasks (the actual work)
+2. "Update @PLANNING.md to mark completed tasks" 
+3. "Make a commit" (pre-commit hooks run all checks automatically)
+4. "Push changes and update PR"
 
-## Notification Sound
+For PR feedback specifically:
+1. Address each piece of feedback
+2. "Reply to review comments using gh GraphQL API with -- @claude signature"
+3. "Update @PLANNING.md to mark completed tasks"
+4. "Make a commit"
+5. "Push changes and check for new PR feedback"
 
-**IMPORTANT**: Claude should play a notification sound every time it finishes tasks and is waiting for user input. This helps the user know when Claude has completed its work.
-
-To play a notification sound on NixOS with PipeWire:
-```bash
-python3 -c "
-import wave, struct, math
-
-# Create a simple beep WAV file
-sample_rate = 44100
-duration = 0.5
-frequency = 440
-
-with wave.open('/tmp/beep.wav', 'wb') as wav:
-    wav.setnchannels(1)
-    wav.setsampwidth(2)
-    wav.setframerate(sample_rate)
-    
-    for i in range(int(sample_rate * duration)):
-        value = int(32767.0 * math.sin(2.0 * math.pi * frequency * i / sample_rate))
-        wav.writeframesraw(struct.pack('<h', value))
-" && pw-play /tmp/beep.wav
-```
+**Why this matters**: The todo list tool reinforces our workflow at every step, preventing process drift as context grows.

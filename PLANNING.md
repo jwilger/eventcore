@@ -166,32 +166,102 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Added GitHub Copilot instructions for automated PR reviews aligned with our checklists
 - [x] Fixed doctest compilation error in resource.rs
 - [x] Added doctests to pre-commit hooks to prevent future doctest failures
+- [x] Updated CLAUDE.md and PLANNING.md to reflect GitHub MCP server integration for all GitHub operations
+- [x] Updated CLAUDE.md and PLANNING.md to document PR-based workflow and clarify that CI only runs on PRs
+- [x] Updated pre-commit hook to auto-format and stage files instead of failing
+- [x] Removed redundant "run all tests" requirement from commit process (pre-commit hooks handle this)
+- [x] Consolidated duplicate PR workflow sections in CLAUDE.md
+- [x] Added PR template requirements and validation workflow documentation
+- [x] Added PR feedback response process using gh GraphQL API for threaded replies
+- [x] Enhanced todo list structure documentation to reinforce workflow and prevent process drift
+- [x] Updated PR validation workflow to require ALL checklist items be checked by humans
+- [x] Added documentation clarifying that checklists must NOT be pre-checked by automation
+- [x] Improved PR validation to auto-convert to draft if submitter checklists incomplete
+- [x] Reduced validation noise by skipping draft PRs and avoiding redundant comments
+- [x] Added debug logging to troubleshoot workflow section detection
+- [x] Fixed PR validation workflow to include synchronize trigger for new commits
+- [x] Fixed regex pattern to properly capture subsections in checklists
+- [x] Added better error handling for draft conversion API calls
+- [x] Updated workflow message to acknowledge GitHub API limitation on draft conversion
+- [x] Implemented GraphQL API for draft conversion as alternative to REST API limitation
+- [x] Set up workflow to use PAT (PR_DRAFT_PAT secret) for draft conversion capability
+- [x] Removed notification sound from CLAUDE.md and PLANNING.md per user request
+
+## Pull Request Workflow
+
+This project uses a **pull request-based workflow**. Direct commits to the main branch are not allowed. All changes must go through pull requests for review and CI validation.
+
+### Key Points
+
+1. **Create feature branches** for logical sets of related changes
+2. **CI/CD workflows only run on PRs**, not on branch pushes
+3. **PR template must be filled out** - enforced by PR validation workflow
+4. **Keep PRs small and focused** for easier review
+
+### Workflow Steps
+
+1. Create a new branch from main
+2. Make your changes following development process rules
+3. Push your branch
+4. Create a PR using `mcp__github__create_pull_request` with **ALL template sections**:
+   - Description (what and why)
+   - Type of Change (select appropriate type only)
+   - Testing checklist (**leave unchecked for human review**)
+   - Performance Impact (if applicable)
+   - Security Checklist (**leave unchecked for human review**)
+   - Code Quality checklist (**leave unchecked for human review**)
+   - Reviewer Checklist (**leave unchecked for human review**)
+   - Review Focus
+5. Monitor CI and address any failures (PR validation will fail until all checklists are checked)
+6. Address review feedback by replying to comments with `-- @claude` signature
+7. Merge when approved, CI passes, and all checklists are checked by humans
 
 ## Development Process Rules
 
 When working on this project, **ALWAYS** follow these rules:
 
-1. **BROKEN CI BUILDS ARE HIGHEST PRIORITY** - If CI is failing, stop all other work and fix it immediately.
+1. **BROKEN CI BUILDS ARE HIGHEST PRIORITY** - If CI is failing on your PR, stop all other work and fix it immediately.
 2. **Review @PLANNING.md** to discover the next task to work on.
-3. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
-4. **ALWAYS include "Update @PLANNING.md to mark completed tasks" in your todolist** - This task should come BEFORE the commit task to ensure completed work is tracked.
-5. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
-6. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
+3. **Create a new branch** for the task if starting fresh work.
+4. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
+5. **ALWAYS include "Update @PLANNING.md to mark completed tasks" in your todolist** - This task should come BEFORE the commit task to ensure completed work is tracked.
+6. **Insert a task to "Run relevant tests (if any) and make a commit"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure. Note: Pre-commit hooks will run all checks automatically.
+7. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository and create/update PR with GitHub MCP tools."
 
 ### CRITICAL: Todo List Structure
 
+**This structure ensures Claude never forgets the development workflow:**
+
 Your todo list should ALWAYS follow this pattern:
-1. Implementation tasks...
-2. "Update @PLANNING.md to mark completed tasks"
-3. "Run all tests and make a commit if they all pass"
-4. "Push changes to remote repository, monitor CI workflow..."
+1. Implementation/fix tasks (the actual work)
+2. "Update @PLANNING.md to mark completed tasks" 
+3. "Make a commit" (pre-commit hooks run all checks automatically)
+4. "Push changes and update PR"
+
+For PR feedback specifically:
+1. Address each piece of feedback
+2. "Reply to review comments using gh GraphQL API with -- @claude signature"
+3. "Update @PLANNING.md to mark completed tasks"
+4. "Make a commit"
+5. "Push changes and check for new PR feedback"
+
+**Why this matters**: The todo list tool reinforces our workflow at every step, preventing process drift as context grows.
 
 ### CI Monitoring Rules
 
-After pushing changes:
-1. **Use `gh` CLI to monitor the CI workflow** - Watch for the workflow to complete
-2. **If the workflow fails** - Address the failures immediately before moving to the next task
-3. **If the workflow passes** - Only then proceed to review @PLANNING.md for the next task
+After creating or updating a PR:
+1. **CI runs automatically on the PR** - No need to trigger manually
+2. **Use GitHub MCP tools to monitor the CI workflow** on your PR
+3. **If the workflow fails** - Address the failures immediately before continuing
+4. **If the workflow passes** - PR is ready for review
+
+We now have access to GitHub MCP server which provides native GitHub integration. Use these MCP tools:
+
+- `mcp__github__get_pull_request` - Check PR status including CI checks
+- `mcp__github__list_workflow_runs` - List recent workflow runs for the repository
+- `mcp__github__get_workflow_run` - Get details of a specific workflow run
+- `mcp__github__list_workflow_jobs` - List jobs for a workflow run to see which failed
+- `mcp__github__get_job_logs` - Get logs for failed jobs to debug issues
 
 ### Commit Rules
 
@@ -220,28 +290,3 @@ After pushing changes:
   ```
 
 **NEVER** make a commit with the `--no-verify` flag. All pre-commit checks must be passing before proceeding.
-
-## Notification Sound
-
-**IMPORTANT**: Claude should play a notification sound every time it finishes tasks and is waiting for user input. This helps the user know when Claude has completed its work.
-
-To play a notification sound on NixOS with PipeWire:
-```bash
-python3 -c "
-import wave, struct, math
-
-# Create a simple beep WAV file
-sample_rate = 44100
-duration = 0.5
-frequency = 440
-
-with wave.open('/tmp/beep.wav', 'wb') as wav:
-    wav.setnchannels(1)
-    wav.setsampwidth(2)
-    wav.setframerate(sample_rate)
-    
-    for i in range(int(sample_rate * duration)):
-        value = int(32767.0 * math.sin(2.0 * math.pi * frequency * i / sample_rate))
-        wav.writeframesraw(struct.pack('<h', value))
-" && pw-play /tmp/beep.wav
-```

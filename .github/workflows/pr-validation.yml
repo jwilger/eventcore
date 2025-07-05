@@ -1,12 +1,23 @@
 name: PR Validation
+# 
+# This workflow validates PR descriptions and enforces checklist completion.
+# 
+# For automatic draft conversion to work, you need to:
+# 1. Create a Personal Access Token (PAT) with 'repo' scope
+# 2. Add it as a repository secret named 'PR_DRAFT_PAT'
+# 
+# Without the PAT, the workflow will still validate checklists but won't
+# be able to automatically convert PRs to draft status.
 
 on:
   pull_request:
-    types: [opened, edited, synchronize, ready_for_review]
+    types: [opened, edited, ready_for_review, synchronize]
 
 permissions:
   pull-requests: write
   issues: write
+  contents: read
+  statuses: write
 
 jobs:
   validate-pr-description:
@@ -16,9 +27,17 @@ jobs:
       - name: Check PR Description
         uses: actions/github-script@v7
         with:
+          # Use PAT if available for draft conversion, otherwise fall back to default token
+          github-token: ${{ secrets.PR_DRAFT_PAT || github.token }}
           script: |
             const pr = context.payload.pull_request;
             const body = pr.body || '';
+            
+            // Skip validation for draft PRs
+            if (pr.draft) {
+              console.log('✅ Skipping validation for draft PR');
+              return;
+            }
             
             // Required sections from our template
             const requiredSections = [
@@ -57,40 +76,153 @@ jobs:
               return;
             }
             
-            // Check for empty checkboxes in required sections
+            // Check for empty checkboxes in submitter sections (not Reviewer Checklist)
             const checkboxPattern = /- \[ \]/g;
-            const securitySection = body.match(/## Security Checklist[\s\S]*?(?=##|$)/);
-            const codeQualitySection = body.match(/## Code Quality[\s\S]*?(?=##|$)/);
             
-            let emptyRequired = [];
+            // Extract submitter sections that have checklists
+            // Use negative lookahead to match until next ## (not ###)
+            const testingSection = body.match(/## Testing[\s\S]*?(?=\n##\s|$)/);
+            const securitySection = body.match(/## Security Checklist[\s\S]*?(?=\n##\s|$)/);
+            const codeQualitySection = body.match(/## Code Quality[\s\S]*?(?=\n##\s|$)/);
+            const reviewerSection = body.match(/## Reviewer Checklist[\s\S]*?(?=\n##\s|$)/);
+            
+            let submitterSectionsWithUnchecked = [];
+            let reviewerHasUnchecked = false;
+            
+            // Debug logging
+            console.log('=== DEBUG: Checking sections for unchecked items ===');
+            console.log('Testing section found:', !!testingSection);
+            console.log('Security section found:', !!securitySection);
+            console.log('Code Quality section found:', !!codeQualitySection);
+            console.log('Reviewer section found:', !!reviewerSection);
+            
+            if (securitySection) {
+              console.log('Security section content:', securitySection[0]);
+              console.log('Unchecked boxes in security:', securitySection[0].match(checkboxPattern));
+            }
+            
+            // Check submitter sections for unchecked items
+            if (testingSection && testingSection[0].match(checkboxPattern)) {
+              console.log('Testing section has unchecked items');
+              submitterSectionsWithUnchecked.push('Testing');
+            }
             
             if (securitySection && securitySection[0].match(checkboxPattern)) {
-              emptyRequired.push('Security Checklist has unchecked items');
+              console.log('Security section has unchecked items');
+              submitterSectionsWithUnchecked.push('Security Checklist');
             }
             
             if (codeQualitySection && codeQualitySection[0].match(checkboxPattern)) {
-              emptyRequired.push('Code Quality has unchecked items');
+              console.log('Code Quality section has unchecked items');
+              submitterSectionsWithUnchecked.push('Code Quality');
             }
             
-            if (emptyRequired.length > 0) {
-              const warningMessage = `
-              ⚠️ **PR Checklist Incomplete**
+            // Check reviewer section separately
+            if (reviewerSection && reviewerSection[0].match(checkboxPattern)) {
+              reviewerHasUnchecked = true;
+            }
+            
+            console.log('Submitter sections with unchecked items:', submitterSectionsWithUnchecked);
+            console.log('Reviewer has unchecked items:', reviewerHasUnchecked);
+            
+            // If submitter sections have unchecked items, convert to draft
+            if (submitterSectionsWithUnchecked.length > 0) {
+              console.log('Converting PR to draft due to incomplete submitter checklists');
               
-              Please complete all required checklists:
-              ${emptyRequired.map(s => `- ${s}`).join('\n')}
+              let conversionWorked = false;
               
-              Mark items as completed (\`[x]\`) or not applicable (\`[N/A]\`).
+              try {
+                // Convert to draft using GraphQL API
+                const mutation = `
+                  mutation ConvertPullRequestToDraft($pullRequestId: ID!) {
+                    convertPullRequestToDraft(input: { pullRequestId: $pullRequestId }) {
+                      pullRequest {
+                        id
+                        number
+                        isDraft
+                      }
+                    }
+                  }
+                `;
+                
+                const variables = {
+                  pullRequestId: pr.node_id
+                };
+                
+                console.log('Converting PR to draft using GraphQL, node_id:', pr.node_id);
+                const response = await github.graphql(mutation, variables);
+                console.log('GraphQL response:', JSON.stringify(response, null, 2));
+                
+                if (response.convertPullRequestToDraft && response.convertPullRequestToDraft.pullRequest) {
+                  console.log('Successfully converted PR to draft:', response.convertPullRequestToDraft.pullRequest.isDraft);
+                  conversionWorked = response.convertPullRequestToDraft.pullRequest.isDraft === true;
+                }
+              } catch (error) {
+                console.error('Failed to convert to draft via GraphQL:', error.message);
+                if (error.message.includes('Resource not accessible')) {
+                  console.error('Note: Draft conversion requires a PAT. Set PR_DRAFT_PAT secret with a token that has repo scope.');
+                }
+                console.error('Error details:', error);
+                
+                // Fallback to REST API
+                try {
+                  console.log('Attempting REST API fallback...');
+                  const restResponse = await github.rest.pulls.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: pr.number,
+                    draft: true
+                  });
+                  console.log('REST API response:', restResponse.status);
+                  console.log('Updated PR draft status:', restResponse.data.draft);
+                  conversionWorked = restResponse.data.draft === true;
+                } catch (restError) {
+                  console.error('REST API also failed:', restError.message);
+                }
+              }
+              
+              const draftMessage = conversionWorked ? `
+              🔄 **PR Converted to Draft**
+              
+              This PR has been automatically converted to draft status because the following submitter checklists have unchecked items:
+              ${submitterSectionsWithUnchecked.map(s => `- **${s}**`).join('\n')}
+              
+              **Next Steps:**
+              1. Review and check off all items in the submitter sections after verifying each one
+              2. Once all submitter checklists are complete, click "Ready for review"
+              3. The Reviewer Checklist should be completed by the reviewer, not the submitter
+              
+              **Note**: Each checkbox represents a quality gate that must be manually verified.
+              ` : `
+              ⚠️ **PR Should Be Draft**
+              
+              This PR should be in draft status because the following submitter checklists have unchecked items:
+              ${submitterSectionsWithUnchecked.map(s => `- **${s}**`).join('\n')}
+              
+              **Action Required:**
+              1. Click "Convert to draft" on this PR
+              2. Review and check off all items in the submitter sections after verifying each one
+              3. Once all submitter checklists are complete, click "Ready for review"
+              4. The Reviewer Checklist should be completed by the reviewer, not the submitter
+              
+              **Note**: Automatic draft conversion is not available. Please manually click "Convert to draft" above.
               `;
-              
-              core.setFailed(warningMessage);
               
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pr.number,
-                body: warningMessage
+                body: draftMessage
               });
+              
+              core.setFailed('PR converted to draft due to incomplete submitter checklists');
               return;
             }
             
-            console.log('✅ PR description follows template');
+            // If only reviewer checklist has unchecked items, that's expected - just fail the check
+            if (reviewerHasUnchecked) {
+              core.setFailed('Reviewer checklist incomplete - waiting for reviewer to complete');
+              return;
+            }
+            
+            console.log('✅ PR description follows template and all submitter checklists are complete');
