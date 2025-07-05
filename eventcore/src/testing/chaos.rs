@@ -679,11 +679,14 @@ mod tests {
     #[tokio::test]
     async fn test_stats_collection() {
         let mock_store = MockEventStore::<TestEvent>::new();
-        let chaos_store = ChaosEventStore::new(mock_store)
-            .with_policy(FailurePolicy::random_errors(0.5, FailureType::Timeout));
 
-        // Perform multiple operations
-        for _ in 0..10 {
+        // Test with deterministic failure rates
+        // First test: 30% failure rate
+        let chaos_store = ChaosEventStore::new(mock_store.clone())
+            .with_policy(FailurePolicy::random_errors(0.3, FailureType::Timeout));
+
+        // Perform 100 operations to ensure statistical significance
+        for _ in 0..100 {
             let _ = chaos_store
                 .read_streams(
                     &[StreamId::try_new("test").unwrap()],
@@ -693,8 +696,60 @@ mod tests {
         }
 
         let stats = chaos_store.stats();
-        assert_eq!(stats.total_operations, 10);
-        assert!(stats.failed_operations > 0);
-        assert!(stats.failed_operations < 10); // With 0.5 probability, unlikely all fail
+        assert_eq!(stats.total_operations, 100);
+
+        // With 30% failure rate and 100 operations, we expect approximately 30 failures
+        // Allow for variance: between 15 and 45 failures (15% to 45%)
+        assert!(
+            stats.failed_operations >= 15,
+            "Expected at least 15 failures, got {}",
+            stats.failed_operations
+        );
+        assert!(
+            stats.failed_operations <= 45,
+            "Expected at most 45 failures, got {}",
+            stats.failed_operations
+        );
+
+        // Reset and test with 0% failure rate
+        chaos_store.reset_stats();
+        let chaos_store_no_fail = ChaosEventStore::new(mock_store.clone())
+            .with_policy(FailurePolicy::random_errors(0.0, FailureType::Timeout));
+
+        for _ in 0..10 {
+            let _ = chaos_store_no_fail
+                .read_streams(
+                    &[StreamId::try_new("test").unwrap()],
+                    &ReadOptions::default(),
+                )
+                .await;
+        }
+
+        let stats_no_fail = chaos_store_no_fail.stats();
+        assert_eq!(stats_no_fail.total_operations, 10);
+        assert_eq!(
+            stats_no_fail.failed_operations, 0,
+            "Expected no failures with 0% failure rate"
+        );
+
+        // Test with 100% failure rate
+        let chaos_store_all_fail = ChaosEventStore::new(mock_store)
+            .with_policy(FailurePolicy::random_errors(1.0, FailureType::Timeout));
+
+        for _ in 0..10 {
+            let _ = chaos_store_all_fail
+                .read_streams(
+                    &[StreamId::try_new("test").unwrap()],
+                    &ReadOptions::default(),
+                )
+                .await;
+        }
+
+        let stats_all_fail = chaos_store_all_fail.stats();
+        assert_eq!(stats_all_fail.total_operations, 10);
+        assert_eq!(
+            stats_all_fail.failed_operations, 10,
+            "Expected all operations to fail with 100% failure rate"
+        );
     }
 }
