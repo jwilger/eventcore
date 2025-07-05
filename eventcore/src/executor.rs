@@ -4,6 +4,7 @@ pub mod optimization;
 pub mod retry;
 pub mod stream_discovery;
 pub mod typestate;
+pub mod validation;
 
 #[cfg(test)]
 mod typestate_compile_tests;
@@ -640,7 +641,7 @@ where
         loop {
             // Move to next iteration and validate limits
             context.next_iteration();
-            self.validate_iteration_limit::<C>(&context)?;
+            validation::validate_iteration_limit::<C>(&context)?;
 
             info!(
                 iteration = context.iteration(),
@@ -681,20 +682,6 @@ where
     }
 
     /// Validates that stream discovery iteration limit is not exceeded.
-    fn validate_iteration_limit<C: Command>(
-        &self,
-        context: &StreamDiscoveryContext,
-    ) -> CommandResult<()> {
-        if context.iteration() > context.max_iterations() {
-            return Err(CommandError::ValidationFailed(format!(
-                "Command '{}' exceeded maximum stream discovery iterations ({}). This suggests the command is continuously discovering new streams. Current streams: {:?}",
-                std::any::type_name::<C>(),
-                context.max_iterations(),
-                context.stream_ids().iter().map(std::convert::AsRef::as_ref).collect::<Vec<_>>()
-            )));
-        }
-        Ok(())
-    }
 
     /// Reads streams with timeout and circuit breaker protection.
     async fn read_streams_with_timeout_and_circuit_breaker(
@@ -1741,7 +1728,7 @@ where
         loop {
             // Move to next iteration and validate limits
             context.next_iteration();
-            self.validate_iteration_limit::<C>(&context)?;
+            validation::validate_iteration_limit::<C>(&context)?;
 
             info!(
                 iteration = context.iteration(),

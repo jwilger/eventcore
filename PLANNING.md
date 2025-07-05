@@ -53,7 +53,7 @@ EventCore has successfully completed all initially planned phases (1-20), includ
   - [ ] `executor/core.rs` - Core execution logic
   - [x] `executor/retry.rs` - Retry and circuit breaker logic (RetryConfig, RetryPolicy extracted)
   - [x] `executor/stream_discovery.rs` - Stream discovery iteration logic (StreamDiscoveryContext extracted)
-  - [ ] `executor/validation.rs` - Command validation
+  - [x] `executor/validation.rs` - Command validation (validate_iteration_limit extracted)
   - [x] `executor/context.rs` - Execution context management (ExecutionContext extracted)
 
 #### 2. Refactor cqrs/rebuild.rs::rebuild function (189 lines) - **HIGH**
