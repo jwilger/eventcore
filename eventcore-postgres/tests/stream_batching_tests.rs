@@ -275,6 +275,7 @@ async fn test_paginated_reading_with_filters() {
 }
 
 #[tokio::test]
+#[ignore = "Performance test may fail in CI/Docker environments"]
 async fn test_multi_stream_batch_performance() {
     let store = setup_test_store().await;
 

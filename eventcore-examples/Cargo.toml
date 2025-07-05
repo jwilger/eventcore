@@ -36,7 +36,7 @@ anyhow = "1.0.95"
 rand = { workspace = true }
 
 # Web framework dependencies
-axum = "0.7.9"
+axum = "0.8.4"
 tower = "0.5.2"
 
 [dev-dependencies]
