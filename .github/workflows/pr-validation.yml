@@ -75,16 +75,31 @@ jobs:
             let submitterSectionsWithUnchecked = [];
             let reviewerHasUnchecked = false;
             
+            // Debug logging
+            console.log('=== DEBUG: Checking sections for unchecked items ===');
+            console.log('Testing section found:', !!testingSection);
+            console.log('Security section found:', !!securitySection);
+            console.log('Code Quality section found:', !!codeQualitySection);
+            console.log('Reviewer section found:', !!reviewerSection);
+            
+            if (securitySection) {
+              console.log('Security section content:', securitySection[0]);
+              console.log('Unchecked boxes in security:', securitySection[0].match(checkboxPattern));
+            }
+            
             // Check submitter sections for unchecked items
             if (testingSection && testingSection[0].match(checkboxPattern)) {
+              console.log('Testing section has unchecked items');
               submitterSectionsWithUnchecked.push('Testing');
             }
             
             if (securitySection && securitySection[0].match(checkboxPattern)) {
+              console.log('Security section has unchecked items');
               submitterSectionsWithUnchecked.push('Security Checklist');
             }
             
             if (codeQualitySection && codeQualitySection[0].match(checkboxPattern)) {
+              console.log('Code Quality section has unchecked items');
               submitterSectionsWithUnchecked.push('Code Quality');
             }
             
@@ -93,8 +108,12 @@ jobs:
               reviewerHasUnchecked = true;
             }
             
+            console.log('Submitter sections with unchecked items:', submitterSectionsWithUnchecked);
+            console.log('Reviewer has unchecked items:', reviewerHasUnchecked);
+            
             // If submitter sections have unchecked items, convert to draft
             if (submitterSectionsWithUnchecked.length > 0) {
+              console.log('Converting PR to draft due to incomplete submitter checklists');
               // Convert to draft
               await github.rest.pulls.update({
                 owner: context.repo.owner,

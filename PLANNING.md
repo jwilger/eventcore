@@ -178,6 +178,7 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Added documentation clarifying that checklists must NOT be pre-checked by automation
 - [x] Improved PR validation to auto-convert to draft if submitter checklists incomplete
 - [x] Reduced validation noise by skipping draft PRs and avoiding redundant comments
+- [x] Added debug logging to troubleshoot workflow section detection
 
 ## Pull Request Workflow
 
