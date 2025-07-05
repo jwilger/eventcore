@@ -67,20 +67,20 @@ pub type ResourceResult<T> = Result<T, ResourceError>;
 /// use eventcore::resource::{Resource, states, ResourceManager};
 /// use std::sync::Arc;
 ///
-/// Example with database pool resource (requires postgres feature)
-/// This would typically be used with eventcore-postgres crate:
-/// ```rust,ignore
-/// use eventcore::resource::database::{DatabaseResourceManager, DatabasePool};
-/// use sqlx::PgPool;
+/// // Example with database pool resource (requires postgres feature)
+/// // This would typically be used with eventcore-postgres crate:
+/// // ```rust,ignore
+/// // use eventcore::resource::database::{DatabaseResourceManager, DatabasePool};
+/// // use sqlx::PgPool;
+/// //
+/// // let pool = Arc::new(PgPool::connect("postgres://localhost/mydb").await?);
+/// // let manager = DatabaseResourceManager::new(pool);
+/// // let db_resource = manager.acquire_pool().await?;
+/// // let result = db_resource.execute_query("SELECT 1").await?;
+/// // let _released = db_resource.release()?;
+/// // ```
 ///
-/// let pool = Arc::new(PgPool::connect("postgres://localhost/mydb").await?);
-/// let manager = DatabaseResourceManager::new(pool);
-/// let db_resource = manager.acquire_pool().await?;
-/// let result = db_resource.execute_query("SELECT 1").await?;
-/// let _released = db_resource.release()?;
-/// ```
-///
-/// Example with a custom resource type
+/// // Example with a custom resource type
 /// struct MyResource {
 ///     data: String,
 /// }

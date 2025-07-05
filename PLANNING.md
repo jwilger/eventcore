@@ -164,6 +164,8 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Updated PR template to remove redundant pre-merge checklist and add Review Focus section
 - [x] Updated PR validation workflow to require Review Focus section
 - [x] Added GitHub Copilot instructions for automated PR reviews aligned with our checklists
+- [x] Fixed doctest compilation error in resource.rs
+- [x] Added doctests to pre-commit hooks to prevent future doctest failures
 
 ## Development Process Rules
 
