@@ -185,6 +185,7 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Updated workflow message to acknowledge GitHub API limitation on draft conversion
 - [x] Implemented GraphQL API for draft conversion as alternative to REST API limitation
 - [x] Set up workflow to use PAT (PR_DRAFT_PAT secret) for draft conversion capability
+- [x] Removed notification sound from CLAUDE.md and PLANNING.md per user request
 
 ## Pull Request Workflow
 
@@ -289,28 +290,3 @@ We now have access to GitHub MCP server which provides native GitHub integration
   ```
 
 **NEVER** make a commit with the `--no-verify` flag. All pre-commit checks must be passing before proceeding.
-
-## Notification Sound
-
-**IMPORTANT**: Claude should play a notification sound every time it finishes tasks and is waiting for user input. This helps the user know when Claude has completed its work.
-
-To play a notification sound on NixOS with PipeWire:
-```bash
-python3 -c "
-import wave, struct, math
-
-# Create a simple beep WAV file
-sample_rate = 44100
-duration = 0.5
-frequency = 440
-
-with wave.open('/tmp/beep.wav', 'wb') as wav:
-    wav.setnchannels(1)
-    wav.setsampwidth(2)
-    wav.setframerate(sample_rate)
-    
-    for i in range(int(sample_rate * duration)):
-        value = int(32767.0 * math.sin(2.0 * math.pi * frequency * i / sample_rate))
-        wav.writeframesraw(struct.pack('<h', value))
-" && pw-play /tmp/beep.wav
-```
