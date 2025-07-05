@@ -149,6 +149,14 @@ struct TypeSafeExecutionResult<Event> {
     additional_streams: Option<Vec<StreamId>>,
 }
 
+/// Context for preparing stream events with complete concurrency control.
+#[derive(Debug)]
+struct StreamEventPreparationContext<'a, Event> {
+    stream_data: &'a crate::event_store::StreamData<Event>,
+    all_read_streams: &'a [StreamId],
+    execution_context: &'a ExecutionContext,
+}
+
 /// Execution options for command execution with sensible defaults.
 ///
 /// By default, commands are executed with retry logic enabled for concurrency conflicts.
@@ -1168,24 +1176,13 @@ where
         stream_events
     }
 
-    /// Prepares stream events with COMPLETE concurrency control.
-    ///
-    /// This method ensures that ALL streams that were read are checked for version conflicts,
-    /// not just the streams being written to. This prevents commands from making decisions
-    /// based on stale data from ANY of the streams they read.
-    fn prepare_stream_events_with_complete_concurrency_control<C>(
+    /// Groups events by stream ID for efficient processing.
+    fn group_events_by_stream<C>(
         events_to_write: Vec<(StreamId, C::Event)>,
-        stream_data: &crate::event_store::StreamData<ES::Event>,
-        all_read_streams: &[StreamId], // ALL streams that were read
-        context: &ExecutionContext,
-    ) -> Vec<StreamEvents<ES::Event>>
+    ) -> HashMap<StreamId, Vec<C::Event>>
     where
         C: Command,
-        ES::Event: From<C::Event>,
     {
-        use crate::metadata::{CorrelationId, UserId};
-
-        // Group events by stream for writing
         let mut streams_with_writes: HashMap<StreamId, Vec<C::Event>> = HashMap::with_capacity(4);
         for (stream_id, event) in events_to_write {
             streams_with_writes
@@ -1193,13 +1190,44 @@ where
                 .or_insert_with(|| Vec::with_capacity(1))
                 .push(event);
         }
+        streams_with_writes
+    }
 
-        let mut stream_events =
-            Vec::with_capacity(all_read_streams.len().max(streams_with_writes.len()));
+    /// Creates event metadata from execution context.
+    fn create_event_metadata(
+        context: &ExecutionContext,
+    ) -> crate::metadata::EventMetadata {
+        use crate::metadata::{CorrelationId, UserId};
 
-        // Process streams that have writes (same as before)
+        let correlation_id = uuid::Uuid::parse_str(&context.correlation_id)
+            .ok()
+            .and_then(|uuid| CorrelationId::try_new(uuid).ok())
+            .unwrap_or_default();
+
+        let user_id = context
+            .user_id
+            .as_ref()
+            .and_then(|uid| UserId::try_new(uid.clone()).ok());
+
+        crate::metadata::EventMetadata::new()
+            .with_correlation_id(correlation_id)
+            .with_user_id(user_id)
+    }
+
+    /// Processes streams that have events to write.
+    fn process_write_streams<C>(
+        streams_with_writes: HashMap<StreamId, Vec<C::Event>>,
+        prep_context: &StreamEventPreparationContext<ES::Event>,
+    ) -> Vec<StreamEvents<ES::Event>>
+    where
+        C: Command,
+        ES::Event: From<C::Event>,
+    {
+        let mut stream_events = Vec::with_capacity(streams_with_writes.len());
+        let metadata = Self::create_event_metadata(prep_context.execution_context);
+
         for (stream_id, events) in streams_with_writes {
-            let current_version = stream_data
+            let current_version = prep_context.stream_data
                 .stream_version(&stream_id)
                 .unwrap_or_else(EventVersion::initial);
             let expected_version = if current_version == EventVersion::initial() {
@@ -1213,22 +1241,7 @@ where
                 .into_iter()
                 .map(|event| {
                     let event_id = EventId::new();
-
-                    let correlation_id = uuid::Uuid::parse_str(&context.correlation_id)
-                        .ok()
-                        .and_then(|uuid| CorrelationId::try_new(uuid).ok())
-                        .unwrap_or_default();
-
-                    let user_id = context
-                        .user_id
-                        .as_ref()
-                        .and_then(|uid| UserId::try_new(uid.clone()).ok());
-
-                    let metadata = crate::metadata::EventMetadata::new()
-                        .with_correlation_id(correlation_id)
-                        .with_user_id(user_id);
-
-                    EventToWrite::with_metadata(event_id, ES::Event::from(event), metadata)
+                    EventToWrite::with_metadata(event_id, ES::Event::from(event), metadata.clone())
                 })
                 .collect();
 
@@ -1239,10 +1252,18 @@ where
             ));
         }
 
-        // CRITICAL: Also add version checks for streams that were READ but NOT written to
-        // This ensures complete concurrency control - any change to ANY read stream will
-        // cause the command to be retried with fresh data
-        for read_stream_id in all_read_streams {
+        stream_events
+    }
+
+    /// Adds version checks for read-only streams to ensure complete concurrency control.
+    fn add_read_only_stream_checks(
+        mut stream_events: Vec<StreamEvents<ES::Event>>,
+        prep_context: &StreamEventPreparationContext<ES::Event>,
+    ) -> Vec<StreamEvents<ES::Event>> {
+        // Reserve capacity for potential read-only streams
+        stream_events.reserve(prep_context.all_read_streams.len());
+
+        for read_stream_id in prep_context.all_read_streams {
             // Skip streams we're already writing to (handled above)
             if stream_events
                 .iter()
@@ -1252,7 +1273,7 @@ where
             }
 
             // Add a version check for this read-only stream
-            let current_version = stream_data
+            let current_version = prep_context.stream_data
                 .stream_version(read_stream_id)
                 .unwrap_or_else(EventVersion::initial);
             let expected_version = if current_version == EventVersion::initial() {
@@ -1270,6 +1291,34 @@ where
         }
 
         stream_events
+    }
+
+    /// Prepares stream events with COMPLETE concurrency control.
+    ///
+    /// This method ensures that ALL streams that were read are checked for version conflicts,
+    /// not just the streams being written to. This prevents commands from making decisions
+    /// based on stale data from ANY of the streams they read.
+    fn prepare_stream_events_with_complete_concurrency_control<C>(
+        events_to_write: Vec<(StreamId, C::Event)>,
+        stream_data: &crate::event_store::StreamData<ES::Event>,
+        all_read_streams: &[StreamId], // ALL streams that were read
+        context: &ExecutionContext,
+    ) -> Vec<StreamEvents<ES::Event>>
+    where
+        C: Command,
+        ES::Event: From<C::Event>,
+    {
+        // Create preparation context for extracted methods
+        let prep_context = StreamEventPreparationContext {
+            stream_data,
+            all_read_streams,
+            execution_context: context,
+        };
+
+        // Extract and refactor into focused, single-responsibility methods
+        let streams_with_writes = Self::group_events_by_stream::<C>(events_to_write);
+        let stream_events = Self::process_write_streams::<C>(streams_with_writes, &prep_context);
+        Self::add_read_only_stream_checks(stream_events, &prep_context)
     }
 
     /// Internal method that executes a command with automatic retry logic.
