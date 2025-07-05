@@ -183,6 +183,7 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Fixed regex pattern to properly capture subsections in checklists
 - [x] Added better error handling for draft conversion API calls
 - [x] Updated workflow message to acknowledge GitHub API limitation on draft conversion
+- [x] Implemented GraphQL API for draft conversion as alternative to REST API limitation
 
 ## Pull Request Workflow
 
