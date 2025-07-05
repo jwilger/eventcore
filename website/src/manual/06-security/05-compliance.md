@@ -2,6 +2,12 @@
 
 EventCore's immutable audit trail helps with compliance, but you must implement specific controls.
 
+> **📋 Comprehensive Compliance Checklist**
+> 
+> For a detailed compliance checklist covering OWASP, NIST, SOC2, PCI DSS, GDPR, and HIPAA requirements, see our [COMPLIANCE_CHECKLIST.md](https://github.com/jwilger/eventcore/blob/main/COMPLIANCE_CHECKLIST.md).
+> 
+> This checklist provides actionable items for achieving compliance with major security frameworks and regulations.
+
 ## GDPR Compliance
 
 ### Data Protection Principles

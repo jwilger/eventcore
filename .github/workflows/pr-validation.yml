@@ -1,0 +1,91 @@
+name: PR Validation
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  validate-pr-description:
+    name: Validate PR Description
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR Description
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = pr.body || '';
+            
+            // Required sections from our template
+            const requiredSections = [
+              '## Description',
+              '## Type of Change',
+              '## Testing',
+              '## Security Checklist',
+              '## Code Quality',
+              '## Reviewer Checklist'
+            ];
+            
+            const missingSections = requiredSections.filter(section => !body.includes(section));
+            
+            if (missingSections.length > 0) {
+              const errorMessage = `
+              ❌ **PR Description Validation Failed**
+              
+              Your PR description is missing required sections from the template:
+              ${missingSections.map(s => `- ${s}`).join('\n')}
+              
+              Please update your PR description to include all required sections from the [PR template](.github/pull_request_template.md).
+              
+              **Tip**: You can edit your PR description by clicking the "..." menu in the top right of the PR description and selecting "Edit".
+              `;
+              
+              core.setFailed(errorMessage);
+              
+              // Also post a comment for visibility
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: errorMessage
+              });
+              return;
+            }
+            
+            // Check for empty checkboxes in required sections
+            const checkboxPattern = /- \[ \]/g;
+            const securitySection = body.match(/## Security Checklist[\s\S]*?(?=##|$)/);
+            const codeQualitySection = body.match(/## Code Quality[\s\S]*?(?=##|$)/);
+            
+            let emptyRequired = [];
+            
+            if (securitySection && securitySection[0].match(checkboxPattern)) {
+              emptyRequired.push('Security Checklist has unchecked items');
+            }
+            
+            if (codeQualitySection && codeQualitySection[0].match(checkboxPattern)) {
+              emptyRequired.push('Code Quality has unchecked items');
+            }
+            
+            if (emptyRequired.length > 0) {
+              const warningMessage = `
+              ⚠️ **PR Checklist Incomplete**
+              
+              Please complete all required checklists:
+              ${emptyRequired.map(s => `- ${s}`).join('\n')}
+              
+              Mark items as completed (\`[x]\`) or not applicable (\`[N/A]\`).
+              `;
+              
+              core.setFailed(warningMessage);
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: warningMessage
+              });
+              return;
+            }
+            
+            console.log('✅ PR description follows template');
