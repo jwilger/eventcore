@@ -46,13 +46,13 @@
 //!     Some("High-performance gaming laptop".to_string()),
 //! );
 //!
-//! let add_product_input = AddProductInput::new(
+//! let add_product_command = AddProductCommand::new(
 //!     product,
 //!     Quantity::new(10)?,
 //!     catalog_stream.clone(),
 //! );
 //!
-//! executor.execute(&AddProductCommand, add_product_input, ExecutionOptions::default()).await?;
+//! executor.execute(add_product_command, ExecutionOptions::default()).await?;
 //!
 //! // Create an order
 //! let order_id = OrderId::generate();
@@ -63,7 +63,7 @@
 //! );
 //!
 //! let create_order = CreateOrderCommand::new(order_id.clone(), customer);
-//! executor.execute(&create_order, create_order.clone(), ExecutionOptions::default()).await?;
+//! executor.execute(create_order, ExecutionOptions::default()).await?;
 //!
 //! // Add item to order
 //! let item = OrderItem::new(
@@ -72,12 +72,12 @@
 //!     Money::from_cents(99999)?,
 //! );
 //!
-//! let add_item_input = AddItemToOrderInput::new(order_id.clone(), item, catalog_stream.clone());
-//! executor.execute(&AddItemToOrderCommand, add_item_input, ExecutionOptions::default()).await?;
+//! let add_item_command = AddItemToOrderCommand::new(order_id.clone(), item, catalog_stream.clone());
+//! executor.execute(add_item_command, ExecutionOptions::default()).await?;
 //!
 //! // Place the order
 //! let place_order = PlaceOrderCommand::new(order_id, catalog_stream);
-//! executor.execute(&place_order, place_order.clone(), ExecutionOptions::default()).await?;
+//! executor.execute(place_order, ExecutionOptions::default()).await?;
 //! # Ok(())
 //! # }
 //! ```

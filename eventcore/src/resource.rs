@@ -62,19 +62,62 @@ pub type ResourceResult<T> = Result<T, ResourceError>;
 /// * `S` - The current state of the resource (phantom type)
 ///
 /// # Example
-/// ```
+/// ```rust,no_run
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// use eventcore::resource::{Resource, states, ResourceManager};
+/// use std::sync::Arc;
+/// use sqlx::PgPool;
 ///
-/// // Resource must be acquired before use
-/// let resource = ResourceManager::acquire_database_connection().await?;
+/// // Example with database pool resource
+/// #[cfg(feature = "postgres")]
+/// {
+///     use eventcore::resource::database::{DatabaseResourceManager, DatabasePool};
+///     
+///     // Create a database pool (would come from your app setup)
+///     let pool = Arc::new(PgPool::connect("postgres://localhost/mydb").await?);
+///     let manager = DatabaseResourceManager::new(pool);
+///     
+///     // Acquire a database pool resource
+///     let db_resource: DatabasePool = manager.acquire_pool().await?;
+///     
+///     // Use the resource - it's automatically in the Acquired state
+///     let result = db_resource.execute_query("SELECT 1").await?;
+///     
+///     // Resource is automatically released when dropped
+///     // Or can be explicitly released:
+///     let _released = db_resource.release()?;
+/// }
 ///
-/// // Use the resource (only possible when acquired)
-/// let result = resource.execute_query("SELECT 1").await?;
+/// // Example with a custom resource type
+/// struct MyResource {
+///     data: String,
+/// }
 ///
-/// // Resource is automatically released when dropped
-/// // Or can be explicitly released:
-/// let released = resource.release().await?;
-/// // released resource cannot be used anymore
+/// // Implement ResourceManager for your type
+/// struct MyResourceManager;
+///
+/// #[async_trait::async_trait]
+/// impl ResourceManager<MyResource> for MyResourceManager {
+///     async fn acquire() -> Result<Resource<MyResource, states::Acquired>, eventcore::resource::ResourceError> {
+///         // In practice, you'd acquire from a pool or create the resource
+///         let resource = Self::create_initializing(MyResource { data: "example".to_string() });
+///         Ok(resource.mark_acquired())
+///     }
+/// }
+///
+/// // Use the resource manager to acquire a resource
+/// let resource = MyResourceManager::acquire().await?;
+///
+/// // Access the inner data (only possible in Acquired state)
+/// let data = resource.get();
+/// println!("Resource data: {}", data.data);
+///
+/// // Transition to released state
+/// let _released: Resource<MyResource, states::Released> = resource.release()?;
+/// // released resource cannot be used anymore (compile-time guarantee)
+///
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug)]
 pub struct Resource<T, S> {
