@@ -35,7 +35,7 @@ futures = { workspace = true }
 proptest = { workspace = true, optional = true }
 miette = { version = "7.6.0", features = ["fancy"] }
 rmp-serde = "1.3.0"
-bincode = "1.3.3"
+bincode = { version = "2.0.1", features = ["serde"] }
 
 # Database support for resource management
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"], optional = true }
