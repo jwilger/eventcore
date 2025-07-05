@@ -97,7 +97,10 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 
 ### Refactoring Process Rules
 
-**IMPORTANT**: Each refactoring task must be completed in its own PR, with PRs chained off each other. This allows continuous work without waiting for human review.
+**IMPORTANT**: Each refactoring task must be completed in its own PR, with PRs chained off each other. This allows continuous work without waiting for human review. To prevent drift and handle merge conflicts effectively:
+- Regularly sync feature branches with the main branch to incorporate the latest changes.
+- Rebase feature branches onto the main branch before creating new PRs to ensure compatibility.
+- Resolve merge conflicts promptly and verify that all integration tests pass after resolving conflicts.
 
 1. **Start with executor.rs refactoring** - This is the most critical
 2. **Create feature branch for each refactoring** - Use descriptive names like `refactor-executor-extract-pipeline`
