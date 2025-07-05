@@ -314,7 +314,7 @@ jobs:
           find website/book -name "*.html" -type f -exec sed -i '/<\/body>/i <script src="/eventcore/version.js"></script>' {} \;
       
       - name: Setup Pages
-        uses: actions/configure-pages@v4
+        uses: actions/configure-pages@v5
       
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
