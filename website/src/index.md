@@ -136,7 +136,6 @@ EventCore excels in domains where business operations naturally span multiple en
 Join our growing community of developers building event-sourced systems:
 
 - 📖 [Comprehensive Documentation](./manual/01-introduction/01-what-is-eventcore.html)
-- 💬 [Discord Community](https://discord.gg/eventcore)
 - 🐛 [Report Issues](https://github.com/jwilger/eventcore/issues)
 - 🤝 [Contributing Guide](./contributing.html)
 

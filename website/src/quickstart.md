@@ -231,6 +231,5 @@ Check out these complete examples in the repository:
 ## Getting Help
 
 - 📖 [Full Documentation](./manual/01-introduction/01-what-is-eventcore.html)
-- 💬 [Discord Community](https://discord.gg/eventcore)
 - 🐛 [Report Issues](https://github.com/jwilger/eventcore/issues)
 - 📚 [API Reference](./api/eventcore/index.html)
