@@ -186,6 +186,7 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Implemented GraphQL API for draft conversion as alternative to REST API limitation
 - [x] Set up workflow to use PAT (PR_DRAFT_PAT secret) for draft conversion capability
 - [x] Removed notification sound from CLAUDE.md and PLANNING.md per user request
+- [x] Updated PR validation workflow to skip Dependabot PRs
 
 ## Pull Request Workflow
 

@@ -39,6 +39,12 @@ jobs:
               return;
             }
             
+            // Skip validation for Dependabot PRs
+            if (pr.user.login === 'dependabot[bot]') {
+              console.log('✅ Skipping validation for Dependabot PR');
+              return;
+            }
+            
             // Required sections from our template
             const requiredSections = [
               '## Description',
