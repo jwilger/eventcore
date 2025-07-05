@@ -4,7 +4,7 @@ Thank you for your interest in contributing to EventCore! This document provides
 
 ## Code of Conduct
 
-By participating in this project, you agree to abide by our [Code of Conduct](https://github.com/jwilger/eventcore/blob/main/CODE_OF_CONDUCT.md).
+By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Getting Started
 
@@ -173,7 +173,7 @@ Use clear, descriptive titles:
 
 ## Security
 
-Please review our [Security Policy](https://github.com/jwilger/eventcore/blob/main/SECURITY.md) for guidelines on:
+Please review our [Security Policy](SECURITY.md) for guidelines on:
 - Reporting vulnerabilities
 - Security best practices for contributions
 - Dependency management

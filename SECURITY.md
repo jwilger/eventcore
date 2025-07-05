@@ -84,6 +84,101 @@ When contributing to EventCore, please follow these security guidelines:
 - **Commit Signing**: Contributors are encouraged to sign commits with GPG
 - **Branch Protection**: Main branch requires PR reviews and passing CI
 
+## Security Considerations for Application Developers
+
+When building applications with EventCore, follow these security best practices:
+
+### 1. Event Payload Security
+
+- **Never store sensitive data unencrypted** in events (passwords, API keys, SSNs, etc.)
+- **Use encryption** for PII and sensitive business data before storing in events
+- **Consider data retention** - events are immutable and permanent by design
+
+```rust
+// Bad: Storing sensitive data directly
+#[derive(Serialize, Deserialize)]
+struct UserRegistered {
+    email: String,
+    password: String,  // Never do this!
+}
+
+// Good: Store only necessary data
+#[derive(Serialize, Deserialize)]
+struct UserRegistered {
+    user_id: UserId,
+    email_hash: String,  // Store hash for lookups
+    registered_at: Timestamp,
+}
+```
+
+### 2. Stream Access Control
+
+EventCore doesn't provide built-in authorization. Implement access control at the application layer:
+
+```rust
+// Implement authorization before command execution
+async fn handle_command(cmd: Command, user: AuthenticatedUser) -> Result<()> {
+    // Check user permissions for the affected streams
+    if !user.can_access_stream(&cmd.stream_id()) {
+        return Err(CommandError::Unauthorized);
+    }
+    
+    executor.execute(cmd).await
+}
+```
+
+### 3. Input Validation
+
+Always validate and sanitize input at application boundaries:
+
+```rust
+// Use nutype for domain validation
+#[nutype(
+    sanitize(trim),
+    validate(regex = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"),
+    derive(Debug, Clone, Serialize, Deserialize)
+)]
+struct Email(String);
+
+// Validate before creating commands
+let email = Email::try_new(untrusted_input)
+    .map_err(|_| "Invalid email format")?;
+```
+
+### 4. Rate Limiting and Resource Protection
+
+Protect against resource exhaustion:
+
+```rust
+// Configure executor with appropriate limits
+let executor = CommandExecutor::builder(event_store)
+    .with_timeout(Duration::from_secs(30))
+    .with_max_retries(3)
+    .build();
+
+// Implement rate limiting at API layer
+rate_limiter.check_rate_limit(user_id)?;
+```
+
+### 5. Projection Security
+
+- **Sanitize data** before displaying in read models
+- **Implement row-level security** in projections
+- **Validate projection state** before exposing to users
+
+### 6. Monitoring and Alerting
+
+- **Log security events** (failed auth, suspicious patterns)
+- **Monitor for anomalies** in event patterns
+- **Alert on security violations** promptly
+
+### 7. Compliance Considerations
+
+- **GDPR**: Implement event encryption and consider pseudonymization
+- **PCI DSS**: Never store credit card details in events
+- **HIPAA**: Encrypt all health-related data
+- **Audit Requirements**: Leverage event sourcing's natural audit trail
+
 ## Security Features in EventCore
 
 EventCore includes several security-focused design decisions:
