@@ -1,0 +1,114 @@
+name: Deploy Website
+
+on:
+  # Deploy on new releases (not pre-releases)
+  release:
+    types: [published]
+  # Allow manual deployment
+  workflow_dispatch:
+  # Deploy on pushes to main (for testing, remove in production)
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mdBook
+        run: |
+          MDBOOK_VERSION="0.4.40"
+          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz | tar -xz
+          sudo mv mdbook /usr/local/bin/
+
+      - name: Build API documentation
+        run: |
+          cargo doc --no-deps --workspace
+          # Copy to website output
+          mkdir -p website/target/website/api
+          cp -r target/doc/* website/target/website/api/
+
+      - name: Sync documentation
+        run: |
+          cd website
+          chmod +x sync-docs.sh
+          ./sync-docs.sh
+
+      - name: Build website
+        run: |
+          cd website
+          mdbook build
+
+      - name: Add version information
+        if: github.event_name == 'release'
+        run: |
+          # Add release version to the website
+          VERSION="${{ github.event.release.tag_name }}"
+          RELEASE_URL="${{ github.event.release.html_url }}"
+          
+          # Create a version banner
+          cat > website/target/website/version.js << EOF
+          document.addEventListener('DOMContentLoaded', function() {
+            const banner = document.createElement('div');
+            banner.className = 'version-banner';
+            banner.innerHTML = \`
+              <span>Version: <a href="${RELEASE_URL}">${VERSION}</a></span>
+            \`;
+            document.body.insertBefore(banner, document.body.firstChild);
+          });
+          EOF
+          
+          # Add CSS for version banner
+          cat >> website/target/website/theme/css/custom.css << EOF
+          
+          .version-banner {
+            background: var(--eventcore-orange);
+            color: white;
+            padding: 0.5rem 1rem;
+            text-align: center;
+            font-size: 0.9rem;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          }
+          
+          .version-banner a {
+            color: white;
+            font-weight: bold;
+            text-decoration: underline;
+          }
+          EOF
+          
+          # Include version script in all HTML files
+          find website/target/website -name "*.html" -type f -exec sed -i '/<\/body>/i <script src="/eventcore/version.js"></script>' {} \;
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/target/website
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
