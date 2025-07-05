@@ -193,7 +193,17 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
         continue-on-error: true
       
+      - name: Cache cargo-llvm-cov
+        uses: actions/cache@v4
+        id: cache-cargo-llvm-cov
+        with:
+          path: ~/.cargo/bin/cargo-llvm-cov
+          key: cargo-llvm-cov-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-llvm-cov-${{ runner.os }}-
+      
       - name: Install cargo-llvm-cov
+        if: steps.cache-cargo-llvm-cov.outputs.cache-hit != 'true'
         uses: taiki-e/install-action@cargo-llvm-cov
       
       - name: Generate coverage report
