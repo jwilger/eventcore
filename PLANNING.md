@@ -35,7 +35,91 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 - Complete subscription system with position tracking
 - Dead code cleanup and CI fixes
 
-## Next Phase: Post-Review Improvements
+## HIGHEST PRIORITY: Codebase Refactoring
+
+**Critical Issue**: The codebase contains several very long functions and files that are difficult to understand, maintain, and test. This creates barriers for both human developers and LLM assistance.
+
+**Refactoring Strategy**: Each refactoring will be done in its own PR, with PRs chained off each other to enable continuous work without waiting for human review.
+
+### Critical Refactoring Tasks (Must Complete All)
+
+#### 1. Refactor executor.rs (2,956 lines) - **CRITICAL**
+**Problem**: Massive single file containing multiple distinct responsibilities
+**Tasks**:
+- [ ] Extract `execute_once` function (157 lines) - Split into pipeline stages
+- [ ] Extract `execute_type_safe` function (139 lines) - Share common patterns
+- [ ] Extract `prepare_stream_events_with_complete_concurrency_control` function (140 lines) - Separate validation logic
+- [ ] Split executor.rs into modules:
+  - [ ] `executor/core.rs` - Core execution logic
+  - [ ] `executor/retry.rs` - Retry and circuit breaker logic
+  - [ ] `executor/stream_discovery.rs` - Stream discovery iteration logic
+  - [ ] `executor/validation.rs` - Command validation
+  - [ ] `executor/context.rs` - Execution context management
+
+#### 2. Refactor cqrs/rebuild.rs::rebuild function (189 lines) - **HIGH**
+**Problem**: Complex rebuild logic with multiple responsibilities
+**Tasks**:
+- [ ] Extract event processing pipeline
+- [ ] Extract checkpoint management
+- [ ] Extract error handling patterns
+- [ ] Create separate functions for each rebuild phase
+
+#### 3. Refactor resource.rs (1,415 lines) - **HIGH**
+**Problem**: Single file handling all resource lifecycle patterns
+**Tasks**:
+- [ ] Extract phantom type definitions to `resource/types.rs`
+- [ ] Move concrete implementations to `resource/implementations.rs`
+- [ ] Create `resource/lifecycle.rs` for acquisition/release patterns
+- [ ] Create `resource/pool.rs` for resource pooling
+- [ ] Create `resource/monitor.rs` for resource monitoring
+
+#### 4. Refactor errors.rs Clone implementation (243 lines) - **MEDIUM**
+**Problem**: Massive manual Clone implementation for error types
+**Tasks**:
+- [ ] Examine if #[derive(Clone)] can be used instead
+- [ ] Split error types into categories (validation, concurrency, infrastructure)
+- [ ] Reduce complexity of error type hierarchy
+
+#### 5. Refactor projection_runner.rs (1,318 lines) - **MEDIUM**
+**Problem**: Complex projection processing logic
+**Tasks**:
+- [ ] Extract event processing pipeline
+- [ ] Separate retry logic into `projection/retry.rs`
+- [ ] Move monitoring/metrics to `projection/monitoring.rs`
+- [ ] Extract task management patterns
+
+#### 6. Refactor serialization/evolution.rs (1,377 lines) - **MEDIUM**
+**Problem**: Schema evolution logic is complex and monolithic
+**Tasks**:
+- [ ] Split migration logic into separate handlers
+- [ ] Extract version compatibility checking
+- [ ] Create separate modules for different evolution strategies
+
+### Refactoring Process Rules
+
+**IMPORTANT**: Each refactoring task must be completed in its own PR, with PRs chained off each other. This allows continuous work without waiting for human review. To prevent drift and handle merge conflicts effectively:
+- Regularly sync feature branches with the main branch to incorporate the latest changes.
+- Rebase feature branches onto the main branch before creating new PRs to ensure compatibility.
+- Resolve merge conflicts promptly and verify that all integration tests pass after resolving conflicts.
+
+1. **Start with executor.rs refactoring** - This is the most critical
+2. **Create feature branch for each refactoring** - Use descriptive names like `refactor-executor-extract-pipeline`
+3. **Chain PRs** - Each subsequent PR branches off the previous one
+4. **Maintain existing public APIs** - No breaking changes during refactoring
+5. **Ensure comprehensive tests** - All integration tests must pass
+6. **Document refactoring decisions** - Each PR should explain the refactoring rationale
+7. **Continue until all tasks complete** - Work through the entire list systematically
+
+### Testing Strategy for Refactoring
+
+1. **Before refactoring**: Ensure comprehensive integration tests exist
+2. **During refactoring**: Maintain existing public APIs
+3. **After refactoring**: Verify no performance regressions
+4. **Property-based tests**: Ensure refactored code maintains invariants
+
+**DO NOT PROCEED WITH POST-REVIEW IMPROVEMENTS** until all refactoring tasks are complete.
+
+## Next Phase: Post-Review Improvements (ON HOLD)
 
 Based on the comprehensive expert review (see REVIEW.md), the following priority improvements have been identified:
 
