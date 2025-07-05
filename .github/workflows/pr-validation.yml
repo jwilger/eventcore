@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, edited, synchronize]
 
+permissions:
+  pull-requests: write
+  issues: write
+
 jobs:
   validate-pr-description:
     name: Validate PR Description
