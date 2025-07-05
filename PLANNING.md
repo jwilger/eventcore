@@ -61,7 +61,8 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 **Tasks**:
 - [x] Extract progress monitoring loop (wait_for_rebuild_completion method)
 - [x] Extract checkpoint management (clear_existing_state method)
-- [ ] Extract event processing pipeline
+- [x] Extract subscription options creation (create_subscription_options method)
+- [ ] Extract processor creation and subscription setup
 - [ ] Extract error handling patterns
 - [ ] Create separate functions for each rebuild phase
 
