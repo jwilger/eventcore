@@ -44,18 +44,25 @@
   - [Distributed Systems](./manual/05-advanced-topics/04-distributed-systems.md)
   - [Performance Optimization](./manual/05-advanced-topics/05-performance-optimization.md)
 
-- [Operations](./manual/06-operations/README.md)
-  - [Deployment Strategies](./manual/06-operations/01-deployment-strategies.md)
-  - [Monitoring & Metrics](./manual/06-operations/02-monitoring-metrics.md)
-  - [Backup & Recovery](./manual/06-operations/03-backup-recovery.md)
-  - [Troubleshooting](./manual/06-operations/04-troubleshooting.md)
-  - [Production Checklist](./manual/06-operations/05-production-checklist.md)
+- [Security](./manual/06-security/README.md)
+  - [Overview](./manual/06-security/01-overview.md)
+  - [Authentication & Authorization](./manual/06-security/02-authentication.md)
+  - [Data Encryption](./manual/06-security/03-encryption.md)
+  - [Input Validation](./manual/06-security/04-validation.md)
+  - [Compliance](./manual/06-security/05-compliance.md)
 
-- [Reference](./manual/07-reference/README.md)
-  - [API Documentation](./manual/07-reference/01-api-documentation.md)
-  - [Configuration Reference](./manual/07-reference/02-configuration-reference.md)
-  - [Error Reference](./manual/07-reference/03-error-reference.md)
-  - [Glossary](./manual/07-reference/04-glossary.md)
+- [Operations](./manual/07-operations/README.md)
+  - [Deployment Strategies](./manual/07-operations/01-deployment-strategies.md)
+  - [Monitoring & Metrics](./manual/07-operations/02-monitoring-metrics.md)
+  - [Backup & Recovery](./manual/07-operations/03-backup-recovery.md)
+  - [Troubleshooting](./manual/07-operations/04-troubleshooting.md)
+  - [Production Checklist](./manual/07-operations/05-production-checklist.md)
+
+- [Reference](./manual/08-reference/README.md)
+  - [API Documentation](./manual/08-reference/01-api-documentation.md)
+  - [Configuration Reference](./manual/08-reference/02-configuration-reference.md)
+  - [Error Reference](./manual/08-reference/03-error-reference.md)
+  - [Glossary](./manual/08-reference/04-glossary.md)
 
 # Examples
 

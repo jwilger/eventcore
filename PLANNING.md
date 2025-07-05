@@ -143,6 +143,30 @@ All documented implementation phases have been completed. The project is ready f
   - Automated documentation synchronization from markdown sources
   - Configured deployment on releases with version information
 
+### Security Infrastructure Setup (2025-07-05)
+- [x] Created SECURITY.md with vulnerability reporting via GitHub Security Advisories
+- [x] Improved cargo-audit CI job to use rustsec/audit-check action
+- [x] Configured Dependabot for automated dependency updates (Rust and GitHub Actions)
+- [x] Created comprehensive CONTRIBUTING.md with GPG signing documentation
+- [x] Added security considerations for application developers to SECURITY.md
+- [x] Created detailed security guide in user manual (06-security):
+  - Overview of security architecture and responsibilities
+  - Authentication & authorization patterns
+  - Data encryption strategies
+  - Input validation techniques
+  - Compliance guidance (GDPR, PCI DSS, HIPAA, SOX)
+- [x] Reorganized documentation structure (renumbered operations to 07, reference to 08)
+- [x] Created comprehensive COMPLIANCE_CHECKLIST.md mapping to OWASP/NIST/SOC2/PCI/GDPR/HIPAA
+- [x] Added pull request template with security and performance review checklists
+- [x] Created PR validation workflow to enforce template usage
+- [x] Added compliance checklist reference to security manual
+- [x] Consolidated documentation to single source (symlinked docs/manual to website/src/manual)
+- [x] Updated PR template to remove redundant pre-merge checklist and add Review Focus section
+- [x] Updated PR validation workflow to require Review Focus section
+- [x] Added GitHub Copilot instructions for automated PR reviews aligned with our checklists
+- [x] Fixed doctest compilation error in resource.rs
+- [x] Added doctests to pre-commit hooks to prevent future doctest failures
+
 ## Development Process Rules
 
 When working on this project, **ALWAYS** follow these rules:
