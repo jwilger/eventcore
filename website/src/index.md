@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="static/logo.png" alt="EventCore Logo" width="300">
+  <img src="logo.png" alt="EventCore Logo" width="300">
   
   # EventCore
   
@@ -7,7 +7,7 @@
   
   [![Crates.io](https://img.shields.io/crates/v/eventcore.svg)](https://crates.io/crates/eventcore)
   [![Documentation](https://docs.rs/eventcore/badge.svg)](https://docs.rs/eventcore)
-  [![License](https://img.shields.io/crates/l/eventcore.svg)](https://github.com/jwilger/eventcore/blob/main/LICENSE)
+  [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jwilger/eventcore/blob/main/LICENSE)
   [![Build Status](https://github.com/jwilger/eventcore/workflows/CI/badge.svg)](https://github.com/jwilger/eventcore/actions)
 </div>
 

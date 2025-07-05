@@ -53,4 +53,8 @@ cobertura.xml
 
 # Nix result symlinks
 result
-result-*website/book/
+result-*
+
+# Website build artifacts
+website/book/
+website/src/logo.png

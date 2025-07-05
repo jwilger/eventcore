@@ -134,4 +134,9 @@ cargo run --example sagas
 [View Source Code](https://github.com/jwilger/eventcore/tree/main/eventcore-examples/src/sagas)
 EOF
 
+# Copy static files to src directory for mdBook
+echo "Copying static files..."
+cp static/logo.png src/
+cp static/.nojekyll src/
+
 echo "Documentation sync complete!"

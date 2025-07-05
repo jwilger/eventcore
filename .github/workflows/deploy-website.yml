@@ -65,6 +65,8 @@ jobs:
         run: |
           cd website
           mdbook build
+          # Copy .nojekyll to prevent Jekyll processing
+          cp static/.nojekyll book/
 
 
       - name: Upload artifact
