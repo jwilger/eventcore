@@ -52,7 +52,7 @@
   - [Production Checklist](./manual/06-operations/05-production-checklist.md)
 
 - [Reference](./manual/07-reference/README.md)
-  - [API Documentation](./api/index.html)
+  - [API Documentation](./manual/07-reference/01-api-documentation.md)
   - [Configuration Reference](./manual/07-reference/02-configuration-reference.md)
   - [Error Reference](./manual/07-reference/03-error-reference.md)
   - [Glossary](./manual/07-reference/04-glossary.md)

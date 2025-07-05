@@ -4,7 +4,18 @@ set -e
 # Sync manual documentation
 echo "Syncing manual documentation..."
 mkdir -p src/manual
+
+# Save the API documentation file (it has custom content)
+if [ -f "src/manual/07-reference/01-api-documentation.md" ]; then
+    cp src/manual/07-reference/01-api-documentation.md /tmp/api-doc-backup.md
+fi
+
 cp -r ../docs/manual/* src/manual/
+
+# Restore the API documentation file
+if [ -f "/tmp/api-doc-backup.md" ]; then
+    cp /tmp/api-doc-backup.md src/manual/07-reference/01-api-documentation.md
+fi
 
 # Copy other important files
 echo "Copying additional documentation..."
