@@ -280,6 +280,36 @@ where
         }
     }
 
+    /// Clears existing state based on the rebuild strategy.
+    async fn clear_existing_state(&self, strategy: &RebuildStrategy) -> CqrsResult<()> {
+        match strategy {
+            RebuildStrategy::FromBeginning => {
+                info!("Clearing all read models and checkpoints");
+                self.read_model_store
+                    .clear()
+                    .await
+                    .map_err(|e| CqrsError::rebuild(format!("Failed to clear read models: {e}")))?;
+                self.checkpoint_store
+                    .delete(&self.projection.config().name)
+                    .await?;
+            }
+            RebuildStrategy::FromCheckpoint(checkpoint) => {
+                info!("Rebuilding from checkpoint: {:?}", checkpoint);
+                // In a real implementation, we'd selectively clear models
+                // that would be affected by events after the checkpoint
+            }
+            RebuildStrategy::FromEvent(event_id) => {
+                info!("Rebuilding from event: {:?}", event_id);
+                // Similar to FromCheckpoint
+            }
+            RebuildStrategy::SpecificStreams(_) => {
+                info!("Rebuilding specific streams");
+                // Would clear only models affected by specified streams
+            }
+        }
+        Ok(())
+    }
+
     /// Waits for rebuild completion by monitoring progress and checking cancellation.
     async fn wait_for_rebuild_completion(
         &self,
@@ -335,31 +365,7 @@ where
         self.is_cancelled.store(false, Ordering::SeqCst);
 
         // Clear existing state based on strategy
-        match &strategy {
-            RebuildStrategy::FromBeginning => {
-                info!("Clearing all read models and checkpoints");
-                self.read_model_store
-                    .clear()
-                    .await
-                    .map_err(|e| CqrsError::rebuild(format!("Failed to clear read models: {e}")))?;
-                self.checkpoint_store
-                    .delete(&self.projection.config().name)
-                    .await?;
-            }
-            RebuildStrategy::FromCheckpoint(checkpoint) => {
-                info!("Rebuilding from checkpoint: {:?}", checkpoint);
-                // In a real implementation, we'd selectively clear models
-                // that would be affected by events after the checkpoint
-            }
-            RebuildStrategy::FromEvent(event_id) => {
-                info!("Rebuilding from event: {:?}", event_id);
-                // Similar to FromCheckpoint
-            }
-            RebuildStrategy::SpecificStreams(_) => {
-                info!("Rebuilding specific streams");
-                // Would clear only models affected by specified streams
-            }
-        }
+        self.clear_existing_state(&strategy).await?;
 
         // Create subscription options based on rebuild strategy
         let subscription_options = match &strategy {

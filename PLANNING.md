@@ -60,8 +60,8 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 **Problem**: Complex rebuild logic with multiple responsibilities
 **Tasks**:
 - [x] Extract progress monitoring loop (wait_for_rebuild_completion method)
+- [x] Extract checkpoint management (clear_existing_state method)
 - [ ] Extract event processing pipeline
-- [ ] Extract checkpoint management
 - [ ] Extract error handling patterns
 - [ ] Create separate functions for each rebuild phase
 
