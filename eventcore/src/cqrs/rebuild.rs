@@ -280,6 +280,45 @@ where
         }
     }
 
+    /// Waits for rebuild completion by monitoring progress and checking cancellation.
+    async fn wait_for_rebuild_completion(
+        &self,
+        subscription: &mut Box<dyn crate::subscription::Subscription<Event = E>>,
+    ) -> CqrsResult<()> {
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            if self.is_cancelled.load(Ordering::Acquire) {
+                subscription
+                    .stop()
+                    .await
+                    .map_err(|e| CqrsError::rebuild(format!("Failed to stop subscription: {e}")))?;
+                return Err(CqrsError::rebuild("Rebuild cancelled"));
+            }
+
+            // Check if we've caught up to live position
+            // For now, we'll use a simple heuristic: if no events processed in last second
+            let current_count = self.events_processed.load(Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let new_count = self.events_processed.load(Ordering::Relaxed);
+
+            if new_count == current_count && current_count > 0 {
+                // No new events processed, we're likely caught up
+                break;
+            }
+
+            // Update progress
+            {
+                let mut progress = self.progress.write().await;
+                progress.update(
+                    self.events_processed.load(Ordering::Relaxed),
+                    self.models_updated.load(Ordering::Relaxed),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Rebuilds the projection using the specified strategy.
     #[instrument(skip(self), fields(projection = %self.projection.config().name))]
     #[allow(clippy::too_many_lines)]
@@ -382,37 +421,7 @@ where
             .map_err(|e| CqrsError::rebuild(format!("Failed to start subscription: {e}")))?;
 
         // Wait for rebuild to complete or be cancelled
-        loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-
-            if self.is_cancelled.load(Ordering::Acquire) {
-                subscription
-                    .stop()
-                    .await
-                    .map_err(|e| CqrsError::rebuild(format!("Failed to stop subscription: {e}")))?;
-                return Err(CqrsError::rebuild("Rebuild cancelled"));
-            }
-
-            // Check if we've caught up to live position
-            // For now, we'll use a simple heuristic: if no events processed in last second
-            let current_count = self.events_processed.load(Ordering::Relaxed);
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            let new_count = self.events_processed.load(Ordering::Relaxed);
-
-            if new_count == current_count && current_count > 0 {
-                // No new events processed, we're likely caught up
-                break;
-            }
-
-            // Update progress
-            {
-                let mut progress = self.progress.write().await;
-                progress.update(
-                    self.events_processed.load(Ordering::Relaxed),
-                    self.models_updated.load(Ordering::Relaxed),
-                );
-            }
-        }
+        self.wait_for_rebuild_completion(&mut subscription).await?;
 
         // Stop subscription
         subscription
