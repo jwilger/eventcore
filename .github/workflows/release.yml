@@ -45,9 +45,9 @@ jobs:
             # Get all check runs for this commit
             CHECK_RUNS=$(gh api "/repos/${{ github.repository }}/commits/$COMMIT_SHA/check-runs" --jq '.check_runs')
             
-            # Check if CI workflow exists and its status
-            CI_STATUS=$(echo "$CHECK_RUNS" | jq -r '.[] | select(.name == "Build") | .status')
-            CI_CONCLUSION=$(echo "$CHECK_RUNS" | jq -r '.[] | select(.name == "Build") | .conclusion')
+            # Check if CI workflow exists and its status (looking for Test jobs)
+            CI_STATUS=$(echo "$CHECK_RUNS" | jq -r '.[] | select(.name == "Test (stable)") | .status')
+            CI_CONCLUSION=$(echo "$CHECK_RUNS" | jq -r '.[] | select(.name == "Test (stable)") | .conclusion')
             
             if [ -z "$CI_STATUS" ]; then
               echo "CI workflow not found for this commit. Waiting..."
