@@ -47,7 +47,7 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 **Problem**: Massive single file containing multiple distinct responsibilities
 **Tasks**:
 - [x] Extract `execute_once` function (157 lines) - Split into pipeline stages
-- [ ] Extract `execute_type_safe` function (139 lines) - Share common patterns
+- [x] Extract `execute_type_safe` function (139 lines) - Share common patterns
 - [ ] Extract `prepare_stream_events_with_complete_concurrency_control` function (140 lines) - Separate validation logic
 - [ ] Split executor.rs into modules:
   - [ ] `executor/core.rs` - Core execution logic
@@ -99,6 +99,8 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 
 **IMPORTANT**: Each refactoring task must be completed in its own PR, with PRs chained off each other. This allows continuous work without waiting for human review.
 
+**CRITICAL**: Claude must continue working through ALL refactoring tasks systematically without stopping. Always include "Review @PLANNING.md to identify next refactoring task and create new todo list to continue systematic refactoring" as the FINAL item in every refactoring todo list.
+
 1. **Start with executor.rs refactoring** - This is the most critical
 2. **Create feature branch for each refactoring** - Use descriptive names like `refactor-executor-extract-pipeline`
 3. **Chain PRs** - Each subsequent PR branches off the previous one
@@ -106,6 +108,7 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 5. **Ensure comprehensive tests** - All integration tests must pass
 6. **Document refactoring decisions** - Each PR should explain the refactoring rationale
 7. **Continue until all tasks complete** - Work through the entire list systematically
+8. **Never stop between refactoring tasks** - Always move immediately to the next task
 
 ### Testing Strategy for Refactoring
 
@@ -321,6 +324,7 @@ Your todo list should ALWAYS follow this pattern:
 2. "Update @PLANNING.md to mark completed tasks" 
 3. "Make a commit" (pre-commit hooks run all checks automatically)
 4. "Push changes and update PR"
+5. **"Review @PLANNING.md to identify next refactoring task and create new todo list to continue systematic refactoring"** (FINAL ITEM for refactoring work)
 
 For PR feedback specifically:
 1. Address each piece of feedback
@@ -329,7 +333,14 @@ For PR feedback specifically:
 4. "Make a commit"
 5. "Push changes and check for new PR feedback"
 
-**Why this matters**: The todo list tool reinforces our workflow at every step, preventing process drift as context grows.
+For refactoring work specifically:
+1. Implementation tasks for current refactoring
+2. "Update @PLANNING.md to mark completed tasks"
+3. "Make a commit"
+4. "Push changes and create PR" 
+5. **"Review @PLANNING.md to identify next refactoring task and create new todo list to continue systematic refactoring"** (MANDATORY FINAL ITEM)
+
+**Why this matters**: The todo list tool reinforces our workflow at every step, preventing process drift as context grows. The final "move to next refactor" item ensures continuous progress through the entire refactoring plan without stopping.
 
 ### CI Monitoring Rules
 

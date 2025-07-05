@@ -140,6 +140,15 @@ struct CommandExecutionResult<Event> {
     additional_streams: Option<Vec<StreamId>>,
 }
 
+/// Result of type-safe command execution with two-phase stream discovery.
+#[derive(Debug)]
+struct TypeSafeExecutionResult<Event> {
+    /// Events to be written to streams.
+    stream_events: Vec<StreamEvents<Event>>,
+    /// Additional streams discovered during execution (if any).
+    additional_streams: Option<Vec<StreamId>>,
+}
+
 /// Execution options for command execution with sensible defaults.
 ///
 /// By default, commands are executed with retry logic enabled for concurrency conflicts.
@@ -967,6 +976,114 @@ where
         );
     }
 
+    /// Reads streams with circuit breaker protection only (no timeout).
+    async fn read_streams_with_circuit_breaker_only(
+        &self,
+        stream_ids: &[StreamId],
+        options: &ExecutionOptions,
+    ) -> CommandResult<crate::event_store::StreamData<ES::Event>> {
+        info!(
+            streams_count = stream_ids.len(),
+            "Starting stream discovery iteration"
+        );
+
+        self.read_streams_with_circuit_breaker(stream_ids, &ReadOptions::new(), options)
+            .await
+            .map_err(CommandError::from)
+    }
+
+    /// Executes command in type-safe scope with two-phase stream discovery.
+    async fn execute_command_in_type_safe_scope<C>(
+        &self,
+        command: &C,
+        stream_data: crate::event_store::StreamData<ES::Event>,
+        stream_ids: &[StreamId],
+        options: &ExecutionOptions,
+        stream_resolver: &mut StreamResolver,
+    ) -> CommandResult<TypeSafeExecutionResult<ES::Event>>
+    where
+        C: Command,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
+        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
+    {
+        // Create type-safe execution scope
+        let scope = typestate::ExecutionScope::<typestate::states::StreamsRead, C, ES>::new(
+            stream_data,
+            stream_ids.to_vec(),
+            options.context.clone(),
+        );
+
+        // Reconstruct state using the scope
+        let scope_with_state = scope.reconstruct_state(command);
+
+        // Check if we need additional streams before command execution
+        let pre_execution_streams = scope_with_state.needs_additional_streams(stream_resolver);
+        if !pre_execution_streams.is_empty() {
+            info!(
+                new_streams_count = pre_execution_streams.len(),
+                "Command requested additional streams, re-reading"
+            );
+            return Ok(TypeSafeExecutionResult {
+                stream_events: Vec::new(),
+                additional_streams: Some(pre_execution_streams),
+            });
+        }
+
+        // Execute command
+        let scope_with_writes = scope_with_state
+            .execute_command(command, stream_resolver)
+            .await?;
+
+        // Check again for additional streams after execution
+        let post_execution_streams = stream_resolver
+            .take_additional_streams()
+            .into_iter()
+            .filter(|s| !stream_ids.contains(s))
+            .collect::<Vec<_>>();
+
+        if !post_execution_streams.is_empty() {
+            info!(
+                new_streams_count = post_execution_streams.len(),
+                "Command requested additional streams after execution, re-reading"
+            );
+            return Ok(TypeSafeExecutionResult {
+                stream_events: Vec::new(),
+                additional_streams: Some(post_execution_streams),
+            });
+        }
+
+        // Prepare stream events using the type-safe scope
+        let stream_events = scope_with_writes.prepare_stream_events();
+
+        Ok(TypeSafeExecutionResult {
+            stream_events,
+            additional_streams: None,
+        })
+    }
+
+    /// Writes events with circuit breaker protection only (no timeout).
+    async fn write_events_with_circuit_breaker_only(
+        &self,
+        stream_events: &[StreamEvents<ES::Event>],
+        options: &ExecutionOptions,
+    ) -> CommandResult<HashMap<StreamId, EventVersion>>
+    where
+        ES::Event: Clone,
+    {
+        self.write_events_with_circuit_breaker(stream_events, options)
+            .await
+            .map_err(CommandError::from)
+    }
+
+    /// Logs successful type-safe command execution.
+    fn log_type_safe_success(&self, result_versions: &HashMap<StreamId, EventVersion>) {
+        info!(
+            written_streams = result_versions.len(),
+            "Command execution completed successfully"
+        );
+    }
+
     /// Attempts to convert an event store event to a command event.
     ///
     /// This is a helper method that tries to convert between event types.
@@ -1668,88 +1785,51 @@ where
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
-        let mut stream_ids = command.read_streams();
+        let mut context = StreamDiscoveryContext::new(
+            command.read_streams(),
+            options.max_stream_discovery_iterations,
+        );
         let mut stream_resolver = StreamResolver::new();
-        let mut iteration = 0;
-        let max_iterations = options.max_stream_discovery_iterations;
 
         loop {
-            iteration += 1;
-            if iteration > max_iterations {
-                return Err(CommandError::ValidationFailed(format!(
-                    "Command '{}' exceeded maximum stream discovery iterations ({max_iterations})",
-                    std::any::type_name::<C>()
-                )));
-            }
+            // Move to next iteration and validate limits
+            context.next_iteration();
+            self.validate_iteration_limit::<C>(&context)?;
 
             info!(
-                iteration,
-                streams_count = stream_ids.len(),
+                iteration = context.iteration,
+                streams_count = context.stream_ids.len(),
                 "Starting stream discovery iteration"
             );
 
-            // Read streams and create type-safe execution scope
-            let stream_data = self
-                .read_streams_with_circuit_breaker(&stream_ids, &ReadOptions::new(), &options)
-                .await
-                .map_err(CommandError::from)?;
+            // Read streams with circuit breaker protection
+            let stream_data = self.read_streams_with_circuit_breaker_only(
+                &context.stream_ids,
+                &options,
+            ).await?;
 
-            // Create type-safe execution scope
-            let scope = typestate::ExecutionScope::<typestate::states::StreamsRead, C, ES>::new(
+            // Execute command in type-safe scope with two-phase stream discovery
+            let execution_result = self.execute_command_in_type_safe_scope(
+                &command,
                 stream_data,
-                stream_ids.clone(),
-                options.context.clone(),
-            );
+                &context.stream_ids,
+                &options,
+                &mut stream_resolver,
+            ).await?;
 
-            // Reconstruct state using the scope
-            let scope_with_state = scope.reconstruct_state(&command);
-
-            // Check if we need additional streams
-            let additional_streams = scope_with_state.needs_additional_streams(&stream_resolver);
-            if !additional_streams.is_empty() {
-                info!(
-                    new_streams_count = additional_streams.len(),
-                    "Command requested additional streams, re-reading"
-                );
-                stream_ids.extend(additional_streams);
+            // Check for additional streams from either phase
+            if let Some(new_streams) = execution_result.additional_streams {
+                context.add_streams(new_streams);
                 continue;
             }
 
-            // Execute command
-            let scope_with_writes = scope_with_state
-                .execute_command(&command, &mut stream_resolver)
-                .await?;
+            // Write events with circuit breaker protection
+            let result_versions = self.write_events_with_circuit_breaker_only(
+                &execution_result.stream_events,
+                &options,
+            ).await?;
 
-            // Check again for additional streams after execution
-            let new_additional = stream_resolver
-                .take_additional_streams()
-                .into_iter()
-                .filter(|s| !stream_ids.contains(s))
-                .collect::<Vec<_>>();
-
-            if !new_additional.is_empty() {
-                info!(
-                    new_streams_count = new_additional.len(),
-                    "Command requested additional streams after execution, re-reading"
-                );
-                stream_ids.extend(new_additional);
-                continue;
-            }
-
-            // Prepare stream events using the type-safe scope
-            let stream_events = scope_with_writes.prepare_stream_events();
-
-            // Write events
-            let result_versions = self
-                .write_events_with_circuit_breaker(&stream_events, &options)
-                .await
-                .map_err(CommandError::from)?;
-
-            info!(
-                written_streams = result_versions.len(),
-                "Command execution completed successfully"
-            );
-
+            self.log_type_safe_success(&result_versions);
             return Ok(result_versions);
         }
     }
