@@ -51,7 +51,7 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 - [x] Extract `prepare_stream_events_with_complete_concurrency_control` function (140 lines) - Separate validation logic
 - [ ] Split executor.rs into modules:
   - [ ] `executor/core.rs` - Core execution logic
-  - [ ] `executor/retry.rs` - Retry and circuit breaker logic
+  - [x] `executor/retry.rs` - Retry and circuit breaker logic (RetryConfig, RetryPolicy extracted)
   - [ ] `executor/stream_discovery.rs` - Stream discovery iteration logic
   - [ ] `executor/validation.rs` - Command validation
   - [ ] `executor/context.rs` - Execution context management
