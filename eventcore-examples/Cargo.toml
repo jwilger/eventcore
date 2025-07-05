@@ -49,17 +49,16 @@ sqlx = { workspace = true }
 [lints]
 workspace = true
 
-# Temporarily disabled until Command API migration is complete
-# [[example]]
-# name = "banking"
-# path = "src/banking/main.rs"
+[[example]]
+name = "banking"
+path = "src/banking/main.rs"
 
-# Temporarily disabled until Command API migration is complete  
+# Temporarily disabled until Command API migration is completed
 # [[example]]
 # name = "ecommerce"
 # path = "src/ecommerce/main.rs"
 
-# Temporarily disabled until Command API migration is complete
+# Temporarily disabled until Command API migration is completed
 # [[example]]
 # name = "sagas"
 # path = "src/sagas/main.rs"
@@ -81,8 +80,7 @@ path = "src/distributed_ecommerce_example.rs"
 name = "axum_integration"
 path = "src/axum_integration_example.rs"
 
-# Temporarily disabled until Command API migration is complete
-# [[bench]]
-# name = "example_benchmarks"
-# harness = false
-# path = "src/benchmarks/bench.rs"
+[[bench]]
+name = "example_benchmarks"
+harness = false
+path = "src/benchmarks/bench.rs"

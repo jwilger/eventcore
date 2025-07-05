@@ -16,20 +16,16 @@
 #![allow(missing_docs)]
 
 // Banking example: Account management and money transfers with type-safe domain modeling
-// Temporarily disabled until Command API migration is complete
-// pub mod banking;
+pub mod banking;
 
 // E-commerce example: Order workflow with inventory management
-// Temporarily disabled until Command API migration is complete
-// pub mod ecommerce;
+pub mod ecommerce;
 
 // Sagas example: Long-running distributed transactions
-// Temporarily disabled until Command API migration is complete
-// pub mod sagas;
+pub mod sagas;
 
 // Benchmarks: Performance testing examples
-// Temporarily disabled until Command API migration is complete
-// pub mod benchmarks;
+pub mod benchmarks;
 
 #[cfg(test)]
 mod tests {
