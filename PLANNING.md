@@ -59,6 +59,7 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 #### 2. Refactor cqrs/rebuild.rs::rebuild function (189 lines) - **HIGH**
 **Problem**: Complex rebuild logic with multiple responsibilities
 **Tasks**:
+- [x] Extract progress monitoring loop (wait_for_rebuild_completion method)
 - [ ] Extract event processing pipeline
 - [ ] Extract checkpoint management
 - [ ] Extract error handling patterns
