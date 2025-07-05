@@ -53,4 +53,4 @@ cobertura.xml
 
 # Nix result symlinks
 result
-result-*
+result-*website/book/

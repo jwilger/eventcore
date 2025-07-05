@@ -254,8 +254,8 @@ jobs:
         run: |
           cargo doc --no-deps --workspace
           # Copy to website output
-          mkdir -p website/target/website/api
-          cp -r target/doc/* website/target/website/api/
+          mkdir -p website/book/api
+          cp -r target/doc/* website/book/api/
       
       - name: Sync documentation
         run: |
@@ -275,7 +275,7 @@ jobs:
           RELEASE_URL="${{ github.event.release.html_url }}"
           
           # Create a version banner
-          cat > website/target/website/version.js << EOF
+          cat > website/book/version.js << EOF
           document.addEventListener('DOMContentLoaded', function() {
             const banner = document.createElement('div');
             banner.className = 'version-banner';
@@ -287,7 +287,7 @@ jobs:
           EOF
           
           # Add CSS for version banner
-          cat >> website/target/website/theme/css/custom.css << EOF
+          cat >> website/book/theme/css/custom.css << EOF
           
           .version-banner {
             background: var(--eventcore-orange);
@@ -309,7 +309,7 @@ jobs:
           EOF
           
           # Include version script in all HTML files
-          find website/target/website -name "*.html" -type f -exec sed -i '/<\/body>/i <script src="/eventcore/version.js"></script>' {} \;
+          find website/book -name "*.html" -type f -exec sed -i '/<\/body>/i <script src="/eventcore/version.js"></script>' {} \;
       
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -317,7 +317,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: website/target/website
+          path: website/book
       
       - name: Deploy to GitHub Pages
         id: deployment

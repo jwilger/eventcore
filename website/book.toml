@@ -7,7 +7,7 @@ src = "src"
 description = "Multi-stream event sourcing with dynamic consistency boundaries"
 
 [build]
-build-dir = "../target/website"
+build-dir = "book"
 create-missing = false
 
 [output.html]
