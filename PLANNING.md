@@ -270,9 +270,23 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Implemented GraphQL API for draft conversion as alternative to REST API limitation
 - [x] Set up workflow to use PAT (PR_DRAFT_PAT secret) for draft conversion capability
 - [x] Removed notification sound from CLAUDE.md and PLANNING.md per user request
-- [x] Updated PR validation workflow to skip Dependabot PRs
-- [x] Added safeguards to PR template to prevent checking checkboxes
-- [x] Enhanced CLAUDE.md with stronger PR checkbox rules and reminders
+
+### Dependency Updates (2025-07-05)
+- [x] Merged PR #3: Update actions/configure-pages from v4 to v5
+- [x] Merged PR #4: Update codecov/codecov-action from v3 to v5
+- [x] Fixed rand crate v0.9.1 deprecation errors in PR #5:
+  - Updated `thread_rng()` to `rng()` in executor.rs, testing/chaos.rs, and retry.rs
+  - Updated `gen()` to `random()` and `gen_range()` to `random_range()`
+  - Fixed ThreadRng Send issue in stress tests by generating random numbers outside async block
+- [x] Fixed OpenTelemetry v0.30.0 API breaking changes in PR #5:
+  - Updated `Resource::new()` to `Resource::builder()` pattern
+  - Removed unnecessary runtime parameter from `PeriodicReader::builder()`
+  - Added required `grpc-tonic` feature to opentelemetry-otlp dependency
+- [x] Fixed bincode v2.0.1 API breaking changes in PR #6:
+  - Updated to use `bincode::serde::encode_to_vec()` and `bincode::serde::decode_from_slice()` APIs
+  - Added "serde" feature to bincode dependency in Cargo.toml
+  - Replaced deprecated `bincode::serialize()` and `bincode::deserialize()` functions
+  - All tests passing with new bincode v2 API
 
 ## Pull Request Workflow
 
