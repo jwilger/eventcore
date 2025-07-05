@@ -274,6 +274,18 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Added safeguards to PR template to prevent checking checkboxes
 - [x] Enhanced CLAUDE.md with stronger PR checkbox rules and reminders
 
+### Dependency Updates (2025-07-05)
+- [x] Merged PR #3: Update actions/configure-pages from v4 to v5
+- [x] Merged PR #4: Update codecov/codecov-action from v3 to v5
+- [x] Fixed rand crate v0.9.1 deprecation errors in PR #5:
+  - Updated `thread_rng()` to `rng()` in executor.rs, testing/chaos.rs, and retry.rs
+  - Updated `gen()` to `random()` and `gen_range()` to `random_range()`
+  - Fixed ThreadRng Send issue in stress tests by generating random numbers outside async block
+- [x] Fixed OpenTelemetry v0.30.0 API breaking changes in PR #5:
+  - Updated `Resource::new()` to `Resource::builder()` pattern
+  - Removed unnecessary runtime parameter from `PeriodicReader::builder()`
+  - Added required `grpc-tonic` feature to opentelemetry-otlp dependency
+
 ## Pull Request Workflow
 
 This project uses a **pull request-based workflow**. Direct commits to the main branch are not allowed. All changes must go through pull requests for review and CI validation.

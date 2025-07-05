@@ -7,7 +7,6 @@ use opentelemetry::metrics::{Meter, MeterProvider};
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::{MetricExporter, WithExportConfig};
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
-use opentelemetry_sdk::runtime;
 use opentelemetry_sdk::Resource;
 use tracing::info;
 
@@ -177,28 +176,21 @@ impl OpenTelemetryExporterBuilder {
     /// Builds the OpenTelemetry exporter.
     pub fn build(self) -> Result<OpenTelemetryExporter, Box<dyn std::error::Error>> {
         // Create resource
-        let resource = Resource::new(vec![
-            KeyValue::new("service.name", self.config.service_name.clone()),
-            KeyValue::new("service.version", self.config.service_version.clone()),
-            KeyValue::new("deployment.environment", self.config.environment.clone()),
-        ]);
+        let resource = Resource::builder()
+            .with_attributes(vec![
+                KeyValue::new("service.name", self.config.service_name.clone()),
+                KeyValue::new("service.version", self.config.service_version.clone()),
+                KeyValue::new("deployment.environment", self.config.environment.clone()),
+            ])
+            .build();
 
         // Configure metrics
-        let metric_exporter = if self.headers.is_empty() {
-            MetricExporter::builder()
-                .with_tonic()
-                .with_endpoint(&self.endpoint)
-                .build()?
-        } else {
-            // For now, skip headers as they require additional dependencies
-            // Headers can be set via environment variables like OTEL_EXPORTER_OTLP_HEADERS
-            MetricExporter::builder()
-                .with_tonic()
-                .with_endpoint(&self.endpoint)
-                .build()?
-        };
+        let metric_exporter = MetricExporter::builder()
+            .with_tonic()
+            .with_endpoint(&self.endpoint)
+            .build()?;
 
-        let reader = PeriodicReader::builder(metric_exporter, runtime::Tokio)
+        let reader = PeriodicReader::builder(metric_exporter)
             .with_interval(Duration::from_secs(10))
             .build();
 

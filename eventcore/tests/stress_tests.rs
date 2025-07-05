@@ -17,6 +17,7 @@ use eventcore::{
 use eventcore_memory::InMemoryEventStore;
 use eventcore_postgres::PostgresEventStore;
 use futures::future::join_all;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -290,10 +291,12 @@ async fn stress_test_multi_stream_transactions(
             let successful_transfers = successful_transfers.clone();
             let failed_transfers = failed_transfers.clone();
 
-            tokio::spawn(async move {
-                let from = rand::random::<usize>() % num_accounts;
-                let to = (from + 1 + rand::random::<usize>() % (num_accounts - 1)) % num_accounts;
+            // Generate random numbers outside the async block
+            let mut rng = rand::rng();
+            let from = rng.random_range(0..num_accounts);
+            let to = (from + 1 + rng.random_range(0..(num_accounts - 1))) % num_accounts;
 
+            tokio::spawn(async move {
                 let command = TransferCommand {
                     from_account: from.to_string(),
                     to_account: to.to_string(),

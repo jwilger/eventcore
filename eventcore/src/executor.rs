@@ -1134,8 +1134,8 @@ where
         let delay = delay.min(max_delay_ms);
 
         // Add jitter (±25% of the delay)
-        let mut rng = rand::thread_rng();
-        let jitter = delay * 0.25 * (rng.gen::<f64>() - 0.5) * 2.0;
+        let mut rng = rand::rng();
+        let jitter = delay * 0.25 * (rng.random::<f64>() - 0.5) * 2.0;
         let final_delay = (delay + jitter).max(0.0).min(max_delay_ms) as u64;
 
         Duration::from_millis(final_delay)
