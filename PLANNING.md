@@ -181,6 +181,8 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Added debug logging to troubleshoot workflow section detection
 - [x] Fixed PR validation workflow to include synchronize trigger for new commits
 - [x] Fixed regex pattern to properly capture subsections in checklists
+- [x] Added better error handling for draft conversion API calls
+- [x] Updated workflow message to acknowledge GitHub API limitation on draft conversion
 
 ## Pull Request Workflow
 

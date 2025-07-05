@@ -115,26 +115,37 @@ jobs:
             // If submitter sections have unchecked items, convert to draft
             if (submitterSectionsWithUnchecked.length > 0) {
               console.log('Converting PR to draft due to incomplete submitter checklists');
-              // Convert to draft
-              await github.rest.pulls.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: pr.number,
-                draft: true
-              });
+              
+              try {
+                // Convert to draft
+                const response = await github.rest.pulls.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                  draft: true
+                });
+                console.log('Draft conversion response:', response.status);
+                console.log('Updated PR draft status:', response.data.draft);
+              } catch (error) {
+                console.error('Failed to convert to draft:', error.message);
+                console.error('Error details:', error);
+              }
               
               const draftMessage = `
-              🔄 **PR Converted to Draft**
+              ⚠️ **PR Should Be Draft**
               
-              This PR has been automatically converted to draft status because the following submitter checklists have unchecked items:
+              This PR should be in draft status because the following submitter checklists have unchecked items:
               ${submitterSectionsWithUnchecked.map(s => `- **${s}**`).join('\n')}
               
               **Next Steps:**
-              1. Review and check off all items in the submitter sections after verifying each one
-              2. Once all submitter checklists are complete, click "Ready for review"
-              3. The Reviewer Checklist should be completed by the reviewer, not the submitter
+              1. Manually convert this PR to draft status by clicking the "Convert to draft" link
+              2. Review and check off all items in the submitter sections after verifying each one
+              3. Once all submitter checklists are complete, click "Ready for review"
+              4. The Reviewer Checklist should be completed by the reviewer, not the submitter
               
               **Note**: Each checkbox represents a quality gate that must be manually verified.
+              
+              *(Automatic draft conversion may not work due to GitHub API limitations)*
               `;
               
               await github.rest.issues.createComment({
