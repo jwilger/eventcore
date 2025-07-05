@@ -432,15 +432,19 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    ```
    **IMPORTANT**: Your PR description MUST include all sections from the PR template (.github/pull_request_template.md):
    - Description (what and why)
-   - Type of Change (with appropriate checkboxes marked)
-   - Testing checklist
+   - Type of Change (select appropriate type only)
+   - Testing checklist (**leave all boxes unchecked**)
    - Performance Impact (if applicable)
-   - Security Checklist
-   - Code Quality checklist
-   - Reviewer Checklist
+   - Security Checklist (**leave all boxes unchecked**)
+   - Code Quality checklist (**leave all boxes unchecked**)
+   - Reviewer Checklist (**leave all boxes unchecked**)
    - Review Focus (guide reviewers to important areas)
    
-   The PR validation workflow will **reject PRs without proper template sections**
+   **CRITICAL**: 
+   - **DO NOT pre-check any checklist items** when creating the PR
+   - All checklists must be verified and checked by a human reviewer
+   - The PR validation workflow will **FAIL until all checklist items are checked**
+   - This ensures human verification of all quality gates
 
 5. **CI runs automatically** on PR creation - no need to monitor before creating the PR
 

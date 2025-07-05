@@ -174,6 +174,8 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Added PR template requirements and validation workflow documentation
 - [x] Added PR feedback response process using gh GraphQL API for threaded replies
 - [x] Enhanced todo list structure documentation to reinforce workflow and prevent process drift
+- [x] Updated PR validation workflow to require ALL checklist items be checked by humans
+- [x] Added documentation clarifying that checklists must NOT be pre-checked by automation
 
 ## Pull Request Workflow
 
@@ -193,16 +195,16 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
 3. Push your branch
 4. Create a PR using `mcp__github__create_pull_request` with **ALL template sections**:
    - Description (what and why)
-   - Type of Change
-   - Testing checklist
+   - Type of Change (select appropriate type only)
+   - Testing checklist (**leave unchecked for human review**)
    - Performance Impact (if applicable)
-   - Security Checklist
-   - Code Quality checklist
-   - Reviewer Checklist
+   - Security Checklist (**leave unchecked for human review**)
+   - Code Quality checklist (**leave unchecked for human review**)
+   - Reviewer Checklist (**leave unchecked for human review**)
    - Review Focus
-5. Monitor CI and address any failures
+5. Monitor CI and address any failures (PR validation will fail until all checklists are checked)
 6. Address review feedback by replying to comments with `-- @claude` signature
-7. Merge when approved and CI passes
+7. Merge when approved, CI passes, and all checklists are checked by humans
 
 ## Development Process Rules
 

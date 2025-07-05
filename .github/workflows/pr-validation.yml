@@ -57,38 +57,59 @@ jobs:
               return;
             }
             
-            // Check for empty checkboxes in required sections
+            // Check for empty checkboxes in ALL checklist sections (except Type of Change)
             const checkboxPattern = /- \[ \]/g;
+            
+            // Extract all sections that have checklists
+            const testingSection = body.match(/## Testing[\s\S]*?(?=##|$)/);
             const securitySection = body.match(/## Security Checklist[\s\S]*?(?=##|$)/);
             const codeQualitySection = body.match(/## Code Quality[\s\S]*?(?=##|$)/);
+            const reviewerSection = body.match(/## Reviewer Checklist[\s\S]*?(?=##|$)/);
             
-            let emptyRequired = [];
+            let sectionsWithUnchecked = [];
+            
+            // Check each section for unchecked items
+            if (testingSection && testingSection[0].match(checkboxPattern)) {
+              sectionsWithUnchecked.push('Testing');
+            }
             
             if (securitySection && securitySection[0].match(checkboxPattern)) {
-              emptyRequired.push('Security Checklist has unchecked items');
+              sectionsWithUnchecked.push('Security Checklist');
             }
             
             if (codeQualitySection && codeQualitySection[0].match(checkboxPattern)) {
-              emptyRequired.push('Code Quality has unchecked items');
+              sectionsWithUnchecked.push('Code Quality');
             }
             
-            if (emptyRequired.length > 0) {
-              const warningMessage = `
-              ⚠️ **PR Checklist Incomplete**
+            if (reviewerSection && reviewerSection[0].match(checkboxPattern)) {
+              sectionsWithUnchecked.push('Reviewer Checklist');
+            }
+            
+            if (sectionsWithUnchecked.length > 0) {
+              const errorMessage = `
+              ❌ **PR Validation Failed - Checklists Incomplete**
               
-              Please complete all required checklists:
-              ${emptyRequired.map(s => `- ${s}`).join('\n')}
+              All checklist items must be checked by a human reviewer before this PR can be merged.
               
-              Mark items as completed (\`[x]\`) or not applicable (\`[N/A]\`).
+              The following sections have unchecked items:
+              ${sectionsWithUnchecked.map(s => `- **${s}**`).join('\n')}
+              
+              **Important**: 
+              - Do NOT pre-check items when creating the PR
+              - Each item must be manually verified by a human
+              - Check items even if they don't apply (to confirm human review)
+              - Only the "Type of Change" section is exempt from this requirement
+              
+              Please have a human reviewer check off all items after verifying each one.
               `;
               
-              core.setFailed(warningMessage);
+              core.setFailed(errorMessage);
               
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pr.number,
-                body: warningMessage
+                body: errorMessage
               });
               return;
             }
