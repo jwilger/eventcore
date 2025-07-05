@@ -24,4 +24,4 @@ The example includes:
 - `commands.rs` - Business operations (OpenAccount, Transfer, etc.)
 - `projections.rs` - Read models for account balances and history
 
-[View Source Code](https://github.com/eventcore-rs/eventcore/tree/main/eventcore-examples/src/banking)
+[View Source Code](https://github.com/jwilger/eventcore/tree/main/eventcore-examples/src/banking)

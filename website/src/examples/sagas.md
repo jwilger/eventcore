@@ -30,4 +30,4 @@ cargo run --example sagas
 - **Idempotency**: Safe retries with exactly-once semantics
 - **Monitoring**: Built-in observability for saga progress
 
-[View Source Code](https://github.com/eventcore-rs/eventcore/tree/main/eventcore-examples/src/sagas)
+[View Source Code](https://github.com/jwilger/eventcore/tree/main/eventcore-examples/src/sagas)

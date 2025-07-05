@@ -7,8 +7,8 @@
   
   [![Crates.io](https://img.shields.io/crates/v/eventcore.svg)](https://crates.io/crates/eventcore)
   [![Documentation](https://docs.rs/eventcore/badge.svg)](https://docs.rs/eventcore)
-  [![License](https://img.shields.io/crates/l/eventcore.svg)](https://github.com/eventcore-rs/eventcore/blob/main/LICENSE)
-  [![Build Status](https://github.com/eventcore-rs/eventcore/workflows/CI/badge.svg)](https://github.com/eventcore-rs/eventcore/actions)
+  [![License](https://img.shields.io/crates/l/eventcore.svg)](https://github.com/jwilger/eventcore/blob/main/LICENSE)
+  [![Build Status](https://github.com/jwilger/eventcore/workflows/CI/badge.svg)](https://github.com/jwilger/eventcore/actions)
 </div>
 
 ---
@@ -137,12 +137,12 @@ Join our growing community of developers building event-sourced systems:
 
 - 📖 [Comprehensive Documentation](./manual/01-introduction/01-what-is-eventcore.html)
 - 💬 [Discord Community](https://discord.gg/eventcore)
-- 🐛 [Report Issues](https://github.com/eventcore-rs/eventcore/issues)
+- 🐛 [Report Issues](https://github.com/jwilger/eventcore/issues)
 - 🤝 [Contributing Guide](./contributing.html)
 
 ## Resources
 
-- [GitHub Repository](https://github.com/eventcore-rs/eventcore)
+- [GitHub Repository](https://github.com/jwilger/eventcore)
 - [crates.io Package](https://crates.io/crates/eventcore)
 - [API Documentation](./api/eventcore/index.html)
 
@@ -150,7 +150,7 @@ Join our growing community of developers building event-sourced systems:
 
 <div class="sponsors">
   <p>EventCore is an open-source project supported by the community.</p>
-  <a href="https://github.com/sponsors/eventcore-rs" class="sponsor-button">Become a Sponsor</a>
+  <a href="https://github.com/sponsors/jwilger" class="sponsor-button">Become a Sponsor</a>
 </div>
 
 ---

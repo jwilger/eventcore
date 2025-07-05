@@ -24,4 +24,4 @@ The example demonstrates:
 - Projection-based inventory queries
 - Integration with external payment systems
 
-[View Source Code](https://github.com/eventcore-rs/eventcore/tree/main/eventcore-examples/src/ecommerce)
+[View Source Code](https://github.com/jwilger/eventcore/tree/main/eventcore-examples/src/ecommerce)

@@ -65,7 +65,7 @@ The example includes:
 - `commands.rs` - Business operations (OpenAccount, Transfer, etc.)
 - `projections.rs` - Read models for account balances and history
 
-[View Source Code](https://github.com/eventcore-rs/eventcore/tree/main/eventcore-examples/src/banking)
+[View Source Code](https://github.com/jwilger/eventcore/tree/main/eventcore-examples/src/banking)
 EOF
 
 cat > src/examples/ecommerce.md << 'EOF'
@@ -95,7 +95,7 @@ The example demonstrates:
 - Projection-based inventory queries
 - Integration with external payment systems
 
-[View Source Code](https://github.com/eventcore-rs/eventcore/tree/main/eventcore-examples/src/ecommerce)
+[View Source Code](https://github.com/jwilger/eventcore/tree/main/eventcore-examples/src/ecommerce)
 EOF
 
 cat > src/examples/sagas.md << 'EOF'
@@ -131,7 +131,7 @@ cargo run --example sagas
 - **Idempotency**: Safe retries with exactly-once semantics
 - **Monitoring**: Built-in observability for saga progress
 
-[View Source Code](https://github.com/eventcore-rs/eventcore/tree/main/eventcore-examples/src/sagas)
+[View Source Code](https://github.com/jwilger/eventcore/tree/main/eventcore-examples/src/sagas)
 EOF
 
 echo "Documentation sync complete!"

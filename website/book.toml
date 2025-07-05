@@ -15,9 +15,9 @@ theme = "theme"
 default-theme = "light"
 preferred-dark-theme = "navy"
 smart-punctuation = true
-git-repository-url = "https://github.com/eventcore-rs/eventcore"
+git-repository-url = "https://github.com/jwilger/eventcore"
 git-repository-icon = "fa-github"
-site-url = "https://eventcore-rs.github.io/eventcore/"
+site-url = "https://jwilger.github.io/eventcore/"
 cname = ""
 
 [output.html.playground]
