@@ -1,3 +1,6 @@
+<!-- IMPORTANT FOR CLAUDE: Leave ALL checkboxes unchecked - they are for human verification only -->
+<!-- AUTOMATION WARNING: Do NOT pre-check any checkboxes. Each must be manually verified by humans -->
+
 ## Description
 
 <!-- Brief description of changes and motivation -->
@@ -5,6 +8,7 @@
 
 ## Type of Change
 
+<!-- REMINDER: Leave ALL checkboxes unchecked - they MUST be checked by humans -->
 - [ ] Bug fix (non-breaking change which fixes an issue)
 - [ ] New feature (non-breaking change which adds functionality)
 - [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
@@ -14,6 +18,7 @@
 
 ## Testing
 
+<!-- CRITICAL: Do NOT check these boxes when creating PR - humans must verify each item -->
 - [ ] All tests pass locally (`cargo test --workspace`)
 - [ ] Added/updated tests for new functionality
 - [ ] Added/updated property-based tests for invariants
@@ -44,6 +49,7 @@ cargo bench --bench realistic_workloads -- --baseline main
 
 ## Security Checklist
 
+<!-- AUTOMATION WARNING: These checkboxes are for HUMAN REVIEW ONLY - do not pre-check -->
 ### Input Validation
 - [ ] All public API inputs use validated `nutype` types
 - [ ] No raw strings/primitives for domain concepts
@@ -66,6 +72,7 @@ cargo bench --bench realistic_workloads -- --baseline main
 
 ## Code Quality
 
+<!-- IMPORTANT: Leave unchecked for human verification - PR will auto-convert to draft if checked -->
 ### Type Safety
 - [ ] Illegal states made unrepresentable
 - [ ] Parse, don't validate - smart constructors used
@@ -84,6 +91,7 @@ cargo bench --bench realistic_workloads -- --baseline main
 
 ## Reviewer Checklist
 
+<!-- NOTE: This section is for REVIEWERS ONLY - submitters should NOT check these boxes -->
 - [ ] Code follows project style guidelines
 - [ ] Changes are well-tested
 - [ ] Documentation is clear and complete
