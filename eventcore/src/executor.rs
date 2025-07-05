@@ -1,4 +1,5 @@
 pub mod config;
+pub mod context;
 pub mod optimization;
 pub mod retry;
 pub mod typestate;
@@ -16,33 +17,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, instrument, warn};
 
-// Import retry types from the new module
+// Import types from the new modules
+pub use context::ExecutionContext;
 pub use retry::{RetryConfig, RetryPolicy};
 
 #[cfg(test)]
 use async_trait::async_trait;
 
 
-/// Context information for command execution.
-#[derive(Debug, Clone)]
-pub struct ExecutionContext {
-    /// Correlation ID for request tracing.
-    pub correlation_id: String,
-    /// User ID for auditing.
-    pub user_id: Option<String>,
-    /// Additional metadata for the execution.
-    pub metadata: std::collections::HashMap<String, String>,
-}
-
-impl Default for ExecutionContext {
-    fn default() -> Self {
-        Self {
-            correlation_id: uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string(),
-            user_id: None,
-            metadata: std::collections::HashMap::new(),
-        }
-    }
-}
 
 /// Context for managing stream discovery iteration state.
 #[derive(Debug, Clone)]
