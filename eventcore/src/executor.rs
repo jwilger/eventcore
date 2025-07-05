@@ -98,6 +98,48 @@ impl Default for ExecutionContext {
     }
 }
 
+/// Context for managing stream discovery iteration state.
+#[derive(Debug, Clone)]
+struct StreamDiscoveryContext {
+    /// Current list of stream IDs being processed.
+    stream_ids: Vec<StreamId>,
+    /// Current iteration count.
+    iteration: usize,
+    /// Maximum allowed iterations before failing.
+    max_iterations: usize,
+}
+
+impl StreamDiscoveryContext {
+    /// Creates a new stream discovery context.
+    fn new(initial_streams: Vec<StreamId>, max_iterations: usize) -> Self {
+        Self {
+            stream_ids: initial_streams,
+            iteration: 0,
+            max_iterations,
+        }
+    }
+
+    /// Adds newly discovered streams and increments iteration count.
+    fn add_streams(&mut self, new_streams: Vec<StreamId>) {
+        self.stream_ids.extend(new_streams);
+        self.iteration += 1;
+    }
+
+    /// Increments the iteration counter for the current streams.
+    fn next_iteration(&mut self) {
+        self.iteration += 1;
+    }
+}
+
+/// Result of command execution containing events and optional additional streams.
+#[derive(Debug)]
+struct CommandExecutionResult<Event> {
+    /// Events to be written to streams.
+    stream_events: Vec<StreamEvents<Event>>,
+    /// Additional streams discovered during execution (if any).
+    additional_streams: Option<Vec<StreamId>>,
+}
+
 /// Execution options for command execution with sensible defaults.
 ///
 /// By default, commands are executed with retry logic enabled for concurrency conflicts.
@@ -674,100 +716,177 @@ where
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
-        let mut stream_ids = command.read_streams();
+        let mut context = StreamDiscoveryContext::new(
+            command.read_streams(),
+            options.max_stream_discovery_iterations,
+        );
         let mut stream_resolver = StreamResolver::new();
-        let mut iteration = 0;
-        let max_iterations = options.max_stream_discovery_iterations;
 
         loop {
-            iteration += 1;
-            if iteration > max_iterations {
-                return Err(CommandError::ValidationFailed(format!(
-                    "Command '{}' exceeded maximum stream discovery iterations ({max_iterations}). This suggests the command is continuously discovering new streams. Current streams: {:?}",
-                    std::any::type_name::<C>(),
-                    stream_ids.iter().map(std::convert::AsRef::as_ref).collect::<Vec<_>>()
-                )));
-            }
+            // Move to next iteration and validate limits
+            context.next_iteration();
+            self.validate_iteration_limit::<C>(&context)?;
 
             info!(
-                iteration,
-                streams_count = stream_ids.len(),
+                iteration = context.iteration,
+                streams_count = context.stream_ids.len(),
                 "Reading streams for command execution"
             );
 
-            // Read all currently known streams with circuit breaker protection
-            let stream_data = if let Some(timeout) = options.event_store_timeout {
-                if let Ok(result) = tokio::time::timeout(
-                    timeout,
-                    self.read_streams_with_circuit_breaker(
-                        &stream_ids,
-                        &ReadOptions::new(),
-                        options,
-                    ),
-                )
-                .await
-                {
-                    result.map_err(|err| {
-                        warn!(error = %err, "Failed to read streams from event store");
-                        CommandError::from(err)
-                    })?
-                } else {
-                    warn!(
-                        "EventStore read_streams operation timed out after {:?}",
-                        timeout
-                    );
-                    return Err(CommandError::EventStore(
-                        crate::errors::EventStoreError::Timeout(timeout),
-                    ));
-                }
-            } else {
-                self.read_streams_with_circuit_breaker(&stream_ids, &ReadOptions::new(), options)
-                    .await
-                    .map_err(|err| {
-                        warn!(error = %err, "Failed to read streams from event store");
-                        CommandError::from(err)
-                    })?
-            };
+            // Read streams with timeout and circuit breaker protection
+            let stream_data = self.read_streams_with_timeout_and_circuit_breaker(
+                &context.stream_ids,
+                options,
+            ).await?;
 
-            // Since we already have the stream data, we need to manually create the execution flow
-            // This is a special case for the executor which optimizes by reading streams in advance
+            // Execute command in type-safe scope
+            let execution_result = self.execute_command_in_scope(
+                &command,
+                stream_data,
+                &context.stream_ids,
+                options,
+                &mut stream_resolver,
+            ).await?;
 
-            // Create an execution scope compatible with existing typestate
-            let scope = typestate::ExecutionScope::<typestate::states::StreamsRead, C, ES>::new(
-                stream_data.clone(),
-                stream_ids.clone(),
-                options.context.clone(),
-            );
-
-            // Reconstruct state
-            let scope_with_state = scope.reconstruct_state(&command);
-
-            info!(
-                applied_events = stream_data.len(),
-                "Applied events to reconstruct state"
-            );
-
-            // Execute command business logic
-            let scope_with_writes = scope_with_state
-                .execute_command(&command, &mut stream_resolver)
-                .await
-                .map_err(|err| {
-                    warn!(error = %err, "Command business logic failed");
-                    err
-                })?;
-
-            // Check if command requested additional streams
-            let new_streams = scope_with_writes.needs_additional_streams(&stream_resolver);
-            if !new_streams.is_empty() {
-                info!(
-                    new_streams_count = new_streams.len(),
-                    "Command requested additional streams, re-reading"
-                );
-                stream_ids.extend(new_streams);
-                continue; // Go back to the top of the loop
+            // Check for additional streams
+            if let Some(new_streams) = execution_result.additional_streams {
+                context.add_streams(new_streams);
+                continue;
             }
 
-            // No additional streams requested, we can proceed with writing
+            // Write events with timeout and circuit breaker protection
+            let result_versions = self.write_events_with_timeout_and_circuit_breaker(
+                &execution_result.stream_events,
+                options,
+            ).await?;
+
+            self.log_success(&result_versions);
+            return Ok(result_versions);
+        }
+    }
+
+    /// Validates that stream discovery iteration limit is not exceeded.
+    fn validate_iteration_limit<C: Command>(
+        &self,
+        context: &StreamDiscoveryContext,
+    ) -> CommandResult<()> {
+        if context.iteration > context.max_iterations {
+            return Err(CommandError::ValidationFailed(format!(
+                "Command '{}' exceeded maximum stream discovery iterations ({}). This suggests the command is continuously discovering new streams. Current streams: {:?}",
+                std::any::type_name::<C>(),
+                context.max_iterations,
+                context.stream_ids.iter().map(std::convert::AsRef::as_ref).collect::<Vec<_>>()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Reads streams with timeout and circuit breaker protection.
+    async fn read_streams_with_timeout_and_circuit_breaker(
+        &self,
+        stream_ids: &[StreamId],
+        options: &ExecutionOptions,
+    ) -> CommandResult<crate::event_store::StreamData<ES::Event>> {
+        info!(
+            streams_count = stream_ids.len(),
+            "Reading streams for command execution"
+        );
+
+        let stream_data = if let Some(timeout) = options.event_store_timeout {
+            self.read_streams_with_timeout(stream_ids, timeout, options).await?
+        } else {
+            self.read_streams_with_circuit_breaker(stream_ids, &ReadOptions::new(), options)
+                .await
+                .map_err(|err| {
+                    warn!(error = %err, "Failed to read streams from event store");
+                    CommandError::from(err)
+                })?
+        };
+
+        Ok(stream_data)
+    }
+
+    /// Handles timeout-specific stream reading logic.
+    async fn read_streams_with_timeout(
+        &self,
+        stream_ids: &[StreamId],
+        timeout: Duration,
+        options: &ExecutionOptions,
+    ) -> CommandResult<crate::event_store::StreamData<ES::Event>> {
+        if let Ok(result) = tokio::time::timeout(
+            timeout,
+            self.read_streams_with_circuit_breaker(stream_ids, &ReadOptions::new(), options),
+        )
+        .await
+        {
+            result.map_err(|err| {
+                warn!(error = %err, "Failed to read streams from event store");
+                CommandError::from(err)
+            })
+        } else {
+            warn!(
+                "EventStore read_streams operation timed out after {:?}",
+                timeout
+            );
+            Err(CommandError::EventStore(
+                crate::errors::EventStoreError::Timeout(timeout),
+            ))
+        }
+    }
+
+    /// Executes command in type-safe scope and handles stream discovery.
+    async fn execute_command_in_scope<C>(
+        &self,
+        command: &C,
+        stream_data: crate::event_store::StreamData<ES::Event>,
+        stream_ids: &[StreamId],
+        options: &ExecutionOptions,
+        stream_resolver: &mut StreamResolver,
+    ) -> CommandResult<CommandExecutionResult<ES::Event>>
+    where
+        C: Command,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
+        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
+    {
+        // Create execution scope
+        let scope = typestate::ExecutionScope::<typestate::states::StreamsRead, C, ES>::new(
+            stream_data.clone(),
+            stream_ids.to_vec(),
+            options.context.clone(),
+        );
+
+        // Reconstruct state
+        let scope_with_state = scope.reconstruct_state(command);
+
+        info!(
+            applied_events = stream_data.len(),
+            "Applied events to reconstruct state"
+        );
+
+        // Execute command business logic
+        let scope_with_writes = scope_with_state
+            .execute_command(command, stream_resolver)
+            .await
+            .map_err(|err| {
+                warn!(error = %err, "Command business logic failed");
+                err
+            })?;
+
+        // Check for additional streams
+        let new_streams = scope_with_writes.needs_additional_streams(stream_resolver);
+        let additional_streams = if new_streams.is_empty() {
+            None
+        } else {
+            info!(
+                new_streams_count = new_streams.len(),
+                "Command requested additional streams, re-reading"
+            );
+            Some(new_streams)
+        };
+
+        // Prepare stream events if no additional streams needed
+        let stream_events = if additional_streams.is_none() {
             let stream_writes_count = scope_with_writes.write_count();
             info!(
                 events_to_write = stream_writes_count,
@@ -775,44 +894,77 @@ where
                 "Command execution complete, writing events"
             );
 
-            // Use the type-safe scope to prepare stream events
-            let stream_events = scope_with_writes.prepare_stream_events();
+            scope_with_writes.prepare_stream_events()
+        } else {
+            Vec::new() // Will be ignored when additional_streams is Some
+        };
 
-            let result_versions = if let Some(timeout) = options.event_store_timeout {
-                if let Ok(result) = tokio::time::timeout(
-                    timeout,
-                    self.write_events_with_circuit_breaker(&stream_events, options),
-                )
+        Ok(CommandExecutionResult {
+            stream_events,
+            additional_streams,
+        })
+    }
+
+    /// Writes events with timeout and circuit breaker protection.
+    async fn write_events_with_timeout_and_circuit_breaker(
+        &self,
+        stream_events: &[StreamEvents<ES::Event>],
+        options: &ExecutionOptions,
+    ) -> CommandResult<HashMap<StreamId, EventVersion>>
+    where
+        ES::Event: Clone,
+    {
+        let result_versions = if let Some(timeout) = options.event_store_timeout {
+            self.write_events_with_timeout(stream_events, timeout, options).await?
+        } else {
+            self.write_events_with_circuit_breaker(stream_events, options)
                 .await
-                {
-                    result.map_err(|err| {
-                        warn!(error = %err, "Failed to write events to event store");
-                        CommandError::from(err)
-                    })?
-                } else {
-                    warn!(
-                        "EventStore write_events_multi operation timed out after {:?}",
-                        timeout
-                    );
-                    return Err(CommandError::EventStore(
-                        crate::errors::EventStoreError::Timeout(timeout),
-                    ));
-                }
-            } else {
-                self.write_events_with_circuit_breaker(&stream_events, options)
-                    .await
-                    .map_err(|err| {
-                        warn!(error = %err, "Failed to write events to event store");
-                        CommandError::from(err)
-                    })?
-            };
+                .map_err(|err| {
+                    warn!(error = %err, "Failed to write events to event store");
+                    CommandError::from(err)
+                })?
+        };
 
-            info!(
-                written_streams = result_versions.len(),
-                "Successfully executed command"
+        Ok(result_versions)
+    }
+
+    /// Handles timeout-specific event writing logic.
+    async fn write_events_with_timeout(
+        &self,
+        stream_events: &[StreamEvents<ES::Event>],
+        timeout: Duration,
+        options: &ExecutionOptions,
+    ) -> CommandResult<HashMap<StreamId, EventVersion>>
+    where
+        ES::Event: Clone,
+    {
+        if let Ok(result) = tokio::time::timeout(
+            timeout,
+            self.write_events_with_circuit_breaker(stream_events, options),
+        )
+        .await
+        {
+            result.map_err(|err| {
+                warn!(error = %err, "Failed to write events to event store");
+                CommandError::from(err)
+            })
+        } else {
+            warn!(
+                "EventStore write_events_multi operation timed out after {:?}",
+                timeout
             );
-            return Ok(result_versions);
+            Err(CommandError::EventStore(
+                crate::errors::EventStoreError::Timeout(timeout),
+            ))
         }
+    }
+
+    /// Logs successful command execution.
+    fn log_success(&self, result_versions: &HashMap<StreamId, EventVersion>) {
+        info!(
+            written_streams = result_versions.len(),
+            "Successfully executed command"
+        );
     }
 
     /// Attempts to convert an event store event to a command event.
