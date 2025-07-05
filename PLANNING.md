@@ -166,6 +166,7 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Added GitHub Copilot instructions for automated PR reviews aligned with our checklists
 - [x] Fixed doctest compilation error in resource.rs
 - [x] Added doctests to pre-commit hooks to prevent future doctest failures
+- [x] Updated CLAUDE.md and PLANNING.md to reflect GitHub MCP server integration for all GitHub operations
 
 ## Development Process Rules
 
@@ -176,7 +177,7 @@ When working on this project, **ALWAYS** follow these rules:
 3. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
 4. **ALWAYS include "Update @PLANNING.md to mark completed tasks" in your todolist** - This task should come BEFORE the commit task to ensure completed work is tracked.
 5. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
-6. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
+6. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with GitHub MCP tools, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
 
 ### CRITICAL: Todo List Structure
 
@@ -184,14 +185,21 @@ Your todo list should ALWAYS follow this pattern:
 1. Implementation tasks...
 2. "Update @PLANNING.md to mark completed tasks"
 3. "Run all tests and make a commit if they all pass"
-4. "Push changes to remote repository, monitor CI workflow..."
+4. "Push changes to remote repository, monitor CI workflow with GitHub MCP tools..."
 
 ### CI Monitoring Rules
 
 After pushing changes:
-1. **Use `gh` CLI to monitor the CI workflow** - Watch for the workflow to complete
+1. **Use GitHub MCP tools to monitor the CI workflow** - Watch for the workflow to complete using MCP tools instead of gh CLI
 2. **If the workflow fails** - Address the failures immediately before moving to the next task
 3. **If the workflow passes** - Only then proceed to review @PLANNING.md for the next task
+
+We now have access to GitHub MCP server which provides native GitHub integration. Use these MCP tools:
+
+- `mcp__github__list_workflow_runs` - List recent workflow runs for the repository
+- `mcp__github__get_workflow_run` - Get details of a specific workflow run
+- `mcp__github__list_workflow_jobs` - List jobs for a workflow run to see which failed
+- `mcp__github__get_job_logs` - Get logs for failed jobs to debug issues
 
 ### Commit Rules
 

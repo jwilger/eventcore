@@ -357,6 +357,49 @@ cargo search <crate_name>
 
 This ensures we're using the most up-to-date and secure versions of all dependencies.
 
+## GitHub MCP Integration
+
+This project now uses GitHub MCP (Model Context Protocol) server for all GitHub interactions. **MCP tools are the primary and preferred way to interact with GitHub**, replacing gh CLI commands.
+
+### Available GitHub MCP Tools
+
+Key tools for development workflow:
+
+- **Workflow Management**:
+  - `mcp__github__list_workflow_runs` - List and monitor CI/CD runs
+  - `mcp__github__get_workflow_run` - Get detailed workflow status
+  - `mcp__github__list_workflow_jobs` - View individual job status
+  - `mcp__github__get_job_logs` - Retrieve logs for debugging failures
+  - `mcp__github__rerun_failed_jobs` - Re-run only failed jobs
+  - `mcp__github__rerun_workflow_run` - Re-run entire workflow
+
+- **Pull Request Management**:
+  - `mcp__github__create_pull_request` - Create new PRs
+  - `mcp__github__get_pull_request` - View PR details
+  - `mcp__github__update_pull_request` - Update PR title/description
+  - `mcp__github__merge_pull_request` - Merge approved PRs
+  - `mcp__github__request_copilot_review` - Request automated review
+
+- **Issue Management**:
+  - `mcp__github__create_issue` - Create new issues
+  - `mcp__github__update_issue` - Update issue status/labels
+  - `mcp__github__list_issues` - View open issues
+  - `mcp__github__add_issue_comment` - Add comments to issues
+
+- **Repository Operations**:
+  - `mcp__github__create_branch` - Create feature branches
+  - `mcp__github__push_files` - Push multiple files in one commit
+  - `mcp__github__get_file_contents` - Read files from GitHub
+  - `mcp__github__create_or_update_file` - Update single files
+
+### Why MCP Over gh CLI
+
+1. **Native Integration**: Direct API access without shell command overhead
+2. **Type Safety**: Structured parameters and responses
+3. **Better Error Handling**: Clear error messages and recovery options
+4. **Richer Data**: Full API responses with all metadata
+5. **Batch Operations**: Efficient multi-file operations
+
 ## Development Process Rules
 
 When working on this project, **ALWAYS** follow these rules:
@@ -365,28 +408,24 @@ When working on this project, **ALWAYS** follow these rules:
 2. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
 3. **Insert a task to "Update @PLANNING.md to mark completed tasks"** before any commit task. This ensures our planning document stays in sync with actual progress.
 4. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
-5. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with gh cli, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
+5. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with GitHub MCP tools, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
 
 ### CI Monitoring Rules
 
 After pushing changes:
 
-1. **Use `gh` CLI to monitor the CI workflow** - Watch for the workflow to complete
+1. **Use GitHub MCP tools to monitor the CI workflow** - Watch for the workflow to complete using MCP tools instead of gh CLI
 2. **If the workflow fails** - Address the failures immediately before moving to the next task
 3. **If the workflow passes** - Only then proceed to review @PLANNING.md for the next task
 
-Example commands:
+We now have access to GitHub MCP server which provides native GitHub integration. Use these MCP tools instead of gh CLI commands:
 
-```bash
-# List recent workflow runs
-gh run list --limit 5
+- `mcp__github__list_workflow_runs` - List recent workflow runs
+- `mcp__github__get_workflow_run` - Get details of a specific workflow run
+- `mcp__github__list_workflow_jobs` - List jobs for a workflow run
+- `mcp__github__get_job_logs` - Get logs for failed jobs
 
-# Watch a specific workflow run
-gh run watch
-
-# View workflow run details if it fails
-gh run view
-```
+Example: To monitor CI after pushing, use `mcp__github__list_workflow_runs` with appropriate parameters.
 
 ### Commit Rules
 
@@ -418,7 +457,7 @@ Your todo list should ALWAYS follow this pattern:
 1. Implementation tasks...
 2. "Update @PLANNING.md to mark completed tasks"
 3. "Run all tests and make a commit if they all pass"
-4. "Push changes to remote repository, monitor CI workflow..."
+4. "Push changes to remote repository, monitor CI workflow with GitHub MCP tools..."
 
 ## Notification Sound
 
