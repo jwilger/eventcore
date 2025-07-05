@@ -167,17 +167,40 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Fixed doctest compilation error in resource.rs
 - [x] Added doctests to pre-commit hooks to prevent future doctest failures
 - [x] Updated CLAUDE.md and PLANNING.md to reflect GitHub MCP server integration for all GitHub operations
+- [x] Updated CLAUDE.md and PLANNING.md to document PR-based workflow and clarify that CI only runs on PRs
+
+## Pull Request Workflow
+
+This project uses a **pull request-based workflow**. Direct commits to the main branch are not allowed. All changes must go through pull requests for review and CI validation.
+
+### Key Points
+
+1. **Create feature branches** for logical sets of related changes
+2. **CI/CD workflows only run on PRs**, not on branch pushes
+3. **PR template must be filled out** - enforced by PR validation workflow
+4. **Keep PRs small and focused** for easier review
+
+### Workflow Steps
+
+1. Create a new branch from main
+2. Make your changes following development process rules
+3. Push your branch
+4. Create a PR using `mcp__github__create_pull_request`
+5. Monitor CI and address any failures
+6. Request reviews and address feedback
+7. Merge when approved and CI passes
 
 ## Development Process Rules
 
 When working on this project, **ALWAYS** follow these rules:
 
-1. **BROKEN CI BUILDS ARE HIGHEST PRIORITY** - If CI is failing, stop all other work and fix it immediately.
+1. **BROKEN CI BUILDS ARE HIGHEST PRIORITY** - If CI is failing on your PR, stop all other work and fix it immediately.
 2. **Review @PLANNING.md** to discover the next task to work on.
-3. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
-4. **ALWAYS include "Update @PLANNING.md to mark completed tasks" in your todolist** - This task should come BEFORE the commit task to ensure completed work is tracked.
-5. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
-6. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository, monitor CI workflow with GitHub MCP tools, and if it passes, review @PLANNING.md to discover the next task and review our process rules."
+3. **Create a new branch** for the task if starting fresh work.
+4. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
+5. **ALWAYS include "Update @PLANNING.md to mark completed tasks" in your todolist** - This task should come BEFORE the commit task to ensure completed work is tracked.
+6. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
+7. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository and create/update PR with GitHub MCP tools."
 
 ### CRITICAL: Todo List Structure
 
@@ -185,17 +208,19 @@ Your todo list should ALWAYS follow this pattern:
 1. Implementation tasks...
 2. "Update @PLANNING.md to mark completed tasks"
 3. "Run all tests and make a commit if they all pass"
-4. "Push changes to remote repository, monitor CI workflow with GitHub MCP tools..."
+4. "Push changes to remote repository and create/update PR with GitHub MCP tools"
 
 ### CI Monitoring Rules
 
-After pushing changes:
-1. **Use GitHub MCP tools to monitor the CI workflow** - Watch for the workflow to complete using MCP tools instead of gh CLI
-2. **If the workflow fails** - Address the failures immediately before moving to the next task
-3. **If the workflow passes** - Only then proceed to review @PLANNING.md for the next task
+After creating or updating a PR:
+1. **CI runs automatically on the PR** - No need to trigger manually
+2. **Use GitHub MCP tools to monitor the CI workflow** on your PR
+3. **If the workflow fails** - Address the failures immediately before continuing
+4. **If the workflow passes** - PR is ready for review
 
 We now have access to GitHub MCP server which provides native GitHub integration. Use these MCP tools:
 
+- `mcp__github__get_pull_request` - Check PR status including CI checks
 - `mcp__github__list_workflow_runs` - List recent workflow runs for the repository
 - `mcp__github__get_workflow_run` - Get details of a specific workflow run
 - `mcp__github__list_workflow_jobs` - List jobs for a workflow run to see which failed
