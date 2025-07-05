@@ -316,12 +316,12 @@ Follow the testing principles from the global Claude.md:
 
 The project uses pre-commit hooks that automatically run:
 
-1. `cargo fmt` - Code formatting
+1. `cargo fmt --all && git add -u` - Auto-formats code and stages changes (runs first)
 2. `cargo clippy` - Linting
 3. `cargo test` - All tests
 4. `cargo check` - Type checking
 
-These ensure code quality before commits.
+The formatting hook automatically fixes and stages formatting issues instead of failing, saving time during the commit process.
 
 ## Development Principles
 
@@ -457,7 +457,7 @@ When working on this project, **ALWAYS** follow these rules:
 2. **Create a new branch** for the task if starting fresh work.
 3. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
 4. **Insert a task to "Update @PLANNING.md to mark completed tasks"** before any commit task. This ensures our planning document stays in sync with actual progress.
-5. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
+5. **Insert a task to "Run relevant tests (if any) and make a commit"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure. Note: Pre-commit hooks will run all checks automatically.
 6. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository and create/update PR with GitHub MCP tools."
 
 ### CI Monitoring Rules
@@ -508,7 +508,7 @@ This ensures consistent code quality and maintains a clean commit history.
 Your todo list should ALWAYS follow this pattern:
 1. Implementation tasks...
 2. "Update @PLANNING.md to mark completed tasks"
-3. "Run all tests and make a commit if they all pass"
+3. "Make a commit" (pre-commit hooks handle formatting and testing automatically)
 4. "Push changes to remote repository and create/update PR with GitHub MCP tools"
 
 ## Notification Sound

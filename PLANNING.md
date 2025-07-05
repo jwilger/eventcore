@@ -168,6 +168,8 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Added doctests to pre-commit hooks to prevent future doctest failures
 - [x] Updated CLAUDE.md and PLANNING.md to reflect GitHub MCP server integration for all GitHub operations
 - [x] Updated CLAUDE.md and PLANNING.md to document PR-based workflow and clarify that CI only runs on PRs
+- [x] Updated pre-commit hook to auto-format and stage files instead of failing
+- [x] Removed redundant "run all tests" requirement from commit process (pre-commit hooks handle this)
 
 ## Pull Request Workflow
 
@@ -199,7 +201,7 @@ When working on this project, **ALWAYS** follow these rules:
 3. **Create a new branch** for the task if starting fresh work.
 4. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
 5. **ALWAYS include "Update @PLANNING.md to mark completed tasks" in your todolist** - This task should come BEFORE the commit task to ensure completed work is tracked.
-6. **Insert a task to "Run all tests and make a commit if they all pass"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure.
+6. **Insert a task to "Run relevant tests (if any) and make a commit"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure. Note: Pre-commit hooks will run all checks automatically.
 7. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository and create/update PR with GitHub MCP tools."
 
 ### CRITICAL: Todo List Structure
@@ -207,7 +209,7 @@ When working on this project, **ALWAYS** follow these rules:
 Your todo list should ALWAYS follow this pattern:
 1. Implementation tasks...
 2. "Update @PLANNING.md to mark completed tasks"
-3. "Run all tests and make a commit if they all pass"
+3. "Make a commit" (pre-commit hooks handle formatting and testing automatically)
 4. "Push changes to remote repository and create/update PR with GitHub MCP tools"
 
 ### CI Monitoring Rules
