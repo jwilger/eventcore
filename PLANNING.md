@@ -184,6 +184,7 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Added better error handling for draft conversion API calls
 - [x] Updated workflow message to acknowledge GitHub API limitation on draft conversion
 - [x] Implemented GraphQL API for draft conversion as alternative to REST API limitation
+- [x] Set up workflow to use PAT (PR_DRAFT_PAT secret) for draft conversion capability
 
 ## Pull Request Workflow
 

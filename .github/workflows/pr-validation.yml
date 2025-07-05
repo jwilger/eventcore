@@ -1,4 +1,13 @@
 name: PR Validation
+# 
+# This workflow validates PR descriptions and enforces checklist completion.
+# 
+# For automatic draft conversion to work, you need to:
+# 1. Create a Personal Access Token (PAT) with 'repo' scope
+# 2. Add it as a repository secret named 'PR_DRAFT_PAT'
+# 
+# Without the PAT, the workflow will still validate checklists but won't
+# be able to automatically convert PRs to draft status.
 
 on:
   pull_request:
@@ -7,6 +16,8 @@ on:
 permissions:
   pull-requests: write
   issues: write
+  contents: read
+  statuses: write
 
 jobs:
   validate-pr-description:
@@ -16,6 +27,8 @@ jobs:
       - name: Check PR Description
         uses: actions/github-script@v7
         with:
+          # Use PAT if available for draft conversion, otherwise fall back to default token
+          github-token: ${{ secrets.PR_DRAFT_PAT || github.token }}
           script: |
             const pr = context.payload.pull_request;
             const body = pr.body || '';
@@ -143,6 +156,9 @@ jobs:
                 }
               } catch (error) {
                 console.error('Failed to convert to draft via GraphQL:', error.message);
+                if (error.message.includes('Resource not accessible')) {
+                  console.error('Note: Draft conversion requires a PAT. Set PR_DRAFT_PAT secret with a token that has repo scope.');
+                }
                 console.error('Error details:', error);
                 
                 // Fallback to REST API
@@ -155,12 +171,18 @@ jobs:
                     draft: true
                   });
                   console.log('REST API response:', restResponse.status);
+                  console.log('Updated PR draft status:', restResponse.data.draft);
                 } catch (restError) {
                   console.error('REST API also failed:', restError.message);
                 }
               }
               
-              const draftMessage = `
+              // Check if draft conversion actually worked
+              const conversionWorked = response.convertPullRequestToDraft && 
+                                       response.convertPullRequestToDraft.pullRequest && 
+                                       response.convertPullRequestToDraft.pullRequest.isDraft === true;
+              
+              const draftMessage = conversionWorked ? `
               🔄 **PR Converted to Draft**
               
               This PR has been automatically converted to draft status because the following submitter checklists have unchecked items:
@@ -172,6 +194,19 @@ jobs:
               3. The Reviewer Checklist should be completed by the reviewer, not the submitter
               
               **Note**: Each checkbox represents a quality gate that must be manually verified.
+              ` : `
+              ⚠️ **PR Should Be Draft**
+              
+              This PR should be in draft status because the following submitter checklists have unchecked items:
+              ${submitterSectionsWithUnchecked.map(s => `- **${s}**`).join('\n')}
+              
+              **Action Required:**
+              1. Click "Convert to draft" on this PR
+              2. Review and check off all items in the submitter sections after verifying each one
+              3. Once all submitter checklists are complete, click "Ready for review"
+              4. The Reviewer Checklist should be completed by the reviewer, not the submitter
+              
+              **Note**: Automatic draft conversion is not available. Please manually click "Convert to draft" above.
               `;
               
               await github.rest.issues.createComment({
