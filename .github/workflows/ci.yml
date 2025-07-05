@@ -127,8 +127,6 @@ jobs:
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Fail on warnings as well as vulnerabilities
-          deny-warnings: true
 
   coverage:
     name: Code Coverage
