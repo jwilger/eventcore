@@ -8,8 +8,11 @@ use std::marker::PhantomData;
 
 /// Phantom type states for stream discovery
 pub mod states {
-    /// Initial state with no streams loaded
-    pub struct Initialized;
+    /// Initial state - first iteration starting
+    pub struct Initial;
+    
+    /// Ready for iteration - can load data
+    pub struct Ready;
 
     /// State with stream data loaded
     pub struct DataLoaded;
@@ -46,7 +49,7 @@ pub enum IterationResult<Event> {
     },
 }
 
-impl StreamDiscoveryContext<states::Initialized> {
+impl StreamDiscoveryContext<states::Initial> {
     /// Create a new stream discovery context
     pub const fn new(initial_streams: Vec<StreamId>, max_iterations: usize) -> Self {
         Self {
@@ -57,6 +60,18 @@ impl StreamDiscoveryContext<states::Initialized> {
         }
     }
 
+    /// Transition to ready state for first iteration
+    pub fn into_ready(self) -> StreamDiscoveryContext<states::Ready> {
+        StreamDiscoveryContext {
+            stream_ids: self.stream_ids,
+            iteration: self.iteration,
+            max_iterations: self.max_iterations,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl StreamDiscoveryContext<states::Ready> {
     /// Transition to data loaded state after reading streams
     pub fn with_loaded_data(self) -> StreamDiscoveryContext<states::DataLoaded> {
         StreamDiscoveryContext {
@@ -136,8 +151,8 @@ impl StreamDiscoveryContext<states::DataLoaded> {
         &self.stream_ids
     }
 
-    /// Convert back to initialized state for next iteration
-    pub fn into_initialized(self) -> StreamDiscoveryContext<states::Initialized> {
+    /// Continue to next iteration
+    pub fn into_ready(self) -> StreamDiscoveryContext<states::Ready> {
         StreamDiscoveryContext {
             stream_ids: self.stream_ids,
             iteration: self.iteration,

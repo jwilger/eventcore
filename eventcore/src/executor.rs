@@ -688,7 +688,8 @@ where
         let context = StreamDiscoveryContext::new(
             command.read_streams(),
             options.max_stream_discovery_iterations,
-        );
+        )
+        .into_ready();
 
         self.execute_with_discovery(command, context, options, StreamResolver::new())
             .await
@@ -698,7 +699,7 @@ where
     async fn execute_with_discovery<C>(
         &self,
         command: C,
-        mut context: StreamDiscoveryContext<stream_discovery::states::Initialized>,
+        mut context: StreamDiscoveryContext<stream_discovery::states::Ready>,
         options: &ExecutionOptions,
         mut stream_resolver: StreamResolver,
     ) -> CommandResult<HashMap<StreamId, EventVersion>>
@@ -750,7 +751,7 @@ where
                     context: next_context,
                 } => {
                     // Continue with updated context in next iteration
-                    context = next_context.into_initialized();
+                    context = next_context.into_ready();
                     // Loop continues
                 }
                 IterationResult::LimitExceeded {
@@ -787,7 +788,7 @@ where
                 .await?;
 
         // Check for additional streams
-        let new_streams = result.needs_additional_streams(stream_resolver);
+        let new_streams = result.check_additional_streams(stream_resolver);
 
         if new_streams.is_empty() {
             let stream_events = result.prepare_stream_events();
@@ -1680,7 +1681,7 @@ where
             let scope_with_state = scope.reconstruct_state(&command);
 
             // Check if we need additional streams
-            let additional_streams = scope_with_state.needs_additional_streams(&stream_resolver);
+            let additional_streams = scope_with_state.check_additional_streams(&stream_resolver);
             if !additional_streams.is_empty() {
                 info!(
                     new_streams_count = additional_streams.len(),

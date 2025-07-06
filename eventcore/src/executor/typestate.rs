@@ -632,7 +632,7 @@ impl<C: Command, ES: EventStore> ExecutionScopeWithState<C, ES> {
     }
 
     /// Check if additional streams were requested
-    pub fn needs_additional_streams(&self, stream_resolver: &StreamResolver) -> Vec<StreamId> {
+    pub fn check_additional_streams(&self, stream_resolver: &StreamResolver) -> Vec<StreamId> {
         stream_resolver
             .additional_streams
             .iter()
@@ -655,7 +655,7 @@ impl<C: Command, ES: EventStore> ExecutionScopeWithWrites<C, ES> {
     }
 
     /// Check if additional streams were requested
-    pub fn needs_additional_streams(&self, stream_resolver: &StreamResolver) -> Vec<StreamId> {
+    pub fn check_additional_streams(&self, stream_resolver: &StreamResolver) -> Vec<StreamId> {
         stream_resolver
             .additional_streams
             .iter()
