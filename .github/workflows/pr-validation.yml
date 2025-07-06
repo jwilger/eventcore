@@ -49,10 +49,7 @@ jobs:
             const requiredSections = [
               '## Description',
               '## Type of Change',
-              '## Testing',
-              '## Security Checklist',
-              '## Code Quality',
-              '## Reviewer Checklist',
+              '## Submitter Checklist',
               '## Review Focus'
             ];
             
@@ -82,58 +79,35 @@ jobs:
               return;
             }
             
-            // Check for empty checkboxes in submitter sections (not Reviewer Checklist)
+            // Check for empty checkboxes in submitter checklist
             const checkboxPattern = /- \[ \]/g;
             
-            // Extract submitter sections that have checklists
+            // Extract submitter checklist section
             // Use negative lookahead to match until next ## (not ###)
-            const testingSection = body.match(/## Testing[\s\S]*?(?=\n##\s|$)/);
-            const securitySection = body.match(/## Security Checklist[\s\S]*?(?=\n##\s|$)/);
-            const codeQualitySection = body.match(/## Code Quality[\s\S]*?(?=\n##\s|$)/);
-            const reviewerSection = body.match(/## Reviewer Checklist[\s\S]*?(?=\n##\s|$)/);
+            const submitterSection = body.match(/## Submitter Checklist[\s\S]*?(?=\n##\s|$)/);
             
-            let submitterSectionsWithUnchecked = [];
-            let reviewerHasUnchecked = false;
+            let submitterHasUnchecked = false;
             
             // Debug logging
             console.log('=== DEBUG: Checking sections for unchecked items ===');
-            console.log('Testing section found:', !!testingSection);
-            console.log('Security section found:', !!securitySection);
-            console.log('Code Quality section found:', !!codeQualitySection);
-            console.log('Reviewer section found:', !!reviewerSection);
+            console.log('Submitter section found:', !!submitterSection);
             
-            if (securitySection) {
-              console.log('Security section content:', securitySection[0]);
-              console.log('Unchecked boxes in security:', securitySection[0].match(checkboxPattern));
+            if (submitterSection) {
+              console.log('Submitter section content:', submitterSection[0]);
+              console.log('Unchecked boxes in submitter:', submitterSection[0].match(checkboxPattern));
             }
             
-            // Check submitter sections for unchecked items
-            if (testingSection && testingSection[0].match(checkboxPattern)) {
-              console.log('Testing section has unchecked items');
-              submitterSectionsWithUnchecked.push('Testing');
+            // Check submitter section for unchecked items
+            if (submitterSection && submitterSection[0].match(checkboxPattern)) {
+              console.log('Submitter checklist has unchecked items');
+              submitterHasUnchecked = true;
             }
             
-            if (securitySection && securitySection[0].match(checkboxPattern)) {
-              console.log('Security section has unchecked items');
-              submitterSectionsWithUnchecked.push('Security Checklist');
-            }
+            console.log('Submitter has unchecked items:', submitterHasUnchecked);
             
-            if (codeQualitySection && codeQualitySection[0].match(checkboxPattern)) {
-              console.log('Code Quality section has unchecked items');
-              submitterSectionsWithUnchecked.push('Code Quality');
-            }
-            
-            // Check reviewer section separately
-            if (reviewerSection && reviewerSection[0].match(checkboxPattern)) {
-              reviewerHasUnchecked = true;
-            }
-            
-            console.log('Submitter sections with unchecked items:', submitterSectionsWithUnchecked);
-            console.log('Reviewer has unchecked items:', reviewerHasUnchecked);
-            
-            // If submitter sections have unchecked items, convert to draft
-            if (submitterSectionsWithUnchecked.length > 0) {
-              console.log('Converting PR to draft due to incomplete submitter checklists');
+            // If submitter checklist has unchecked items, convert to draft
+            if (submitterHasUnchecked) {
+              console.log('Converting PR to draft due to incomplete submitter checklist');
               
               let conversionWorked = false;
               
@@ -190,26 +164,22 @@ jobs:
               const draftMessage = conversionWorked ? `
               🔄 **PR Converted to Draft**
               
-              This PR has been automatically converted to draft status because the following submitter checklists have unchecked items:
-              ${submitterSectionsWithUnchecked.map(s => `- **${s}**`).join('\n')}
+              This PR has been automatically converted to draft status because the **Submitter Checklist** has unchecked items.
               
               **Next Steps:**
-              1. Review and check off all items in the submitter sections after verifying each one
-              2. Once all submitter checklists are complete, click "Ready for review"
-              3. The Reviewer Checklist should be completed by the reviewer, not the submitter
+              1. Review and check off all items in the Submitter Checklist after verifying each one
+              2. Once all checklist items are complete, click "Ready for review"
               
               **Note**: Each checkbox represents a quality gate that must be manually verified.
               ` : `
               ⚠️ **PR Should Be Draft**
               
-              This PR should be in draft status because the following submitter checklists have unchecked items:
-              ${submitterSectionsWithUnchecked.map(s => `- **${s}**`).join('\n')}
+              This PR should be in draft status because the **Submitter Checklist** has unchecked items.
               
               **Action Required:**
               1. Click "Convert to draft" on this PR
-              2. Review and check off all items in the submitter sections after verifying each one
-              3. Once all submitter checklists are complete, click "Ready for review"
-              4. The Reviewer Checklist should be completed by the reviewer, not the submitter
+              2. Review and check off all items in the Submitter Checklist after verifying each one
+              3. Once all checklist items are complete, click "Ready for review"
               
               **Note**: Automatic draft conversion is not available. Please manually click "Convert to draft" above.
               `;
@@ -221,14 +191,8 @@ jobs:
                 body: draftMessage
               });
               
-              core.setFailed('PR converted to draft due to incomplete submitter checklists');
+              core.setFailed('PR converted to draft due to incomplete submitter checklist');
               return;
             }
             
-            // If only reviewer checklist has unchecked items, that's expected - just fail the check
-            if (reviewerHasUnchecked) {
-              core.setFailed('Reviewer checklist incomplete - waiting for reviewer to complete');
-              return;
-            }
-            
-            console.log('✅ PR description follows template and all submitter checklists are complete');
+            console.log('✅ PR description follows template and submitter checklist is complete');
