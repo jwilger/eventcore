@@ -4,7 +4,7 @@
 ## Description
 
 <!-- Brief description of changes and motivation -->
-<!-- Note: GitHub Copilot will use the checklists below to guide its review -->
+<!-- Note: GitHub Copilot will use the checklist below to guide its review -->
 
 ## Type of Change
 
@@ -15,13 +15,6 @@
 - [ ] Performance improvement
 - [ ] Documentation update
 - [ ] Security enhancement
-
-## Testing
-
-<!-- CRITICAL: Do NOT check these boxes when creating PR - humans must verify each item -->
-- [ ] All tests pass locally (`cargo test --workspace`)
-- [ ] Added/updated tests for new functionality
-- [ ] Added/updated property-based tests for invariants
 
 ## Performance Impact
 
@@ -47,57 +40,19 @@ cargo bench --bench realistic_workloads -- --baseline main
 
 </details>
 
-## Security Checklist
+## Submitter Checklist
 
+<!-- CRITICAL: Do NOT check these boxes when creating PR - humans must verify each item -->
 <!-- AUTOMATION WARNING: These checkboxes are for HUMAN REVIEW ONLY - do not pre-check -->
-### Input Validation
-- [ ] All public API inputs use validated `nutype` types
-- [ ] No raw strings/primitives for domain concepts
-- [ ] Proper error messages without sensitive information
+<!-- PR will auto-convert to draft if these items are not checked by humans -->
 
-### Data Protection
-- [ ] No sensitive data (passwords, keys, PII) stored unencrypted
-- [ ] Proper use of `SecureString` or similar for sensitive fields
-- [ ] Audit trail considerations for compliance
-
-### Dependencies
-- [ ] Ran `cargo audit` - no vulnerabilities
-- [ ] New dependencies justified in PR description
-- [ ] Dependencies from reputable sources with active maintenance
-
-### Error Handling
-- [ ] All errors use proper Result types
-- [ ] No `unwrap()` in production code paths
-- [ ] Error messages don't leak implementation details
-
-## Code Quality
-
-<!-- IMPORTANT: Leave unchecked for human verification - PR will auto-convert to draft if checked -->
-### Type Safety
-- [ ] Illegal states made unrepresentable
-- [ ] Parse, don't validate - smart constructors used
-- [ ] Total functions - all cases handled
-
-### Performance
-- [ ] No unbounded allocations
-- [ ] Appropriate use of `&str` vs `String`
-- [ ] Batch operations where applicable
-- [ ] Resource cleanup guaranteed (RAII)
-
-### Documentation
-- [ ] Public APIs have doc comments with examples
-- [ ] Complex algorithms explained
-- [ ] Breaking changes noted in comments
-
-## Reviewer Checklist
-
-<!-- NOTE: This section is for REVIEWERS ONLY - submitters should NOT check these boxes -->
 - [ ] Code follows project style guidelines
-- [ ] Changes are well-tested
-- [ ] Documentation is clear and complete
-- [ ] Security considerations addressed
-- [ ] Performance impact acceptable
-- [ ] Breaking changes justified
+- [ ] Changes are well-documented
+- [ ] All tests pass
+- [ ] Performance implications have been considered
+- [ ] Security implications have been reviewed
+- [ ] Breaking changes are documented
+- [ ] The change is backward compatible where possible
 
 ## Review Focus
 
