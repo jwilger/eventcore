@@ -101,15 +101,6 @@ impl Default for ExecutionContext {
 
 use stream_discovery::{IterationResult, StreamDiscoveryContext};
 
-/// Result of command execution containing events and optional additional streams.
-#[derive(Debug)]
-struct CommandExecutionResult<Event> {
-    /// Events to be written to streams.
-    stream_events: Vec<StreamEvents<Event>>,
-    /// Additional streams discovered during execution (if any).
-    additional_streams: Option<Vec<StreamId>>,
-}
-
 /// Execution options for command execution with sensible defaults.
 ///
 /// By default, commands are executed with retry logic enabled for concurrency conflicts.

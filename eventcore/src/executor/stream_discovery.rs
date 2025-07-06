@@ -91,7 +91,7 @@ impl StreamDiscoveryContext<states::DataLoaded> {
     ) -> Result<Self, StreamDiscoveryContext<states::LimitExceeded>> {
         self.stream_ids.extend(new_streams);
 
-        if self.iteration >= self.max_iterations {
+        if self.iteration > self.max_iterations {
             Err(StreamDiscoveryContext {
                 stream_ids: self.stream_ids,
                 iteration: self.iteration,
