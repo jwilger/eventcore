@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 pub mod states {
     /// Initial state - first iteration starting
     pub struct Initial;
-    
+
     /// Ready for iteration - can load data
     pub struct Ready;
 
