@@ -46,13 +46,13 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 #### 1. Refactor executor.rs (2,956 lines) - **CRITICAL**
 **Problem**: Massive single file containing multiple distinct responsibilities
 **Tasks**:
-- [ ] Extract `execute_once` function (157 lines) - Split into pipeline stages
+- [x] Extract `execute_once` function (157 lines) - Split into pipeline stages (Implemented functional approach with type-state StreamDiscoveryContext)
 - [ ] Extract `execute_type_safe` function (139 lines) - Share common patterns
 - [ ] Extract `prepare_stream_events_with_complete_concurrency_control` function (140 lines) - Separate validation logic
 - [ ] Split executor.rs into modules:
   - [ ] `executor/core.rs` - Core execution logic
   - [ ] `executor/retry.rs` - Retry and circuit breaker logic
-  - [ ] `executor/stream_discovery.rs` - Stream discovery iteration logic
+  - [x] `executor/stream_discovery.rs` - Stream discovery iteration logic (Created with type-state pattern)
   - [ ] `executor/validation.rs` - Command validation
   - [ ] `executor/context.rs` - Execution context management
 
