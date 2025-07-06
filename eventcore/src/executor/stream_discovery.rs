@@ -132,6 +132,16 @@ impl StreamDiscoveryContext<states::DataLoaded> {
     pub fn stream_ids(&self) -> &[StreamId] {
         &self.stream_ids
     }
+    
+    /// Convert back to initialized state for next iteration
+    pub fn into_initialized(self) -> StreamDiscoveryContext<states::Initialized> {
+        StreamDiscoveryContext {
+            stream_ids: self.stream_ids,
+            iteration: self.iteration,
+            max_iterations: self.max_iterations,
+            _state: PhantomData,
+        }
+    }
 }
 
 impl StreamDiscoveryContext<states::LimitExceeded> {

@@ -736,12 +736,9 @@ where
                     return Ok(result_versions);
                 }
                 IterationResult::NeedsMoreStreams { context: next_context } => {
-                    // Continue with new context in next iteration
-                    context = StreamDiscoveryContext::new(
-                        next_context.stream_ids().to_vec(),
-                        next_context.remaining_iterations(),
-                    );
-                    // Loop continues with updated context
+                    // Continue with updated context in next iteration
+                    context = next_context.into_initialized();
+                    // Loop continues
                 }
                 IterationResult::LimitExceeded { context: limit_context } => {
                     return Err(CommandError::ValidationFailed(limit_context.error_message::<C>()));
@@ -768,11 +765,11 @@ where
         // Transform command execution into functional pipeline
         let result = self.create_execution_scope(stream_data.clone(), context.stream_ids(), options)
             .reconstruct_state(command)
-            .execute_command_pipeline(command, stream_resolver)
+            .execute_command(command, stream_resolver)
             .await?;
         
         // Check for additional streams
-        let new_streams = result.check_additional_streams(stream_resolver);
+        let new_streams = result.needs_additional_streams(stream_resolver);
         
         if new_streams.is_empty() {
             let stream_events = result.prepare_stream_events();

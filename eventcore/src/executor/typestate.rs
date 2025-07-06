@@ -631,14 +631,6 @@ impl<C: Command, ES: EventStore> ExecutionScopeWithState<C, ES> {
         .with_writes(stream_writes))
     }
     
-    /// Execute command in pipeline style for functional approach
-    pub async fn execute_command_pipeline(
-        self,
-        command: &C,
-        stream_resolver: &mut StreamResolver,
-    ) -> Result<ExecutionScopeWithWrites<C, ES>, CommandError> {
-        self.execute_command(command, stream_resolver).await
-    }
 
     /// Check if additional streams were requested
     pub fn needs_additional_streams(&self, stream_resolver: &StreamResolver) -> Vec<StreamId> {
@@ -671,11 +663,6 @@ impl<C: Command, ES: EventStore> ExecutionScopeWithWrites<C, ES> {
             .filter(|s| !self.scope.stream_ids.contains(s))
             .cloned()
             .collect()
-    }
-    
-    /// Check if additional streams were requested (alias for functional pipeline)
-    pub fn check_additional_streams(&self, stream_resolver: &StreamResolver) -> Vec<StreamId> {
-        self.needs_additional_streams(stream_resolver)
     }
 }
 
