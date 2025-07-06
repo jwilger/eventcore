@@ -1,5 +1,6 @@
 pub mod config;
 pub mod optimization;
+pub mod stream_discovery;
 pub mod typestate;
 
 #[cfg(test)]
@@ -98,38 +99,7 @@ impl Default for ExecutionContext {
     }
 }
 
-/// Context for managing stream discovery iteration state.
-#[derive(Debug, Clone)]
-struct StreamDiscoveryContext {
-    /// Current list of stream IDs being processed.
-    stream_ids: Vec<StreamId>,
-    /// Current iteration count.
-    iteration: usize,
-    /// Maximum allowed iterations before failing.
-    max_iterations: usize,
-}
-
-impl StreamDiscoveryContext {
-    /// Creates a new stream discovery context.
-    fn new(initial_streams: Vec<StreamId>, max_iterations: usize) -> Self {
-        Self {
-            stream_ids: initial_streams,
-            iteration: 0,
-            max_iterations,
-        }
-    }
-
-    /// Adds newly discovered streams and increments iteration count.
-    fn add_streams(&mut self, new_streams: Vec<StreamId>) {
-        self.stream_ids.extend(new_streams);
-        self.iteration += 1;
-    }
-
-    /// Increments the iteration counter for the current streams.
-    fn next_iteration(&mut self) {
-        self.iteration += 1;
-    }
-}
+use stream_discovery::{StreamDiscoveryContext, IterationResult};
 
 /// Result of command execution containing events and optional additional streams.
 #[derive(Debug)]
@@ -704,7 +674,6 @@ where
             max_stream_discovery_iterations = options.max_stream_discovery_iterations
         )
     )]
-    #[allow(clippy::too_many_lines)]
     async fn execute_once<C>(
         &self,
         command: C,
@@ -716,70 +685,125 @@ where
         for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
         ES::Event: From<C::Event> + Clone + serde::Serialize,
     {
-        let mut context = StreamDiscoveryContext::new(
+        let context = StreamDiscoveryContext::new(
             command.read_streams(),
             options.max_stream_discovery_iterations,
         );
-        let mut stream_resolver = StreamResolver::new();
-
+        
+        self.execute_with_discovery(command, context, options, StreamResolver::new()).await
+    }
+    
+    /// Recursive functional execution with stream discovery
+    async fn execute_with_discovery<C>(
+        &self,
+        command: C,
+        mut context: StreamDiscoveryContext<stream_discovery::states::Initialized>,
+        options: &ExecutionOptions,
+        mut stream_resolver: StreamResolver,
+    ) -> CommandResult<HashMap<StreamId, EventVersion>>
+    where
+        C: Command,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
+        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
+    {
+        // Transform recursion into iteration to avoid stack overflow
         loop {
-            // Move to next iteration and validate limits
-            context.next_iteration();
-            self.validate_iteration_limit::<C>(&context)?;
-
+            // Transition to data loaded state
+            let data_loaded_context = context.with_loaded_data();
+            
+            // Log with derived context
+            let log_ctx = data_loaded_context.log_context();
             info!(
-                iteration = context.iteration,
-                streams_count = context.stream_ids.len(),
+                %log_ctx,
                 "Reading streams for command execution"
             );
-
-            // Read streams with timeout and circuit breaker protection
-            let stream_data = self.read_streams_with_timeout_and_circuit_breaker(
-                &context.stream_ids,
-                options,
-            ).await?;
-
-            // Execute command in type-safe scope
-            let execution_result = self.execute_command_in_scope(
-                &command,
-                stream_data,
-                &context.stream_ids,
-                options,
-                &mut stream_resolver,
-            ).await?;
-
-            // Check for additional streams
-            if let Some(new_streams) = execution_result.additional_streams {
-                context.add_streams(new_streams);
-                continue;
+            
+            // Read streams
+            let stream_ids = data_loaded_context.stream_ids();
+            let stream_data = self.read_streams_with_timeout_and_circuit_breaker(stream_ids, options).await?;
+            
+            // Execute command and check for additional streams
+            match self.execute_iteration(&command, data_loaded_context, stream_data, options, &mut stream_resolver).await? {
+                IterationResult::Complete { stream_events } => {
+                    // Write events and return
+                    let result_versions = self.write_events_with_timeout_and_circuit_breaker(
+                        &stream_events,
+                        options,
+                    ).await?;
+                    
+                    self.log_success(&result_versions);
+                    return Ok(result_versions);
+                }
+                IterationResult::NeedsMoreStreams { context: next_context } => {
+                    // Continue with new context in next iteration
+                    context = StreamDiscoveryContext::new(
+                        next_context.stream_ids().to_vec(),
+                        next_context.remaining_iterations(),
+                    );
+                    // Loop continues with updated context
+                }
+                IterationResult::LimitExceeded { context: limit_context } => {
+                    return Err(CommandError::ValidationFailed(limit_context.error_message::<C>()));
+                }
             }
-
-            // Write events with timeout and circuit breaker protection
-            let result_versions = self.write_events_with_timeout_and_circuit_breaker(
-                &execution_result.stream_events,
-                options,
-            ).await?;
-
-            self.log_success(&result_versions);
-            return Ok(result_versions);
         }
     }
-
-    /// Validates that stream discovery iteration limit is not exceeded.
-    fn validate_iteration_limit<C: Command>(
+    
+    /// Execute a single iteration of command processing
+    async fn execute_iteration<C>(
         &self,
-        context: &StreamDiscoveryContext,
-    ) -> CommandResult<()> {
-        if context.iteration > context.max_iterations {
-            return Err(CommandError::ValidationFailed(format!(
-                "Command '{}' exceeded maximum stream discovery iterations ({}). This suggests the command is continuously discovering new streams. Current streams: {:?}",
-                std::any::type_name::<C>(),
-                context.max_iterations,
-                context.stream_ids.iter().map(std::convert::AsRef::as_ref).collect::<Vec<_>>()
-            )));
+        command: &C,
+        context: StreamDiscoveryContext<stream_discovery::states::DataLoaded>,
+        stream_data: crate::event_store::StreamData<ES::Event>,
+        options: &ExecutionOptions,
+        stream_resolver: &mut StreamResolver,
+    ) -> CommandResult<IterationResult<ES::Event>>
+    where
+        C: Command,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
+        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
+        ES::Event: From<C::Event> + Clone + serde::Serialize,
+    {
+        // Transform command execution into functional pipeline
+        let result = self.create_execution_scope(stream_data.clone(), context.stream_ids(), options)
+            .reconstruct_state(command)
+            .execute_command_pipeline(command, stream_resolver)
+            .await?;
+        
+        // Check for additional streams
+        let new_streams = result.check_additional_streams(stream_resolver);
+        
+        if new_streams.is_empty() {
+            let stream_events = result.prepare_stream_events();
+            Ok(IterationResult::Complete { stream_events })
+        } else {
+            match context.add_streams(new_streams) {
+                Ok(new_context) => Ok(IterationResult::NeedsMoreStreams { context: new_context }),
+                Err(limit_context) => Ok(IterationResult::LimitExceeded { context: limit_context }),
+            }
         }
-        Ok(())
     }
+    
+    /// Create execution scope in functional style
+    fn create_execution_scope<C>(
+        &self,
+        stream_data: crate::event_store::StreamData<ES::Event>,
+        stream_ids: &[StreamId],
+        options: &ExecutionOptions,
+    ) -> typestate::ExecutionScope<typestate::states::StreamsRead, C, ES>
+    where
+        C: Command,
+        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event>,
+        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
+    {
+        typestate::ExecutionScope::new(
+            stream_data,
+            stream_ids.to_vec(),
+            options.context.clone(),
+        )
+    }
+
 
     /// Reads streams with timeout and circuit breaker protection.
     async fn read_streams_with_timeout_and_circuit_breaker(
@@ -834,76 +858,6 @@ where
         }
     }
 
-    /// Executes command in type-safe scope and handles stream discovery.
-    async fn execute_command_in_scope<C>(
-        &self,
-        command: &C,
-        stream_data: crate::event_store::StreamData<ES::Event>,
-        stream_ids: &[StreamId],
-        options: &ExecutionOptions,
-        stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<CommandExecutionResult<ES::Event>>
-    where
-        C: Command,
-        C::Event: Clone + PartialEq + Eq + for<'a> TryFrom<&'a ES::Event> + serde::Serialize,
-        for<'a> <C::Event as TryFrom<&'a ES::Event>>::Error: std::fmt::Display,
-        ES::Event: From<C::Event> + Clone + serde::Serialize,
-    {
-        // Create execution scope
-        let scope = typestate::ExecutionScope::<typestate::states::StreamsRead, C, ES>::new(
-            stream_data.clone(),
-            stream_ids.to_vec(),
-            options.context.clone(),
-        );
-
-        // Reconstruct state
-        let scope_with_state = scope.reconstruct_state(command);
-
-        info!(
-            applied_events = stream_data.len(),
-            "Applied events to reconstruct state"
-        );
-
-        // Execute command business logic
-        let scope_with_writes = scope_with_state
-            .execute_command(command, stream_resolver)
-            .await
-            .map_err(|err| {
-                warn!(error = %err, "Command business logic failed");
-                err
-            })?;
-
-        // Check for additional streams
-        let new_streams = scope_with_writes.needs_additional_streams(stream_resolver);
-        let additional_streams = if new_streams.is_empty() {
-            None
-        } else {
-            info!(
-                new_streams_count = new_streams.len(),
-                "Command requested additional streams, re-reading"
-            );
-            Some(new_streams)
-        };
-
-        // Prepare stream events if no additional streams needed
-        let stream_events = if additional_streams.is_none() {
-            let stream_writes_count = scope_with_writes.write_count();
-            info!(
-                events_to_write = stream_writes_count,
-                final_streams_count = stream_ids.len(),
-                "Command execution complete, writing events"
-            );
-
-            scope_with_writes.prepare_stream_events()
-        } else {
-            Vec::new() // Will be ignored when additional_streams is Some
-        };
-
-        Ok(CommandExecutionResult {
-            stream_events,
-            additional_streams,
-        })
-    }
 
     /// Writes events with timeout and circuit breaker protection.
     async fn write_events_with_timeout_and_circuit_breaker(
