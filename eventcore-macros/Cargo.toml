@@ -1,11 +1,11 @@
 [package]
 name = "eventcore-macros"
-version = "0.1.0"
-edition = "2021"
-authors = ["EventCore Contributors"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Procedural macros for the EventCore event sourcing library"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/eventcore/eventcore"
 readme = "../README.md"
 keywords = ["event-sourcing", "cqrs", "macros", "ddd", "events"]
 categories = ["data-structures", "development-tools::procedural-macro-helpers"]

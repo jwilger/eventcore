@@ -74,39 +74,42 @@ jobs:
           echo "Timeout waiting for CI to complete"
           exit 1
       
-      - name: Extract versions from Cargo.toml files
+      - name: Extract and validate workspace version
         id: cargo_versions
         run: |
-          # Extract version from workspace root
-          ROOT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+          # Extract version from workspace root ([workspace.package] section)
+          ROOT_VERSION=$(grep -A 10 '^\[workspace.package\]' Cargo.toml | grep '^version = ' | head -1 | cut -d'"' -f2)
           echo "root_version=$ROOT_VERSION" >> $GITHUB_OUTPUT
+          echo "Workspace version: $ROOT_VERSION"
           
-          # Extract versions from all workspace members
-          EVENTCORE_VERSION=$(grep '^version = ' eventcore/Cargo.toml | head -1 | cut -d'"' -f2)
-          echo "eventcore_version=$EVENTCORE_VERSION" >> $GITHUB_OUTPUT
+          # Verify workspace members use workspace version
+          # Check that all workspace members use version.workspace = true
+          echo "Checking workspace member version declarations..."
           
-          POSTGRES_VERSION=$(grep '^version = ' eventcore-postgres/Cargo.toml | head -1 | cut -d'"' -f2)
-          echo "postgres_version=$POSTGRES_VERSION" >> $GITHUB_OUTPUT
+          for crate in eventcore eventcore-postgres eventcore-memory eventcore-macros; do
+            if [ -f "$crate/Cargo.toml" ]; then
+              VERSION_LINE=$(grep '^version' "$crate/Cargo.toml" || echo "")
+              if [[ "$VERSION_LINE" == *"version.workspace = true"* ]]; then
+                echo "✓ $crate: uses workspace version"
+              elif [[ "$VERSION_LINE" == *'version = "'* ]]; then
+                LOCAL_VERSION=$(echo "$VERSION_LINE" | cut -d'"' -f2)
+                if [ "$LOCAL_VERSION" != "$ROOT_VERSION" ]; then
+                  echo "✗ $crate: has local version $LOCAL_VERSION, expected $ROOT_VERSION"
+                  exit 1
+                else
+                  echo "✓ $crate: has matching local version $LOCAL_VERSION"
+                fi
+              else
+                echo "✗ $crate: no version declaration found"
+                exit 1
+              fi
+            else
+              echo "✗ $crate: Cargo.toml not found"
+              exit 1
+            fi
+          done
           
-          MEMORY_VERSION=$(grep '^version = ' eventcore-memory/Cargo.toml | head -1 | cut -d'"' -f2)
-          echo "memory_version=$MEMORY_VERSION" >> $GITHUB_OUTPUT
-          
-          MACROS_VERSION=$(grep '^version = ' eventcore-macros/Cargo.toml | head -1 | cut -d'"' -f2)
-          echo "macros_version=$MACROS_VERSION" >> $GITHUB_OUTPUT
-          
-          # Verify all versions match
-          if [ "$EVENTCORE_VERSION" != "$ROOT_VERSION" ] || 
-             [ "$POSTGRES_VERSION" != "$ROOT_VERSION" ] || 
-             [ "$MEMORY_VERSION" != "$ROOT_VERSION" ] || 
-             [ "$MACROS_VERSION" != "$ROOT_VERSION" ]; then
-            echo "Error: Not all crate versions match!"
-            echo "Root: $ROOT_VERSION"
-            echo "eventcore: $EVENTCORE_VERSION"
-            echo "eventcore-postgres: $POSTGRES_VERSION"
-            echo "eventcore-memory: $MEMORY_VERSION"
-            echo "eventcore-macros: $MACROS_VERSION"
-            exit 1
-          fi
+          echo "All workspace members have consistent version configuration"
       
       - name: Validate version match
         run: |
