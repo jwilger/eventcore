@@ -630,7 +630,6 @@ impl<C: Command, ES: EventStore> ExecutionScopeWithState<C, ES> {
         }
         .with_writes(stream_writes))
     }
-    
 
     /// Check if additional streams were requested
     pub fn needs_additional_streams(&self, stream_resolver: &StreamResolver) -> Vec<StreamId> {

@@ -10,13 +10,13 @@ use std::marker::PhantomData;
 pub mod states {
     /// Initial state with no streams loaded
     pub struct Initialized;
-    
+
     /// State with stream data loaded
     pub struct DataLoaded;
-    
+
     /// Discovery process is complete
     pub struct DiscoveryComplete;
-    
+
     /// Maximum iterations exceeded - terminal state
     pub struct LimitExceeded;
 }
@@ -48,7 +48,7 @@ pub enum IterationResult<Event> {
 
 impl StreamDiscoveryContext<states::Initialized> {
     /// Create a new stream discovery context
-    pub fn new(initial_streams: Vec<StreamId>, max_iterations: usize) -> Self {
+    pub const fn new(initial_streams: Vec<StreamId>, max_iterations: usize) -> Self {
         Self {
             stream_ids: initial_streams,
             iteration: 0,
@@ -56,7 +56,7 @@ impl StreamDiscoveryContext<states::Initialized> {
             _state: PhantomData,
         }
     }
-    
+
     /// Transition to data loaded state after reading streams
     pub fn with_loaded_data(self) -> StreamDiscoveryContext<states::DataLoaded> {
         StreamDiscoveryContext {
@@ -70,9 +70,12 @@ impl StreamDiscoveryContext<states::Initialized> {
 
 impl StreamDiscoveryContext<states::DataLoaded> {
     /// Add newly discovered streams and check iteration limit
-    pub fn add_streams(mut self, new_streams: Vec<StreamId>) -> Result<Self, StreamDiscoveryContext<states::LimitExceeded>> {
+    pub fn add_streams(
+        mut self,
+        new_streams: Vec<StreamId>,
+    ) -> Result<Self, StreamDiscoveryContext<states::LimitExceeded>> {
         self.stream_ids.extend(new_streams);
-        
+
         if self.iteration >= self.max_iterations {
             Err(StreamDiscoveryContext {
                 stream_ids: self.stream_ids,
@@ -84,7 +87,7 @@ impl StreamDiscoveryContext<states::DataLoaded> {
             Ok(self)
         }
     }
-    
+
     /// Mark discovery as complete
     pub fn complete(self) -> StreamDiscoveryContext<states::DiscoveryComplete> {
         StreamDiscoveryContext {
@@ -94,22 +97,22 @@ impl StreamDiscoveryContext<states::DataLoaded> {
             _state: PhantomData,
         }
     }
-    
+
     /// Get current iteration count
-    pub fn current_iteration(&self) -> usize {
+    pub const fn current_iteration(&self) -> usize {
         self.iteration
     }
-    
+
     /// Get remaining iterations
-    pub fn remaining_iterations(&self) -> usize {
+    pub const fn remaining_iterations(&self) -> usize {
         self.max_iterations.saturating_sub(self.iteration)
     }
-    
+
     /// Get stream count
     pub fn stream_count(&self) -> usize {
         self.stream_ids.len()
     }
-    
+
     /// Map over the stream IDs
     pub async fn map_streams<F, Fut, T, E>(&self, f: F) -> Result<T, E>
     where
@@ -118,7 +121,7 @@ impl StreamDiscoveryContext<states::DataLoaded> {
     {
         f(&self.stream_ids).await
     }
-    
+
     /// Derive log context from the current state
     pub fn log_context(&self) -> LogContext {
         LogContext {
@@ -127,12 +130,12 @@ impl StreamDiscoveryContext<states::DataLoaded> {
             max_iterations: self.max_iterations,
         }
     }
-    
+
     /// Access stream IDs immutably
     pub fn stream_ids(&self) -> &[StreamId] {
         &self.stream_ids
     }
-    
+
     /// Convert back to initialized state for next iteration
     pub fn into_initialized(self) -> StreamDiscoveryContext<states::Initialized> {
         StreamDiscoveryContext {
