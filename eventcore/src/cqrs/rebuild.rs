@@ -321,21 +321,31 @@ where
 
     /// Rebuilds the projection using the specified strategy.
     #[instrument(skip(self), fields(projection = %self.projection.config().name))]
-    #[allow(clippy::too_many_lines)]
     pub async fn rebuild(&self, strategy: RebuildStrategy) -> CqrsResult<RebuildProgress> {
         info!("Starting projection rebuild with strategy: {:?}", strategy);
 
-        // Reset progress
-        {
-            let mut progress = self.progress.write().await;
-            *progress = RebuildProgress::new();
-        }
+        self.reset_progress().await;
+        self.clear_existing_state(&strategy).await?;
+        
+        let subscription_options = self.create_subscription_options(&strategy)?;
+        let mut subscription = self.setup_subscription_with_processor(subscription_options).await?;
+        
+        self.wait_for_rebuild_completion(&mut subscription).await?;
+        self.finalize_rebuild(&mut subscription).await
+    }
+
+    /// Resets progress tracking for a new rebuild operation.
+    async fn reset_progress(&self) {
+        let mut progress = self.progress.write().await;
+        *progress = RebuildProgress::new();
         self.events_processed.store(0, Ordering::SeqCst);
         self.models_updated.store(0, Ordering::SeqCst);
         self.is_cancelled.store(false, Ordering::SeqCst);
+    }
 
-        // Clear existing state based on strategy
-        match &strategy {
+    /// Clears existing state based on the rebuild strategy.
+    async fn clear_existing_state(&self, strategy: &RebuildStrategy) -> CqrsResult<()> {
+        match strategy {
             RebuildStrategy::FromBeginning => {
                 info!("Clearing all read models and checkpoints");
                 self.read_model_store
@@ -360,9 +370,12 @@ where
                 // Would clear only models affected by specified streams
             }
         }
+        Ok(())
+    }
 
-        // Create subscription options based on rebuild strategy
-        let subscription_options = match &strategy {
+    /// Creates subscription options based on the rebuild strategy.
+    fn create_subscription_options(&self, strategy: &RebuildStrategy) -> CqrsResult<SubscriptionOptions> {
+        let subscription_options = match strategy {
             RebuildStrategy::FromBeginning => SubscriptionOptions::CatchUpFromBeginning,
             RebuildStrategy::FromCheckpoint(checkpoint) => {
                 let position = crate::subscription::SubscriptionPosition::new(
@@ -384,7 +397,14 @@ where
                 SubscriptionOptions::CatchUpFromBeginning
             }
         };
+        Ok(subscription_options)
+    }
 
+    /// Sets up the subscription with a rebuild processor.
+    async fn setup_subscription_with_processor(
+        &self,
+        subscription_options: SubscriptionOptions,
+    ) -> CqrsResult<Box<dyn crate::subscription::Subscription<Event = E>>> {
         // Create the rebuild processor
         let processor = RebuildProcessor {
             projection: self.projection.clone(),
@@ -414,15 +434,20 @@ where
         subscription
             .start(
                 subscription_name,
-                subscription_options.clone(),
+                subscription_options,
                 Box::new(processor),
             )
             .await
             .map_err(|e| CqrsError::rebuild(format!("Failed to start subscription: {e}")))?;
 
-        // Wait for rebuild to complete or be cancelled
-        self.wait_for_rebuild_completion(&mut subscription).await?;
+        Ok(subscription)
+    }
 
+    /// Finalizes the rebuild by stopping the subscription and updating progress.
+    async fn finalize_rebuild(
+        &self,
+        subscription: &mut Box<dyn crate::subscription::Subscription<Event = E>>,
+    ) -> CqrsResult<RebuildProgress> {
         // Stop subscription
         subscription
             .stop()

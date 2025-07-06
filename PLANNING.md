@@ -60,10 +60,10 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 **Problem**: Complex rebuild logic with multiple responsibilities
 **Tasks**:
 - [x] Extract progress monitoring loop (wait_for_rebuild_completion method)
-- [ ] Extract event processing pipeline
-- [ ] Extract checkpoint management
-- [ ] Extract error handling patterns
-- [ ] Create separate functions for each rebuild phase
+- [x] Extract event processing pipeline (setup_subscription_with_processor method)
+- [x] Extract checkpoint management (finalize_rebuild method)
+- [x] Extract error handling patterns (clear_existing_state method)
+- [x] Create separate functions for each rebuild phase (reset_progress, create_subscription_options, etc.)
 
 #### 3. Refactor resource.rs (1,415 lines) - **HIGH**
 **Problem**: Single file handling all resource lifecycle patterns
