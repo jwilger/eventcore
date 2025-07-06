@@ -70,7 +70,7 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 **Problem**: Single file handling all resource lifecycle patterns
 **Tasks**:
 - [x] Extract phantom type definitions to `resource/types.rs`
-- [ ] Move concrete implementations to `resource/implementations.rs`
+- [x] Move concrete implementations to `resource/implementations.rs`
 - [ ] Create `resource/lifecycle.rs` for acquisition/release patterns
 - [ ] Create `resource/pool.rs` for resource pooling
 - [ ] Create `resource/monitor.rs` for resource monitoring

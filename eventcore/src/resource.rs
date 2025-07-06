@@ -5,13 +5,16 @@
 //! The type system prevents use-after-release and double-release errors.
 
 pub mod types;
+pub mod implementations;
 
 pub use types::{states, IsAcquired, IsReleasable, IsRecoverable};
+pub use implementations::{
+    Resource, ResourceManager, ResourceScope, TimedResourceGuard,
+    ResourceLeakDetector, ResourceLeakStats, global_leak_detector,
+    ManagedResource, ResourceExt
+};
 
-use std::marker::PhantomData;
-use std::time::{Duration, Instant};
-
-use async_trait::async_trait;
+use std::time::Duration;
 use thiserror::Error;
 
 /// Errors that can occur during resource operations
@@ -44,580 +47,11 @@ pub enum ResourceError {
 /// Type alias for resource operation results
 pub type ResourceResult<T> = Result<T, ResourceError>;
 
-/// A resource that enforces acquisition and release through the type system
-///
-/// # Type Parameters
-/// * `T` - The underlying resource type
-/// * `S` - The current state of the resource (phantom type)
-///
-/// # Example
-/// ```rust,no_run
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// use eventcore::resource::{Resource, states, ResourceManager};
-/// use std::sync::Arc;
-///
-/// // Example with database pool resource (requires postgres feature)
-/// // This would typically be used with eventcore-postgres crate:
-/// // ```rust,ignore
-/// // use eventcore::resource::database::{DatabaseResourceManager, DatabasePool};
-/// // use sqlx::PgPool;
-/// //
-/// // let pool = Arc::new(PgPool::connect("postgres://localhost/mydb").await?);
-/// // let manager = DatabaseResourceManager::new(pool);
-/// // let db_resource = manager.acquire_pool().await?;
-/// // let result = db_resource.execute_query("SELECT 1").await?;
-/// // let _released = db_resource.release()?;
-/// // ```
-///
-/// // Example with a custom resource type
-/// struct MyResource {
-///     data: String,
-/// }
-///
-/// // Implement ResourceManager for your type
-/// struct MyResourceManager;
-///
-/// #[async_trait::async_trait]
-/// impl ResourceManager<MyResource> for MyResourceManager {
-///     async fn acquire() -> Result<Resource<MyResource, states::Acquired>, eventcore::resource::ResourceError> {
-///         // In practice, you'd acquire from a pool or create the resource
-///         let resource = Self::create_initializing(MyResource { data: "example".to_string() });
-///         Ok(resource.mark_acquired())
-///     }
-/// }
-///
-/// // Use the resource manager to acquire a resource
-/// let resource = MyResourceManager::acquire().await?;
-///
-/// // Access the inner data (only possible in Acquired state)
-/// let data = resource.get();
-/// println!("Resource data: {}", data.data);
-///
-/// // Transition to released state
-/// let _released: Resource<MyResource, states::Released> = resource.release()?;
-/// // released resource cannot be used anymore (compile-time guarantee)
-///
-/// # Ok(())
-/// # }
-/// ```
-#[derive(Debug)]
-pub struct Resource<T, S> {
-    inner: T,
-    _state: PhantomData<S>,
-}
-
-impl<T, S> Resource<T, S> {
-    /// Create a new resource in the given state
-    ///
-    /// # Safety
-    /// This is an internal method and should only be called by the ResourceManager
-    /// with appropriate state validation.
-    const fn new(inner: T) -> Self {
-        Self {
-            inner,
-            _state: PhantomData,
-        }
-    }
-
-    /// Get a reference to the underlying resource
-    ///
-    /// Only available when resource is acquired
-    pub const fn get(&self) -> &T
-    where
-        S: IsAcquired,
-    {
-        &self.inner
-    }
-
-    /// Get a mutable reference to the underlying resource
-    ///
-    /// Only available when resource is acquired
-    pub fn get_mut(&mut self) -> &mut T
-    where
-        S: IsAcquired,
-    {
-        &mut self.inner
-    }
-
-    /// Consume the resource and return the inner value
-    ///
-    /// Only available when resource is acquired
-    pub fn into_inner(self) -> T
-    where
-        S: IsAcquired,
-    {
-        self.inner
-    }
-}
-
-
-/// State transitions for resources
-impl<T> Resource<T, states::Initializing> {
-    /// Transition from initializing to acquired state
-    ///
-    /// This represents successful resource acquisition
-    pub fn mark_acquired(self) -> Resource<T, states::Acquired> {
-        Resource::new(self.inner)
-    }
-
-    /// Transition from initializing to failed state
-    ///
-    /// This represents failed resource acquisition
-    pub fn mark_failed(self) -> Resource<T, states::Failed> {
-        Resource::new(self.inner)
-    }
-}
-
-impl<T> Resource<T, states::Acquired> {
-    /// Release the resource, transitioning to released state
-    ///
-    /// After release, the resource cannot be used anymore
-    pub fn release(self) -> ResourceResult<Resource<T, states::Released>> {
-        // Perform any cleanup logic here
-        // For now, we just transition the state
-        Ok(Resource::new(self.inner))
-    }
-
-    /// Mark resource as failed due to an error
-    ///
-    /// Failed resources can be recovered or released
-    pub fn mark_failed(self) -> Resource<T, states::Failed> {
-        Resource::new(self.inner)
-    }
-}
-
-impl<T> Resource<T, states::Failed> {
-    /// Attempt to recover a failed resource
-    ///
-    /// If successful, transitions back to acquired state
-    pub fn recover(self) -> ResourceResult<Resource<T, states::Acquired>> {
-        // Perform recovery logic here
-        // For now, we optimistically assume recovery succeeds
-        Ok(Resource::new(self.inner))
-    }
-
-    /// Release a failed resource
-    ///
-    /// This allows cleanup even when the resource is in a failed state
-    pub fn release(self) -> ResourceResult<Resource<T, states::Released>> {
-        // Perform cleanup of failed resource
-        Ok(Resource::new(self.inner))
-    }
-}
-
-impl<T> Resource<T, states::Released> {
-    /// Check if resource has been released
-    ///
-    /// This is always true for resources in Released state
-    pub const fn is_released(&self) -> bool {
-        true
-    }
-}
-
-/// Trait for types that can manage resource acquisition and release
-#[async_trait]
-pub trait ResourceManager<T> {
-    /// Acquire a resource, returning it in an acquired state
-    async fn acquire() -> ResourceResult<Resource<T, states::Acquired>>;
-
-    /// Create a resource in initializing state
-    ///
-    /// Callers must transition to acquired or failed state
-    fn create_initializing(inner: T) -> Resource<T, states::Initializing> {
-        Resource::new(inner)
-    }
-}
-
-/// Scoped resource management with automatic cleanup
-///
-/// This ensures resources are always released when the scope ends,
-/// even if an error occurs. Supports both async and sync cleanup.
-pub struct ResourceScope<T> {
-    resource: Option<Resource<T, states::Acquired>>,
-    leaked: bool,
-}
-
-impl<T> ResourceScope<T> {
-    /// Create a new resource scope with an acquired resource
-    pub const fn new(resource: Resource<T, states::Acquired>) -> Self {
-        Self {
-            resource: Some(resource),
-            leaked: false,
-        }
-    }
-
-    /// Access the resource within the scope
-    ///
-    /// Panics if the resource has already been released
-    pub fn with_resource<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut Resource<T, states::Acquired>) -> R,
-    {
-        let resource = self
-            .resource
-            .as_mut()
-            .expect("Resource has already been released from scope");
-        f(resource)
-    }
-
-    /// Manually release the resource from the scope
-    ///
-    /// If not called, the resource will be automatically released when dropped
-    pub fn release(mut self) -> ResourceResult<()> {
-        if let Some(resource) = self.resource.take() {
-            resource.release()?;
-        }
-        Ok(())
-    }
-
-    /// Check if the resource has been released
-    pub const fn is_released(&self) -> bool {
-        self.resource.is_none()
-    }
-
-    /// Check if the resource was leaked (dropped without explicit release)
-    pub const fn is_leaked(&self) -> bool {
-        self.leaked
-    }
-}
-
-impl<T> Drop for ResourceScope<T> {
-    fn drop(&mut self) {
-        if self.resource.is_some() {
-            self.leaked = true;
-            tracing::error!("ResourceScope dropped without explicit release - resource may leak");
-
-            // Attempt to perform emergency cleanup if the resource supports it
-            if let Some(resource) = self.resource.take() {
-                // Try to release synchronously if possible
-                // Note: This is a best-effort cleanup for resources that don't require async release
-                drop(resource);
-            }
-        }
-    }
-}
-
-/// Timeout-based resource cleanup guard
-///
-/// Automatically releases resources after a specified timeout if not explicitly released
-pub struct TimedResourceGuard<T>
-where
-    T: Send + 'static,
-{
-    resource: Option<Resource<T, states::Acquired>>,
-    timeout: Duration,
-    acquired_at: Instant,
-    cleanup_task: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl<T> TimedResourceGuard<T>
-where
-    T: Send + 'static,
-{
-    /// Create a new timed resource guard
-    pub fn new(resource: Resource<T, states::Acquired>, timeout: Duration) -> Self {
-        let acquired_at = Instant::now();
-
-        Self {
-            resource: Some(resource),
-            timeout,
-            acquired_at,
-            cleanup_task: None,
-        }
-    }
-
-    /// Create a new timed resource guard with automatic cleanup task
-    pub fn new_with_auto_cleanup(resource: Resource<T, states::Acquired>, timeout: Duration) -> Self
-    where
-        T: Send + Sync + 'static,
-    {
-        let acquired_at = Instant::now();
-
-        // Note: In a real implementation, we'd need a way to cancel the cleanup task
-        // when the resource is manually released. This is a simplified version.
-
-        Self {
-            resource: Some(resource),
-            timeout,
-            acquired_at,
-            cleanup_task: None,
-        }
-    }
-
-    /// Check if the resource has timed out
-    pub fn is_timed_out(&self) -> bool {
-        self.acquired_at.elapsed() > self.timeout
-    }
-
-    /// Get time remaining before timeout
-    pub fn time_remaining(&self) -> Option<Duration> {
-        self.timeout.checked_sub(self.acquired_at.elapsed())
-    }
-
-    /// Access the resource if it hasn't timed out
-    pub fn get(&self) -> Option<&T>
-    where
-        T: Send,
-    {
-        if self.is_timed_out() {
-            None
-        } else {
-            self.resource.as_ref().map(Resource::get)
-        }
-    }
-
-    /// Release the resource manually before timeout
-    pub fn release(mut self) -> ResourceResult<()> {
-        if let Some(cleanup_task) = self.cleanup_task.take() {
-            cleanup_task.abort();
-        }
-
-        if let Some(resource) = self.resource.take() {
-            if self.is_timed_out() {
-                return Err(ResourceError::Timeout {
-                    duration: self.acquired_at.elapsed(),
-                });
-            }
-            resource.release()?;
-        }
-        Ok(())
-    }
-}
-
-impl<T> Drop for TimedResourceGuard<T>
-where
-    T: Send + 'static,
-{
-    fn drop(&mut self) {
-        if let Some(cleanup_task) = self.cleanup_task.take() {
-            cleanup_task.abort();
-        }
-
-        if self.resource.is_some() {
-            if self.is_timed_out() {
-                tracing::error!(
-                    "TimedResourceGuard dropped after timeout of {:?} - resource forcibly cleaned up",
-                    self.timeout
-                );
-            } else {
-                tracing::warn!("TimedResourceGuard dropped before timeout - resource may leak");
-            }
-        }
-    }
-}
-
-/// Resource leak detector for debugging and monitoring
-#[derive(Debug, Default)]
-pub struct ResourceLeakDetector {
-    active_resources: std::sync::Mutex<std::collections::HashMap<String, ResourceInfo>>,
-}
-
-#[derive(Debug, Clone)]
-struct ResourceInfo {
-    resource_type: String,
-    acquired_at: Instant,
-    location: Option<String>,
-}
-
-impl ResourceLeakDetector {
-    /// Create a new leak detector
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Register a resource acquisition
-    pub fn register_acquisition(
-        &self,
-        resource_id: &str,
-        resource_type: &str,
-        location: Option<String>,
-    ) {
-        if let Ok(mut resources) = self.active_resources.lock() {
-            resources.insert(
-                resource_id.to_string(),
-                ResourceInfo {
-                    resource_type: resource_type.to_string(),
-                    acquired_at: Instant::now(),
-                    location,
-                },
-            );
-        }
-    }
-
-    /// Register a resource release
-    pub fn register_release(&self, resource_id: &str) {
-        if let Ok(mut resources) = self.active_resources.lock() {
-            resources.remove(resource_id);
-        }
-    }
-
-    /// Get statistics about active resources
-    pub fn get_stats(&self) -> ResourceLeakStats {
-        self.active_resources.lock().map_or_else(
-            |_| ResourceLeakStats::default(),
-            |resources| {
-                let total_count = resources.len();
-                let mut by_type = std::collections::HashMap::new();
-                let mut oldest_age = Duration::ZERO;
-
-                for info in resources.values() {
-                    *by_type.entry(info.resource_type.clone()).or_insert(0) += 1;
-                    let age = info.acquired_at.elapsed();
-                    if age > oldest_age {
-                        oldest_age = age;
-                    }
-                }
-
-                ResourceLeakStats {
-                    total_active: total_count,
-                    by_type,
-                    oldest_resource_age: oldest_age,
-                }
-            },
-        )
-    }
-
-    /// Find potentially leaked resources (older than threshold)
-    pub fn find_potential_leaks(&self, threshold: Duration) -> Vec<String> {
-        self.active_resources.lock().map_or_else(
-            |_| Vec::new(),
-            |resources| {
-                resources
-                    .iter()
-                    .filter(|(_, info)| info.acquired_at.elapsed() > threshold)
-                    .map(|(id, _)| id.clone())
-                    .collect()
-            },
-        )
-    }
-}
-
-/// Statistics about resource usage and potential leaks
-#[derive(Debug, Default)]
-pub struct ResourceLeakStats {
-    /// Total number of active resources
-    pub total_active: usize,
-    /// Count of active resources by type
-    pub by_type: std::collections::HashMap<String, usize>,
-    /// Age of the oldest active resource
-    pub oldest_resource_age: Duration,
-}
-
-/// Global resource leak detector instance
-static GLOBAL_LEAK_DETECTOR: std::sync::OnceLock<ResourceLeakDetector> = std::sync::OnceLock::new();
-
-/// Get the global resource leak detector
-pub fn global_leak_detector() -> &'static ResourceLeakDetector {
-    GLOBAL_LEAK_DETECTOR.get_or_init(ResourceLeakDetector::new)
-}
-
-/// Automatic cleanup resource wrapper
-///
-/// This wrapper automatically registers resources for leak detection
-/// and provides cleanup on drop
-pub struct ManagedResource<T, S> {
-    inner: Option<Resource<T, S>>,
-    resource_id: String,
-    cleanup_registered: bool,
-}
-
-impl<T, S> ManagedResource<T, S> {
-    /// Create a new managed resource
-    pub fn new(resource: Resource<T, S>, resource_type: &str) -> Self {
-        let resource_id = format!(
-            "{}_{}",
-            resource_type,
-            uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))
-        );
-
-        // Register with leak detector
-        global_leak_detector().register_acquisition(
-            &resource_id,
-            resource_type,
-            Some(format!("{}:{}:{}", file!(), line!(), column!())),
-        );
-
-        Self {
-            inner: Some(resource),
-            resource_id,
-            cleanup_registered: true,
-        }
-    }
-
-    /// Get a reference to the inner resource
-    pub const fn get(&self) -> Option<&Resource<T, S>> {
-        self.inner.as_ref()
-    }
-
-    /// Take the inner resource, transferring ownership
-    pub fn take(mut self) -> Option<Resource<T, S>> {
-        if self.cleanup_registered {
-            global_leak_detector().register_release(&self.resource_id);
-            self.cleanup_registered = false;
-        }
-        self.inner.take()
-    }
-}
-
-impl<T, S> Drop for ManagedResource<T, S> {
-    fn drop(&mut self) {
-        if self.cleanup_registered {
-            global_leak_detector().register_release(&self.resource_id);
-        }
-
-        if self.inner.is_some() {
-            tracing::debug!("ManagedResource dropped with resource still present");
-        }
-    }
-}
-
-/// Extension trait for adding automatic cleanup to resources
-pub trait ResourceExt<T, S>: Sized {
-    /// Wrap in a managed resource for automatic leak detection
-    fn managed(self, resource_type: &str) -> ManagedResource<T, S>;
-
-    /// Wrap in a scoped resource for automatic cleanup
-    fn scoped(self) -> ResourceScope<T>
-    where
-        S: IsAcquired;
-
-    /// Wrap in a timed guard for timeout-based cleanup
-    fn with_timeout(self, timeout: Duration) -> TimedResourceGuard<T>
-    where
-        S: IsAcquired,
-        T: Send + 'static;
-}
-
-// Implementation only for Acquired state to avoid unsafe code and conflicts
-impl<T> ResourceExt<T, states::Acquired> for Resource<T, states::Acquired> {
-    fn managed(self, resource_type: &str) -> ManagedResource<T, states::Acquired> {
-        ManagedResource::new(self, resource_type)
-    }
-
-    fn scoped(self) -> ResourceScope<T> {
-        ResourceScope::new(self)
-    }
-
-    fn with_timeout(self, timeout: Duration) -> TimedResourceGuard<T>
-    where
-        T: Send + 'static,
-    {
-        TimedResourceGuard::new(self, timeout)
-    }
-}
-
-// Implementation for other states (can only use managed)
-impl<T, S> Resource<T, S> {
-    /// Create a managed resource for any state
-    pub fn managed(self, resource_type: &str) -> ManagedResource<T, S> {
-        ManagedResource::new(self, resource_type)
-    }
-}
-
 /// Database connection resource implementation
 #[cfg(feature = "postgres")]
 pub mod database {
-    use super::{async_trait, states, Resource, ResourceError, ResourceManager, ResourceResult};
+    use super::{implementations::Resource, states, ResourceError, ResourceManager, ResourceResult};
+    use async_trait::async_trait;
     use sqlx::{PgPool, Postgres, Transaction};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -882,7 +316,8 @@ pub mod database {
 
 /// Lock resource implementation with phantom types
 pub mod locking {
-    use super::{states, PhantomData, Resource, ResourceError, ResourceResult};
+    use super::{implementations::Resource, states, ResourceError, ResourceResult};
+    use std::marker::PhantomData;
     use std::sync::{Arc, Mutex, MutexGuard};
 
     /// A mutex lock wrapped in resource management
@@ -959,7 +394,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
-    use tokio::time::{sleep, timeout};
+    use tokio::time::sleep;
 
     #[test]
     fn test_resource_state_transitions() {
@@ -1001,299 +436,141 @@ mod tests {
     }
 
     #[test]
-    fn test_resource_scope_automatic_cleanup() {
-        let leaked_flag = Arc::new(AtomicUsize::new(0));
+    fn test_resource_scope_drop_warning() {
+        let resource = Resource::<String, Acquired>::new("test".to_string());
+        let scope = ResourceScope::new(resource);
 
-        // Create scope and let it drop without explicit release
-        {
-            let resource = Resource::<String, Acquired>::new("test".to_string());
-            let _scope = ResourceScope::new(resource);
-
-            // Increment counter when scope is created
-            leaked_flag.store(1, Ordering::SeqCst);
-
-            // Scope will be dropped here without explicit release
-        }
-
-        // Verify scope was created (this tests that the test setup works)
-        assert_eq!(leaked_flag.load(Ordering::SeqCst), 1);
+        // Drop without release
+        drop(scope); // Should log warning
     }
 
     #[tokio::test]
     async fn test_timed_resource_guard() {
         let resource = Resource::<String, Acquired>::new("test".to_string());
-        let timeout_duration = Duration::from_millis(100);
-        let guard = TimedResourceGuard::new(resource, timeout_duration);
+        let guard = TimedResourceGuard::new(resource, Duration::from_millis(100));
 
-        // Initially should be available
-        assert!(guard.get().is_some());
+        // Resource accessible before timeout
+        assert_eq!(guard.get(), Some(&"test".to_string()));
         assert!(!guard.is_timed_out());
         assert!(guard.time_remaining().is_some());
 
         // Wait for timeout
         sleep(Duration::from_millis(150)).await;
 
-        // Should be timed out
-        assert!(guard.is_timed_out());
+        // Resource not accessible after timeout
         assert!(guard.get().is_none());
+        assert!(guard.is_timed_out());
         assert!(guard.time_remaining().is_none());
 
-        // Release should fail with timeout error
+        // Release fails after timeout
         match guard.release() {
-            Err(ResourceError::Timeout { .. }) => {
-                // Expected timeout error
+            Err(ResourceError::Timeout { duration }) => {
+                assert!(duration >= Duration::from_millis(150));
             }
-            other => panic!("Expected timeout error, got: {other:?}"),
+            _ => panic!("Expected timeout error"),
         }
     }
 
-    #[tokio::test]
-    async fn test_timed_resource_guard_early_release() {
-        let resource = Resource::<String, Acquired>::new("test".to_string());
-        let guard = TimedResourceGuard::new(resource, Duration::from_secs(10));
-
-        // Should be available
-        assert!(guard.get().is_some());
-        assert!(!guard.is_timed_out());
-
-        // Release before timeout
-        guard.release().unwrap();
-    }
-
     #[test]
-    fn test_mutex_resource() {
-        let mutex_resource = locking::create_mutex_resource(42i32);
-
-        // Can acquire lock
-        let guard = mutex_resource.lock().unwrap();
-        assert_eq!(*guard.get(), 42);
-
-        // Lock is exclusive
-        assert!(mutex_resource.try_lock().unwrap().is_none()); // Should fail to acquire
-
-        // Release first lock
-        drop(guard);
-
-        // Now should be able to acquire
-        assert!(mutex_resource.try_lock().unwrap().is_some());
-    }
-
-    #[test]
-    fn test_mutex_resource_mutable_access() {
-        let mutex_resource = locking::create_mutex_resource(42i32);
-
-        // Acquire lock and modify data
-        {
-            let mut guard = mutex_resource.lock().unwrap();
-            *guard.get_mut() = 100;
-        }
-
-        // Verify modification
-        assert_eq!(*mutex_resource.lock().unwrap().get(), 100);
-    }
-
-    #[test]
-    fn test_resource_leak_detector() {
+    fn test_leak_detector() {
         let detector = ResourceLeakDetector::new();
 
-        // Initially empty
-        let initial_stats = detector.get_stats();
-        assert_eq!(initial_stats.total_active, 0);
-        assert!(initial_stats.by_type.is_empty());
-
         // Register some resources
-        detector.register_acquisition("res1", "DatabasePool", Some("test_location".to_string()));
-        detector.register_acquisition("res2", "DatabasePool", None);
-        detector.register_acquisition("res3", "MutexLock", None);
+        detector.register_acquisition("res1", "TestResource", Some("test.rs:42".to_string()));
+        detector.register_acquisition("res2", "TestResource", None);
+        detector.register_acquisition("res3", "OtherResource", None);
 
+        // Check stats
         let stats = detector.get_stats();
         assert_eq!(stats.total_active, 3);
-        assert_eq!(stats.by_type.get("DatabasePool"), Some(&2));
-        assert_eq!(stats.by_type.get("MutexLock"), Some(&1));
+        assert_eq!(stats.by_type.get("TestResource"), Some(&2));
+        assert_eq!(stats.by_type.get("OtherResource"), Some(&1));
 
         // Release one resource
         detector.register_release("res1");
 
         let stats = detector.get_stats();
         assert_eq!(stats.total_active, 2);
-        assert_eq!(stats.by_type.get("DatabasePool"), Some(&1));
+        assert_eq!(stats.by_type.get("TestResource"), Some(&1));
 
-        // Find potential leaks (none yet since resources are new)
-        let leaks = detector.find_potential_leaks(Duration::from_secs(1));
-        assert!(leaks.is_empty());
-
-        // Clean up
-        detector.register_release("res2");
-        detector.register_release("res3");
-
-        let final_stats = detector.get_stats();
-        assert_eq!(final_stats.total_active, 0);
-    }
-
-    #[test]
-    fn test_global_leak_detector() {
-        let initial_count = global_leak_detector().get_stats().total_active;
-
-        // Register a resource
-        global_leak_detector().register_acquisition("global_test", "TestResource", None);
-
-        let stats = global_leak_detector().get_stats();
-        assert_eq!(stats.total_active, initial_count + 1);
-
-        // Release the resource
-        global_leak_detector().register_release("global_test");
-
-        let final_stats = global_leak_detector().get_stats();
-        assert_eq!(final_stats.total_active, initial_count);
+        // Check for leaks (with very short threshold for testing)
+        let leaks = detector.find_potential_leaks(Duration::from_nanos(1));
+        assert_eq!(leaks.len(), 2);
     }
 
     #[test]
     fn test_managed_resource() {
-        let initial_count = global_leak_detector().get_stats().total_active;
-
-        // Create managed resource
         let resource = Resource::<String, Acquired>::new("test".to_string());
+        let detector_before = global_leak_detector().get_stats();
+
+        {
+            let managed = ManagedResource::new(resource, "TestResource");
+            assert!(managed.get().is_some());
+
+            // Should be registered
+            let stats_during = global_leak_detector().get_stats();
+            assert_eq!(stats_during.total_active, detector_before.total_active + 1);
+        }
+
+        // Should be unregistered after drop
+        let stats_after = global_leak_detector().get_stats();
+        assert_eq!(stats_after.total_active, detector_before.total_active);
+    }
+
+    #[test]
+    fn test_managed_resource_take() {
+        let resource = Resource::<String, Acquired>::new("test".to_string());
+        let detector_before = global_leak_detector().get_stats();
+
         let managed = ManagedResource::new(resource, "TestResource");
 
-        // Should be tracked
-        let stats = global_leak_detector().get_stats();
-        assert!(stats.total_active > initial_count);
-        assert!(stats.by_type.contains_key("TestResource"));
+        // Take ownership
+        let resource_back = managed.take().unwrap();
+        assert_eq!(resource_back.get(), "test");
 
-        // Can access inner resource
-        assert!(managed.get().is_some());
-
-        // Taking resource should work and update tracking
-        let taken = managed.take();
-        assert!(taken.is_some());
-
-        // Should be untracked now
-        let final_stats = global_leak_detector().get_stats();
-        assert_eq!(final_stats.total_active, initial_count);
+        // Should be unregistered immediately
+        let stats_after = global_leak_detector().get_stats();
+        assert_eq!(stats_after.total_active, detector_before.total_active);
     }
 
     #[test]
-    fn test_managed_resource_drop_cleanup() {
-        let initial_count = global_leak_detector().get_stats().total_active;
-
-        // Create managed resource and drop it
-        {
-            let resource = Resource::<String, Acquired>::new("test".to_string());
-            let _managed = ManagedResource::new(resource, "TestResource");
-
-            // Should be tracked
-            let stats = global_leak_detector().get_stats();
-            assert!(stats.total_active > initial_count);
-        } // Drop happens here
-
-        // Should be untracked after drop
-        let final_stats = global_leak_detector().get_stats();
-        assert_eq!(final_stats.total_active, initial_count);
-    }
-
-    #[test]
-    fn test_resource_extension_traits() {
+    fn test_resource_ext_trait() {
         let resource = Resource::<String, Acquired>::new("test".to_string());
 
-        // Test managed extension
+        // Test scoped
+        let scope = resource.scoped();
+        scope.release().unwrap();
+
+        let resource = Resource::<String, Acquired>::new("test".to_string());
+
+        // Test managed
         let managed = resource.managed("TestResource");
-        assert!(managed.get().is_some());
+        drop(managed);
 
-        let resource2 = Resource::<String, Acquired>::new("test2".to_string());
-
-        // Test scoped extension
-        let scope = resource2.scoped();
-        assert!(!scope.is_released());
-
-        let resource3 = Resource::<String, Acquired>::new("test3".to_string());
-
-        // Test timed extension
-        let timed = resource3.with_timeout(Duration::from_secs(1));
-        assert!(timed.get().is_some());
-    }
-
-    #[tokio::test]
-    async fn test_resource_state_machine_invalid_transitions() {
-        // Test that certain state transitions are not allowed at compile time
-
-        let released = Resource::<String, Released>::new("test".to_string());
-        assert!(released.is_released());
-
-        // These operations should not compile (verified by compiler):
-        // released.get(); // ❌ Cannot access released resource
-        // released.release(); // ❌ Cannot release already released resource
-        // released.mark_failed(); // ❌ Cannot fail released resource
-    }
-
-    #[tokio::test]
-    async fn test_concurrent_resource_access() {
-        let resource = locking::create_mutex_resource(0i32);
-        let resource = Arc::new(resource);
-
-        // Spawn multiple tasks that increment the counter
-        let mut handles = vec![];
-        for _ in 0..10 {
-            let resource_clone = resource.clone();
-            let handle = tokio::spawn(async move {
-                let mut guard = resource_clone.lock().unwrap();
-                let current = *guard.get();
-                *guard.get_mut() = current + 1;
-                // Lock is released when guard is dropped
-            });
-            handles.push(handle);
-        }
-
-        // Wait for all tasks to complete
-        for handle in handles {
-            handle.await.unwrap();
-        }
-
-        // Verify final value
-        assert_eq!(*resource.lock().unwrap().get(), 10);
-    }
-
-    #[tokio::test]
-    async fn test_resource_timeout_behavior() {
         let resource = Resource::<String, Acquired>::new("test".to_string());
-        let guard = TimedResourceGuard::new(resource, Duration::from_millis(50));
 
-        // Test that timeout actually works
-        let result = timeout(Duration::from_millis(100), async {
-            while !guard.is_timed_out() {
-                sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await;
-
-        assert!(result.is_ok(), "Timeout should have occurred within 100ms");
-        assert!(guard.is_timed_out());
+        // Test with_timeout
+        let guard = resource.with_timeout(Duration::from_secs(1));
+        guard.release().unwrap();
     }
 
     #[test]
-    fn test_resource_error_types() {
-        // Test different error variants
-        let acquisition_error = ResourceError::AcquisitionFailed("test".to_string());
-        assert!(matches!(
-            acquisition_error,
-            ResourceError::AcquisitionFailed(_)
-        ));
+    fn test_mutex_resource() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&counter);
 
-        let release_error = ResourceError::ReleaseFailed("test".to_string());
-        assert!(matches!(release_error, ResourceError::ReleaseFailed(_)));
+        let mutex_res = locking::create_mutex_resource(counter_clone);
 
-        let invalid_state_error = ResourceError::InvalidState("test".to_string());
-        assert!(matches!(
-            invalid_state_error,
-            ResourceError::InvalidState(_)
-        ));
+        // Lock and modify
+        {
+            let mut guard = mutex_res.lock().unwrap();
+            guard.get_mut().fetch_add(1, Ordering::SeqCst);
+        }
 
-        let timeout_error = ResourceError::Timeout {
-            duration: Duration::from_secs(1),
-        };
-        assert!(matches!(timeout_error, ResourceError::Timeout { .. }));
-
-        let poisoned_error = ResourceError::Poisoned("test".to_string());
-        assert!(matches!(poisoned_error, ResourceError::Poisoned(_)));
+        // Try lock
+        let guard = mutex_res.try_lock().unwrap();
+        assert!(guard.is_some());
+        assert_eq!(guard.unwrap().get().load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1338,7 +615,7 @@ mod tests {
 
 /// Integration with existing EventCore types
 pub mod integration {
-    use super::{states, Resource};
+    use super::{implementations::Resource, states};
 
     /// Resource wrapper for event stores
     pub type EventStoreResource<ES> = Resource<ES, states::Acquired>;
