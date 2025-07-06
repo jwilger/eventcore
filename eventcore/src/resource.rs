@@ -4,26 +4,15 @@
 //! Resources must be acquired before use and cannot be used after release.
 //! The type system prevents use-after-release and double-release errors.
 
+pub mod types;
+
+pub use types::{states, IsAcquired, IsReleasable, IsRecoverable};
+
 use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use thiserror::Error;
-
-/// Phantom type markers for resource states
-pub mod states {
-    /// Resource has been acquired and is ready for use
-    pub struct Acquired;
-
-    /// Resource has been released and cannot be used
-    pub struct Released;
-
-    /// Resource is in an intermediate state (e.g., during initialization)
-    pub struct Initializing;
-
-    /// Resource has failed and requires recovery
-    pub struct Failed;
-}
 
 /// Errors that can occur during resource operations
 #[derive(Debug, Error)]
@@ -161,38 +150,6 @@ impl<T, S> Resource<T, S> {
     }
 }
 
-/// Type-level marker trait for acquired resource states
-///
-/// This trait is sealed and can only be implemented for states that represent
-/// an acquired resource (e.g., `Acquired` but not `Released`)
-pub trait IsAcquired: private::Sealed {}
-
-impl IsAcquired for states::Acquired {}
-
-/// Type-level marker trait for releasable resource states
-///
-/// This trait determines which states allow resource release operations
-pub trait IsReleasable: private::Sealed {}
-
-impl IsReleasable for states::Acquired {}
-impl IsReleasable for states::Failed {}
-
-/// Type-level marker trait for recoverable resource states
-///
-/// This trait determines which states allow resource recovery operations
-pub trait IsRecoverable: private::Sealed {}
-
-impl IsRecoverable for states::Failed {}
-
-// Sealed trait pattern to prevent external implementations
-mod private {
-    pub trait Sealed {}
-
-    impl Sealed for super::states::Acquired {}
-    impl Sealed for super::states::Released {}
-    impl Sealed for super::states::Initializing {}
-    impl Sealed for super::states::Failed {}
-}
 
 /// State transitions for resources
 impl<T> Resource<T, states::Initializing> {
