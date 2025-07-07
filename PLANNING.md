@@ -318,6 +318,11 @@ All documented implementation phases have been completed. The project is ready f
   - Deleted failed v0.1.0 release and tag from GitHub
   - Bumped workspace version to 0.1.1 to avoid crates.io version conflicts
   - Updated all internal crate versions to 0.1.1 in workspace dependencies
+- [x] Fixed circular dependency preventing v0.1.1 release:
+  - eventcore-macros v0.1.1 required eventcore v0.1.1 in dev-dependencies but publishing order is macros-first
+  - Removed eventcore dev-dependency from eventcore-macros (only used for placeholder tests)
+  - Deleted failed v0.1.1 release and tag to allow clean re-release attempt
+  - This eliminates the circular dependency that prevented successful crates.io publishing
 
 ## Pull Request Workflow
 
