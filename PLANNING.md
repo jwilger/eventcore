@@ -313,6 +313,11 @@ All documented implementation phases have been completed. The project is ready f
   - Added all internal crates to workspace.dependencies in root Cargo.toml with path + version
   - Updated all internal dependency references to use `{ workspace = true }`
   - Eliminates manual version updates when bumping workspace version for releases
+- [x] Fixed version conflicts preventing re-release after partial crates.io publishing:
+  - v0.1.0 release failed after publishing eventcore-macros but before publishing other crates
+  - Deleted failed v0.1.0 release and tag from GitHub
+  - Bumped workspace version to 0.1.1 to avoid crates.io version conflicts
+  - Updated all internal crate versions to 0.1.1 in workspace dependencies
 
 ## Pull Request Workflow
 
