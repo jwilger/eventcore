@@ -323,6 +323,11 @@ All documented implementation phases have been completed. The project is ready f
   - Removed eventcore dev-dependency from eventcore-macros (only used for placeholder tests)
   - Deleted failed v0.1.1 release and tag to allow clean re-release attempt
   - This eliminates the circular dependency that prevented successful crates.io publishing
+- [x] Fixed crates.io publishing order to resolve dev-dependency circular dependency:
+  - Issue: eventcore has eventcore-memory and eventcore-postgres as dev-dependencies
+  - Problem: Release workflow was trying to publish eventcore before its dev-dependencies existed on crates.io
+  - Solution: Updated publishing order to macros → memory → postgres → eventcore
+  - This ensures all dev-dependencies are available before eventcore is published
 
 ## Pull Request Workflow
 
