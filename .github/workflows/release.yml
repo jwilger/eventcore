@@ -197,6 +197,7 @@ jobs:
       - name: Run tests
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
         run: cargo test --workspace
       
       - name: Publish crates
