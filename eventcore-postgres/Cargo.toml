@@ -13,7 +13,7 @@ description = "PostgreSQL adapter for EventCore event sourcing library"
 
 [dependencies]
 # Core dependencies
-eventcore = { path = "../eventcore" }
+eventcore = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
@@ -26,7 +26,7 @@ chrono = { workspace = true }
 # PostgreSQL specific
 sqlx = { workspace = true }
 parking_lot = { workspace = true }
-rand.workspace = true
+rand = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -35,7 +35,7 @@ insta = { workspace = true }
 criterion = { workspace = true }
 tracing-subscriber = { workspace = true }
 testcontainers = { workspace = true }
-eventcore-memory = { path = "../eventcore-memory" }
+eventcore-memory = { workspace = true }
 futures = { workspace = true }
 
 # Temporarily disabled until Command API migration is complete

@@ -51,6 +51,12 @@ parking_lot = "0.12.4"
 # Async stream utilities
 futures = "0.3.31"
 
+# Internal workspace crates
+eventcore = { version = "0.1.0", path = "eventcore" }
+eventcore-postgres = { version = "0.1.0", path = "eventcore-postgres" }
+eventcore-memory = { version = "0.1.0", path = "eventcore-memory" }
+eventcore-macros = { version = "0.1.0", path = "eventcore-macros" }
+
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

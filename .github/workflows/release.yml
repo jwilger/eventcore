@@ -304,6 +304,7 @@ jobs:
           EOF
           
           # Add CSS for version banner
+          mkdir -p website/book/theme/css
           cat >> website/book/theme/css/custom.css << EOF
           
           .version-banner {

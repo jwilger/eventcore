@@ -301,6 +301,19 @@ All documented implementation phases have been completed. The project is ready f
   - Removed unnecessary runtime parameter from `PeriodicReader::builder()`
   - Added required `grpc-tonic` feature to opentelemetry-otlp dependency
 
+### Release Workflow Fixes (2025-07-07)
+- [x] Fixed PostgreSQL test configuration (missing TEST_DATABASE_URL) in PR #31
+- [x] Fixed documentation sync script symlink issue in PR #31
+- [x] Fixed Cargo.toml version specifications for crates.io publishing in PR #33
+- [x] Fixed CSS directory creation for documentation builds in PR #33
+- [x] Fixed additional Cargo.toml syntax errors and dependency versions in PR #33:
+  - Fixed `rand.workspace = true` syntax error to `rand = { workspace = true }`
+  - Added missing version to eventcore-memory dev-dependency
+  - Implemented workspace dependencies for internal crates to enable automatic lockstep versioning
+  - Added all internal crates to workspace.dependencies in root Cargo.toml with path + version
+  - Updated all internal dependency references to use `{ workspace = true }`
+  - Eliminates manual version updates when bumping workspace version for releases
+
 ## Pull Request Workflow
 
 This project uses a **pull request-based workflow**. Direct commits to the main branch are not allowed. All changes must go through pull requests for review and CI validation.
