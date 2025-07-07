@@ -353,6 +353,13 @@ All documented implementation phases have been completed. The project is ready f
   - Must copy all checkboxes, headers, and structure exactly as written
   - Only fill in description content areas, never modify template structure
 
+### Dependency Management (2025-07-07)
+- [x] Fixed Dependabot creating PRs for internal workspace crates:
+  - Problem: Dependabot was suggesting version updates for our own workspace crates
+  - Cause: Internal crates listed in workspace.dependencies with version numbers
+  - Solution: Added ignore rules in dependabot.yml for all internal workspace crates
+  - This prevents spurious PRs while keeping version numbers for crates.io publishing
+
 ## Pull Request Workflow
 
 This project uses a **pull request-based workflow**. Direct commits to the main branch are not allowed. All changes must go through pull requests for review and CI validation.
