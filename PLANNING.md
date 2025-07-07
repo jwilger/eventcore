@@ -347,6 +347,11 @@ All documented implementation phases have been completed. The project is ready f
   - Final solution: Updated CLAUDE.md to instruct stripping out ALL HTML comments
   - HTML comments are instructions for automation, not content for the PR
   - Clean PR descriptions now contain only the visible template structure
+- [x] Enhanced PR template usage instructions:
+  - Problem: PR descriptions were not following template structure exactly
+  - Solution: Updated CLAUDE.md to emphasize using template VERBATIM
+  - Must copy all checkboxes, headers, and structure exactly as written
+  - Only fill in description content areas, never modify template structure
 
 ## Pull Request Workflow
 

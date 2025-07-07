@@ -440,12 +440,16 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    **STEP 2**: Process the template content for the PR description:
    - Read the template to understand the structure and requirements
    - **STRIP OUT ALL HTML COMMENTS** - they are instructions for you, not content for the PR
-   - Keep only the visible sections and structure:
-     - Section headers (## Description, ## Type of Change, etc.)
-     - Checkboxes (leave ALL unchecked [ ])
-     - Fill in ONLY the content sections (Description, Performance Impact, Review Focus)
-   - NEVER include the HTML comment instructions in the actual PR description
-   - The template structure must be preserved, but without any <!-- --> comments
+   - **USE THE TEMPLATE VERBATIM** except for filling in content sections:
+     - Copy ALL section headers exactly as written (## Description, ## Type of Change, etc.)
+     - Copy ALL checkboxes exactly as written (leave ALL unchecked [ ])
+     - Copy the EXACT checkbox text - do not modify, summarize, or reorganize
+     - Fill in ONLY these content areas:
+       - Description section: Your description of changes
+       - Performance Impact section: Your performance analysis (keep benchmark template if present)
+       - Review Focus section: Your guidance for reviewers
+   - NEVER modify the template structure, checkbox text, or section organization
+   - The template must be preserved VERBATIM except for your filled-in content
    
    **STEP 3**: Fill in required sections:
    - Description: Brief explanation of changes and motivation
