@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 authors = ["EventCore Contributors"]
 edition = "2021"
 rust-version = "1.70.0"
@@ -52,10 +52,10 @@ parking_lot = "0.12.4"
 futures = "0.3.31"
 
 # Internal workspace crates
-eventcore = { version = "0.1.0", path = "eventcore" }
-eventcore-postgres = { version = "0.1.0", path = "eventcore-postgres" }
-eventcore-memory = { version = "0.1.0", path = "eventcore-memory" }
-eventcore-macros = { version = "0.1.0", path = "eventcore-macros" }
+eventcore = { version = "0.1.1", path = "eventcore" }
+eventcore-postgres = { version = "0.1.1", path = "eventcore-postgres" }
+eventcore-memory = { version = "0.1.1", path = "eventcore-memory" }
+eventcore-macros = { version = "0.1.1", path = "eventcore-macros" }
 
 
 [workspace.lints.rust]
