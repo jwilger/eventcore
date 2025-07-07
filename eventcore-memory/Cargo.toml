@@ -13,7 +13,7 @@ description = "In-memory adapter for EventCore event sourcing library (for testi
 
 [dependencies]
 # Core dependencies
-eventcore = { path = "../eventcore", version = "0.1.0" }
+eventcore = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }

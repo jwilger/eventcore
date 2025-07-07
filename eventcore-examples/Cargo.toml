@@ -11,10 +11,10 @@ publish = false
 
 [dependencies]
 # Core dependencies
-eventcore = { path = "../eventcore", features = ["testing"] }
-eventcore-macros = { path = "../eventcore-macros" }
-eventcore-postgres = { path = "../eventcore-postgres" }
-eventcore-memory = { path = "../eventcore-memory" }
+eventcore = { workspace = true, features = ["testing"] }
+eventcore-macros = { workspace = true }
+eventcore-postgres = { workspace = true }
+eventcore-memory = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

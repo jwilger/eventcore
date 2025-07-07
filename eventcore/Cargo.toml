@@ -55,8 +55,8 @@ criterion = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = "0.2.5"
 rand = { workspace = true }
-eventcore-memory = { path = "../eventcore-memory" }
-eventcore-postgres = { path = "../eventcore-postgres" }
+eventcore-memory = { workspace = true }
+eventcore-postgres = { workspace = true }
 axum = { version = "0.8", features = ["tokio"] }
 
 [features]

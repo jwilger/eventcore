@@ -15,9 +15,9 @@ description = "Benchmarks for the EventCore multi-stream event sourcing library"
 workspace = true
 
 [dependencies]
-eventcore = { path = "../eventcore", features = ["testing"] }
-eventcore-memory = { path = "../eventcore-memory" }
-eventcore-postgres = { path = "../eventcore-postgres" }
+eventcore = { workspace = true, features = ["testing"] }
+eventcore-memory = { workspace = true }
+eventcore-postgres = { workspace = true }
 tokio = { workspace = true }
 criterion = { workspace = true, features = ["async_futures"] }
 async-trait = { workspace = true }
