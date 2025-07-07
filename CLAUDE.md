@@ -437,16 +437,15 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    Read .github/pull_request_template.md before creating ANY PR
    ```
    
-   **STEP 2**: Use the EXACT template content as the PR description base:
-   - Copy the entire template content verbatim
-   - Keep ALL HTML comments as hidden comments (<!-- -->)
-   - **CRITICAL**: HTML comments must use proper syntax without escaping
-     - ✅ CORRECT: `<!-- This is a hidden comment -->`
-     - ❌ WRONG: `&lt;!-- This will show as text --&gt;`
-     - ❌ WRONG: `\<!-- This will also show as text --\>`
-   - When using GitHub API/MCP tools, pass HTML comments as-is without escaping
-   - Fill in ONLY the content sections (Description, Performance Impact, Review Focus)
-   - NEVER modify the template structure or remove comments
+   **STEP 2**: Process the template content for the PR description:
+   - Read the template to understand the structure and requirements
+   - **STRIP OUT ALL HTML COMMENTS** - they are instructions for you, not content for the PR
+   - Keep only the visible sections and structure:
+     - Section headers (## Description, ## Type of Change, etc.)
+     - Checkboxes (leave ALL unchecked [ ])
+     - Fill in ONLY the content sections (Description, Performance Impact, Review Focus)
+   - NEVER include the HTML comment instructions in the actual PR description
+   - The template structure must be preserved, but without any <!-- --> comments
    
    **STEP 3**: Fill in required sections:
    - Description: Brief explanation of changes and motivation

@@ -343,9 +343,10 @@ All documented implementation phases have been completed. The project is ready f
   - This reduces CI noise while maintaining validation effectiveness
 - [x] Fixed PR description HTML comment handling:
   - Problem: HTML comments in PR template were being escaped and shown as visible text
-  - Solution: Updated CLAUDE.md with explicit instructions on proper HTML comment syntax
-  - Added examples of correct vs incorrect HTML comment formatting for API/MCP usage
-  - Ensures PR template instructions remain hidden while preserving template structure
+  - Initial solution: Tried to preserve HTML comments as hidden, but kept failing
+  - Final solution: Updated CLAUDE.md to instruct stripping out ALL HTML comments
+  - HTML comments are instructions for automation, not content for the PR
+  - Clean PR descriptions now contain only the visible template structure
 
 ## Pull Request Workflow
 
