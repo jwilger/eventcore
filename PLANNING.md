@@ -288,6 +288,13 @@ All documented implementation phases have been completed. The project is ready f
   - Replaced deprecated `bincode::serialize()` and `bincode::deserialize()` functions
   - All tests passing with new bincode v2 API
 
+### Release Workflow Fixes (2025-07-07)
+- [x] Fixed circular dependency preventing crates.io publishing:
+  - Identified that eventcore-macros depends on eventcore in dev-dependencies
+  - This creates circular dependency during publishing since eventcore-macros is published first
+  - Removed eventcore dev-dependency from eventcore-macros Cargo.toml
+  - This eliminates the circular dependency that prevented successful crates.io publishing
+
 ## Pull Request Workflow
 
 This project uses a **pull request-based workflow**. Direct commits to the main branch are not allowed. All changes must go through pull requests for review and CI validation.
