@@ -341,6 +341,11 @@ All documented implementation phases have been completed. The project is ready f
   - Solution: Added 30-second sleep delay when PR is edited to allow multiple checkbox changes
   - Also added 5-minute comment deduplication to avoid spam when users check multiple boxes
   - This reduces CI noise while maintaining validation effectiveness
+- [x] Fixed PR description HTML comment handling:
+  - Problem: HTML comments in PR template were being escaped and shown as visible text
+  - Solution: Updated CLAUDE.md with explicit instructions on proper HTML comment syntax
+  - Added examples of correct vs incorrect HTML comment formatting for API/MCP usage
+  - Ensures PR template instructions remain hidden while preserving template structure
 
 ## Pull Request Workflow
 

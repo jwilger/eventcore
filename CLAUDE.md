@@ -440,6 +440,11 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    **STEP 2**: Use the EXACT template content as the PR description base:
    - Copy the entire template content verbatim
    - Keep ALL HTML comments as hidden comments (<!-- -->)
+   - **CRITICAL**: HTML comments must use proper syntax without escaping
+     - ✅ CORRECT: `<!-- This is a hidden comment -->`
+     - ❌ WRONG: `&lt;!-- This will show as text --&gt;`
+     - ❌ WRONG: `\<!-- This will also show as text --\>`
+   - When using GitHub API/MCP tools, pass HTML comments as-is without escaping
    - Fill in ONLY the content sections (Description, Performance Impact, Review Focus)
    - NEVER modify the template structure or remove comments
    
