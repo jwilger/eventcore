@@ -13,7 +13,7 @@ description = "PostgreSQL adapter for EventCore event sourcing library"
 
 [dependencies]
 # Core dependencies
-eventcore = { path = "../eventcore" }
+eventcore = { path = "../eventcore", version = "0.1.0" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
