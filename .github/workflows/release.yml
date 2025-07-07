@@ -204,23 +204,26 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          # Publish in dependency order
+          # Publish in dependency order - eventcore has eventcore-memory and eventcore-postgres as dev-dependencies
+          # so they need to be published first
           echo "Publishing eventcore-macros..."
           (cd eventcore-macros && cargo publish)
           
           # Wait for crates.io to index
           sleep 30
           
-          echo "Publishing eventcore..."
-          (cd eventcore && cargo publish)
+          echo "Publishing eventcore-memory..."
+          (cd eventcore-memory && cargo publish)
           
           sleep 30
           
           echo "Publishing eventcore-postgres..."
           (cd eventcore-postgres && cargo publish)
           
-          echo "Publishing eventcore-memory..."
-          (cd eventcore-memory && cargo publish)
+          sleep 30
+          
+          echo "Publishing eventcore..."
+          (cd eventcore && cargo publish)
 
   publish-docs:
     name: Publish Documentation

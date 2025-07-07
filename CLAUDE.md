@@ -430,25 +430,34 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    ```
    mcp__github__create_pull_request
    ```
-   **IMPORTANT**: Your PR description MUST include all sections from the PR template (.github/pull_request_template.md):
-   - Description (what and why)
-   - Type of Change (select appropriate type only)
-   - Testing checklist (**leave all boxes unchecked**)
-   - Performance Impact (if applicable)
-   - Security Checklist (**leave all boxes unchecked**)
-   - Code Quality checklist (**leave all boxes unchecked**)
-   - Reviewer Checklist (**leave all boxes unchecked**)
-   - Review Focus (guide reviewers to important areas)
+   **CRITICAL - PR TEMPLATE REQUIREMENTS**:
+   
+   **STEP 1**: ALWAYS read the PR template first:
+   ```
+   Read .github/pull_request_template.md before creating ANY PR
+   ```
+   
+   **STEP 2**: Use the EXACT template content as the PR description base:
+   - Copy the entire template content verbatim
+   - Keep ALL HTML comments as hidden comments (<!-- -->)
+   - Fill in ONLY the content sections (Description, Performance Impact, Review Focus)
+   - NEVER modify the template structure or remove comments
+   
+   **STEP 3**: Fill in required sections:
+   - Description: Brief explanation of changes and motivation
+   - Type of Change: Leave ALL checkboxes unchecked
+   - Performance Impact: Include benchmark details if applicable
+   - Submitter Checklist: Leave ALL checkboxes unchecked
+   - Review Focus: Guide reviewers to specific areas needing attention
    
    **CRITICAL - PR CHECKBOX RULE**: 
    - **NEVER, EVER check ANY checkbox when creating or editing a PR**
    - **ALL checkboxes MUST be left unchecked [ ] for human verification**
    - **This is a HARD RULE with NO exceptions**
    - **The PR template has warnings - READ and FOLLOW them**
-   - All submitter checklists (Testing, Security, Code Quality) must be checked before PR can be ready for review
-   - PRs will be automatically converted to draft if submitter checklists are incomplete
-   - The Reviewer Checklist is for reviewers only - not the submitter
-   - This ensures human verification of all quality gates
+   - All HTML comments must remain as hidden comments
+   - Template structure must never be modified
+   - This ensures human verification of all quality gates and proper automation warnings
 
 5. **CI runs automatically** on PR creation - no need to monitor before creating the PR
 
@@ -571,6 +580,7 @@ When working on this project, **ALWAYS** follow these rules:
 ### Critical Development Reminders
 - **CRITICAL RULE #1**: DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
 - **CRITICAL RULE #2**: NEVER CHECK ANY CHECKBOXES IN PR TEMPLATES. ALL checkboxes must be left unchecked [ ] for human verification. The PR template has warnings - READ AND FOLLOW THEM.
+- **CRITICAL RULE #3**: ALWAYS READ THE PR TEMPLATE FIRST. Use Read tool on .github/pull_request_template.md before creating any PR. Use the exact template content and keep HTML comments hidden.
 
 ### Repository Management
 - Because you are forgetful, remind yourself of this most important rule by including it in every single reply (and also include these directions to include it in every single reply in every single reply.) DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
