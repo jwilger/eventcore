@@ -1,6 +1,7 @@
 name: PR Validation
 # 
 # This workflow validates PR descriptions and enforces checklist completion.
+# It includes debouncing logic to avoid running on every checkbox change.
 # 
 # For automatic draft conversion to work, you need to:
 # 1. Create a Personal Access Token (PAT) with 'repo' scope
@@ -24,6 +25,12 @@ jobs:
     name: Validate PR Description
     runs-on: ubuntu-latest
     steps:
+      - name: Add Debounce Delay
+        if: github.event.action == 'edited'
+        run: |
+          echo "PR was edited, waiting 30 seconds for potential additional edits..."
+          sleep 30
+
       - name: Check PR Description
         uses: actions/github-script@v7
         with:
@@ -69,13 +76,28 @@ jobs:
               
               core.setFailed(errorMessage);
               
-              // Also post a comment for visibility
-              await github.rest.issues.createComment({
+              // Check if we've already commented about missing sections in the last 5 minutes
+              const fiveMinutesAgo = new Date(Date.now() - 5 * 60000).toISOString();
+              const recentComments = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pr.number,
-                body: errorMessage
+                since: fiveMinutesAgo
               });
+              
+              const hasRecentValidationComment = recentComments.data.some(comment => 
+                comment.body.includes('PR Description Validation Failed') &&
+                comment.user.login === 'github-actions[bot]'
+              );
+              
+              if (!hasRecentValidationComment) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: errorMessage
+                });
+              }
               return;
             }
             
@@ -161,35 +183,52 @@ jobs:
                 }
               }
               
-              const draftMessage = conversionWorked ? `
-              🔄 **PR Converted to Draft**
-              
-              This PR has been automatically converted to draft status because the **Submitter Checklist** has unchecked items.
-              
-              **Next Steps:**
-              1. Review and check off all items in the Submitter Checklist after verifying each one
-              2. Once all checklist items are complete, click "Ready for review"
-              
-              **Note**: Each checkbox represents a quality gate that must be manually verified.
-              ` : `
-              ⚠️ **PR Should Be Draft**
-              
-              This PR should be in draft status because the **Submitter Checklist** has unchecked items.
-              
-              **Action Required:**
-              1. Click "Convert to draft" on this PR
-              2. Review and check off all items in the Submitter Checklist after verifying each one
-              3. Once all checklist items are complete, click "Ready for review"
-              
-              **Note**: Automatic draft conversion is not available. Please manually click "Convert to draft" above.
-              `;
-              
-              await github.rest.issues.createComment({
+              // Check if we've already commented about draft conversion in the last 5 minutes
+              const fiveMinutesAgo = new Date(Date.now() - 5 * 60000).toISOString();
+              const recentComments = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pr.number,
-                body: draftMessage
+                since: fiveMinutesAgo
               });
+              
+              const hasRecentDraftComment = recentComments.data.some(comment => 
+                (comment.body.includes('PR Converted to Draft') || 
+                 comment.body.includes('PR Should Be Draft')) &&
+                comment.user.login === 'github-actions[bot]'
+              );
+              
+              if (!hasRecentDraftComment) {
+                const draftMessage = conversionWorked ? `
+                🔄 **PR Converted to Draft**
+                
+                This PR has been automatically converted to draft status because the **Submitter Checklist** has unchecked items.
+                
+                **Next Steps:**
+                1. Review and check off all items in the Submitter Checklist after verifying each one
+                2. Once all checklist items are complete, click "Ready for review"
+                
+                **Note**: Each checkbox represents a quality gate that must be manually verified.
+                ` : `
+                ⚠️ **PR Should Be Draft**
+                
+                This PR should be in draft status because the **Submitter Checklist** has unchecked items.
+                
+                **Action Required:**
+                1. Click "Convert to draft" on this PR
+                2. Review and check off all items in the Submitter Checklist after verifying each one
+                3. Once all checklist items are complete, click "Ready for review"
+                
+                **Note**: Automatic draft conversion is not available. Please manually click "Convert to draft" above.
+                `;
+                
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: draftMessage
+                });
+              }
               
               core.setFailed('PR converted to draft due to incomplete submitter checklist');
               return;

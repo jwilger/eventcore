@@ -335,6 +335,24 @@ All documented implementation phases have been completed. The project is ready f
   - Added CRITICAL RULE #3 to prevent future template violations
   - This ensures all future PRs follow the project's template requirements
 
+### Workflow Improvements (2025-07-07)
+- [x] Added PR validation workflow debouncing:
+  - Problem: PR validation workflow triggered on every checkbox change, creating excessive CI runs
+  - Solution: Added 30-second sleep delay when PR is edited to allow multiple checkbox changes
+  - Also added 5-minute comment deduplication to avoid spam when users check multiple boxes
+  - This reduces CI noise while maintaining validation effectiveness
+- [x] Fixed PR description HTML comment handling:
+  - Problem: HTML comments in PR template were being escaped and shown as visible text
+  - Initial solution: Tried to preserve HTML comments as hidden, but kept failing
+  - Final solution: Updated CLAUDE.md to instruct stripping out ALL HTML comments
+  - HTML comments are instructions for automation, not content for the PR
+  - Clean PR descriptions now contain only the visible template structure
+- [x] Enhanced PR template usage instructions:
+  - Problem: PR descriptions were not following template structure exactly
+  - Solution: Updated CLAUDE.md to emphasize using template VERBATIM
+  - Must copy all checkboxes, headers, and structure exactly as written
+  - Only fill in description content areas, never modify template structure
+
 ## Pull Request Workflow
 
 This project uses a **pull request-based workflow**. Direct commits to the main branch are not allowed. All changes must go through pull requests for review and CI validation.

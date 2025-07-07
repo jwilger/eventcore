@@ -437,11 +437,19 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    Read .github/pull_request_template.md before creating ANY PR
    ```
    
-   **STEP 2**: Use the EXACT template content as the PR description base:
-   - Copy the entire template content verbatim
-   - Keep ALL HTML comments as hidden comments (<!-- -->)
-   - Fill in ONLY the content sections (Description, Performance Impact, Review Focus)
-   - NEVER modify the template structure or remove comments
+   **STEP 2**: Process the template content for the PR description:
+   - Read the template to understand the structure and requirements
+   - **STRIP OUT ALL HTML COMMENTS** - they are instructions for you, not content for the PR
+   - **USE THE TEMPLATE VERBATIM** except for filling in content sections:
+     - Copy ALL section headers exactly as written (## Description, ## Type of Change, etc.)
+     - Copy ALL checkboxes exactly as written (leave ALL unchecked [ ])
+     - Copy the EXACT checkbox text - do not modify, summarize, or reorganize
+     - Fill in ONLY these content areas:
+       - Description section: Your description of changes
+       - Performance Impact section: Your performance analysis (keep benchmark template if present)
+       - Review Focus section: Your guidance for reviewers
+   - NEVER modify the template structure, checkbox text, or section organization
+   - The template must be preserved VERBATIM except for your filled-in content
    
    **STEP 3**: Fill in required sections:
    - Description: Brief explanation of changes and motivation
