@@ -10,7 +10,8 @@ if [ -f "src/manual/07-reference/01-api-documentation.md" ]; then
     cp src/manual/07-reference/01-api-documentation.md /tmp/api-doc-backup.md
 fi
 
-cp -r ../docs/manual/* src/manual/
+# Skip copying manual docs since docs/manual is a symlink to src/manual
+# cp -r ../docs/manual/* src/manual/
 
 # Restore the API documentation file
 if [ -f "/tmp/api-doc-backup.md" ]; then
