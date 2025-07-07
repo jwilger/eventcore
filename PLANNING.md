@@ -328,6 +328,12 @@ All documented implementation phases have been completed. The project is ready f
   - Problem: Release workflow was trying to publish eventcore before its dev-dependencies existed on crates.io
   - Solution: Updated publishing order to macros → memory → postgres → eventcore
   - This ensures all dev-dependencies are available before eventcore is published
+  - Created PR #42 with proper template format to implement the fix
+- [x] Added PR template compliance rules to CLAUDE.md:
+  - Added requirement to always read .github/pull_request_template.md before creating PRs
+  - Added steps to use exact template content and keep HTML comments hidden
+  - Added CRITICAL RULE #3 to prevent future template violations
+  - This ensures all future PRs follow the project's template requirements
 
 ## Pull Request Workflow
 
