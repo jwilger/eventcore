@@ -181,7 +181,18 @@ jobs:
             postgres:15
           
           # Wait for PostgreSQL to be ready
-          sleep 10
+          echo "Waiting for PostgreSQL to start..."
+          for i in {1..30}; do
+            if docker exec postgres pg_isready -U postgres -h localhost; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            echo "Waiting for PostgreSQL... attempt $i/30"
+            sleep 2
+          done
+          
+          # Give it a bit more time to fully initialize
+          sleep 5
       
       - name: Run tests
         env:
