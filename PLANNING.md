@@ -357,8 +357,18 @@ All documented implementation phases have been completed. The project is ready f
 - [x] Fixed Dependabot creating PRs for internal workspace crates:
   - Problem: Dependabot was suggesting version updates for our own workspace crates
   - Cause: Internal crates listed in workspace.dependencies with version numbers
-  - Solution: Added ignore rules in dependabot.yml for all internal workspace crates
-  - This prevents spurious PRs while keeping version numbers for crates.io publishing
+  - Initial solution: Added ignore rules in dependabot.yml for all internal workspace crates
+  - Better solution: Removed version numbers from internal workspace dependencies
+  - Cargo automatically infers versions from workspace.package.version for crates.io
+  - Now only need to update version in one place: workspace.package.version
+  - Removed Dependabot ignore rules as they're no longer needed
+
+### Development Process Improvements (2025-07-07)
+- [x] Added CRITICAL RULE #4 to CLAUDE.md:
+  - Always stop and ask for help rather than taking shortcuts that violate rules
+  - When faced with obstacles, must ask user for guidance
+  - Especially important when tempted to use --no-verify or bypass safety checks
+  - Emphasized that it's better to ask for help than violate safety rules
 
 ## Pull Request Workflow
 
