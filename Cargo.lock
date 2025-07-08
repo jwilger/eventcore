@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-benchmarks"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-examples"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -922,9 +922,8 @@ dependencies = [
 
 [[package]]
 name = "eventcore-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
- "eventcore",
  "proc-macro2",
  "quote",
  "syn 2.0.104",
@@ -933,7 +932,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-memory"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -953,7 +952,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-postgres"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1388,9 +1387,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc2fdfdbff08affe55bb779f33b053aa1fe5dd5b54c257343c17edfa55711bdb"
+checksum = "7f66d5bd4c6f02bf0542fad85d626775bab9258cf795a4256dcaf3161114d1df"
 dependencies = [
  "base64 0.22.1",
  "bytes",
