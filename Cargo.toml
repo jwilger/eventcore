@@ -52,10 +52,11 @@ parking_lot = "0.12.4"
 futures = "0.3.31"
 
 # Internal workspace crates
-eventcore = { version = "0.1.1", path = "eventcore" }
-eventcore-postgres = { version = "0.1.1", path = "eventcore-postgres" }
-eventcore-memory = { version = "0.1.1", path = "eventcore-memory" }
-eventcore-macros = { version = "0.1.1", path = "eventcore-macros" }
+# Version is automatically inferred from workspace.package.version for crates.io publishing
+eventcore = { path = "eventcore" }
+eventcore-postgres = { path = "eventcore-postgres" }
+eventcore-memory = { path = "eventcore-memory" }
+eventcore-macros = { path = "eventcore-macros" }
 
 
 [workspace.lints.rust]

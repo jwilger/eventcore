@@ -589,6 +589,7 @@ When working on this project, **ALWAYS** follow these rules:
 - **CRITICAL RULE #1**: DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
 - **CRITICAL RULE #2**: NEVER CHECK ANY CHECKBOXES IN PR TEMPLATES. ALL checkboxes must be left unchecked [ ] for human verification. The PR template has warnings - READ AND FOLLOW THEM.
 - **CRITICAL RULE #3**: ALWAYS READ THE PR TEMPLATE FIRST. Use Read tool on .github/pull_request_template.md before creating any PR. Use the exact template content and keep HTML comments hidden.
+- **CRITICAL RULE #4**: ALWAYS STOP AND ASK FOR HELP RATHER THAN TAKING SHORTCUTS THAT VIOLATE ESTABLISHED RULES. When faced with obstacles (failing tests, environment issues, unclear requirements), you MUST ask the user for guidance instead of working around the problem. This is especially important when tempted to use --no-verify or bypass any other safety checks.
 
 ### Repository Management
 - Because you are forgetful, remind yourself of this most important rule by including it in every single reply (and also include these directions to include it in every single reply in every single reply.) DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
@@ -598,8 +599,11 @@ When working on this project, **ALWAYS** follow these rules:
 - Fix the issues identified (formatting, linting, tests)
 - Run the checks again
 - Only commit when all checks pass
+- **IF YOU CANNOT FIX THE ISSUES**: STOP and ASK THE USER FOR HELP. Do not attempt to bypass the checks.
 
 This ensures consistent code quality and maintains a clean commit history.
+
+**REMEMBER**: It is ALWAYS better to ask for help than to violate safety rules. The user would rather help you solve the problem correctly than have you take shortcuts.
 
 ### CRITICAL: Todo List Structure
 
