@@ -2,9 +2,88 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 🚨 CRITICAL RULES - ALWAYS APPLY
+
+**These rules must NEVER be violated under any circumstances:**
+
+1. **NEVER use the `--no-verify` flag when committing code**
+2. **NEVER check ANY checkboxes in PR templates** - All checkboxes must be left unchecked [ ] for human verification
+3. **ALWAYS read .github/pull_request_template.md before creating any PR**
+4. **ALWAYS stop and ask for help rather than taking shortcuts** - When faced with obstacles, ask the user for guidance
+5. **ALWAYS update @PLANNING.md before committing** - Mark completed tasks with [x] and include in commit
+6. **ALWAYS follow the exact todo list structure** - This prevents process drift
+
+## 📋 TABLE OF CONTENTS
+
+### Quick Reference by Task
+- **🆕 Starting new work?** → Read [🚨 Critical Rules](#critical-rules---always-apply), [Development Process Rules](#development-process-rules)
+- **🔧 Setting up environment?** → Read [Development Commands](#development-commands)
+- **💻 Writing code?** → Read [Architecture](#architecture), [Type-Driven Development](#type-driven-development-philosophy)
+- **📤 Making commits?** → Read [Commit Rules](#commit-rules), [Pre-commit Hooks](#pre-commit-hooks)
+- **🔄 Creating/updating PRs?** → Read [Pull Request Workflow](#pull-request-workflow), [🚨 Critical Rules](#critical-rules---always-apply)
+- **💬 Responding to PR feedback?** → Read [Responding to PR Feedback](#responding-to-pr-feedback)
+- **💙 Using GitHub features?** → Read [GitHub MCP Integration](#github-mcp-integration)
+
+### All Sections
+1. [🚨 Critical Rules](#critical-rules---always-apply) (THIS SECTION - READ FIRST!)
+2. [Project Overview](#project-overview)
+3. [Development Process Rules](#development-process-rules) (How to work on this project)
+4. [Type-Driven Development Philosophy](#type-driven-development-philosophy)
+5. [Development Commands](#development-commands)
+6. [Architecture](#architecture)
+7. [Performance Targets](#performance-targets)
+8. [Pre-commit Hooks](#pre-commit-hooks)
+9. [Development Principles](#development-principles)
+10. [GitHub MCP Integration](#github-mcp-integration)
+11. [Pull Request Workflow](#pull-request-workflow)
+12. [Memories](#memories) (Important reminders)
+
 ## Project Overview
 
 EventCore is a multi-stream event sourcing library that implements dynamic consistency boundaries. This approach, building on established event sourcing patterns, eliminates traditional aggregate boundaries in favor of self-contained commands that can read from and write to multiple streams atomically.
+
+## Development Process Rules
+
+**🚨 REMINDER: Review [Critical Rules](#critical-rules---always-apply) before proceeding!**
+
+When working on this project, **ALWAYS** follow these rules:
+
+1. **Review @PLANNING.md** to discover the next task to work on.
+2. **Follow the Pull Request Workflow** (see [Pull Request Workflow](#pull-request-workflow)) for all code changes.
+3. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
+4. **Insert a task to "Update @PLANNING.md to mark completed tasks"** before any commit task. This ensures our planning document stays in sync with actual progress.
+5. **Insert a task to "Make a commit"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure. Note: Pre-commit hooks will run all checks automatically.
+6. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository and create/update PR with GitHub MCP tools."
+
+### CRITICAL: Todo List Structure
+
+**This structure ensures Claude never forgets the development workflow:**
+
+Your todo list should ALWAYS follow this pattern:
+1. START with writing tests for any changes BEFORE making the changes, and ensure the tests fail as you expect them to.
+2. Implementation/fix tasks (the actual work)
+3. "Update @PLANNING.md to mark completed tasks" 
+4. "Make a commit" (pre-commit hooks run all checks automatically)
+5. "Push changes and update PR"
+
+For PR feedback specifically:
+1. Address each piece of feedback
+2. "Reply to review comments using gh GraphQL API with -- @claude signature"
+3. "Update @PLANNING.md to mark completed tasks"
+4. "Make a commit"
+5. "Push changes and check for new PR feedback"
+
+**Why this matters**: The todo list tool reinforces our workflow at every step, preventing process drift as context grows.
+
+### Commit Rules
+
+**BEFORE MAKING ANY COMMIT**:
+
+1. **Ensure @PLANNING.md is updated** - All completed tasks must be marked with [x]
+2. **Include the updated PLANNING.md in the commit** - Use `git add PLANNING.md`
+3. **This keeps our task tracking in sync with code changes**
+
+**🚨 CRITICAL REMINDER**: NEVER use `--no-verify` flag. All pre-commit checks must pass!
 
 ## Type-Driven Development Philosophy
 
@@ -23,6 +102,8 @@ This project follows strict type-driven development principles as outlined in th
 For detailed type-driven development guidance, refer to `/home/jwilger/.claude/CLAUDE.md`.
 
 ## Development Commands
+
+**🚨 REMINDER**: Never use `--no-verify` flag! See [Critical Rules](#critical-rules---always-apply)
 
 ### Setup
 
@@ -314,6 +395,8 @@ Follow the testing principles from the global Claude.md:
 
 ## Pre-commit Hooks
 
+**🚨 CRITICAL**: These hooks ensure code quality. NEVER bypass them with `--no-verify`!
+
 The project uses pre-commit hooks that automatically run:
 
 1. `cargo fmt --all && git add -u` - Auto-formats code and stages changes (runs first)
@@ -334,6 +417,8 @@ The formatting hook automatically fixes and stages formatting issues instead of 
 5. **Add Infrastructure Last**: Database, serialization, monitoring
 
 ### Code Review Focus
+
+**🚨 REMINDER**: All PR checkboxes must be left unchecked for human verification!
 
 Before submitting code, ensure:
 
@@ -358,6 +443,8 @@ cargo search <crate_name>
 This ensures we're using the most up-to-date and secure versions of all dependencies.
 
 ## GitHub MCP Integration
+
+**🚨 IMPORTANT**: Use MCP tools instead of gh CLI for all GitHub operations!
 
 This project now uses GitHub MCP (Model Context Protocol) server for all GitHub interactions. **MCP tools are the primary and preferred way to interact with GitHub**, replacing gh CLI commands.
 
@@ -413,13 +500,15 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
 
 ### PR Workflow Steps
 
+**🚨 CRITICAL**: Never check ANY checkboxes in PR templates! See [Critical Rules](#critical-rules---always-apply)
+
 1. **Create a new branch** from main for your changes:
    ```bash
    git checkout main && git pull origin main
    git checkout -b descriptive-branch-name
    ```
 
-2. **Make your changes** following the development process rules below
+2. **Make your changes** following the [Development Process Rules](#development-process-rules)
 
 3. **Push your branch** when ready for review:
    ```bash
@@ -430,7 +519,8 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    ```
    mcp__github__create_pull_request
    ```
-   **CRITICAL - PR TEMPLATE REQUIREMENTS**:
+   
+   **PR TEMPLATE REQUIREMENTS**:
    
    **STEP 1**: ALWAYS read the PR template first:
    ```
@@ -457,6 +547,8 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    - Performance Impact: Include benchmark details if applicable
    - Submitter Checklist: Leave ALL checkboxes unchecked
    - Review Focus: Guide reviewers to specific areas needing attention
+   
+   **🚨 REMINDER**: ALL checkboxes MUST be left unchecked [ ] for human verification!
 
 5. **CI runs automatically** on PR creation - no need to monitor before creating the PR
 
@@ -519,6 +611,8 @@ When addressing PR review feedback:
      }
    }'
    ```
+   
+   **🚨 REMINDER**: Always sign automated responses with `-- @claude`!
 
 3. **Always include in your response**:
    - Explanation of what changes you made
@@ -555,62 +649,31 @@ When addressing PR review feedback:
 - **Keep PRs small and focused** for easier review
 - **All automated comments must be signed with `-- @claude`**
 
-## Development Process Rules
 
-When working on this project, **ALWAYS** follow these rules:
-
-1. **Review @PLANNING.md** to discover the next task to work on.
-2. **Follow the Pull Request Workflow** (see section above) for all code changes.
-3. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
-4. **Insert a task to "Update @PLANNING.md to mark completed tasks"** before any commit task. This ensures our planning document stays in sync with actual progress.
-5. **Insert a task to "Make a commit"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure. Note: Pre-commit hooks will run all checks automatically.
-6. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository and create/update PR with GitHub MCP tools."
-
-### Commit Rules
-
-**BEFORE MAKING ANY COMMIT**:
-
-1. **Ensure @PLANNING.md is updated** - All completed tasks must be marked with [x]
-2. **Include the updated PLANNING.md in the commit** - Use `git add PLANNING.md`
-3. **This keeps our task tracking in sync with code changes**
 
 ## Memories
 
-### Critical Development Reminders
-- **CRITICAL RULE #1**: DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
-- **CRITICAL RULE #2**: ALWAYS READ THE PR TEMPLATE FIRST. Use Read tool on .github/pull_request_template.md before creating any PR. Use the exact template content and keep HTML comments hidden.
-- **CRITICAL RULE #4**: ALWAYS STOP AND ASK FOR HELP RATHER THAN TAKING SHORTCUTS THAT VIOLATE ESTABLISHED RULES. When faced with obstacles (failing tests, environment issues, unclear requirements), you MUST ask the user for guidance instead of working around the problem. This is especially important when tempted to use --no-verify or bypass any other safety checks.
+### Repository Management Reminders
 
-### Repository Management
 - Because you are forgetful, remind yourself of this most important rule by including it in every single reply (and also include these directions to include it in every single reply in every single reply.) DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
 
-**NEVER** make a commit with the `--no-verify` flag. All pre-commit checks must be passing before proceeding. If pre-commit checks fail:
-
+**IF PRE-COMMIT CHECKS FAIL**:
 - Fix the issues identified (formatting, linting, tests)
 - Run the checks again
 - Only commit when all checks pass
 - **IF YOU CANNOT FIX THE ISSUES**: STOP and ASK THE USER FOR HELP. Do not attempt to bypass the checks.
 
-This ensures consistent code quality and maintains a clean commit history.
-
 **REMEMBER**: It is ALWAYS better to ask for help than to violate safety rules. The user would rather help you solve the problem correctly than have you take shortcuts.
 
-### CRITICAL: Todo List Structure
+## 🔴 FINAL CRITICAL REMINDERS
 
-**This structure ensures Claude never forgets the development workflow:**
+**Before proceeding with ANY task, remember:**
 
-Your todo list should ALWAYS follow this pattern:
-1. START with writing tests for any changes BEFORE making the changes, and ensure the tests fail as you expect them to.
-2. Implementation/fix tasks (the actual work)
-3. "Update @PLANNING.md to mark completed tasks" 
-4. "Make a commit" (pre-commit hooks run all checks automatically)
-5. "Push changes and update PR"
+1. **NEVER use `--no-verify`** - Fix issues, don't bypass checks
+2. **NEVER check PR checkboxes** - Leave ALL unchecked for humans
+3. **ALWAYS read PR template first** - Use exact template structure
+4. **ALWAYS update @PLANNING.md** - Before every commit
+5. **ALWAYS follow todo list structure** - Prevents workflow drift
+6. **ALWAYS ask for help** - When stuck or tempted to take shortcuts
 
-For PR feedback specifically:
-1. Address each piece of feedback
-2. "Reply to review comments using gh GraphQL API with -- @claude signature"
-3. "Update @PLANNING.md to mark completed tasks"
-4. "Make a commit"
-5. "Push changes and check for new PR feedback"
-
-**Why this matters**: The todo list tool reinforces our workflow at every step, preventing process drift as context grows.
+**These rules are absolute. No exceptions. Ever.**

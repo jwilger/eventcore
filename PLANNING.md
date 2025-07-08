@@ -370,6 +370,16 @@ All documented implementation phases have been completed. The project is ready f
   - Especially important when tempted to use --no-verify or bypass safety checks
   - Emphasized that it's better to ask for help than violate safety rules
 
+### Development Documentation Improvements (2025-07-08)
+- [x] Reorganized CLAUDE.md for better LLM effectiveness:
+  - Moved critical rules to the very top for immediate visibility
+  - Added comprehensive table of contents with task-based quick reference
+  - Consolidated Development Process Rules right after Project Overview
+  - Added reminder callouts at key decision points throughout the file
+  - Added emoji indicators for better visual scanning
+  - Created final critical reminders section at the end
+  - Optimized for single-file context to ensure all rules are always visible
+
 ## Pull Request Workflow
 
 This project uses a **pull request-based workflow**. Direct commits to the main branch are not allowed. All changes must go through pull requests for review and CI validation.
