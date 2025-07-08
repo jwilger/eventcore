@@ -22,14 +22,6 @@ updates:
     # They also ignore the open-pull-requests-limit
     allow:
       - dependency-type: "all"
-    # Ignore internal workspace crates - these are versioned together
-    ignore:
-      - dependency-name: "eventcore"
-      - dependency-name: "eventcore-postgres"
-      - dependency-name: "eventcore-memory"
-      - dependency-name: "eventcore-macros"
-      - dependency-name: "eventcore-examples"
-      - dependency-name: "eventcore-benchmarks"
     commit-message:
       prefix: "deps"
       include: "scope"
