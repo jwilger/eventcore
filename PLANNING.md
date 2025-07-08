@@ -363,6 +363,13 @@ All documented implementation phases have been completed. The project is ready f
   - Now only need to update version in one place: workspace.package.version
   - Removed Dependabot ignore rules as they're no longer needed
 
+### Development Process Improvements (2025-07-07)
+- [x] Added CRITICAL RULE #4 to CLAUDE.md:
+  - Always stop and ask for help rather than taking shortcuts that violate rules
+  - When faced with obstacles, must ask user for guidance
+  - Especially important when tempted to use --no-verify or bypass safety checks
+  - Emphasized that it's better to ask for help than violate safety rules
+
 ## Pull Request Workflow
 
 This project uses a **pull request-based workflow**. Direct commits to the main branch are not allowed. All changes must go through pull requests for review and CI validation.
