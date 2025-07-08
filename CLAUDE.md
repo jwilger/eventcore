@@ -457,15 +457,6 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    - Performance Impact: Include benchmark details if applicable
    - Submitter Checklist: Leave ALL checkboxes unchecked
    - Review Focus: Guide reviewers to specific areas needing attention
-   
-   **CRITICAL - PR CHECKBOX RULE**: 
-   - **NEVER, EVER check ANY checkbox when creating or editing a PR**
-   - **ALL checkboxes MUST be left unchecked [ ] for human verification**
-   - **This is a HARD RULE with NO exceptions**
-   - **The PR template has warnings - READ and FOLLOW them**
-   - All HTML comments must remain as hidden comments
-   - Template structure must never be modified
-   - This ensures human verification of all quality gates and proper automation warnings
 
 5. **CI runs automatically** on PR creation - no need to monitor before creating the PR
 
@@ -587,8 +578,7 @@ When working on this project, **ALWAYS** follow these rules:
 
 ### Critical Development Reminders
 - **CRITICAL RULE #1**: DO NOT USE THE --no-verify FLAG TO COMMIT CODE. EVER.
-- **CRITICAL RULE #2**: NEVER CHECK ANY CHECKBOXES IN PR TEMPLATES. ALL checkboxes must be left unchecked [ ] for human verification. The PR template has warnings - READ AND FOLLOW THEM.
-- **CRITICAL RULE #3**: ALWAYS READ THE PR TEMPLATE FIRST. Use Read tool on .github/pull_request_template.md before creating any PR. Use the exact template content and keep HTML comments hidden.
+- **CRITICAL RULE #2**: ALWAYS READ THE PR TEMPLATE FIRST. Use Read tool on .github/pull_request_template.md before creating any PR. Use the exact template content and keep HTML comments hidden.
 - **CRITICAL RULE #4**: ALWAYS STOP AND ASK FOR HELP RATHER THAN TAKING SHORTCUTS THAT VIOLATE ESTABLISHED RULES. When faced with obstacles (failing tests, environment issues, unclear requirements), you MUST ask the user for guidance instead of working around the problem. This is especially important when tempted to use --no-verify or bypass any other safety checks.
 
 ### Repository Management
@@ -610,10 +600,11 @@ This ensures consistent code quality and maintains a clean commit history.
 **This structure ensures Claude never forgets the development workflow:**
 
 Your todo list should ALWAYS follow this pattern:
-1. Implementation/fix tasks (the actual work)
-2. "Update @PLANNING.md to mark completed tasks" 
-3. "Make a commit" (pre-commit hooks run all checks automatically)
-4. "Push changes and update PR"
+1. START with writing tests for any changes BEFORE making the changes, and ensure the tests fail as you expect them to.
+2. Implementation/fix tasks (the actual work)
+3. "Update @PLANNING.md to mark completed tasks" 
+4. "Make a commit" (pre-commit hooks run all checks automatically)
+5. "Push changes and update PR"
 
 For PR feedback specifically:
 1. Address each piece of feedback
