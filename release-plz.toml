@@ -6,8 +6,7 @@ release_always = true
 allow_dirty = true
 
 # Dependencies update
-# TODO: Re-enable after initial release (temporarily disabled because workspace
-# dependencies are not yet published to crates.io)
+# TODO: Re-enable after initial release (temporarily disabled because workspace dependencies are not yet published to crates.io)
 dependencies_update = false
 
 # Git configuration
