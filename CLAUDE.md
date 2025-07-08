@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. **NEVER check ANY checkboxes in PR templates** - All checkboxes must be left unchecked [ ] for human verification
 3. **ALWAYS read .github/pull_request_template.md before creating any PR**
 4. **ALWAYS stop and ask for help rather than taking shortcuts** - When faced with obstacles, ask the user for guidance
-5. **ALWAYS update @PLANNING.md before committing** - Mark completed tasks with [x] and include in commit
+5. **Update @PLANNING.md before committing when working on planned tasks** - Mark completed tasks with [x] and include in commit
 6. **ALWAYS follow the exact todo list structure** - This prevents process drift
 
 ## 📋 TABLE OF CONTENTS
@@ -51,7 +51,7 @@ When working on this project, **ALWAYS** follow these rules:
 1. **Review @PLANNING.md** to discover the next task to work on.
 2. **Follow the Pull Request Workflow** (see [Pull Request Workflow](#pull-request-workflow)) for all code changes.
 3. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
-4. **Insert a task to "Update @PLANNING.md to mark completed tasks"** before any commit task. This ensures our planning document stays in sync with actual progress.
+4. **When working on tasks from @PLANNING.md, insert a task to "Update @PLANNING.md to mark completed tasks"** before any commit task. For ad-hoc requests not in PLANNING.md, skip this step unless explicitly asked to add them.
 5. **Insert a task to "Make a commit"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure. Note: Pre-commit hooks will run all checks automatically.
 6. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository and create/update PR with GitHub MCP tools."
 
@@ -60,11 +60,19 @@ When working on this project, **ALWAYS** follow these rules:
 **This structure ensures Claude never forgets the development workflow:**
 
 Your todo list should ALWAYS follow this pattern:
+
+**For planned work from @PLANNING.md:**
 1. START with writing tests for any changes BEFORE making the changes, and ensure the tests fail as you expect them to.
 2. Implementation/fix tasks (the actual work)
 3. "Update @PLANNING.md to mark completed tasks" 
 4. "Make a commit" (pre-commit hooks run all checks automatically)
 5. "Push changes and update PR"
+
+**For ad-hoc requests not in @PLANNING.md:**
+1. START with writing tests for any changes BEFORE making the changes, and ensure the tests fail as you expect them to.
+2. Implementation/fix tasks (the actual work)
+3. "Make a commit" (pre-commit hooks run all checks automatically)
+4. "Push changes and update PR"
 
 For PR feedback specifically:
 1. Address each piece of feedback
@@ -79,9 +87,12 @@ For PR feedback specifically:
 
 **BEFORE MAKING ANY COMMIT**:
 
-1. **Ensure @PLANNING.md is updated** - All completed tasks must be marked with [x]
-2. **Include the updated PLANNING.md in the commit** - Use `git add PLANNING.md`
-3. **This keeps our task tracking in sync with code changes**
+1. **If working on planned tasks from @PLANNING.md**:
+   - Ensure completed tasks are marked with [x]
+   - Include the updated PLANNING.md in the commit - Use `git add PLANNING.md`
+2. **If working on ad-hoc requests**: 
+   - Only update PLANNING.md if explicitly asked to track the work there
+   - Otherwise, proceed with the commit without updating PLANNING.md
 
 **🚨 CRITICAL REMINDER**: NEVER use `--no-verify` flag. All pre-commit checks must pass!
 
@@ -672,7 +683,7 @@ When addressing PR review feedback:
 1. **NEVER use `--no-verify`** - Fix issues, don't bypass checks
 2. **NEVER check PR checkboxes** - Leave ALL unchecked for humans
 3. **ALWAYS read PR template first** - Use exact template structure
-4. **ALWAYS update @PLANNING.md** - Before every commit
+4. **Update @PLANNING.md when working on planned tasks** - Not required for ad-hoc requests
 5. **ALWAYS follow todo list structure** - Prevents workflow drift
 6. **ALWAYS ask for help** - When stuck or tempted to take shortcuts
 
