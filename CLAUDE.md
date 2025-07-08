@@ -583,6 +583,10 @@ After creating or updating a PR:
 
 ### Responding to PR Feedback
 
+**IMPORTANT**: Only respond to formal review comments, not regular PR comments:
+- **Review comments** (part of a formal review with "Changes requested", "Approved", etc.) = Address these
+- **Regular PR comments** (standalone comments on the PR) = These are for human-to-human conversation, ignore them
+
 When addressing PR review feedback:
 
 1. **First, get the review thread details** using GraphQL:
