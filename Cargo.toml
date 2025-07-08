@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 authors = ["EventCore Contributors"]
 edition = "2021"
 rust-version = "1.70.0"
@@ -54,10 +54,10 @@ futures = "0.3.31"
 # Internal workspace crates
 # Version must be specified for crates.io publishing
 # These will be automatically updated by release-plz
-eventcore = { path = "eventcore", version = "0.1.2" }
-eventcore-postgres = { path = "eventcore-postgres", version = "0.1.2" }
-eventcore-memory = { path = "eventcore-memory", version = "0.1.2" }
-eventcore-macros = { path = "eventcore-macros", version = "0.1.2" }
+eventcore = { path = "eventcore", version = "0.1.3" }
+eventcore-postgres = { path = "eventcore-postgres", version = "0.1.3" }
+eventcore-memory = { path = "eventcore-memory", version = "0.1.3" }
+eventcore-macros = { path = "eventcore-macros", version = "0.1.3" }
 
 
 [workspace.lints.rust]
