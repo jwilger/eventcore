@@ -11,14 +11,28 @@ dependencies_update = true
 # Git configuration
 git_release_enable = true  # Create GitHub releases
 git_tag_enable = true      # Create git tags
-git_tag_prefix = "v"       # Tags will be like v0.1.2
+git_tag_name = "v{{ version }}"  # Tags will be like v0.1.2
 
 # PR configuration
 pr_labels = ["release", "automated"]
 
 # Changelog configuration
 changelog_update = true
-changelog_include = ["feat", "fix", "perf", "refactor", "chore", "build", "ci", "docs", "style", "test"]
+
+[changelog]
+# Types of commits to include in changelogs
+commit_parsers = [
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^chore", group = "Miscellaneous Tasks" },
+  { message = "^build", group = "Build System" },
+  { message = "^ci", group = "Continuous Integration" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^style", group = "Styling" },
+  { message = "^test", group = "Testing" },
+]
 
 # Package-specific configuration for publishing order
 [[package]]
