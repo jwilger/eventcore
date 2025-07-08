@@ -1,6 +1,7 @@
 name: PR Validation
 # 
 # This workflow validates PR descriptions and enforces checklist completion.
+# It only runs on non-draft PRs to avoid unnecessary CI runs.
 # It includes debouncing logic to avoid running on every checkbox change.
 # 
 # For automatic draft conversion to work, you need to:
@@ -24,6 +25,8 @@ jobs:
   validate-pr-description:
     name: Validate PR Description
     runs-on: ubuntu-latest
+    # Skip the entire job for draft PRs
+    if: github.event.pull_request.draft == false
     steps:
       - name: Add Debounce Delay
         if: github.event.action == 'edited'
@@ -39,12 +42,6 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const body = pr.body || '';
-            
-            // Skip validation for draft PRs
-            if (pr.draft) {
-              console.log('✅ Skipping validation for draft PR');
-              return;
-            }
             
             // Skip validation for Dependabot PRs
             if (pr.user.login === 'dependabot[bot]') {
