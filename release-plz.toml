@@ -1,0 +1,47 @@
+[workspace]
+# Update all workspace members together
+members_release_always = true
+
+# Allow dirty working directory (for CI)
+allow_dirty = true
+
+# Dependencies update
+dependencies_update = true
+
+# Git configuration
+git_release_enable = true  # Create GitHub releases
+git_tag_enable = true      # Create git tags
+git_tag_prefix = "v"       # Tags will be like v0.1.2
+
+# PR configuration
+pr_labels = ["release", "automated"]
+
+# Changelog configuration
+changelog_update = true
+changelog_include = ["feat", "fix", "perf", "refactor", "chore", "build", "ci", "docs", "style", "test"]
+
+# Package-specific configuration for publishing order
+[[package]]
+name = "eventcore-macros"
+# Macros crate needs to be published first
+
+[[package]]
+name = "eventcore"
+# Core crate published after macros
+
+[[package]]
+name = "eventcore-memory"
+# Memory adapter depends on eventcore
+
+[[package]]
+name = "eventcore-postgres"
+# Postgres adapter depends on eventcore
+
+# Don't publish example and benchmark crates
+[[package]]
+name = "eventcore-examples"
+publish = false
+
+[[package]]
+name = "eventcore-benchmarks"
+publish = false
