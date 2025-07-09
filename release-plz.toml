@@ -36,6 +36,8 @@ commit_parsers = [
   { message = "^docs", group = "Documentation" },
   { message = "^style", group = "Styling" },
   { message = "^test", group = "Testing" },
+  # Catch-all pattern to include commits without conventional prefixes
+  { message = "^.*", group = "Other Changes" },
 ]
 
 # Package-specific configuration for publishing order
