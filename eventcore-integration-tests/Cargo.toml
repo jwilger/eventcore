@@ -1,0 +1,42 @@
+[package]
+name = "eventcore-integration-tests"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Integration tests for EventCore that test multiple crates together"
+publish = false
+
+[dependencies]
+eventcore = { workspace = true, features = ["testing"] }
+eventcore-memory = { workspace = true }
+eventcore-postgres = { workspace = true }
+eventcore-macros = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+sqlx = { workspace = true }
+futures = "0.3"
+
+[dev-dependencies]
+proptest = { workspace = true }
+tokio-test = { workspace = true }
+insta = { workspace = true }
+criterion = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-test = "0.2.5"
+rand = { workspace = true }
+axum = { version = "0.8", features = ["tokio"] }
+
+[features]
+testing = []
+
+[lints]
+workspace = true
