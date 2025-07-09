@@ -19,23 +19,15 @@ git_tag_name = "v{{ version }}"  # Tags will be like v0.1.2
 
 # PR configuration
 pr_labels = ["release", "automated"]
+pr_draft = true  # Create release PRs as drafts
 
 # Changelog configuration
 changelog_update = true
 
 [changelog]
-# Types of commits to include in changelogs
+# Include all commits in a single flat list
 commit_parsers = [
-  { message = "^feat", group = "Features" },
-  { message = "^fix", group = "Bug Fixes" },
-  { message = "^perf", group = "Performance" },
-  { message = "^refactor", group = "Refactoring" },
-  { message = "^chore", group = "Miscellaneous Tasks" },
-  { message = "^build", group = "Build System" },
-  { message = "^ci", group = "Continuous Integration" },
-  { message = "^docs", group = "Documentation" },
-  { message = "^style", group = "Styling" },
-  { message = "^test", group = "Testing" },
+  { message = "^.*", group = "Changes" },
 ]
 
 # Package-specific configuration for publishing order
