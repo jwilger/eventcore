@@ -7,14 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.3] - 2025-07-09
+## [0.1.3] - 2025-07-07
 
-### Added
+### Changes
 - Initial release of in-memory event store adapter
+
+## [0.1.0] - 2025-07-04
+
+### Changes
 - Full EventStore trait implementation
-- Thread-safe concurrent access
+- Thread-safe concurrent access with Arc<RwLock>
 - Perfect for testing and development
 - Subscription support with position tracking
+- Event ordering guarantees
+- Stream version tracking
 
 [unreleased]: https://github.com/jwilger/eventcore/compare/v0.1.3...HEAD
 [0.1.3]: https://github.com/jwilger/eventcore/releases/tag/v0.1.3
+[0.1.0]: https://github.com/jwilger/eventcore/releases/tag/v0.1.0

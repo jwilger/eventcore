@@ -19,6 +19,7 @@ git_tag_name = "v{{ version }}"  # Tags will be like v0.1.2
 
 # PR configuration
 pr_labels = ["release", "automated"]
+pr_draft = true  # Create release PRs as drafts
 
 # Changelog configuration
 changelog_update = true
