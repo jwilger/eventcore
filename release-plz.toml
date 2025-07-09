@@ -24,20 +24,9 @@ pr_labels = ["release", "automated"]
 changelog_update = true
 
 [changelog]
-# Types of commits to include in changelogs
+# Include all commits in a single flat list
 commit_parsers = [
-  { message = "^feat", group = "Features" },
-  { message = "^fix", group = "Bug Fixes" },
-  { message = "^perf", group = "Performance" },
-  { message = "^refactor", group = "Refactoring" },
-  { message = "^chore", group = "Miscellaneous Tasks" },
-  { message = "^build", group = "Build System" },
-  { message = "^ci", group = "Continuous Integration" },
-  { message = "^docs", group = "Documentation" },
-  { message = "^style", group = "Styling" },
-  { message = "^test", group = "Testing" },
-  # Catch-all pattern to include commits without conventional prefixes
-  { message = "^.*", group = "Other Changes" },
+  { message = "^.*", group = "Changes" },
 ]
 
 # Package-specific configuration for publishing order
