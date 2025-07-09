@@ -15,16 +15,9 @@ repos:
         files: \.(rs|toml)$
         pass_filenames: false
 
-      - id: cargo-test
-        name: cargo test
-        entry: cargo test --workspace --lib --bins --all-features
-        language: system
-        files: \.(rs|toml)$
-        pass_filenames: false
-
-      - id: cargo-test-integration
-        name: cargo integration tests
-        entry: cargo test --workspace --test '*' --all-features
+      - id: cargo-nextest
+        name: cargo nextest
+        entry: cargo nextest run --workspace --all-features
         language: system
         files: \.(rs|toml)$
         pass_filenames: false
