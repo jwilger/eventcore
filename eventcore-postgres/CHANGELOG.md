@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.3](https://github.com/jwilger/eventcore/releases/tag/v0.1.3) - 2025-07-09
+## [0.1.3] - 2025-07-09
 
-### Features
+### Added
+- Initial release of PostgreSQL event store adapter
+- Full EventStore trait implementation
+- Production-ready with connection pooling
+- Configurable retry and timeout behavior
+- Health monitoring and metrics
+- Subscription support with position tracking
 
-- Implement command definition macros (Phase 13.1)
+### Fixed
+- Fixed flaky connection pool timeout test
+
+[unreleased]: https://github.com/jwilger/eventcore/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/jwilger/eventcore/releases/tag/v0.1.3

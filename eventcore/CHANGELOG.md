@@ -10,10 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.3] - 2025-07-09
 
 ### Added
-- Event store performance benchmarks
-- Projection processing benchmarks
-- Realistic workload simulations
-- Validation optimization benchmarks
+- Initial release of EventCore
+- Multi-stream event sourcing with dynamic consistency boundaries
+- Type-safe command execution with compile-time stream access guarantees
+- Comprehensive testing infrastructure
+- Property-based tests for system invariants
+- Performance benchmarks
+- Complete examples (banking, e-commerce)
+- Documentation and user manual
+
+### Fixed
+- Fixed compilation errors in examples
+- Fixed flaky query timeout test
 
 [unreleased]: https://github.com/jwilger/eventcore/compare/v0.1.3...HEAD
 [0.1.3]: https://github.com/jwilger/eventcore/releases/tag/v0.1.3

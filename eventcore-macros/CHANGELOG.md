@@ -10,10 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.3] - 2025-07-09
 
 ### Added
-- Event store performance benchmarks
-- Projection processing benchmarks
-- Realistic workload simulations
-- Validation optimization benchmarks
+- Initial release of EventCore macros
+- `#[derive(Command)]` macro for automatic CommandStreams implementation
+- Stream declaration support with `#[stream]` attribute
+- Automatic StreamSet type generation
 
 [unreleased]: https://github.com/jwilger/eventcore/compare/v0.1.3...HEAD
 [0.1.3]: https://github.com/jwilger/eventcore/releases/tag/v0.1.3

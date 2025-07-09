@@ -10,10 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.3] - 2025-07-09
 
 ### Added
-- Event store performance benchmarks
-- Projection processing benchmarks
-- Realistic workload simulations
-- Validation optimization benchmarks
+- Banking example demonstrating multi-stream transfers
+- E-commerce example showing distributed system patterns
+- Axum integration example
+- Simplified command example
+
+### Fixed
+- Fixed compilation errors in distributed e-commerce example
+- Removed bogus benchmark placeholder
 
 [unreleased]: https://github.com/jwilger/eventcore/compare/v0.1.3...HEAD
 [0.1.3]: https://github.com/jwilger/eventcore/releases/tag/v0.1.3

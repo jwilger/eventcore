@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.3](https://github.com/jwilger/eventcore/releases/tag/v0.1.3) - 2025-07-09
+## [0.1.3] - 2025-07-09
 
-### Miscellaneous Tasks
+### Added
+- Initial release of in-memory event store adapter
+- Full EventStore trait implementation
+- Thread-safe concurrent access
+- Perfect for testing and development
+- Subscription support with position tracking
 
-- release v0.1.3 ([#59](https://github.com/jwilger/eventcore/pull/59))
+[unreleased]: https://github.com/jwilger/eventcore/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/jwilger/eventcore/releases/tag/v0.1.3
