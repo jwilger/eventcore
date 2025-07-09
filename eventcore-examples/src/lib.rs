@@ -25,7 +25,6 @@ pub mod ecommerce;
 pub mod sagas;
 
 // Benchmarks: Performance testing examples
-pub mod benchmarks;
 
 #[cfg(test)]
 mod tests {

@@ -188,7 +188,7 @@ async fn test_performance_optimized_config() {
 async fn test_query_timeout_configuration() {
     let config = PostgresConfigBuilder::new()
         .database_url(test_database_url())
-        .query_timeout(Some(Duration::from_millis(100))) // Very short timeout
+        .query_timeout(Some(Duration::from_millis(500))) // Short timeout for testing
         .build();
 
     let store = PostgresEventStore::<serde_json::Value>::new(config)

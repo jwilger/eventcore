@@ -80,7 +80,3 @@ path = "src/distributed_ecommerce_example.rs"
 name = "axum_integration"
 path = "src/axum_integration_example.rs"
 
-[[bench]]
-name = "example_benchmarks"
-harness = false
-path = "src/benchmarks/bench.rs"

@@ -436,12 +436,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::resource::{states, Resource};
+    use async_trait::async_trait;
+    use eventcore::resource::{states, Resource, ResourceManager};
 
-    #[test]
-    fn test_resource_state_transitions() {
+    // Test helper to create resources using the public API
+    struct TestResourceManager;
+
+    #[async_trait]
+    impl ResourceManager<String> for TestResourceManager {
+        async fn acquire() -> ResourceResult<Resource<String, states::Acquired>> {
+            // Create resource in initializing state, then mark as acquired
+            let resource = Self::create_initializing("test".to_string());
+            Ok(resource.mark_acquired())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resource_state_transitions() {
         // Test that resource states work correctly
-        let resource = Resource::<String, states::Acquired>::new("test".to_string());
+        let resource = TestResourceManager::acquire().await.unwrap();
         assert_eq!(resource.get(), "test");
 
         // Test scoped resource
@@ -452,9 +465,9 @@ mod tests {
         drop(scope);
     }
 
-    #[test]
-    fn test_managed_resource() {
-        let resource = Resource::<String, states::Acquired>::new("test".to_string());
+    #[tokio::test]
+    async fn test_managed_resource() {
+        let resource = TestResourceManager::acquire().await.unwrap();
         let managed = resource.managed("TestResource");
 
         // Resource should be tracked
@@ -467,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_timed_resource() {
-        let resource = Resource::<String, states::Acquired>::new("test".to_string());
+        let resource = TestResourceManager::acquire().await.unwrap();
         let timed = resource.with_timeout(Duration::from_millis(100));
 
         // Initially should be available

@@ -1382,6 +1382,9 @@ mod tests {
             total_amount: Amount::try_new(10_000).unwrap(),
         };
 
+        // Save order_id for verification
+        let expected_order_id = order.order_id.clone();
+
         // Execute order creation
         executor
             .execute(order, ExecutionOptions::new())
@@ -1390,14 +1393,15 @@ mod tests {
 
         // Verify order was created
         let order_stream = StreamId::try_new("order-ORDER-TEST-001").unwrap();
-        let events = event_store
-            .read_stream(&order_stream, None, 100)
+        let stream_data = event_store
+            .read_streams(&[order_stream.clone()], &ReadOptions::default())
             .await
             .unwrap();
+        let events: Vec<_> = stream_data.events.into_iter().map(|e| e.payload).collect();
         assert_eq!(events.len(), 1);
 
-        if let ECommerceEvent::OrderCreated { order_id, .. } = &events[0].payload {
-            assert_eq!(order_id, &order.order_id);
+        if let ECommerceEvent::OrderCreated { order_id, .. } = &events[0] {
+            assert_eq!(order_id, &expected_order_id);
         } else {
             panic!("Expected OrderCreated event");
         }
@@ -1422,20 +1426,21 @@ mod tests {
 
         // Check for failure event
         let order_stream = StreamId::try_new("order-ORDER-TEST-002").unwrap();
-        let events = event_store
-            .read_stream(&order_stream, None, 100)
+        let stream_data = event_store
+            .read_streams(&[order_stream.clone()], &ReadOptions::default())
             .await
             .unwrap();
+        let events: Vec<_> = stream_data.events.into_iter().map(|e| e.payload).collect();
         assert_eq!(events.len(), 1);
 
         if let ECommerceEvent::StockReservationFailed {
             requested,
             available,
             ..
-        } = &events[0].payload
+        } = &events[0]
         {
-            assert_eq!(*requested, Quantity::try_new(5).unwrap());
-            assert_eq!(*available, Quantity::try_new(1).unwrap()); // Default when no stock
+            assert_eq!(requested, &Quantity::try_new(5).unwrap());
+            assert_eq!(available, &Quantity::try_new(1).unwrap()); // Default when no stock
         } else {
             panic!("Expected StockReservationFailed event");
         }
@@ -1464,14 +1469,15 @@ mod tests {
 
         // Should only have one payment event
         let payment_stream = StreamId::from_static("payment-aggregate");
-        let events = event_store
-            .read_stream(&payment_stream, None, 100)
+        let stream_data = event_store
+            .read_streams(&[payment_stream.clone()], &ReadOptions::default())
             .await
             .unwrap();
+        let events: Vec<_> = stream_data.events.into_iter().map(|e| e.payload).collect();
 
         let payment_events: Vec<_> = events
             .iter()
-            .filter(|e| matches!(e.payload, ECommerceEvent::PaymentProcessed { .. }))
+            .filter(|e| matches!(e, ECommerceEvent::PaymentProcessed { .. }))
             .collect();
 
         assert!(payment_events.len() <= 1, "Payment should be idempotent");
