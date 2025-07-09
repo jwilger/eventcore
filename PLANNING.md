@@ -352,6 +352,12 @@ All documented implementation phases have been completed. The project is ready f
   - Solution: Updated CLAUDE.md to emphasize using template VERBATIM
   - Must copy all checkboxes, headers, and structure exactly as written
   - Only fill in description content areas, never modify template structure
+- [x] Replaced PR validation workflow and template with Definition of Done bot:
+  - Removed PR validation workflow that was causing excessive friction
+  - Removed PR template in favor of automatic DoD checklist
+  - Added dod.yaml configuration with project checklist items
+  - Added definition-of-done.yml workflow to automatically add checklists to PRs
+  - Updated CLAUDE.md to reflect new PR workflow without templates
 
 ### Dependency Management (2025-07-07)
 - [x] Fixed Dependabot creating PRs for internal workspace crates:
@@ -388,7 +394,7 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
 
 1. **Create feature branches** for logical sets of related changes
 2. **CI/CD workflows only run on PRs**, not on branch pushes
-3. **PR template must be filled out** - enforced by PR validation workflow
+3. **Definition of Done checklist** will be automatically added to PRs
 4. **Keep PRs small and focused** for easier review
 
 ### Workflow Steps
@@ -396,18 +402,10 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
 1. Create a new branch from main
 2. Make your changes following development process rules
 3. Push your branch
-4. Create a PR using `mcp__github__create_pull_request` with **ALL template sections**:
-   - Description (what and why)
-   - Type of Change (select appropriate type only)
-   - Testing checklist (**leave unchecked for human review**)
-   - Performance Impact (if applicable)
-   - Security Checklist (**leave unchecked for human review**)
-   - Code Quality checklist (**leave unchecked for human review**)
-   - Reviewer Checklist (**leave unchecked for human review**)
-   - Review Focus
-5. Monitor CI and address any failures (PR validation will fail until all checklists are checked)
+4. Create a PR using `mcp__github__create_pull_request` with a clear description
+5. Monitor CI and address any failures
 6. Address review feedback by replying to comments with `-- @claude` signature
-7. Merge when approved, CI passes, and all checklists are checked by humans
+7. Merge when approved, CI passes, and humans have verified the Definition of Done checklist
 
 ## Development Process Rules
 
