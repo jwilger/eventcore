@@ -9,6 +9,9 @@ allow_dirty = true
 # TODO: Re-enable after initial release (temporarily disabled because workspace dependencies are not yet published to crates.io)
 dependencies_update = false
 
+# Note: Due to failed release attempts, v0.1.1 and v0.1.2 tags exist but weren't fully published.
+# The workspace is at v0.1.3 to bypass these issues.
+
 # Git configuration
 git_release_enable = true  # Create GitHub releases
 git_tag_enable = true      # Create git tags
@@ -39,18 +42,23 @@ commit_parsers = [
 [[package]]
 name = "eventcore-macros"
 # Macros crate needs to be published first
+release = true
 
 [[package]]
 name = "eventcore"
 # Core crate published after macros
+# Explicitly set release to ensure it's included
+release = true
 
 [[package]]
 name = "eventcore-memory"
 # Memory adapter depends on eventcore
+release = true
 
 [[package]]
 name = "eventcore-postgres"
 # Postgres adapter depends on eventcore
+release = true
 
 # Don't publish example and benchmark crates
 [[package]]
