@@ -1,17 +1,18 @@
 name: Release-plz
 
 # This workflow creates release PRs when changes are pushed to main.
-# It only runs the 'release-pr' command to avoid circular dependency issues
-# during initial publishing of workspace crates.
+# It uses a Personal Access Token (PAT) instead of GITHUB_TOKEN to ensure
+# that CI workflows are triggered on the created PR.
 #
-# To actually publish to crates.io:
-# 1. Merge the release PR created by this workflow
-# 2. Manually run 'cargo publish' for each crate in dependency order:
-#    - eventcore-macros
-#    - eventcore
-#    - eventcore-memory
-#    - eventcore-postgres
-# 3. Once all crates are published, re-enable dependencies_update in release-plz.toml
+# Setup:
+# Uses the existing PR_DRAFT_PAT secret which has the necessary permissions
+#
+# The workflow will:
+# 1. Create a release PR with version bumps and changelog
+# 2. Trigger CI checks on the PR (due to PAT usage)
+#
+# Publishing happens automatically when you merge the release PR.
+# Release-plz handles the dependency order automatically.
 
 permissions:
   pull-requests: write
@@ -32,7 +33,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PR_DRAFT_PAT }}
       
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -40,11 +41,8 @@ jobs:
       - name: Run release-plz
         uses: release-plz/action@v0.5.102
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PR_DRAFT_PAT }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         with:
-          # Only create PR, don't release yet
-          # This prevents circular dependency issues during initial publishing
-          command: release-pr
           # Enable debug output
           rust_log: debug
