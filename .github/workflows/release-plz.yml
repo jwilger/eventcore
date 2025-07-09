@@ -1,18 +1,21 @@
 name: Release-plz
 
-# This workflow creates release PRs when changes are pushed to main.
+# This workflow handles both creating release PRs and publishing to crates.io.
 # It uses a Personal Access Token (PAT) instead of GITHUB_TOKEN to ensure
 # that CI workflows are triggered on the created PR.
 #
 # Setup:
-# Uses the existing PR_DRAFT_PAT secret which has the necessary permissions
+# - PR_DRAFT_PAT: GitHub PAT with repo permissions for creating PRs
+# - CARGO_REGISTRY_TOKEN: crates.io token for publishing
 #
-# The workflow will:
-# 1. Create a release PR with version bumps and changelog
-# 2. Trigger CI checks on the PR (due to PAT usage)
+# The workflow automatically:
+# 1. Creates a release PR when changes are pushed to main
+# 2. Publishes to crates.io when the release PR is merged
 #
-# Publishing happens automatically when you merge the release PR.
-# Release-plz handles the dependency order automatically.
+# Release-plz is smart enough to:
+# - Only create/update PRs when there are unreleased changes
+# - Only publish when its own release PR is merged
+# - Handle the dependency order automatically
 
 permissions:
   pull-requests: write
@@ -44,7 +47,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PR_DRAFT_PAT }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         with:
-          # Only create PR, don't publish yet
-          command: release-pr
           # Enable debug output
           rust_log: debug
