@@ -1,0 +1,27 @@
+name: Definition of Done
+
+on:
+  pull_request:
+    types: [opened, edited]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  check-dod:
+    name: Check Definition of Done
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Check Definition of Done
+        uses: platisd/definition-of-done@master
+        with:
+          dod_yaml: 'dod.yaml'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          message_header: |
+            ## Definition of Done Checklist
+            
+            Please ensure all items in this checklist are completed before merging:

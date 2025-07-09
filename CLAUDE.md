@@ -7,9 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **These rules must NEVER be violated under any circumstances:**
 
 1. **NEVER use the `--no-verify` flag when committing code**
-2. **NEVER check ANY checkboxes in PR templates** - All checkboxes must be left unchecked [ ] for human verification
-3. **ALWAYS read .github/pull_request_template.md before creating any PR**
-4. **ALWAYS stop and ask for help rather than taking shortcuts** - When faced with obstacles, ask the user for guidance
+2. **ALWAYS stop and ask for help rather than taking shortcuts** - When faced with obstacles, ask the user for guidance
 5. **Update @PLANNING.md before committing when working on planned tasks** - Mark completed tasks with [x] and include in commit
 6. **ALWAYS follow the exact todo list structure** - This prevents process drift
 
@@ -511,8 +509,6 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
 
 ### PR Workflow Steps
 
-**🚨 CRITICAL**: Never check ANY checkboxes in PR templates! See [Critical Rules](#critical-rules---always-apply)
-
 1. **Create a new branch** from main for your changes:
    ```bash
    git checkout main && git pull origin main
@@ -531,35 +527,21 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
    mcp__github__create_pull_request
    ```
    
-   **PR TEMPLATE REQUIREMENTS**:
+   **PR DESCRIPTION**:
+   - Provide a clear description of what changes you made and why
+   - Include any relevant context or motivation
+   - Mention any breaking changes or important considerations
    
-   **STEP 1**: ALWAYS read the PR template first:
-   ```
-   Read .github/pull_request_template.md before creating ANY PR
-   ```
+   **PR LABELS**: Add appropriate labels based on the type of change:
+   - `bug` - For bug fixes
+   - `enhancement` - For new features or improvements
+   - `documentation` - For documentation changes
+   - `breaking-change` - For changes that break existing functionality
+   - `developer-experience` - For DX improvements (tooling, workflows, etc.)
+   - `api-design` - For changes to public APIs
+   - `automated` - For automated/bot-created PRs
    
-   **STEP 2**: Process the template content for the PR description:
-   - Read the template to understand the structure and requirements
-   - **STRIP OUT ALL HTML COMMENTS** - they are instructions for you, not content for the PR
-   - **USE THE TEMPLATE VERBATIM** except for filling in content sections:
-     - Copy ALL section headers exactly as written (## Description, ## Type of Change, etc.)
-     - Copy ALL checkboxes exactly as written (leave ALL unchecked [ ])
-     - Copy the EXACT checkbox text - do not modify, summarize, or reorganize
-     - Fill in ONLY these content areas:
-       - Description section: Your description of changes
-       - Performance Impact section: Your performance analysis (keep benchmark template if present)
-       - Review Focus section: Your guidance for reviewers
-   - NEVER modify the template structure, checkbox text, or section organization
-   - The template must be preserved VERBATIM except for your filled-in content
-   
-   **STEP 3**: Fill in required sections:
-   - Description: Brief explanation of changes and motivation
-   - Type of Change: Leave ALL checkboxes unchecked
-   - Performance Impact: Include benchmark details if applicable
-   - Submitter Checklist: Leave ALL checkboxes unchecked
-   - Review Focus: Guide reviewers to specific areas needing attention
-   
-   **🚨 REMINDER**: ALL checkboxes MUST be left unchecked [ ] for human verification!
+   **Note**: The Definition of Done bot will automatically add a checklist to your PR. These items are for HUMAN VERIFICATION ONLY - never attempt to check or complete them yourself.
 
 5. **CI runs automatically** on PR creation - no need to monitor before creating the PR
 
@@ -659,7 +641,7 @@ When addressing PR review feedback:
 ### Important Notes
 
 - **CI/CD workflows only run on PRs**, not on branch pushes
-- **The PR template must be filled out** - the PR validation workflow enforces this
+- **Definition of Done checklist** will be automatically added to PRs
 - **Request reviews** from maintainers or use `mcp__github__request_copilot_review` for automated review
 - **Keep PRs small and focused** for easier review
 - **All automated comments must be signed with `-- @claude`**
@@ -685,10 +667,8 @@ When addressing PR review feedback:
 **Before proceeding with ANY task, remember:**
 
 1. **NEVER use `--no-verify`** - Fix issues, don't bypass checks
-2. **NEVER check PR checkboxes** - Leave ALL unchecked for humans
-3. **ALWAYS read PR template first** - Use exact template structure
-4. **Update @PLANNING.md when working on planned tasks** - Not required for ad-hoc requests
-5. **ALWAYS follow todo list structure** - Prevents workflow drift
-6. **ALWAYS ask for help** - When stuck or tempted to take shortcuts
+2. **Update @PLANNING.md when working on planned tasks** - Not required for ad-hoc requests
+3. **ALWAYS follow todo list structure** - Prevents workflow drift
+4. **ALWAYS ask for help** - When stuck or tempted to take shortcuts
 
 **These rules are absolute. No exceptions. Ever.**
