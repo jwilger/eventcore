@@ -10,6 +10,7 @@ categories.workspace = true
 keywords.workspace = true
 readme = "README.md"
 description = "Benchmarks for the EventCore multi-stream event sourcing library"
+publish = false
 
 [lints]
 workspace = true
