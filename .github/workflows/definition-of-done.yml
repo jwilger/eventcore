@@ -30,7 +30,7 @@ jobs:
       
       # Always verify the DoD is satisfied by checking the PR description
       - name: Verify Definition of Done
-        if: always()  # Run on all events
+        if: always()  # Needed to run even when previous step is skipped
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
