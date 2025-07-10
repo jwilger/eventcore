@@ -16,9 +16,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       
-      - name: Check Definition of Done
-        # Only run the actual DoD check on opened/edited events
-        # On other events, just pass to satisfy the required check
+      # Run the DoD action only on opened/edited to update the checklist
+      - name: Update Definition of Done Checklist
         if: github.event.action == 'opened' || github.event.action == 'edited'
         uses: platisd/definition-of-done@master
         with:
@@ -29,7 +28,31 @@ jobs:
             
             Please ensure all items in this checklist are completed before merging:
       
-      - name: Skip DoD check
-        # On synchronize (push) and reopened events, just report success
-        if: github.event.action == 'synchronize' || github.event.action == 'reopened'
-        run: echo "Skipping DoD check for push/reopen events"
+      # Always verify the DoD is satisfied by checking the PR description
+      - name: Verify Definition of Done
+        if: always()  # Needed to run even when previous step is skipped
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get the PR description
+          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body -q .body)
+          
+          # Only check for unchecked boxes if the DoD checklist exists
+          if echo "$PR_BODY" | grep -q "Definition of Done Checklist"; then
+            # Check if all checkboxes are checked (look for unchecked boxes: - [ ])
+            if echo "$PR_BODY" | grep -q "\- \[ \]"; then
+              echo "❌ Definition of Done checklist has unchecked items!"
+              echo "Please ensure all items in the checklist are completed before merging."
+              exit 1
+            else
+              echo "✅ All Definition of Done items are checked!"
+            fi
+          else
+            # On new PRs, the checklist might not exist yet
+            if [[ "${{ github.event.action }}" == "opened" ]]; then
+              echo "⏳ Definition of Done checklist will be added shortly..."
+            else
+              echo "⚠️  No Definition of Done checklist found in PR description"
+              exit 1
+            fi
+          fi
