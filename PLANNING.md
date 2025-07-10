@@ -35,179 +35,45 @@ EventCore has successfully completed all initially planned phases (1-20), includ
 - Complete subscription system with position tracking
 - Dead code cleanup and CI fixes
 
-## HIGHEST PRIORITY: Codebase Refactoring
+## Codebase Refactoring and Improvements
 
-**Critical Issue**: The codebase contains several very long functions and files that are difficult to understand, maintain, and test. This creates barriers for both human developers and LLM assistance.
+### Migration to GitHub Issues Complete (2025-07-10)
 
-**Refactoring Strategy**: Each refactoring will be done in its own PR, with PRs chained off each other to enable continuous work without waiting for human review.
+All refactoring tasks and post-review improvements have been successfully migrated to GitHub Issues:
 
-### Critical Refactoring Tasks (Must Complete All)
+**Refactoring Issues Created:**
+- Issue #53: [CRITICAL] Refactor executor.rs (2,956 lines)
+- Issue #54: [HIGH] Refactor cqrs/rebuild.rs::rebuild function (189 lines)
+- Issue #75: [HIGH] Refactor resource.rs (1,415 lines)
+- Issue #76: [MEDIUM] Refactor errors.rs Clone implementation (243 lines)
+- Issue #77: [MEDIUM] Refactor projection_runner.rs (1,318 lines)
+- Issue #78: [MEDIUM] Refactor serialization/evolution.rs (1,377 lines)
 
-#### 1. Refactor executor.rs (2,956 lines) - **CRITICAL**
-**Problem**: Massive single file containing multiple distinct responsibilities
-**Tasks**:
-- [x] Extract `execute_once` function (157 lines) - Split into pipeline stages (Implemented functional approach with type-state StreamDiscoveryContext)
-- [ ] Extract `execute_type_safe` function (139 lines) - Share common patterns
-- [ ] Extract `prepare_stream_events_with_complete_concurrency_control` function (140 lines) - Separate validation logic
-- [ ] Split executor.rs into modules:
-  - [ ] `executor/core.rs` - Core execution logic
-  - [ ] `executor/retry.rs` - Retry and circuit breaker logic
-  - [x] `executor/stream_discovery.rs` - Stream discovery iteration logic (Created with type-state pattern)
-  - [ ] `executor/validation.rs` - Command validation
-  - [ ] `executor/context.rs` - Execution context management
+**Post-Review Improvement Issues Created:**
+- Issue #79: [HIGH] Implement Snapshot System for Long-Running Streams
+- Issue #80: [HIGH] Enhanced Projection Capabilities for Complex Read Models
+- Issue #81: [HIGH] Beginner-Friendly Documentation and Onboarding
+- Issue #82: [MEDIUM] Advanced Error Recovery and Poison Message Handling
+- Issue #83: [MEDIUM] Performance Optimization and Monitoring
+- Issue #84: [MEDIUM] Enhanced Developer Experience
+- Issue #85: [LOW] Ecosystem Integration
+- Issue #86: [LOW] Multi-Tenant and Scaling Features
+- Issue #87: [LOW] Advanced Event Sourcing Patterns
 
-#### 2. Refactor cqrs/rebuild.rs::rebuild function (189 lines) - **HIGH**
-**Problem**: Complex rebuild logic with multiple responsibilities
-**Tasks**:
-- [ ] Extract event processing pipeline
-- [ ] Extract checkpoint management
-- [ ] Extract error handling patterns
-- [ ] Create separate functions for each rebuild phase
+All future work should be tracked through GitHub Issues. This PLANNING.md file now serves as a historical record of completed work.
 
-#### 3. Refactor resource.rs (1,415 lines) - **HIGH**
-**Problem**: Single file handling all resource lifecycle patterns
-**Tasks**:
-- [ ] Extract phantom type definitions to `resource/types.rs`
-- [ ] Move concrete implementations to `resource/implementations.rs`
-- [ ] Create `resource/lifecycle.rs` for acquisition/release patterns
-- [ ] Create `resource/pool.rs` for resource pooling
-- [ ] Create `resource/monitor.rs` for resource monitoring
+### Original Refactoring Strategy
 
-#### 4. Refactor errors.rs Clone implementation (243 lines) - **MEDIUM**
-**Problem**: Massive manual Clone implementation for error types
-**Tasks**:
-- [ ] Examine if #[derive(Clone)] can be used instead
-- [ ] Split error types into categories (validation, concurrency, infrastructure)
-- [ ] Reduce complexity of error type hierarchy
+Each refactoring will be done in its own PR, with PRs chained off each other to enable continuous work without waiting for human review.
 
-#### 5. Refactor projection_runner.rs (1,318 lines) - **MEDIUM**
-**Problem**: Complex projection processing logic
-**Tasks**:
-- [ ] Extract event processing pipeline
-- [ ] Separate retry logic into `projection/retry.rs`
-- [ ] Move monitoring/metrics to `projection/monitoring.rs`
-- [ ] Extract task management patterns
+### Refactoring Tasks
 
-#### 6. Refactor serialization/evolution.rs (1,377 lines) - **MEDIUM**
-**Problem**: Schema evolution logic is complex and monolithic
-**Tasks**:
-- [ ] Split migration logic into separate handlers
-- [ ] Extract version compatibility checking
-- [ ] Create separate modules for different evolution strategies
+All refactoring tasks have been migrated to GitHub Issues. See Issues #53-#78 for details.
 
-### Refactoring Process Rules
+### Post-Review Improvements
 
-**IMPORTANT**: Each refactoring task must be completed in its own PR, with PRs chained off each other. This allows continuous work without waiting for human review. To prevent drift and handle merge conflicts effectively:
-- Regularly sync feature branches with the main branch to incorporate the latest changes.
-- Rebase feature branches onto the main branch before creating new PRs to ensure compatibility.
-- Resolve merge conflicts promptly and verify that all integration tests pass after resolving conflicts.
+All post-review improvements have been migrated to GitHub Issues. See Issues #79-#87 for details.
 
-1. **Start with executor.rs refactoring** - This is the most critical
-2. **Create feature branch for each refactoring** - Use descriptive names like `refactor-executor-extract-pipeline`
-3. **Chain PRs** - Each subsequent PR branches off the previous one
-4. **Maintain existing public APIs** - No breaking changes during refactoring
-5. **Ensure comprehensive tests** - All integration tests must pass
-6. **Document refactoring decisions** - Each PR should explain the refactoring rationale
-7. **Continue until all tasks complete** - Work through the entire list systematically
-
-### Testing Strategy for Refactoring
-
-1. **Before refactoring**: Ensure comprehensive integration tests exist
-2. **During refactoring**: Maintain existing public APIs
-3. **After refactoring**: Verify no performance regressions
-4. **Property-based tests**: Ensure refactored code maintains invariants
-
-**DO NOT PROCEED WITH POST-REVIEW IMPROVEMENTS** until all refactoring tasks are complete.
-
-## Next Phase: Post-Review Improvements (ON HOLD)
-
-Based on the comprehensive expert review (see REVIEW.md), the following priority improvements have been identified:
-
-### High Priority (Blocks broader adoption)
-
-#### 1. Snapshot System Implementation
-**Problem**: No built-in support for snapshots makes massive streams potentially problematic
-**Solution**: 
-- [ ] Design snapshot strategy for long-running streams
-- [ ] Implement automatic snapshot creation based on event count thresholds
-- [ ] Add snapshot restoration capabilities to state reconstruction
-- [ ] Document snapshot lifecycle and best practices
-
-#### 2. Enhanced Projection Capabilities for Complex Read Models
-**Problem**: Limited support for building projections that need to correlate events across multiple streams
-**Solution**:
-- [ ] Add stream pattern subscriptions (e.g., subscribe to all "customer-*" streams)
-- [ ] Implement event correlation framework for related events (by correlation_id, causation_id)
-- [ ] Create projection composition patterns for building complex views
-- [ ] Add temporal windowing for time-based event correlation
-- [ ] Document patterns for multi-stream projections (e.g., order history, reconciliation)
-
-#### 3. Beginner-Friendly Documentation and Onboarding
-**Problem**: Steep learning curve identified as major adoption barrier
-**Solution**:
-- [ ] Create "EventCore in 15 minutes" quick start guide
-- [ ] Add progressive complexity examples (simple → intermediate → advanced)
-- [ ] Develop interactive tutorial with common patterns
-- [ ] Create migration guide from traditional event sourcing
-
-### Medium Priority (Production enhancements)
-
-#### 4. Advanced Error Recovery and Poison Message Handling
-**Problem**: Production systems need robust error handling strategies
-**Solution**:
-- [ ] Implement dead letter queue patterns for failed events
-- [ ] Add automatic retry with exponential backoff
-- [ ] Create error quarantine and manual recovery workflows
-- [ ] Document operational runbooks for common failure scenarios
-
-#### 5. Performance Optimization and Monitoring
-**Problem**: Need better production performance insights and tuning
-**Solution**:
-- [ ] Add detailed performance metrics and dashboards
-- [ ] Implement connection pool optimization for PostgreSQL adapter
-- [ ] Create performance profiling tools for command execution
-- [ ] Add memory usage monitoring and optimization
-
-#### 6. Enhanced Developer Experience
-**Problem**: Complex type system creates friction for new developers
-**Solution**:
-- [ ] Improve macro error messages with actionable suggestions
-- [ ] Add IDE integration and LSP support for better tooling
-- [ ] Create debug utilities for command and projection development
-- [ ] Implement development-mode warnings for common mistakes
-
-### Low Priority (Future enhancements)
-
-#### 7. Ecosystem Integration
-**Problem**: Limited integration with popular Rust web frameworks and tools
-**Solution**:
-- [ ] Create official Axum integration crate
-- [ ] Add Actix Web integration examples
-- [ ] Develop Tower middleware for HTTP APIs
-- [ ] Create integration with popular serialization formats
-
-#### 8. Multi-Tenant and Scaling Features
-**Problem**: Enterprise adoption may require multi-tenancy support
-**Solution**:
-- [ ] Design tenant isolation strategies
-- [ ] Implement tenant-scoped stream access
-- [ ] Add horizontal scaling documentation
-- [ ] Create cluster deployment examples
-
-#### 9. Advanced Event Sourcing Patterns
-**Problem**: Missing some advanced event sourcing capabilities
-**Solution**:
-- [ ] Implement event upcasting and schema migration
-- [ ] Add support for event encryption at rest
-- [ ] Create event archival and retention policies
-- [ ] Implement advanced causality tracking
-
-## Implementation Priority
-
-1. **Start with #1 (Snapshots)** - This directly addresses the most significant technical limitation
-2. **Follow with #3 (Documentation)** - Reduces adoption barriers for new users
-3. **Then #2 (Enhanced Projections)** - Enables complex read models while maintaining proper CQRS separation
-4. **Address production items (#4-6)** - As real-world usage patterns emerge
 
 All documented implementation phases have been completed. The project is ready for:
 - Production usage (with caveats noted in review)
@@ -406,6 +272,10 @@ This project uses a **pull request-based workflow**. Direct commits to the main 
 5. Monitor CI and address any failures
 6. Address review feedback by replying to comments with `-- @claude` signature
 7. Merge when approved, CI passes, and humans have verified the Definition of Done checklist
+
+## Active Development
+
+All active development is now tracked through GitHub Issues. See the [Issues page](https://github.com/jwilger/eventcore/issues) for current work items.
 
 ## Development Process Rules
 
