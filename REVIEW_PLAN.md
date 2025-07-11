@@ -190,7 +190,6 @@ EventCore is a multi-stream event sourcing library implementing dynamic consiste
 - `/docs/manual/` (All 7 sections)
 - `/docs/phantom_type_projection_protocol.md`
 - Example READMEs in `/eventcore-examples/`
-- `/PLANNING.md` (Development process)
 
 **Key Questions**:
 - Redgreen: "Can a newcomer build something in 30 minutes?"
