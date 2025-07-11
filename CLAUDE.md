@@ -510,10 +510,10 @@ Key tools for development workflow:
    - **THEN**: Project value and impact
    - **THEN**: Technical debt that blocks other work
    
-   **IMPORTANT**: When listing available issues:
-   - Always check if any issues are already assigned to the current user
-   - Check for existing branches matching the issue pattern (e.g., `issue-{number}-*`)
-   - Issues with both assignment AND existing branches should be presented FIRST, regardless of their labeled priority
+   > **IMPORTANT**: When listing available issues:
+   > - Always check if any issues are already assigned to the current user
+   > - Check for existing branches matching the issue pattern (e.g., `issue-{number}-*`)
+   > - Issues with both assignment AND existing branches should be presented FIRST, regardless of their labeled priority
 
 3. **Get user selection** - The user will choose which issue to work on
 
