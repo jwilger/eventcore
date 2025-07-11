@@ -503,11 +503,17 @@ Key tools for development workflow:
    mcp__github__list_issues with state="open"
    ```
 
-2. **Suggest top issues** to work on based on:
-   - Priority levels (CRITICAL > HIGH > MEDIUM > LOW)
-   - Logical dependencies between issues
-   - Project value and impact
-   - Technical debt that blocks other work
+2. **Prioritize and suggest issues** to work on based on:
+   - **HIGHEST PRIORITY**: Issues already assigned to the current user, especially if there's an existing branch for that issue
+   - **THEN**: Priority levels (CRITICAL > HIGH > MEDIUM > LOW)
+   - **THEN**: Logical dependencies between issues
+   - **THEN**: Project value and impact
+   - **THEN**: Technical debt that blocks other work
+   
+   **IMPORTANT**: When listing available issues:
+   - Always check if any issues are already assigned to the current user
+   - Check for existing branches matching the issue pattern (e.g., `issue-{number}-*`)
+   - Issues with both assignment AND existing branches should be presented FIRST, regardless of their labeled priority
 
 3. **Get user selection** - The user will choose which issue to work on
 
