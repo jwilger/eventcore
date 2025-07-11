@@ -87,7 +87,6 @@ For PR feedback specifically:
 
 1. **Ensure all changes are properly tested** and pre-commit checks will pass
 2. **Write clear, descriptive commit messages** that explain the why, not just the what
-3. **Reference the GitHub issue number** in commits when applicable (e.g., "Fix #123: ...")
 
 **🚨 CRITICAL REMINDER**: NEVER use `--no-verify` flag. All pre-commit checks must pass!
 
@@ -514,7 +513,7 @@ Key tools for development workflow:
 
 4. **Assign the issue** to the user:
    ```
-   mcp__github__update_issue with assignees=["jwilger"]
+   mcp__github__update_issue with assignees=["username"]
    ```
 
 5. **Create a feature branch** for the issue:
@@ -532,15 +531,15 @@ Key tools for development workflow:
 
 ### Issue Naming Conventions
 
-- Use descriptive branch names: `issue-53-refactor-executor`
+- Use descriptive branch names: `issue-{number}-descriptive-name`
 - Include the issue number for easy reference
 - Keep branch names concise but meaningful
 
 ### Linking Work to Issues
 
-- Reference issue numbers in commit messages: "Fix #53: Refactor executor.rs"
-- GitHub will automatically link commits and PRs to issues
-- When creating PRs, mention "Closes #53" to auto-close on merge
+- Reference issue numbers in PR descriptions, not individual commits
+- GitHub will automatically link PRs to issues when you mention them
+- When creating PRs, mention "Closes #{issue-number}" to auto-close on merge
 
 ## Pull Request Workflow
 
@@ -644,16 +643,20 @@ When addressing PR review feedback:
 
 2. **Reply directly to the review thread** using the thread ID:
    ```bash
-   gh api graphql -f query='
+   gh api graphql --field query='
    mutation {
      addPullRequestReviewThreadReply(input: {
        pullRequestReviewThreadId: "THREAD_ID",
-       body: "Your response here\n\n-- @claude"
+       body: """Your response here
+
+-- @claude"""
      }) {
        comment { id body }
      }
    }'
    ```
+   
+   **Note**: Use triple quotes (""") for multiline strings in GraphQL to avoid escaping issues
    
    **🚨 REMINDER**: Always sign automated responses with `-- @claude`!
 
