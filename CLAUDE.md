@@ -8,19 +8,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 1. **NEVER use the `--no-verify` flag when committing code**
 2. **ALWAYS stop and ask for help rather than taking shortcuts** - When faced with obstacles, ask the user for guidance
-5. **Update @PLANNING.md before committing when working on planned tasks** - Mark completed tasks with [x] and include in commit
-6. **ALWAYS follow the exact todo list structure** - This prevents process drift
+3. **ALWAYS follow the exact todo list structure** - This prevents process drift
+4. **Use GitHub Issues for all task tracking** - All work items are tracked in GitHub Issues, not PLANNING.md
 
 ## 📋 TABLE OF CONTENTS
 
 ### Quick Reference by Task
-- **🆕 Starting new work?** → Read [🚨 Critical Rules](#critical-rules---always-apply), [Development Process Rules](#development-process-rules)
+- **🆕 Starting new work?** → Read [🚨 Critical Rules](#critical-rules---always-apply), [Development Process Rules](#development-process-rules), [GitHub Issues Workflow](#github-issues-workflow)
 - **🔧 Setting up environment?** → Read [Development Commands](#development-commands)
 - **💻 Writing code?** → Read [Architecture](#architecture), [Type-Driven Development](#type-driven-development-philosophy)
 - **📤 Making commits?** → Read [Commit Rules](#commit-rules), [Pre-commit Hooks](#pre-commit-hooks)
 - **🔄 Creating/updating PRs?** → Read [Pull Request Workflow](#pull-request-workflow), [🚨 Critical Rules](#critical-rules---always-apply)
 - **💬 Responding to PR feedback?** → Read [Responding to PR Feedback](#responding-to-pr-feedback)
-- **💙 Using GitHub features?** → Read [GitHub MCP Integration](#github-mcp-integration)
+- **💙 Using GitHub features?** → Read [GitHub MCP Integration](#github-mcp-integration), [GitHub Issues Workflow](#github-issues-workflow)
 
 ### All Sections
 1. [🚨 Critical Rules](#critical-rules---always-apply) (THIS SECTION - READ FIRST!)
@@ -33,8 +33,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 8. [Pre-commit Hooks](#pre-commit-hooks)
 9. [Development Principles](#development-principles)
 10. [GitHub MCP Integration](#github-mcp-integration)
-11. [Pull Request Workflow](#pull-request-workflow)
-12. [Memories](#memories) (Important reminders)
+11. [GitHub Issues Workflow](#github-issues-workflow) (How to work with issues)
+12. [Pull Request Workflow](#pull-request-workflow)
+13. [Memories](#memories) (Important reminders)
 
 ## Project Overview
 
@@ -46,12 +47,13 @@ EventCore is a multi-stream event sourcing library that implements dynamic consi
 
 When working on this project, **ALWAYS** follow these rules:
 
-1. **Review @PLANNING.md** to discover the next task to work on.
-2. **Follow the Pull Request Workflow** (see [Pull Request Workflow](#pull-request-workflow)) for all code changes.
-3. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
-4. **When working on tasks from @PLANNING.md, insert a task to "Update @PLANNING.md to mark completed tasks"** before any commit task. For ad-hoc requests not in PLANNING.md, skip this step unless explicitly asked to add them.
-5. **Insert a task to "Make a commit"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure. Note: Pre-commit hooks will run all checks automatically.
-6. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository and create/update PR with GitHub MCP tools."
+1. **Review GitHub Issues** to discover work items. Use `mcp__github__list_issues` to see open issues.
+2. **Get assigned to an issue** before starting work. The user will select which issue to work on.
+3. **Create a feature branch** for the issue using `mcp__github__create_branch`.
+4. **Follow the Pull Request Workflow** (see [Pull Request Workflow](#pull-request-workflow)) for all code changes.
+5. **IMMEDIATELY use the todo list tool** to create a todolist with the specific actions you will take to complete the task.
+6. **Insert a task to "Make a commit"** after each discrete action that involves a change to the code, tests, database schema, or infrastructure. Note: Pre-commit hooks will run all checks automatically.
+7. **The FINAL item in the todolist MUST always be** to "Push your changes to the remote repository and create/update PR with GitHub MCP tools."
 
 ### CRITICAL: Todo List Structure
 
@@ -59,14 +61,13 @@ When working on this project, **ALWAYS** follow these rules:
 
 Your todo list should ALWAYS follow this pattern:
 
-**For planned work from @PLANNING.md:**
+**For work on GitHub Issues:**
 1. START with writing tests for any changes BEFORE making the changes, and ensure the tests fail as you expect them to.
 2. Implementation/fix tasks (the actual work)
-3. "Update @PLANNING.md to mark completed tasks" 
-4. "Make a commit" (pre-commit hooks run all checks automatically)
-5. "Push changes and update PR"
+3. "Make a commit" (pre-commit hooks run all checks automatically)
+4. "Push changes and update PR"
 
-**For ad-hoc requests not in @PLANNING.md:**
+**For ad-hoc requests not tracked in GitHub Issues:**
 1. START with writing tests for any changes BEFORE making the changes, and ensure the tests fail as you expect them to.
 2. Implementation/fix tasks (the actual work)
 3. "Make a commit" (pre-commit hooks run all checks automatically)
@@ -75,9 +76,8 @@ Your todo list should ALWAYS follow this pattern:
 For PR feedback specifically:
 1. Address each piece of feedback
 2. "Reply to review comments using gh GraphQL API with -- @claude signature"
-3. "Update @PLANNING.md to mark completed tasks"
-4. "Make a commit"
-5. "Push changes and check for new PR feedback"
+3. "Make a commit"
+4. "Push changes and check for new PR feedback"
 
 **Why this matters**: The todo list tool reinforces our workflow at every step, preventing process drift as context grows.
 
@@ -85,12 +85,8 @@ For PR feedback specifically:
 
 **BEFORE MAKING ANY COMMIT**:
 
-1. **If working on planned tasks from @PLANNING.md**:
-   - Ensure completed tasks are marked with [x]
-   - Include the updated PLANNING.md in the commit - Use `git add PLANNING.md`
-2. **If working on ad-hoc requests**: 
-   - Only update PLANNING.md if explicitly asked to track the work there
-   - Otherwise, proceed with the commit without updating PLANNING.md
+1. **Ensure all changes are properly tested** and pre-commit checks will pass
+2. **Write clear, descriptive commit messages** that explain the why, not just the what
 
 **🚨 CRITICAL REMINDER**: NEVER use `--no-verify` flag. All pre-commit checks must pass!
 
@@ -496,6 +492,55 @@ Key tools for development workflow:
 4. **Richer Data**: Full API responses with all metadata
 5. **Batch Operations**: Efficient multi-file operations
 
+## GitHub Issues Workflow
+
+**ALL development work is now tracked through GitHub Issues**, not PLANNING.md.
+
+### Starting Work on an Issue
+
+1. **List open issues** to see available work:
+   ```
+   mcp__github__list_issues with state="open"
+   ```
+
+2. **Suggest top issues** to work on based on:
+   - Priority levels (CRITICAL > HIGH > MEDIUM > LOW)
+   - Logical dependencies between issues
+   - Project value and impact
+   - Technical debt that blocks other work
+
+3. **Get user selection** - The user will choose which issue to work on
+
+4. **Assign the issue** to the user:
+   ```
+   mcp__github__update_issue with assignees=["username"]
+   ```
+
+5. **Create a feature branch** for the issue:
+   ```
+   mcp__github__create_branch with:
+   - branch: "issue-{number}-descriptive-name"
+   - from_branch: "main"
+   ```
+
+6. **Check out the branch locally**:
+   ```bash
+   git fetch origin
+   git checkout issue-{number}-descriptive-name
+   ```
+
+### Issue Naming Conventions
+
+- Use descriptive branch names: `issue-{number}-descriptive-name`
+- Include the issue number for easy reference
+- Keep branch names concise but meaningful
+
+### Linking Work to Issues
+
+- Reference issue numbers in PR descriptions, not individual commits
+- GitHub will automatically link PRs to issues when you mention them
+- When creating PRs, mention "Closes #{issue-number}" to auto-close on merge
+
 ## Pull Request Workflow
 
 This project uses a **pull request-based workflow**. Direct commits to the main branch are not allowed. All changes must go through pull requests for review and CI validation.
@@ -598,16 +643,20 @@ When addressing PR review feedback:
 
 2. **Reply directly to the review thread** using the thread ID:
    ```bash
-   gh api graphql -f query='
+   gh api graphql --field query='
    mutation {
      addPullRequestReviewThreadReply(input: {
        pullRequestReviewThreadId: "THREAD_ID",
-       body: "Your response here\n\n-- @claude"
+       body: """Your response here
+
+-- @claude"""
      }) {
        comment { id body }
      }
    }'
    ```
+   
+   **Note**: Use triple quotes (""") for multiline strings in GraphQL to avoid escaping issues
    
    **🚨 REMINDER**: Always sign automated responses with `-- @claude`!
 
@@ -667,7 +716,7 @@ When addressing PR review feedback:
 **Before proceeding with ANY task, remember:**
 
 1. **NEVER use `--no-verify`** - Fix issues, don't bypass checks
-2. **Update @PLANNING.md when working on planned tasks** - Not required for ad-hoc requests
+2. **Work on assigned GitHub Issues** - Get assigned before starting work
 3. **ALWAYS follow todo list structure** - Prevents workflow drift
 4. **ALWAYS ask for help** - When stuck or tempted to take shortcuts
 

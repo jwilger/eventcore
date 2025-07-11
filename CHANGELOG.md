@@ -46,6 +46,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive security audit integration in CI
 - Protection against dependency vulnerabilities
 
+## [0.1.3] - 2025-07-07
+
+### Fixed
+- PostgreSQL test configuration (missing TEST_DATABASE_URL) in PR #31
+- Documentation sync script symlink issue in PR #31
+- Cargo.toml version specifications for crates.io publishing in PR #33
+- CSS directory creation for documentation builds in PR #33
+- Workspace dependency syntax errors (`rand.workspace = true` to `rand = { workspace = true }`)
+- Version conflicts preventing re-release after partial crates.io publishing
+- Circular dependency in eventcore-macros preventing crates.io release
+- Publishing order to resolve dev-dependency circular dependencies
+
+### Changed
+- Implemented workspace dependencies for internal crates to enable automatic lockstep versioning
+- Updated publishing order to macros → memory → postgres → eventcore
+- Added PR template compliance rules to CLAUDE.md
+- Improved PR validation workflow with debouncing and comment deduplication
+- Replaced PR validation workflow with Definition of Done bot
+- Removed version numbers from internal workspace dependencies for cleaner dependency management
+
+### Added
+- PR template compliance enforcement in development workflow
+- Definition of Done bot configuration for automatic PR checklists
+- Critical rule #4 to CLAUDE.md: Always stop and ask for help rather than taking shortcuts
+
+## [0.1.2] - 2025-07-05
+
+### Fixed
+- Rand crate v0.9.1 deprecation errors:
+  - Updated `thread_rng()` to `rng()` across codebase
+  - Updated `gen()` to `random()` and `gen_range()` to `random_range()`
+  - Fixed ThreadRng Send issue in stress tests
+- OpenTelemetry v0.30.0 API breaking changes:
+  - Updated `Resource::new()` to `Resource::builder()` pattern
+  - Removed unnecessary runtime parameter from `PeriodicReader::builder()`
+  - Added required `grpc-tonic` feature to opentelemetry-otlp dependency
+- Bincode v2.0.1 API breaking changes:
+  - Updated to use `bincode::serde::encode_to_vec()` and `bincode::serde::decode_from_slice()`
+  - Added "serde" feature to bincode dependency
+  - Replaced deprecated `bincode::serialize()` and `bincode::deserialize()` functions
+
+### Changed
+- Updated actions/configure-pages from v4 to v5 (PR #3)
+- Updated codecov/codecov-action from v3 to v5 (PR #4)
+
+## [0.1.1] - 2025-07-05
+
+### Added
+- Modern documentation website with mdBook
+  - GitHub Pages deployment workflow
+  - Custom EventCore branding and responsive design
+  - Automated documentation synchronization from markdown sources
+  - Deployment on releases with version information
+- Comprehensive security infrastructure:
+  - SECURITY.md with vulnerability reporting via GitHub Security Advisories
+  - Improved cargo-audit CI job using rustsec/audit-check action
+  - Dependabot configuration for automated dependency updates
+  - CONTRIBUTING.md with GPG signing documentation
+  - Security guide in user manual covering authentication, encryption, validation, and compliance
+  - COMPLIANCE_CHECKLIST.md mapping to OWASP/NIST/SOC2/PCI/GDPR/HIPAA
+  - Pull request template with security and performance review checklists
+- GitHub Copilot instructions for automated PR reviews
+- Pre-commit hook improvements:
+  - Added doctests to pre-commit hooks
+  - Auto-format and stage files instead of failing
+- GitHub MCP server integration for all GitHub operations
+
+### Fixed
+- Outdated Command trait references (now CommandLogic) in documentation
+- Broken documentation links in README.md
+- License information to reflect MIT-only licensing
+- Doctest compilation error in resource.rs
+
+### Changed
+- Reorganized documentation structure (renumbered operations to 07, reference to 08)
+- Consolidated documentation to single source (symlinked docs/manual to website/src/manual)
+- Updated PR template to remove redundant pre-merge checklist and add Review Focus section
+- Enhanced CLAUDE.md with GitHub MCP integration and PR-based workflow documentation
+- Simplified PR template by consolidating multiple checklists into single Submitter Checklist
+
 ## [0.1.0] - Initial Release
 
 ### Added
