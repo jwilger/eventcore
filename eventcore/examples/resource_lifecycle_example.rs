@@ -4,14 +4,14 @@
 //! system to ensure safe resource acquisition and release with compile-time guarantees.
 
 use eventcore::resource::{
-    global_leak_detector, locking::create_mutex_resource, ResourceError, ResourceExt,
-    ResourceResult,
+    global_leak_detector, locking::create_mutex_resource, ResourceExt, ResourceResult,
 };
+use std::time::Duration;
 
 #[cfg(feature = "postgres")]
-use eventcore::resource::database::DatabaseResourceFactory;
+use eventcore::resource::{database::DatabaseResourceFactory, ResourceError};
 #[cfg(feature = "postgres")]
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 #[cfg(feature = "postgres")]
 use tokio::time::sleep;
 
