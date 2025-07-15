@@ -1351,6 +1351,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eventcore::{EventStore, ReadOptions};
 
     #[tokio::test]
     async fn test_distributed_saga_success() {
