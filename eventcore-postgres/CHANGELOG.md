@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/jwilger/eventcore/compare/v0.1.3...v0.1.4) - 2025-07-21
+
+### Changes
+
+- Add CHANGELOG.md files to all workspace packages ([#72](https://github.com/jwilger/eventcore/pull/72))
+- Update pre-commit hooks to use nextest for all tests ([#70](https://github.com/jwilger/eventcore/pull/70))
+
 ### Changes
 - Update pre-commit hooks to use nextest for all tests (#70)
 - Fix flaky query timeout test by increasing timeout from 100ms to 500ms
