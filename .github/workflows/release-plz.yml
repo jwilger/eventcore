@@ -8,14 +8,12 @@ name: Release-plz
 # - PR_DRAFT_PAT: GitHub PAT with repo permissions for creating PRs
 # - CARGO_REGISTRY_TOKEN: crates.io token for publishing
 #
-# The workflow automatically:
-# 1. Creates a release PR when changes are pushed to main
-# 2. Publishes to crates.io when the release PR is merged
+# The workflow has two different behaviors:
+# 1. On regular push to main: Creates/updates a release PR (release-pr command)
+# 2. When a release PR is merged: Publishes packages to crates.io (release command)
 #
-# Release-plz is smart enough to:
-# - Only create/update PRs when there are unreleased changes
-# - Only publish when its own release PR is merged
-# - Handle the dependency order automatically
+# This separation ensures that manual version bumps don't trigger immediate
+# publishing, and that packages are published in the correct dependency order.
 
 permissions:
   pull-requests: write
@@ -41,11 +39,43 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       
-      - name: Run release-plz
+      # Determine if this is a release PR merge by checking the commit message
+      - name: Check if this is a release PR merge
+        id: check_release
+        run: |
+          # Get the commit message of the HEAD commit
+          COMMIT_MSG=$(git log -1 --pretty=%s)
+          echo "Commit message: $COMMIT_MSG"
+          
+          # Check if this is a release PR merge (contains "chore: release")
+          if [[ "$COMMIT_MSG" =~ ^chore:\ release ]]; then
+            echo "This is a release PR merge"
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "This is a regular commit"
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+      
+      # Run release-pr command for regular commits
+      - name: Create/Update Release PR
+        if: steps.check_release.outputs.is_release == 'false'
         uses: release-plz/action@v0.5.102
         env:
           GITHUB_TOKEN: ${{ secrets.PR_DRAFT_PAT }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         with:
+          command: release-pr
+          # Enable debug output
+          rust_log: debug
+      
+      # Run release command only for release PR merges
+      - name: Publish to crates.io
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: release-plz/action@v0.5.102
+        env:
+          GITHUB_TOKEN: ${{ secrets.PR_DRAFT_PAT }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        with:
+          command: release
           # Enable debug output
           rust_log: debug
