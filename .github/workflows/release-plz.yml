@@ -59,7 +59,7 @@ jobs:
       # Run release-pr command for regular commits
       - name: Create/Update Release PR
         if: steps.check_release.outputs.is_release == 'false'
-        uses: release-plz/action@v0.5.102
+        uses: release-plz/action@v0.5.109
         env:
           GITHUB_TOKEN: ${{ secrets.PR_DRAFT_PAT }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -71,7 +71,7 @@ jobs:
       # Run release command only for release PR merges
       - name: Publish to crates.io
         if: steps.check_release.outputs.is_release == 'true'
-        uses: release-plz/action@v0.5.102
+        uses: release-plz/action@v0.5.109
         env:
           GITHUB_TOKEN: ${{ secrets.PR_DRAFT_PAT }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
