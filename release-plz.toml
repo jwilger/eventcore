@@ -15,7 +15,7 @@ dependencies_update = false
 # Git configuration
 git_release_enable = true  # Create GitHub releases
 git_tag_enable = true      # Create git tags
-git_tag_name = "{{ package }}-v{{ version }}"  # Tags will be like eventcore-v0.1.2
+git_tag_name = "{{ package }}-v{{ version }}"  # Tags: eventcore-v0.1.2, eventcore-macros-v0.1.2, etc.
 
 # PR configuration
 pr_labels = ["release", "automated"]
