@@ -44,11 +44,11 @@ jobs:
         id: check_release
         run: |
           # Get the commit message of the HEAD commit
-          COMMIT_MSG=$(git log -1 --pretty=%s)
-          echo "Commit message: $COMMIT_MSG"
+          COMMIT_MSG=$(git log -1 --pretty=%s --)
+          echo "Commit message: \"$COMMIT_MSG\""
           
           # Check if this is a release PR merge (contains "chore: release")
-          if [[ "$COMMIT_MSG" =~ ^chore:\ release ]]; then
+          if [[ "$COMMIT_MSG" =~ ^chore:[[:space:]]release ]]; then
             echo "This is a release PR merge"
             echo "is_release=true" >> $GITHUB_OUTPUT
           else

@@ -31,16 +31,24 @@ git checkout main
 git pull origin main
 
 # 2. Publish packages in the correct order
-cd eventcore-macros && cargo publish && cd ..
+cd eventcore-macros
+cargo publish
+cd ..
 # Wait for crates.io to index the package (~1-2 minutes)
 
-cd eventcore && cargo publish && cd ..
+cd eventcore
+cargo publish
+cd ..
 # Wait for crates.io to index the package
 
-cd eventcore-memory && cargo publish && cd ..
+cd eventcore-memory
+cargo publish
+cd ..
 # Wait for crates.io to index the package
 
-cd eventcore-postgres && cargo publish && cd ..
+cd eventcore-postgres
+cargo publish
+cd ..
 
 # 3. Create git tags for the release
 git tag -a eventcore-v0.1.X -m "Release eventcore v0.1.X"
