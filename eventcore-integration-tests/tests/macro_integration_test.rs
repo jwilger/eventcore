@@ -22,7 +22,6 @@ enum TestEvent {
 }
 
 #[derive(Command, Clone)]
-#[allow(dead_code)]
 struct WithdrawMoney {
     #[stream]
     account_stream: StreamId,
@@ -88,9 +87,11 @@ impl CommandLogic for WithdrawMoney {
 
 #[test]
 fn test_macros_compile() {
-    // This test just verifies that the macros compile correctly
-    // when used from an external crate. The actual functionality
-    // is tested through the command logic implementation above.
+    // This test verifies that the macros compile correctly when used from an external crate.
+    // The WithdrawMoney struct and its CommandLogic implementation demonstrate that:
+    // 1. The #[derive(Command)] macro works correctly
+    // 2. The emit! macro can be used within command handlers
+    // 3. The require! macro properly generates validation code
 
     // Test that require! macro expands correctly
     fn test_require() -> CommandResult<()> {
@@ -99,15 +100,18 @@ fn test_macros_compile() {
         Ok(())
     }
 
+    // Create an instance to verify the struct compiles and can be instantiated
+    let _cmd = WithdrawMoney {
+        account_stream: StreamId::try_new("test-account".to_string()).unwrap(),
+        amount: 100,
+    };
+
     match test_require() {
         Err(CommandError::BusinessRuleViolation(msg)) => {
             assert_eq!(msg, "Test error message");
         }
         _ => panic!("Expected BusinessRuleViolation error"),
     }
-
-    // The emit! macro is tested implicitly by the CommandLogic implementation
-    // compiling successfully above.
 }
 
 #[test]
