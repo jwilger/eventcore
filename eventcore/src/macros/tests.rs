@@ -1,8 +1,6 @@
 //! Tests for helper macros.
 
-use crate::command::CommandResult;
-use crate::errors::CommandError;
-use crate::require;
+use crate::{require, CommandError, CommandResult};
 
 #[test]
 fn test_require_macro_success() {

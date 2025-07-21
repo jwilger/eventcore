@@ -34,7 +34,7 @@ mod tests;
 macro_rules! require {
     ($condition:expr, $message:expr) => {
         if !$condition {
-            return Err($crate::errors::CommandError::BusinessRuleViolation(
+            return Err($crate::CommandError::BusinessRuleViolation(
                 $message.to_string(),
             ));
         }
@@ -77,10 +77,6 @@ macro_rules! require {
 #[macro_export]
 macro_rules! emit {
     ($events:expr, $read_streams:expr, $stream_id:expr, $event:expr) => {
-        $events.push($crate::command::StreamWrite::new(
-            $read_streams,
-            $stream_id,
-            $event,
-        )?);
+        $events.push($crate::StreamWrite::new($read_streams, $stream_id, $event)?);
     };
 }
