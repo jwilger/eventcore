@@ -30,26 +30,33 @@ commit_parsers = [
   { message = "^.*", group = "Changes" },
 ]
 
-# Package-specific configuration for publishing order
+# Package-specific configuration
+# 
+# IMPORTANT: release-plz does not always respect dependency order when publishing.
+# See: https://github.com/release-plz/release-plz/issues/1316
+# 
+# The correct publishing order based on dependencies is:
+# 1. eventcore-macros (no internal dependencies)
+# 2. eventcore (depends on macros)
+# 3. eventcore-memory (depends on eventcore)
+# 4. eventcore-postgres (depends on eventcore and eventcore-memory)
+#
+# However, release-plz may publish in a different order, causing failures.
+# If this happens, packages need to be manually published in the correct order.
 [[package]]
 name = "eventcore-macros"
-# Macros crate needs to be published first
 release = true
 
 [[package]]
 name = "eventcore"
-# Core crate published after macros
-# Explicitly set release to ensure it's included
 release = true
 
 [[package]]
 name = "eventcore-memory"
-# Memory adapter depends on eventcore
 release = true
 
 [[package]]
 name = "eventcore-postgres"
-# Postgres adapter depends on eventcore
 release = true
 
 # Don't publish example and benchmark crates
