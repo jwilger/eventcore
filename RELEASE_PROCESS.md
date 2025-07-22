@@ -7,7 +7,7 @@ This document describes the release process for the EventCore workspace.
 The project uses a hybrid approach for fully automated releases:
 
 1. **[release-plz](https://release-plz.dev/)** - Creates/updates release PRs when changes are pushed to `main`
-2. **[cargo-publish-workspace](https://github.com/foresterre/cargo-publish-workspace)** - Publishes packages to crates.io in topological (dependency) order when release PRs are merged
+2. **[cargo-workspaces](https://github.com/pksunkara/cargo-workspaces)** - Publishes packages to crates.io in topological (dependency) order when release PRs are merged
 
 This combination ensures reliable, automated releases without manual intervention.
 
@@ -15,9 +15,9 @@ This combination ensures reliable, automated releases without manual interventio
 
 ### Package Publishing Order
 
-cargo-publish-workspace automatically determines and uses the correct publishing order based on the dependency graph. It handles the topological sorting internally, ensuring packages are always published in the correct order.
+cargo-workspaces automatically determines and uses the correct publishing order based on the dependency graph. It handles the topological sorting internally, ensuring packages are always published in the correct order.
 
-**The dependency graph (automatically handled by cargo-publish-workspace):**
+**The dependency graph (automatically handled by cargo-workspaces):**
 1. `eventcore-macros` (no internal dependencies)
 2. `eventcore` (depends on eventcore-macros)
 3. `eventcore-memory` (depends on eventcore)
