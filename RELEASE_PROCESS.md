@@ -4,26 +4,30 @@ This document describes the release process for the EventCore workspace.
 
 ## Automated Release Process
 
-The project uses [release-plz](https://release-plz.dev/) for automated releases:
+The project uses a hybrid approach for fully automated releases:
 
-1. When changes are pushed to `main`, release-plz creates/updates a release PR
-2. When the release PR is merged, release-plz publishes packages to crates.io
+1. **[release-plz](https://release-plz.dev/)** - Creates/updates release PRs when changes are pushed to `main`
+2. **[cargo-publish-workspace](https://github.com/foresterre/cargo-publish-workspace)** - Publishes packages to crates.io in topological (dependency) order when release PRs are merged
 
-## Known Issues
+This combination ensures reliable, automated releases without manual intervention.
+
+## How It Works
 
 ### Package Publishing Order
 
-release-plz has a known issue where it doesn't always respect the dependency graph when publishing workspace packages. This can cause publishing failures when packages are published out of order.
+cargo-publish-workspace automatically determines and uses the correct publishing order based on the dependency graph. It handles the topological sorting internally, ensuring packages are always published in the correct order.
 
-**Correct publishing order based on dependencies:**
+**The dependency graph (automatically handled by cargo-publish-workspace):**
 1. `eventcore-macros` (no internal dependencies)
 2. `eventcore` (depends on eventcore-macros)
 3. `eventcore-memory` (depends on eventcore)
 4. `eventcore-postgres` (depends on eventcore and eventcore-memory)
 
-### Manual Publishing Process
+The workflow includes a 30-second delay between publishing each crate to ensure crates.io has time to index each package before dependent crates are published.
 
-If release-plz fails to publish packages in the correct order, you'll need to publish manually:
+### Fallback: Manual Publishing Process
+
+In the unlikely event that the automated process fails, you can publish manually:
 
 ```bash
 # 1. First, ensure you're on the latest main branch
@@ -50,7 +54,8 @@ cd eventcore-postgres
 cargo publish
 cd ..
 
-# 3. Create git tags for the release
+# 3. Create git tags for the release (if not already created)
+# Note: release-plz usually creates these tags automatically
 git tag -a eventcore-v0.1.X -m "Release eventcore v0.1.X"
 git tag -a eventcore-macros-v0.1.X -m "Release eventcore-macros v0.1.X"
 git tag -a eventcore-memory-v0.1.X -m "Release eventcore-memory v0.1.X"

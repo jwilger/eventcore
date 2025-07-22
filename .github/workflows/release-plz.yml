@@ -68,14 +68,20 @@ jobs:
           # Enable debug output
           rust_log: debug
       
+      # Install cargo-publish-workspace for topological ordering
+      - name: Install cargo-publish-workspace
+        if: steps.check_release.outputs.is_release == 'true'
+        run: cargo install cargo-publish-workspace --locked
+      
       # Run release command only for release PR merges
+      # Using cargo-publish-workspace instead of release-plz to ensure
+      # workspace crates are published in topological (dependency) order
       - name: Publish to crates.io
         if: steps.check_release.outputs.is_release == 'true'
-        uses: release-plz/action@v0.5.109
         env:
-          GITHUB_TOKEN: ${{ secrets.PR_DRAFT_PAT }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        with:
-          command: release
-          # Enable debug output
-          rust_log: debug
+        run: |
+          # Publish workspace crates in topological order
+          # --sleep 30 gives crates.io time to update its index between publishes
+          # This prevents "crate not found" errors for workspace dependencies
+          cargo publish-workspace publish --sleep 30
