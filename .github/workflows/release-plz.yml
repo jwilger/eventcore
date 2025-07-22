@@ -68,10 +68,23 @@ jobs:
           # Enable debug output
           rust_log: debug
       
+      # Cache cargo-publish-workspace for better performance
+      - name: Cache cargo-publish-workspace
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-publish-workspace
+          key: cargo-publish-workspace-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-publish-workspace-${{ runner.os }}-
+      
       # Install cargo-publish-workspace for topological ordering
       - name: Install cargo-publish-workspace
         if: steps.check_release.outputs.is_release == 'true'
-        run: cargo install cargo-publish-workspace --locked
+        run: |
+          if ! command -v cargo-publish-workspace &> /dev/null; then
+            cargo install cargo-publish-workspace --locked
+          fi
       
       # Run release command only for release PR merges
       # Using cargo-publish-workspace instead of release-plz to ensure
@@ -84,4 +97,4 @@ jobs:
           # Publish workspace crates in topological order
           # --sleep 30 gives crates.io time to update its index between publishes
           # This prevents "crate not found" errors for workspace dependencies
-          cargo publish-workspace publish --sleep 30
+          cargo publish-workspace --sleep 30
