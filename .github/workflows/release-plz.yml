@@ -68,14 +68,67 @@ jobs:
           # Enable debug output
           rust_log: debug
       
+      # Cache cargo-workspaces for better performance
+      - name: Cache cargo-workspaces
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-workspaces
+          key: cargo-workspaces-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-workspaces-${{ runner.os }}-
+      
+      # Install cargo-workspaces for topological ordering
+      - name: Install cargo-workspaces
+        if: steps.check_release.outputs.is_release == 'true'
+        run: |
+          if ! command -v cargo-workspaces &> /dev/null; then
+            cargo install cargo-workspaces --locked
+          fi
+      
       # Run release command only for release PR merges
+      # Using cargo-workspaces instead of release-plz to ensure
+      # workspace crates are published in topological (dependency) order
       - name: Publish to crates.io
         if: steps.check_release.outputs.is_release == 'true'
-        uses: release-plz/action@v0.5.109
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          # Publish workspace crates in topological order
+          # --from-git skips version bumping (already done by release-plz)
+          # --publish-interval 30 gives crates.io time to update its index between publishes
+          # This prevents "crate not found" errors for workspace dependencies
+          cargo workspaces publish --from-git --publish-interval 30 --yes
+      
+      # Create GitHub releases and tags after successful publishing
+      # We need to temporarily set publish=false to skip cargo publish
+      # since we already published with cargo-workspaces
+      - name: Create GitHub releases and tags
+        if: steps.check_release.outputs.is_release == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.PR_DRAFT_PAT }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        with:
-          command: release
-          # Enable debug output
-          rust_log: debug
+        run: |
+          # Create temporary config to disable publishing
+          cat > .release-plz-temp.toml << 'EOF'
+          [workspace]
+          publish = false
+          # Copy other settings from main config
+          release_always = true
+          allow_dirty = true
+          dependencies_update = false
+          git_release_enable = true
+          git_tag_enable = true
+          git_tag_name = "{{ package }}-v{{ version }}"
+          changelog_update = true
+          
+          [changelog]
+          commit_parsers = [
+            { message = "^.*", group = "Changes" },
+          ]
+          EOF
+          
+          # Run release-plz with temporary config to create releases and tags only
+          npx --yes release-plz release --config .release-plz-temp.toml
+          
+          # Clean up
+          rm .release-plz-temp.toml
