@@ -8,8 +8,12 @@ The project uses a hybrid approach for fully automated releases:
 
 1. **[release-plz](https://release-plz.dev/)** - Creates/updates release PRs when changes are pushed to `main`
 2. **[cargo-workspaces](https://github.com/pksunkara/cargo-workspaces)** - Publishes packages to crates.io in topological (dependency) order when release PRs are merged
+3. **[release-plz](https://release-plz.dev/)** - Creates GitHub releases and git tags after successful publishing
 
-This combination ensures reliable, automated releases without manual intervention.
+This combination ensures reliable, automated releases without manual intervention while maintaining:
+- Correct dependency ordering during publishing (cargo-workspaces)
+- Consistent changelog generation and GitHub releases (release-plz)
+- Automated version management and PR creation (release-plz)
 
 ## How It Works
 
