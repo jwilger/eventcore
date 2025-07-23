@@ -76,6 +76,9 @@ macro_rules! require {
 /// ```
 #[macro_export]
 macro_rules! emit {
+    // The double braces `{{ }}` are used here to create a block expression.
+    // This is necessary for the `#[allow(clippy::vec_init_then_push)]` attribute
+    // to work properly, as it scopes the attribute to the block.
     ($events:expr, $read_streams:expr, $stream_id:expr, $event:expr) => {{
         #[allow(clippy::vec_init_then_push)]
         $events.push($crate::StreamWrite::new($read_streams, $stream_id, $event)?);
