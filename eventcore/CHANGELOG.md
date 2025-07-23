@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8](https://github.com/jwilger/eventcore/compare/eventcore-v0.1.7...eventcore-v0.1.8) - 2025-07-23
+
+### Fixed
+
+- add clippy allow attribute to emit! macro to suppress vec_init_then_push warning ([#106](https://github.com/jwilger/eventcore/pull/106))
+
 ## [0.1.6](https://github.com/jwilger/eventcore/compare/eventcore-v0.1.5...eventcore-v0.1.6) - 2025-07-21
 
 ### Changes
