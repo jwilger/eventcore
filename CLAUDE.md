@@ -86,9 +86,53 @@ For PR feedback specifically:
 **BEFORE MAKING ANY COMMIT**:
 
 1. **Ensure all changes are properly tested** and pre-commit checks will pass
-2. **Write clear, descriptive commit messages** that explain the why, not just the what
+2. **Use conventional commit format** - This project uses [Conventional Commits](https://www.conventionalcommits.org/) for all commit messages
+3. **Include scope when changing specific packages** - e.g., `fix(eventcore-macros): resolve clippy warning`
 
 **🚨 CRITICAL REMINDER**: NEVER use `--no-verify` flag. All pre-commit checks must pass!
+
+#### Conventional Commit Format
+
+All commits MUST follow the conventional commit format:
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+**Types** (required):
+- `feat`: A new feature
+- `fix`: A bug fix
+- `docs`: Documentation only changes
+- `style`: Changes that do not affect the meaning of the code (white-space, formatting, etc)
+- `refactor`: A code change that neither fixes a bug nor adds a feature
+- `perf`: A code change that improves performance
+- `test`: Adding missing tests or correcting existing tests
+- `build`: Changes that affect the build system or external dependencies
+- `ci`: Changes to CI configuration files and scripts
+- `chore`: Other changes that don't modify src or test files
+- `revert`: Reverts a previous commit
+
+**Scope** (optional but recommended for workspace projects):
+- Use package names for workspace-specific changes: `eventcore`, `eventcore-macros`, `eventcore-memory`, `eventcore-postgres`
+- Use descriptive scopes for cross-cutting concerns: `deps`, `ci`, `docs`
+- Omit scope for changes that affect the entire workspace
+
+**Examples**:
+```
+feat(eventcore): add support for event metadata
+fix(eventcore-macros): resolve clippy warning in emit! macro
+docs: update README with conventional commit guidelines
+ci: fix release-plz changelog grouping
+chore(deps): bump tokio from 1.38 to 1.39
+```
+
+**Breaking Changes**:
+- Add `!` after the type/scope to indicate breaking changes: `feat(eventcore)!: change EventStore trait`
+- Include `BREAKING CHANGE:` in the commit body with details
 
 ## Type-Driven Development Philosophy
 

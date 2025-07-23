@@ -25,10 +25,30 @@ pr_draft = true  # Create release PRs as drafts
 changelog_update = true
 
 [changelog]
-# Include all commits in a single flat list
+# Use conventional commits for changelog generation
+# Group commits by type for better organization
 commit_parsers = [
-  { message = "^.*", group = "Changes" },
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^style", group = "Style" },
+  { message = "^test", group = "Testing" },
+  { message = "^chore\\(release\\):", skip = true },
+  { message = "^chore\\(deps\\)", group = "Dependencies" },
+  { message = "^chore\\(deps-dev\\)", group = "Development Dependencies" },
+  { message = "^chore", group = "Miscellaneous Tasks" },
+  { message = "^build", group = "Build System" },
+  { message = "^ci", group = "Continuous Integration" },
+  { message = "^revert", group = "Reverts" },
 ]
+
+# Sort commit groups in a logical order
+sort_commits = "oldest"
+
+# Use scope from conventional commits when present
+protect_breaking_commits = true
 
 # Package-specific configuration
 # 
@@ -46,18 +66,31 @@ commit_parsers = [
 [[package]]
 name = "eventcore-macros"
 release = true
+# Ensure only commits affecting this package are included
+changelog_include = ["eventcore-macros/**"]
+# Also include commits with explicit scope
+changelog_path = "./eventcore-macros/CHANGELOG.md"
 
 [[package]]
 name = "eventcore"
 release = true
+# Include commits affecting the core library
+changelog_include = ["eventcore/src/**", "eventcore/Cargo.toml"]
+# Exclude macro-specific changes
+changelog_exclude = ["eventcore-macros/**"]
+changelog_path = "./eventcore/CHANGELOG.md"
 
 [[package]]
 name = "eventcore-memory"
 release = true
+changelog_include = ["eventcore-memory/**"]
+changelog_path = "./eventcore-memory/CHANGELOG.md"
 
 [[package]]
 name = "eventcore-postgres"
 release = true
+changelog_include = ["eventcore-postgres/**"]
+changelog_path = "./eventcore-postgres/CHANGELOG.md"
 
 # Don't publish example and benchmark crates
 [[package]]
