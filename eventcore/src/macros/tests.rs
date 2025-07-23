@@ -37,28 +37,3 @@ fn test_emit_macro() {
 
     // Placeholder to ensure the macro module compiles
 }
-
-#[test]
-fn test_emit_macro_no_clippy_warning() {
-    // Test to ensure the emit! macro doesn't trigger clippy::vec_init_then_push
-    // This test verifies that the pattern shown in the issue doesn't produce warnings
-
-    // We can't easily test the actual macro expansion here, but we can
-    // document the issue and solution for reference
-
-    // The issue is that code like this:
-    // ```
-    // let mut events = vec![];
-    // emit!(events, &read_streams, stream_id, SomeEvent { data: "test" });
-    // ```
-    //
-    // Expands to:
-    // ```
-    // let mut events = vec![];
-    // events.push(StreamWrite::new(&read_streams, stream_id, SomeEvent { data: "test" })?);
-    // ```
-    //
-    // Which triggers clippy::vec_init_then_push because it sees a push right after vec![]
-
-    // The solution is to add #[allow(clippy::vec_init_then_push)] to the macro expansion
-}
