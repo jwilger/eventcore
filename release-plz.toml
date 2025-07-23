@@ -47,10 +47,6 @@ commit_parsers = [
 # Sort commit groups in a logical order
 sort_commits = "oldest"
 
-# Filter commits by file paths to ensure proper package attribution
-# This helps release-plz correctly assign commits to packages
-changelog_include = ["**/*.rs", "**/Cargo.toml", "**/*.md"]
-
 # Use scope from conventional commits when present
 protect_breaking_commits = true
 
@@ -79,7 +75,7 @@ changelog_path = "./eventcore-macros/CHANGELOG.md"
 name = "eventcore"
 release = true
 # Include commits affecting the core library
-changelog_include = ["eventcore/src/**", "eventcore/Cargo.toml", "src/**"]
+changelog_include = ["eventcore/src/**", "eventcore/Cargo.toml"]
 # Exclude macro-specific changes
 changelog_exclude = ["eventcore-macros/**"]
 changelog_path = "./eventcore/CHANGELOG.md"
