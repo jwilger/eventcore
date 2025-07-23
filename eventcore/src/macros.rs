@@ -76,7 +76,8 @@ macro_rules! require {
 /// ```
 #[macro_export]
 macro_rules! emit {
-    ($events:expr, $read_streams:expr, $stream_id:expr, $event:expr) => {
+    ($events:expr, $read_streams:expr, $stream_id:expr, $event:expr) => {{
+        #[allow(clippy::vec_init_then_push)]
         $events.push($crate::StreamWrite::new($read_streams, $stream_id, $event)?);
-    };
+    }};
 }
