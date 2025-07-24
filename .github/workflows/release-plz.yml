@@ -118,7 +118,7 @@ jobs:
           dependencies_update = false
           git_release_enable = true
           git_tag_enable = true
-          git_tag_name = "{{ package }}-v{{ version }}"
+          git_tag_name = "v{{ version }}"
           changelog_update = true
           
           [changelog]
@@ -127,8 +127,22 @@ jobs:
           ]
           EOF
           
+          # Cache release-plz binary
+          - name: Cache release-plz binary
+            uses: actions/cache@v3
+            with:
+              path: ~/.cargo/bin/release-plz
+              key: ${{ runner.os }}-release-plz-${{ hashFiles('**/Cargo.lock') }}
+              restore-keys: |
+                ${{ runner.os }}-release-plz-
+          
+          # Install release-plz if not already cached
+          - name: Install release-plz
+            if: ![ -x ~/.cargo/bin/release-plz ]
+            run: cargo install release-plz --locked
+          
           # Run release-plz with temporary config to create releases and tags only
-          npx --yes release-plz release --config .release-plz-temp.toml
+          release-plz release --config .release-plz-temp.toml
           
           # Clean up
           rm .release-plz-temp.toml
