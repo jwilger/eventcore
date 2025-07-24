@@ -127,8 +127,19 @@ jobs:
           ]
           EOF
           
-          # Install release-plz if not already available
-          cargo install release-plz --locked
+          # Cache release-plz binary
+          - name: Cache release-plz binary
+            uses: actions/cache@v3
+            with:
+              path: ~/.cargo/bin/release-plz
+              key: ${{ runner.os }}-release-plz-${{ hashFiles('**/Cargo.lock') }}
+              restore-keys: |
+                ${{ runner.os }}-release-plz-
+          
+          # Install release-plz if not already cached
+          - name: Install release-plz
+            if: ![ -x ~/.cargo/bin/release-plz ]
+            run: cargo install release-plz --locked
           
           # Run release-plz with temporary config to create releases and tags only
           release-plz release --config .release-plz-temp.toml
