@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.1.8...eventcore-postgres-v0.1.9) - 2025-07-24
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.1.6](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.1.5...eventcore-postgres-v0.1.6) - 2025-07-21
 
 ### Changes
