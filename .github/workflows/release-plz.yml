@@ -118,7 +118,7 @@ jobs:
           dependencies_update = false
           git_release_enable = true
           git_tag_enable = true
-          git_tag_name = "{{ package }}-v{{ version }}"
+          git_tag_name = "v{{ version }}"
           changelog_update = true
           
           [changelog]
