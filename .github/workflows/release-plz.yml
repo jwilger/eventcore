@@ -127,8 +127,11 @@ jobs:
           ]
           EOF
           
+          # Install release-plz if not already available
+          cargo install release-plz --locked
+          
           # Run release-plz with temporary config to create releases and tags only
-          npx --yes release-plz release --config .release-plz-temp.toml
+          release-plz release --config .release-plz-temp.toml
           
           # Clean up
           rm .release-plz-temp.toml
