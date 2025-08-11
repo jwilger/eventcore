@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       
       # Run the DoD action only on opened/edited to update the checklist
       - name: Update Definition of Done Checklist
