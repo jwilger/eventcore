@@ -32,7 +32,7 @@ regex = "1.11.1"
 # Additional dependencies for examples
 rust_decimal = { version = "1.37.0", features = ["serde"] }
 rust_decimal_macros = "1.37.0"
-anyhow = "1.0.95"
+anyhow = "1.0.99"
 rand = { workspace = true }
 
 # Web framework dependencies
