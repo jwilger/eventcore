@@ -27,12 +27,12 @@ chrono = { workspace = true }
 
 # Type safety dependencies
 nutype = { workspace = true, features = ["regex"] }
-regex = "1.11.1"
+regex = "1.11.2"
 
 # Additional dependencies for examples
-rust_decimal = { version = "1.37.0", features = ["serde"] }
-rust_decimal_macros = "1.37.0"
-anyhow = "1.0.95"
+rust_decimal = { version = "1.38.0", features = ["serde"] }
+rust_decimal_macros = "1.38.0"
+anyhow = "1.0.100"
 rand = { workspace = true }
 
 # Web framework dependencies
