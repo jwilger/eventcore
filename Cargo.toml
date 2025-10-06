@@ -23,23 +23,23 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Core dependencies
-tokio = { version = "1.46.1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
-async-trait = "0.1.88"
-uuid = { version = "1.17.0", features = ["v7", "serde"] }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.141"
-thiserror = "2.0.12"
+tokio = { version = "1.47.1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
+async-trait = "0.1.89"
+uuid = { version = "1.18.1", features = ["v7", "serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+thiserror = "2.0.17"
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-chrono = { version = "0.4.41", features = ["serde"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+chrono = { version = "0.4.42", features = ["serde"] }
 
 # Type safety dependencies
-nutype = { version = "0.6.1", features = ["serde"] }
+nutype = { version = "0.6.2", features = ["serde"] }
 
 # Testing dependencies
-proptest = "1.7.0"
+proptest = "1.8.0"
 tokio-test = "0.4.4"
-insta = "1.43.1"
+insta = "1.43.2"
 criterion = "0.6.0"
 rand = "0.9.2"
 testcontainers = "0.24.0"
@@ -47,7 +47,7 @@ testcontainers = "0.24.0"
 # Database dependencies (only for specific crates)
 # Note: We disable default features to avoid pulling in sqlx-mysql and its vulnerable rsa dependency
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
-parking_lot = "0.12.4"
+parking_lot = "0.12.5"
 
 # Async stream utilities
 futures = "0.3.31"

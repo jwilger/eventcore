@@ -41,10 +41,10 @@ bincode = { version = "2.0.1", features = ["serde"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"], optional = true }
 
 # Observability integrations
-opentelemetry = { version = "0.30", features = ["metrics", "trace"], optional = true }
-opentelemetry-otlp = { version = "0.30", features = ["grpc-tonic", "metrics"], optional = true }
-opentelemetry_sdk = { version = "0.30", features = ["rt-tokio"], optional = true }
-tracing-opentelemetry = { version = "0.31", optional = true }
+opentelemetry = { version = "0.31", features = ["metrics", "trace"], optional = true }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "metrics"], optional = true }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"], optional = true }
+tracing-opentelemetry = { version = "0.32", optional = true }
 prometheus = { version = "0.14", optional = true }
 
 [dev-dependencies]
