@@ -1,9 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 6792631b37cab9beb45b6fcb961c5f15b8321cb049ec9ae92c692880c4c701ce # shrinks to type_name = "aaAA0", version = 1
-cc dad26d6e4050c41f5d031de2607827ef205c191339c222e92b13c0e95096c5b7 # shrinks to event = SimpleEvent { id: "00A00A0A", value: 0 }
-cc b64a7592944d22b0529a3162a78aaea9a7f6830c36bac681390c0dda55b01827 # shrinks to event = StoredEvent { event: Event { id: EventId(0197b8b5-e33a-70e0-93ff-363fd12fa4b3), stream_id: StreamId("0"), payload: SimpleEvent { id: "00AA0a0a", value: 0 }, metadata: EventMetadata { timestamp: Timestamp(2025-06-28T22:43:37.402732106Z), correlation_id: CorrelationId(0197b8b5-e33a-70e0-93ff-3626771f4900), causation_id: None, user_id: None, custom: {} }, created_at: Timestamp(2025-06-28T22:43:37.402738520Z) }, version: EventVersion(0), stored_at: Timestamp(2025-06-28T22:43:37.402738791Z) }
