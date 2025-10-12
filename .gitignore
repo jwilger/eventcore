@@ -58,3 +58,15 @@ result-*
 # Website build artifacts
 website/book/
 website/src/logo.png
+
+
+# Added by cargo
+
+/target
+
+
+# Added by cargo
+#
+# already existing elements were commented out
+
+#/target

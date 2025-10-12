@@ -1,8 +1,0 @@
-dod:
-  - 'Code follows project style guidelines'
-  - 'Changes are well-documented'
-  - 'All tests pass'
-  - 'Performance implications have been considered'
-  - 'Security implications have been reviewed'
-  - 'Breaking changes are documented'
-  - 'The change is backward compatible where possible'

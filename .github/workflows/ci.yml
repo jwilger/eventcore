@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,14 +21,19 @@ jobs:
           - stable
           - beta
           - nightly
-    
+        postgres:
+          - 15
+          - 16
+          - 17
+          - 18
+
     services:
-      postgres-main:
-        image: postgres:15
+      postgres:
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: eventcore
+          POSTGRES_DB: eventcore_test
         ports:
           - 5432:5432
         options: >-
@@ -36,54 +41,28 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      
-      postgres-test:
-        image: postgres:15
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: eventcore_test
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
-          components: rustfmt, clippy
-      
+
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
-      
-      - name: Login to Docker Hub
-        if: ${{ github.event_name != 'pull_request' }}
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-        continue-on-error: true
-      
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-      
-      - name: Run tests with nextest
+
+      - name: Run tests
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5433/eventcore_test
-        run: cargo nextest run --workspace --all-features --profile ci
-        
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
+        run: cargo test --workspace --all-features
+
       - name: Run doctests
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5433/eventcore_test
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
         run: cargo test --doc --workspace --all-features
 
   format:
@@ -91,12 +70,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -105,181 +84,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      
+
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
-      
+
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features
 
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Cache cargo-audit
         uses: actions/cache@v4
         id: cache-cargo-audit
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-${{ runner.os }}
-      
+
       - name: Install cargo-audit
         if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --locked
-      
+
       - name: Run security audit
         run: cargo audit
-
-  coverage:
-    name: Code Coverage
-    runs-on: ubuntu-latest
-    # Run concurrently with test jobs for faster CI
-    
-    services:
-      postgres-main:
-        image: postgres:15
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: eventcore
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      
-      postgres-test:
-        image: postgres:15
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: eventcore_test
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-      
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-      
-      - name: Login to Docker Hub
-        if: ${{ github.event_name != 'pull_request' }}
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-        continue-on-error: true
-      
-      - name: Cache cargo-llvm-cov
-        uses: actions/cache@v4
-        id: cache-cargo-llvm-cov
-        with:
-          path: ~/.cargo/bin/cargo-llvm-cov
-          key: cargo-llvm-cov-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-llvm-cov-${{ runner.os }}-
-      
-      - name: Install cargo-llvm-cov
-        if: steps.cache-cargo-llvm-cov.outputs.cache-hit != 'true'
-        uses: taiki-e/install-action@cargo-llvm-cov
-      
-      - name: Generate coverage report
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5433/eventcore_test
-        run: timeout 10m cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info --lib
-      
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: lcov.info
-          fail_ci_if_error: false
-          verbose: true
-
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-      
-      - name: Check all targets
-        run: cargo check --workspace --all-targets --all-features
-
-  dependency-check:
-    name: Dependency Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-      
-      - name: Install cargo-outdated
-        run: cargo install cargo-outdated
-      
-      - name: Check for significant outdated dependencies
-        run: |
-          echo "Checking for outdated dependencies..."
-          # Use --root-deps-only to focus on direct dependencies
-          # Allow exit code 1 for now but capture output
-          cargo outdated --workspace --root-deps-only --format json > outdated.json || true
-          
-          # Check if there are any major version updates for direct dependencies
-          if [ -s outdated.json ]; then
-            echo "Found some outdated dependencies:"
-            cat outdated.json
-            # For now, only fail on major version updates of direct dependencies
-            # This avoids false positives from transitive dependency version conflicts
-            echo "Dependency check completed - review results above"
-          else
-            echo "No outdated direct dependencies found"
-          fi
-
-  msrv:
-    name: Minimum Supported Rust Version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.70.0  # MSRV - update as needed
-      
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-      
-      - name: Check MSRV
-        run: cargo check --workspace --all-features

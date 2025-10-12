@@ -32,9 +32,11 @@
             pre-commit
             nodejs_22
             glow
+            just
             jq
             sqlx-cli
             postgresql
+            cargo-nextest
           ];
 
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
