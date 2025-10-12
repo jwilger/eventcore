@@ -36,10 +36,33 @@
             jq
             sqlx-cli
             postgresql
-            cargo-nextest
           ];
 
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+
+          shellHook = ''
+            CARGO_MCP_VERSION="0.2.0"
+            CARGO_NEXTEST_VERSION="0.9.105"
+
+            # Setup local cargo bin directory
+            export CARGO_INSTALL_ROOT="$PWD/.cargo-bin"
+            export PATH="$CARGO_INSTALL_ROOT/bin:$PATH"
+
+            # Create directory if it doesn't exist
+            mkdir -p "$CARGO_INSTALL_ROOT/bin"
+
+            # Check cargo-mcp version
+            if ! command -v cargo-mcp >/dev/null 2>&1 || [ "$(cargo-mcp --version 2>/dev/null | awk '{print $2}')" != "$CARGO_MCP_VERSION" ]; then
+              echo "Installing cargo-mcp $CARGO_MCP_VERSION to $CARGO_INSTALL_ROOT..."
+              cargo install cargo-mcp --version "$CARGO_MCP_VERSION" --root "$CARGO_INSTALL_ROOT"
+            fi
+
+            # Check cargo-nextest version
+            if ! command -v cargo-nextest >/dev/null 2>&1 || [ "$(cargo-nextest --version 2>/dev/null | awk '{print $2}')" != "$CARGO_NEXTEST_VERSION" ]; then
+              echo "Installing cargo-nextest $CARGO_NEXTEST_VERSION to $CARGO_INSTALL_ROOT..."
+              cargo install cargo-nextest --version "$CARGO_NEXTEST_VERSION" --root "$CARGO_INSTALL_ROOT"
+            fi
+          '';
         };
       }
     );

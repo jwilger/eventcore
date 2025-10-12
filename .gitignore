@@ -34,6 +34,9 @@
 .envrc
 .direnv/
 
+# Local cargo tools installed by nix flake
+.cargo-bin/
+
 # Coverage reports
 *.profraw
 *.profdata
