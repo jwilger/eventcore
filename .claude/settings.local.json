@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "SlashCommand(/sdlc-app:adr-template)",
-      "SlashCommand(/sdlc-app:documentation-philosophy)"
+      "SlashCommand(/sdlc-app:documentation-philosophy)",
+      "SlashCommand(/sdlc-core:adr-template)",
+      "SlashCommand(/sdlc-core:documentation-philosophy)"
     ]
   },
   "outputStyle": "default",
