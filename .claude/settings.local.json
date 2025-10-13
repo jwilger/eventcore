@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "SlashCommand(/sdlc-app:adr-template)",
+      "SlashCommand(/sdlc-app:documentation-philosophy)"
+    ]
+  },
+  "outputStyle": "default",
+  "spinnerTipsEnabled": false
+}
