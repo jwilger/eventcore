@@ -8,6 +8,6 @@
       "Read(//home/jwilger/.claude/processes/**)"
     ]
   },
-  "outputStyle": "default",
+  "outputStyle": "marvin",
   "spinnerTipsEnabled": false
 }

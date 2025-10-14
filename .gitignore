@@ -62,6 +62,9 @@ result-*
 website/book/
 website/src/logo.png
 
+# Claude Code local settings
+.claude/settings.local.json
+
 
 # Added by cargo
 
