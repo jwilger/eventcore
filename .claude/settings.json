@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "SlashCommand(/sdlc-app:adr-template)",
+      "SlashCommand(/sdlc-app:documentation-philosophy)",
+      "SlashCommand(/sdlc-core:adr-template)",
+      "SlashCommand(/sdlc-core:documentation-philosophy)",
+      "Read(//home/jwilger/.claude/processes/**)"
+    ]
+  },
+  "outputStyle": "marvin",
+  "spinnerTipsEnabled": false
+}
