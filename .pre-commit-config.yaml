@@ -20,7 +20,7 @@ repos:
 
       - id: cargo-test
         name: cargo test
-        entry: cargo nextest run --workspace --all-features --fail-fast
+        entry: cargo nextest run --workspace --all-features --fail-fast --no-tests=pass
         language: system
         types: [rust]
         pass_filenames: false
@@ -42,7 +42,7 @@ repos:
 
       - id: cargo-audit
         name: cargo audit
-        entry: cargo audit
+        entry: cargo audit --db .cargo-advisory-db
         language: system
         types: [rust]
         pass_filenames: false

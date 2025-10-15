@@ -20,43 +20,22 @@ pub enum CommandError {
     /// This error indicates another command modified the stream(s) between
     /// this command's read and write phases. The executor will automatically
     /// retry with fresh state.
-    #[error("concurrency conflict: {0}")]
-    ConcurrencyError(#[from] ConcurrencyError),
+    #[error("concurrency conflict")]
+    ConcurrencyError,
 
     /// Storage backend failure during event store operations.
     ///
     /// This error wraps failures from the event store backend (network errors,
     /// constraint violations, etc.). The error classification determines
     /// whether retry is appropriate.
-    #[error("event store error: {0}")]
-    EventStoreError(#[from] EventStoreError),
+    #[error("event store error")]
+    EventStoreError,
 
     /// Invalid command state detected during execution.
     ///
     /// This error indicates the command entered an invalid state during
     /// execution (e.g., state reconstruction failed, required stream missing).
     /// These errors are permanent and indicate logic errors.
-    #[error("validation error: {0}")]
-    ValidationError(#[from] ValidationError),
+    #[error("validation error")]
+    ValidationError,
 }
-
-/// Placeholder for concurrency error details.
-///
-/// TODO: Implement full ConcurrencyError with expected vs actual versions.
-#[derive(Error, Debug)]
-#[error("version conflict")]
-pub struct ConcurrencyError;
-
-/// Placeholder for event store error details.
-///
-/// TODO: Implement full EventStoreError with backend-specific details.
-#[derive(Error, Debug)]
-#[error("event store failure")]
-pub struct EventStoreError;
-
-/// Placeholder for validation error details.
-///
-/// TODO: Implement full ValidationError with field-specific context.
-#[derive(Error, Debug)]
-#[error("validation failure")]
-pub struct ValidationError;

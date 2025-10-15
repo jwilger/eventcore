@@ -2,9 +2,10 @@ mod command;
 mod errors;
 mod store;
 
-pub use command::CommandLogic;
-pub use errors::CommandError;
-pub use store::EventStore;
+// Re-export only the minimal public API needed for execute() signature
+use command::CommandLogic;
+use errors::CommandError;
+use store::EventStore;
 
 /// Execute a command against the event store.
 ///
@@ -25,14 +26,6 @@ pub use store::EventStore;
 /// - Business rule validation fails (via command's `handle()`)
 /// - Event persistence fails
 /// - Optimistic concurrency conflicts occur
-///
-/// # Examples
-///
-/// ```ignore
-/// use eventcore::execute;
-///
-/// let result = execute(postgres_store, send_message_cmd).await?;
-/// ```
 pub async fn execute<C, S>(_store: S, _command: C) -> Result<(), CommandError>
 where
     C: CommandLogic,
