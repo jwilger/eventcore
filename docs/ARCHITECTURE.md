@@ -14,7 +14,7 @@ EventCore is a type-safe event sourcing library for Rust that implements **multi
 
 ## Architectural Principles
 
-EventCore's architecture is guided by four foundational principles that inform all design decisions:
+EventCore's architecture is guided by five foundational principles that inform all design decisions:
 
 ### 1. Type-Driven Development
 
@@ -45,7 +45,17 @@ EventCore is library infrastructure, not business framework:
 - Async runtime agnostic (Tokio, async-std)
 - Minimal opinionated dependencies
 
-### 4. Developer Ergonomics
+### 4. Free Function API Design
+
+Public API consists primarily of free functions, not methods on structs (ADR-010):
+
+- **Minimal API Surface**: Types remain private until compiler requires public exposure
+- **Composability**: Free functions enable function composition, partial application, easier testing
+- **Explicit Dependencies**: All inputs visible in signatures - no hidden state
+- **Compiler-Driven Evolution**: Types made public only when compiler or tests force it
+- **Clear Data Flow**: Parameter passing makes ownership and data dependencies explicit
+
+### 5. Developer Ergonomics
 
 Minimize boilerplate while maximizing type safety (ADR-006):
 
@@ -64,14 +74,14 @@ EventCore's architecture comprises six major components that work together to pr
 ```mermaid
 graph TB
     App[Application Code]
-    Executor[Command Executor]
+    ExecFn[execute() function]
     Cmd[Command System]
     Store[Event Store Abstraction]
     Backend[Storage Backend]
 
-    App -->|"execute(command)"| Executor
-    Executor -->|"extract streams"| Cmd
-    Executor -->|"read/append events"| Store
+    App -->|"execute(command, store)"| ExecFn
+    ExecFn -->|"extract streams"| Cmd
+    ExecFn -->|"read/append events"| Store
     Store -->|"ACID transactions"| Backend
     Cmd -->|"apply/handle"| App
 
@@ -81,11 +91,11 @@ graph TB
         Meta[Event Metadata]
     end
 
-    Executor -.->|"uses"| Types
-    Executor -.->|"produces"| Errors
+    ExecFn -.->|"uses"| Types
+    ExecFn -.->|"produces"| Errors
     Store -.->|"preserves"| Meta
 
-    style Executor fill:#e1f5ff
+    style ExecFn fill:#e1f5ff
     style Store fill:#e1ffe1
     style Cmd fill:#ffe1e1
 ```
@@ -146,54 +156,77 @@ graph TB
 
 **Why This Design:** Clear separation between infrastructure (generated) and business logic (hand-written) minimizes boilerplate while maintaining compile-time safety. Optional dynamic discovery provides flexibility without compromising common-case simplicity.
 
-### 3. Command Executor (ADR-008)
+### 3. Command Execution (ADR-008, ADR-010)
 
-**Purpose:** Orchestrates command execution with automatic retry on version conflicts.
+**Purpose:** Orchestrate command execution with automatic retry on version conflicts via free function API.
+
+**API Design (ADR-010):**
+
+EventCore provides command execution through a free function, not a struct method:
+
+```rust
+// Public API: free function with explicit dependencies
+pub async fn execute<C, S>(
+    command: C,
+    store: &S,
+) -> Result<ExecutionResponse, CommandError>
+where
+    C: CommandLogic + CommandStreams,
+    S: EventStore,
+```
+
+**Why Free Functions:**
+
+- **Explicit Dependencies**: Store passed as parameter, making data flow clear
+- **Composability**: Function can be wrapped, partially applied, composed with combinators
+- **Minimal API Surface**: No CommandExecutor struct to learn or manage
+- **Testability**: Mock dependencies passed explicitly, no struct lifecycle concerns
+- **Compiler-Driven Types**: Supporting types made public only when compiler requires it
 
 **Execution Flow:**
 
 ```mermaid
 sequenceDiagram
     participant App as Application
-    participant Exec as Command Executor
+    participant ExecFn as execute() function
     participant Cmd as Command (Logic)
     participant Store as Event Store
 
-    App->>Exec: execute(command)
+    App->>ExecFn: execute(command, store)
 
-    Note over Exec: Phase 1: Stream Resolution
-    Exec->>Cmd: extract static streams
+    Note over ExecFn: Phase 1: Stream Resolution
+    ExecFn->>Cmd: extract static streams
     opt Dynamic Discovery
-        Exec->>Store: read static streams
-        Exec->>Cmd: apply(events) → state
-        Exec->>Cmd: resolve_additional_streams(state)
+        ExecFn->>Store: read static streams
+        ExecFn->>Cmd: apply(events) → state
+        ExecFn->>Cmd: resolve_additional_streams(state)
     end
 
-    Note over Exec: Phase 2: Read & Capture Versions
-    Exec->>Store: read(all_streams)
-    Store-->>Exec: events + versions
+    Note over ExecFn: Phase 2: Read & Capture Versions
+    ExecFn->>Store: read(all_streams)
+    Store-->>ExecFn: events + versions
 
-    Note over Exec: Phase 3: State Reconstruction
-    Exec->>Cmd: apply(events) for all streams
-    Cmd-->>Exec: reconstructed state
+    Note over ExecFn: Phase 3: State Reconstruction
+    ExecFn->>Cmd: apply(events) for all streams
+    Cmd-->>ExecFn: reconstructed state
 
-    Note over Exec: Phase 4: Business Logic
-    Exec->>Cmd: handle(state, context)
-    Cmd-->>Exec: events to emit
+    Note over ExecFn: Phase 4: Business Logic
+    ExecFn->>Cmd: handle(state, context)
+    Cmd-->>ExecFn: events to emit
 
-    Note over Exec: Phase 5: Atomic Write
-    Exec->>Store: append(events, expected_versions)
+    Note over ExecFn: Phase 5: Atomic Write
+    ExecFn->>Store: append(events, expected_versions)
 
     alt Version Conflict
-        Store-->>Exec: ConcurrencyError
-        Note over Exec: Automatic Retry with Backoff
-        Exec->>Exec: Return to Phase 2 with fresh read
+        Store-->>ExecFn: ConcurrencyError
+        Note over ExecFn: Automatic Retry with Backoff
+        ExecFn->>ExecFn: Return to Phase 2 with fresh read
     else Success
-        Store-->>Exec: Success
-        Exec-->>App: Command completed
+        Store-->>ExecFn: Success
+        ExecFn-->>App: Command completed
     else Permanent Error
-        Store-->>Exec: ValidationError/BusinessRuleViolation
-        Exec-->>App: Fail immediately (no retry)
+        Store-->>ExecFn: ValidationError/BusinessRuleViolation
+        ExecFn-->>App: Fail immediately (no retry)
     end
 ```
 
@@ -206,7 +239,7 @@ sequenceDiagram
 - Metadata (correlation/causation) preserved across retries
 - Permanent errors fail immediately without retry
 
-**Why This Design:** Centralizes infrastructure concerns (retry, orchestration) in the executor, keeping command implementations focused on business logic. Automatic retry provides correctness guarantees without developer intervention.
+**Why This Design:** Centralizes infrastructure concerns (retry, orchestration) in the execute function, keeping command implementations focused on business logic. Automatic retry provides correctness guarantees without developer intervention. Free function API maximizes composability and minimizes learning curve.
 
 ### 4. Type System (ADR-003)
 
@@ -353,7 +386,12 @@ impl CommandLogic for TransferMoney {
 }
 ```
 
-**2. Execution Flow (Infrastructure):**
+**2. Execution Flow (Infrastructure via execute() function):**
+
+```rust
+// Application invokes free function with command and store
+let response = execute(transfer_command, &event_store).await?;
+```
 
 - **Phase 1 - Stream Resolution:** Extract `from_account` and `to_account` stream IDs
 - **Phase 2 - Read with Version Capture:** Read both streams, capture versions (e.g., version 42, 17)
@@ -368,7 +406,7 @@ impl CommandLogic for TransferMoney {
 If concurrent command committed to `from_account` between read and write:
 
 - ConcurrencyError returned by EventStore
-- Executor applies exponential backoff (10ms first retry)
+- execute() function applies exponential backoff (10ms first retry)
 - Return to Phase 2: re-read both streams with fresh versions
 - Re-execute business logic with updated state
 - Retry atomic write with new version expectations
@@ -433,7 +471,7 @@ Optimistic concurrency control workflow:
 
 **3. Automatic Retry:**
 
-- Executor classifies ConcurrencyError as Retriable
+- execute() function classifies ConcurrencyError as Retriable
 - Apply exponential backoff delay (10ms)
 - Return to read phase with fresh read
 - Command A re-reads account stream at version 12
@@ -450,7 +488,7 @@ Optimistic concurrency control workflow:
 Multi-stream atomicity permeates the entire architecture:
 
 - **Event Store:** Leverages storage-native transactions (PostgreSQL ACID) for atomic multi-stream appends
-- **Command Executor:** Coordinates reads and writes ensuring all streams participate in version checking
+- **execute() function:** Coordinates reads and writes ensuring all streams participate in version checking
 - **Dynamic Discovery:** Discovered streams fully integrated into atomic write operation
 - **Retry Logic:** Failed attempts retry entire flow, maintaining atomicity invariants
 
@@ -472,7 +510,7 @@ Type-driven development enforced across all components:
 
 Correlation and causation provide distributed tracing throughout execution:
 
-- **Command Invocation:** Executor generates/receives correlation ID for operation
+- **Command Invocation:** execute() function generates/receives correlation ID for operation
 - **Event Emission:** Events carry correlation and causation IDs from context
 - **Retry Preservation:** Same correlation ID across all retry attempts
 - **Event Storage:** Metadata persisted atomically with events
@@ -485,11 +523,11 @@ Correlation and causation provide distributed tracing throughout execution:
 Errors flow through layers with context accumulation:
 
 - **Command Logic:** BusinessRuleViolation with rule context
-- **Executor:** Adds command type, stream IDs, retry attempt count
+- **execute() function:** Adds command type, stream IDs, retry attempt count
 - **Event Store:** Maps backend errors to EventCore types, preserves backend details in error chain
 - **Application:** Receives fully-contextualized error for logging, monitoring, user feedback
 
-**Classification Enforcement:** Executor respects Retriable/Permanent distinction - only ConcurrencyError triggers retry.
+**Classification Enforcement:** execute() function respects Retriable/Permanent distinction - only ConcurrencyError triggers retry.
 
 ## Quality Attributes
 
@@ -613,7 +651,7 @@ graph TB
     end
 
     subgraph "EventCore Library"
-        Executor[Command Executor]
+        ExecFn[execute() function]
         Store[EventStore Trait]
     end
 
@@ -627,9 +665,9 @@ graph TB
         ProjStore[(Projection Store)]
     end
 
-    WebAPI --> Executor
-    BgWorker --> Executor
-    Executor --> Store
+    WebAPI --> ExecFn
+    BgWorker --> ExecFn
+    ExecFn --> Store
     Store --> PG
 
     PG -.->|Event Subscription| Proj1
@@ -637,15 +675,15 @@ graph TB
     Proj1 --> ProjStore
     Proj2 --> ProjStore
 
-    style Executor fill:#e1f5ff
+    style ExecFn fill:#e1f5ff
     style Store fill:#e1ffe1
     style PG fill:#d4edda
 ```
 
 **Components:**
 
-- **Web API:** Commands received from HTTP requests, executed via executor
-- **Background Workers:** Long-running processes executing scheduled commands
+- **Web API:** Commands received from HTTP requests, executed via execute() function
+- **Background Workers:** Long-running processes executing scheduled commands via execute() function
 - **PostgreSQL:** Production event store with ACID transactions
 - **Projections:** Read models built from event subscriptions, stored separately
 
@@ -658,7 +696,7 @@ graph TB
     end
 
     subgraph "EventCore Library"
-        Executor[Command Executor]
+        ExecFn[execute() function]
         Store[EventStore Trait]
     end
 
@@ -666,8 +704,8 @@ graph TB
         Memory[In-Memory Store<br/>+ Chaos Injection]
     end
 
-    Tests --> Executor
-    Executor --> Store
+    Tests --> ExecFn
+    ExecFn --> Store
     Store --> Memory
 
     style Memory fill:#fff3cd
@@ -797,12 +835,12 @@ struct MyCommand {
 **Web Framework Integration (Axum example):**
 
 ```rust
-// Handler receives command, uses executor
+// Handler receives command, invokes execute() function
 async fn transfer_handler(
-    State(executor): State<CommandExecutor>,
+    State(store): State<Arc<PostgresEventStore>>,
     Json(cmd): Json<TransferMoney>
 ) -> Result<Json<Success>> {
-    executor.execute(cmd).await?;
+    execute(cmd, store.as_ref()).await?;
     Ok(Json(Success))
 }
 ```
@@ -810,10 +848,10 @@ async fn transfer_handler(
 **Background Job Processing:**
 
 ```rust
-// Worker executes scheduled commands
-async fn process_scheduled_commands(executor: &CommandExecutor) {
+// Worker executes scheduled commands via free function
+async fn process_scheduled_commands(store: &impl EventStore) {
     for cmd in fetch_scheduled_commands() {
-        executor.execute(cmd).await?;
+        execute(cmd, store).await?;
     }
 }
 ```
@@ -879,6 +917,7 @@ This architecture synthesizes the following accepted ADRs:
 - **ADR-007:** Optimistic Concurrency Control Strategy
 - **ADR-008:** Command Executor and Retry Logic
 - **ADR-009:** Stream Resolver Design for Dynamic Discovery
+- **ADR-010:** Free Function API Design Philosophy
 
 Refer to individual ADRs for detailed rationale, alternatives considered, and specific implementation guidance.
 
