@@ -7,6 +7,14 @@ use command::CommandLogic;
 use errors::CommandError;
 use store::EventStore;
 
+/// Represents the successful outcome of command execution.
+///
+/// This type is returned when a command completes successfully, including
+/// state reconstruction, business rule validation, and atomic event persistence.
+/// The specific data included in this response is yet to be determined based
+/// on actual usage requirements.
+pub struct ExecutionResponse;
+
 /// Execute a command against the event store.
 ///
 /// This is the primary entry point for EventCore. It orchestrates the complete
@@ -26,7 +34,7 @@ use store::EventStore;
 /// - Business rule validation fails (via command's `handle()`)
 /// - Event persistence fails
 /// - Optimistic concurrency conflicts occur
-pub async fn execute<C, S>(_store: S, _command: C) -> Result<(), CommandError>
+pub async fn execute<C, S>(_store: S, _command: C) -> Result<ExecutionResponse, CommandError>
 where
     C: CommandLogic,
     S: EventStore,
