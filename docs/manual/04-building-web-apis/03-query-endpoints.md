@@ -25,13 +25,13 @@ use serde::{Deserialize, Serialize};
 struct ListTasksQuery {
     #[serde(default)]
     status: Option<TaskStatus>,
-    
+
     #[serde(default)]
     assigned_to: Option<String>,
-    
+
     #[serde(default = "default_page")]
     page: u32,
-    
+
     #[serde(default = "default_page_size")]
     page_size: u32,
 }
@@ -73,27 +73,27 @@ async fn list_tasks(
         .await
         .get::<TaskListProjection>()
         .ok_or_else(|| ApiError::internal("Task projection not available"))?;
-    
+
     // Apply filters
     let mut tasks = projection.get_all_tasks();
-    
+
     if let Some(status) = query.status {
         tasks.retain(|t| t.status == status);
     }
-    
+
     if let Some(assigned_to) = query.assigned_to {
         tasks.retain(|t| t.assigned_to.as_ref() == Some(&assigned_to));
     }
-    
+
     // Calculate pagination
     let total_items = tasks.len() as u64;
     let total_pages = ((total_items as f32) / (query.page_size as f32)).ceil() as u32;
-    
+
     // Apply pagination
     let start = ((query.page - 1) * query.page_size) as usize;
     let end = (start + query.page_size as usize).min(tasks.len());
     let page_tasks = tasks[start..end].to_vec();
-    
+
     Ok(Json(ListTasksResponse {
         tasks: page_tasks.into_iter().map(Into::into).collect(),
         pagination: PaginationInfo {
@@ -133,30 +133,30 @@ struct AdvancedTaskQuery {
     // Filters
     #[serde(default)]
     status: Option<Vec<TaskStatus>>,
-    
+
     #[serde(default)]
     assigned_to: Option<Vec<String>>,
-    
+
     #[serde(default)]
     created_after: Option<DateTime<Utc>>,
-    
+
     #[serde(default)]
     created_before: Option<DateTime<Utc>>,
-    
+
     #[serde(default)]
     search: Option<String>,
-    
+
     // Sorting
     #[serde(default = "default_sort_field")]
     sort_by: SortField,
-    
+
     #[serde(default = "default_sort_order")]
     sort_order: SortOrder,
-    
+
     // Pagination
     #[serde(default)]
     cursor: Option<String>,
-    
+
     #[serde(default = "default_limit")]
     limit: u32,
 }
@@ -174,30 +174,30 @@ async fn search_tasks(
         .await
         .get::<TaskSearchProjection>()
         .ok_or_else(|| ApiError::internal("Search projection not available"))?;
-    
+
     // Build query
     let mut search_query = SearchQuery::new();
-    
+
     if let Some(statuses) = query.status {
         search_query = search_query.with_status_in(statuses);
     }
-    
+
     if let Some(assignees) = query.assigned_to {
         search_query = search_query.with_assignee_in(assignees);
     }
-    
+
     if let Some(after) = query.created_after {
         search_query = search_query.created_after(after);
     }
-    
+
     if let Some(before) = query.created_before {
         search_query = search_query.created_before(before);
     }
-    
+
     if let Some(search_text) = query.search {
         search_query = search_query.with_text_search(search_text);
     }
-    
+
     // Apply sorting
     search_query = match query.sort_by {
         SortField::CreatedAt => search_query.sort_by_created_at(query.sort_order),
@@ -206,17 +206,17 @@ async fn search_tasks(
         SortField::Priority => search_query.sort_by_priority(query.sort_order),
         SortField::DueDate => search_query.sort_by_due_date(query.sort_order),
     };
-    
+
     // Apply cursor pagination
     if let Some(cursor) = query.cursor {
         search_query = search_query.after_cursor(Cursor::decode(&cursor)?);
     }
-    
+
     search_query = search_query.limit(query.limit);
-    
+
     // Execute query
     let results = projection.search(search_query).await?;
-    
+
     Ok(Json(results))
 }
 ```
@@ -252,12 +252,12 @@ async fn get_task_statistics(
         .await
         .get::<TaskAnalyticsProjection>()
         .ok_or_else(|| ApiError::internal("Analytics projection not available"))?;
-    
+
     let stats = projection.calculate_statistics(
         query.start_date,
         query.end_date,
     ).await?;
-    
+
     Ok(Json(stats))
 }
 
@@ -284,13 +284,13 @@ async fn get_task_completion_trend(
         .await
         .get::<TaskMetricsProjection>()
         .ok_or_else(|| ApiError::internal("Metrics projection not available"))?;
-    
+
     let data = projection.get_completion_trend(
         query.start_date,
         query.end_date,
         query.granularity,
     ).await?;
-    
+
     Ok(Json(data))
 }
 ```
@@ -311,10 +311,10 @@ struct QueryRoot;
 impl QueryRoot {
     async fn task(&self, ctx: &Context<'_>, id: ID) -> GraphQLResult<Option<Task>> {
         let projection = ctx.data::<Arc<TaskProjection>>()?;
-        
+
         Ok(projection.get_task(&id.to_string()).await?)
     }
-    
+
     async fn tasks(
         &self,
         ctx: &Context<'_>,
@@ -323,16 +323,16 @@ impl QueryRoot {
         pagination: Option<PaginationInput>,
     ) -> GraphQLResult<TaskConnection> {
         let projection = ctx.data::<Arc<TaskProjection>>()?;
-        
+
         let query = build_query(filter, sort, pagination);
         let results = projection.query(query).await?;
-        
+
         Ok(TaskConnection::from(results))
     }
-    
+
     async fn user(&self, ctx: &Context<'_>, id: ID) -> GraphQLResult<Option<User>> {
         let projection = ctx.data::<Arc<UserProjection>>()?;
-        
+
         Ok(projection.get_user(&id.to_string()).await?)
     }
 }
@@ -367,7 +367,7 @@ async fn graphql_handler(
         .data(state.projections.clone())
         .data(user)
         .finish();
-    
+
     schema.execute(req.into_inner()).await.into()
 }
 ```
@@ -402,25 +402,25 @@ where
         Ok(data) => data,
         Err(e) => return e.into_response(),
     };
-    
+
     // Serialize response
     let body = match serde_json::to_vec(&result) {
         Ok(bytes) => bytes,
         Err(_) => return ApiError::internal("Serialization failed").into_response(),
     };
-    
+
     // Calculate ETag
     let mut hasher = Sha256::new();
     hasher.update(&body);
     let etag = format!("\"{}\"", hex::encode(hasher.finalize()));
-    
+
     // Check If-None-Match
     if let Some(if_none_match) = headers.get(IF_NONE_MATCH) {
         if if_none_match.to_str().ok() == Some(&etag) {
             return StatusCode::NOT_MODIFIED.into_response();
         }
     }
-    
+
     // Build response with caching headers
     Response::builder()
         .status(StatusCode::OK)
@@ -456,7 +456,7 @@ async fn get_public_statistics(
                 .await
                 .get::<PublicStatsProjection>()
                 .ok_or_else(|| ApiError::internal("Stats not available"))?;
-            
+
             projection.get_current_stats().await
         },
     ).await
@@ -489,7 +489,7 @@ impl QueryCache {
                 .build(),
         }
     }
-    
+
     async fn get_or_compute<F, Fut, T>(
         &self,
         key: &str,
@@ -508,14 +508,14 @@ impl QueryCache {
                     .map_err(|_| ApiError::internal("Cache deserialization failed"));
             }
         }
-        
+
         // Compute result
         let result = compute_fn().await?;
-        
+
         // Cache result
         let data = serde_json::to_vec(&result)
             .map_err(|_| ApiError::internal("Cache serialization failed"))?;
-        
+
         self.cache.insert(
             key.to_string(),
             CachedResult {
@@ -524,7 +524,7 @@ impl QueryCache {
                 ttl,
             }
         ).await;
-        
+
         Ok(result)
     }
 }
@@ -551,7 +551,7 @@ async fn task_updates_stream(
             .unwrap()
             .subscribe_to_updates(user.id)
             .await;
-        
+
         while let Some(update) = subscription.next().await {
             let event = match update {
                 TaskUpdate::Created(task) => {
@@ -572,11 +572,11 @@ async fn task_updates_stream(
                         .data(task_id)
                 }
             };
-            
+
             yield Ok(event);
         }
     };
-    
+
     Sse::new(stream).keep_alive(
         axum::response::sse::KeepAlive::new()
             .interval(Duration::from_secs(30))
@@ -596,7 +596,7 @@ async fn get_tasks_with_assignees_bad(
 ) -> Result<Vec<TaskWithAssignee>, ApiError> {
     let tasks = projection.get_all_tasks().await?;
     let mut results = Vec::new();
-    
+
     for task in tasks {
         // This makes a separate query for each task!
         let assignee = if let Some(assignee_id) = &task.assigned_to {
@@ -604,13 +604,13 @@ async fn get_tasks_with_assignees_bad(
         } else {
             None
         };
-        
+
         results.push(TaskWithAssignee {
             task,
             assignee,
         });
     }
-    
+
     Ok(results)
 }
 
@@ -619,31 +619,31 @@ async fn get_tasks_with_assignees_good(
     projection: &TaskProjection,
 ) -> Result<Vec<TaskWithAssignee>, ApiError> {
     let tasks = projection.get_all_tasks().await?;
-    
+
     // Collect all assignee IDs
     let assignee_ids: HashSet<_> = tasks
         .iter()
         .filter_map(|t| t.assigned_to.as_ref())
         .cloned()
         .collect();
-    
+
     // Load all assignees in one query
     let assignees = projection
         .get_users_by_ids(assignee_ids.into_iter().collect())
         .await?;
-    
+
     // Build results
     let assignee_map: HashMap<_, _> = assignees
         .into_iter()
         .map(|u| (u.id.clone(), u))
         .collect();
-    
+
     Ok(tasks.into_iter().map(|task| {
         let assignee = task.assigned_to
             .as_ref()
             .and_then(|id| assignee_map.get(id))
             .cloned();
-        
+
         TaskWithAssignee { task, assignee }
     }).collect())
 }
@@ -661,7 +661,7 @@ impl QueryComplexity {
         // Simple heuristic: count fields and multiply by depth
         let field_count = count_fields(query);
         let max_depth = calculate_max_depth(query);
-        
+
         field_count * max_depth
     }
 }
@@ -686,18 +686,18 @@ impl QueryComplexityGuard {
                 format!("Limit cannot exceed {}", self.max_items)
             ));
         }
-        
+
         // Check filter complexity
-        let filter_count = 
+        let filter_count =
             query.status.as_ref().map(|s| s.len()).unwrap_or(0) +
             query.assigned_to.as_ref().map(|a| a.len()).unwrap_or(0);
-        
+
         if filter_count > 100 {
             return Err(ApiError::bad_request(
                 "Too many filter values"
             ));
         }
-        
+
         Ok(())
     }
 }
@@ -724,22 +724,22 @@ impl QueryAuthorizer for RoleBasedAuthorizer {
         if user.has_role("admin") {
             return true;
         }
-        
+
         // Others can only see their own tasks or tasks they created
         // Would need to check task details...
         true
     }
-    
+
     async fn can_view_user_tasks(&self, user: &AuthenticatedUser, target_user_id: &str) -> bool {
         // Users can see their own tasks
         if user.id.to_string() == target_user_id {
             return true;
         }
-        
+
         // Managers can see their team's tasks
         user.has_role("manager") || user.has_role("admin")
     }
-    
+
     async fn can_view_statistics(&self, user: &AuthenticatedUser) -> bool {
         user.has_role("manager") || user.has_role("admin")
     }
@@ -755,7 +755,7 @@ async fn get_user_tasks(
     if !state.authorizer.can_view_user_tasks(&user, &user_id).await {
         return Err(ApiError::forbidden("Cannot view tasks for this user"));
     }
-    
+
     // Continue with query...
 }
 ```
@@ -787,11 +787,11 @@ async fn rate_limit_middleware(
             .unwrap_or("anonymous")
             .to_string(),
     };
-    
+
     limiter
         .check_key(&key)
         .map_err(|_| ApiError::too_many_requests("Rate limit exceeded"))?;
-    
+
     Ok(next.run(request).await)
 }
 ```
@@ -802,11 +802,11 @@ async fn rate_limit_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_pagination() {
         let state = create_test_state_with_tasks(100).await;
-        
+
         // First page
         let response = list_tasks(
             State(state.clone()),
@@ -816,11 +816,11 @@ mod tests {
                 ..Default::default()
             }),
         ).await.unwrap();
-        
+
         assert_eq!(response.0.tasks.len(), 20);
         assert_eq!(response.0.pagination.total_items, 100);
         assert_eq!(response.0.pagination.total_pages, 5);
-        
+
         // Last page
         let response = list_tasks(
             State(state),
@@ -830,29 +830,29 @@ mod tests {
                 ..Default::default()
             }),
         ).await.unwrap();
-        
+
         assert_eq!(response.0.tasks.len(), 20);
     }
-    
+
     #[tokio::test]
     async fn test_caching_headers() {
         let state = create_test_state().await;
-        
+
         let response = get_public_statistics(
             State(state),
             HeaderMap::new(),
         ).await;
-        
+
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().contains_key(ETAG));
         assert!(response.headers().contains_key(CACHE_CONTROL));
-        
+
         let cache_control = response.headers()
             .get(CACHE_CONTROL)
             .unwrap()
             .to_str()
             .unwrap();
-        
+
         assert!(cache_control.contains("max-age=300"));
     }
 }
@@ -880,6 +880,7 @@ Query endpoints in EventCore applications:
 - ✅ **Testable** - Easy to test in isolation
 
 Key patterns:
+
 1. Read from projections, not event streams
 2. Implement proper pagination
 3. Cache responses appropriately

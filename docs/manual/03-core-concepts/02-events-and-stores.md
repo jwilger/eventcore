@@ -95,13 +95,13 @@ Every event carries metadata for auditing and debugging:
 pub struct EventMetadata {
     /// Who triggered this event
     pub user_id: Option<UserId>,
-    
+
     /// Correlation ID for tracking across services
     pub correlation_id: CorrelationId,
-    
+
     /// What caused this event (previous event ID)
     pub causation_id: Option<CausationId>,
-    
+
     /// Custom metadata
     pub custom: HashMap<String, Value>,
 }
@@ -168,13 +168,13 @@ pub struct StreamEvents<E> {
 pub enum ExpectedVersion {
     /// Stream must not exist
     NoStream,
-    
+
     /// Stream must be at this exact version
     Exact(EventVersion),
-    
+
     /// Stream must exist but any version is OK
     Any,
-    
+
     /// No version check (dangerous!)
     NoCheck,
 }
@@ -220,6 +220,7 @@ event_store.initialize().await?;
 ```
 
 PostgreSQL schema:
+
 ```sql
 -- Events table with optimal indexing
 CREATE TABLE events (
@@ -230,10 +231,10 @@ CREATE TABLE events (
     payload JSONB NOT NULL,
     metadata JSONB NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL,
-    
+
     -- Ensure stream version uniqueness
     UNIQUE(stream_id, version),
-    
+
     -- Indexes for common queries
     INDEX idx_stream_id (stream_id),
     INDEX idx_occurred_at (occurred_at),
@@ -315,14 +316,14 @@ struct UserRegistered {
 enum UserRegisteredVersioned {
     #[serde(rename = "1")]
     V1 { user_id: UserId, email: Email },
-    
+
     #[serde(rename = "2")]
-    V2 { 
-        user_id: UserId, 
-        email: Email, 
+    V2 {
+        user_id: UserId,
+        email: Email,
         referral_code: Option<String>,
     },
-    
+
     #[serde(rename = "3")]
     V3 {
         user_id: UserId,
@@ -455,7 +456,7 @@ Events maintain both stream order and global order:
 // Stream order: version within a stream
 stream_events.events[0].version < stream_events.events[1].version
 
-// Global order: EventId across all streams  
+// Global order: EventId across all streams
 all_events[0].id < all_events[1].id
 ```
 
@@ -476,7 +477,7 @@ for item in large_dataset {
         metadata: None,
         expected_version: ExpectedVersion::Any,
     });
-    
+
     // Write in batches
     if batch.len() >= 100 {
         event_store.write_events(batch.drain(..).collect()).await?;
@@ -499,7 +500,7 @@ let stream_id = StreamId::from_static("orders");
 
 // Partition by hash
 let stream_id = StreamId::from_static(&format!(
-    "orders-{}", 
+    "orders-{}",
     order_id.hash() % 16  // 16 partitions
 ));
 ```
@@ -526,13 +527,13 @@ impl<ES: EventStore> CachedEventStore<ES> {
                 return Ok(cached.clone());
             }
         }
-        
+
         // Read from store
         let events = self.inner.read_stream(stream_id, options).await?;
-        
+
         // Update cache
         self.cache.write().await.insert(stream_id.clone(), events.clone());
-        
+
         Ok(events)
     }
 }
@@ -574,7 +575,7 @@ use eventcore::testing::assertions::*;
 #[test]
 fn test_events_are_ordered() {
     let events = vec![/* ... */];
-    
+
     assert_events_ordered(&events);
     assert_unique_event_ids(&events);
     assert_stream_version_progression(&events, &stream_id);
@@ -592,6 +593,7 @@ Events in EventCore are:
 - ✅ **Rich with metadata** for auditing
 
 Best practices:
+
 1. Design events around business concepts
 2. Include all necessary data in events
 3. Plan for event evolution

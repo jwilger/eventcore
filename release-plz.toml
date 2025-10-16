@@ -51,10 +51,10 @@ sort_commits = "oldest"
 protect_breaking_commits = true
 
 # Package-specific configuration
-# 
+#
 # IMPORTANT: release-plz does not always respect dependency order when publishing.
 # See: https://github.com/release-plz/release-plz/issues/1316
-# 
+#
 # The correct publishing order based on dependencies is:
 # 1. eventcore-macros (no internal dependencies)
 # 2. eventcore (depends on macros)

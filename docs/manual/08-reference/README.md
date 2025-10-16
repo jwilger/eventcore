@@ -19,6 +19,7 @@ This part provides comprehensive reference documentation for EventCore. Use this
 ## Usage
 
 This reference documentation is designed for:
+
 - Quick lookups during development
 - Understanding specific configuration options
 - Troubleshooting error conditions

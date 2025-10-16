@@ -1,5 +1,5 @@
 # Production Configuration Example for EventCore Applications
-# 
+#
 # This file demonstrates best practices for configuring EventCore
 # in production environments. Use environment variables to override
 # these values for different deployment environments.

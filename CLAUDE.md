@@ -18,6 +18,7 @@ This is an **infrastructure/library project** - the consumers are developers who
 4. **Total functions** - Handle all cases explicitly
 
 Example pattern:
+
 ```rust
 // Good: Domain type with validation
 #[nutype(
@@ -70,6 +71,7 @@ docker-compose up -d
 ```
 
 The Nix environment includes:
+
 - Rust toolchain (version from rust-toolchain.toml)
 - cargo-nextest (fast parallel test runner)
 - cargo-mcp (MCP protocol support)
@@ -109,6 +111,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 **GPG commit signing is REQUIRED.** All commits must be signed.
 
 Commit messages should:
+
 - Be under 50 chars for the summary line
 - Include a detailed explanation focusing on WHY (not just what)
 - Follow this format:
@@ -128,18 +131,22 @@ See CONTRIBUTING.md for GPG setup instructions.
 ## Type Safety Patterns
 
 ### Handle Errors Explicitly
+
 - Use `Result` types throughout
 - Avoid `unwrap()` and `expect()` in library code
 - Use `CommandError` for command failures
 - Use `require!` macro for business rule validation
 
 ### Domain Types Over Primitives
+
 Always wrap primitives in validated domain types:
+
 - `StreamId` instead of `String`
 - Custom newtypes for domain concepts
 - Use `nutype` for validation at construction time
 
 ### Composition Over Classes
+
 - Small, focused functions that compose
 - Traits define behavior contracts
 - No aggregate classes - just commands and events
@@ -147,6 +154,7 @@ Always wrap primitives in validated domain types:
 ## Security Checklist
 
 Before submitting code:
+
 - No hardcoded secrets or credentials
 - All user input validated using `nutype` types
 - SQL queries use parameterized statements (via `sqlx`)
@@ -165,6 +173,7 @@ Before submitting code:
 ## Performance Notes
 
 Current benchmarks (PostgreSQL backend):
+
 - Single-stream commands: ~86 ops/sec
 - Multi-stream commands: ~25-50 ops/sec (with full atomicity)
 - Batch event writes: 9,000+ events/sec
@@ -177,6 +186,7 @@ Optimized for correctness and multi-stream atomicity over raw throughput.
 EventCore follows an infrastructure/library development workflow adapted for building reusable components:
 
 **Phases:**
+
 1. **Technical Requirements Analysis** - Define WHAT the library must provide and WHY (focus on developer consumer needs)
 2. ~~Event Modeling~~ - **Skipped** (application-level concern, not applicable to libraries)
 3. **Architectural Decision Records (ADRs)** - Document key architectural decisions with rationale
@@ -187,6 +197,7 @@ EventCore follows an infrastructure/library development workflow adapted for bui
 8. **Acceptance Validation** - Verify requirements met and documentation complete
 
 **Key Differences from Application Development:**
+
 - No event modeling (we're building the event sourcing infrastructure, not modeling business events)
 - No UX/design system phases (library has API surface, not user interface)
 - Planning focuses on incremental library features, not user stories

@@ -1,5 +1,5 @@
 //! Production configuration example for EventCore applications
-//! 
+//!
 //! This example demonstrates best practices for configuring EventCore
 //! in production environments, including connection pooling, monitoring,
 //! error handling, and graceful shutdown.
@@ -160,10 +160,10 @@ pub async fn create_event_store(
         .build()?;
 
     let store = PostgresEventStore::new(postgres_config).await?;
-    
+
     // Run migrations
     store.run_migrations().await?;
-    
+
     Ok(Arc::new(store))
 }
 
@@ -300,7 +300,7 @@ impl<E: EventStore> CircuitBreaker<E> {
             Ok(Err(e)) | Err(_) => {
                 // Increment failure count
                 let failures = self.failure_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                
+
                 if failures >= self.config.circuit_breaker_threshold {
                     *self.last_failure.lock().unwrap() = Some(std::time::Instant::now());
                 }
@@ -336,7 +336,7 @@ impl<E: EventStore> CircuitBreaker<E> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     init_logging();
-    
+
     info!("Starting EventCore application");
 
     // Load configuration
@@ -364,16 +364,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Application started on {}:{}",
         config.server.host, config.server.port
     );
-    
+
     shutdown_signal().await;
-    
+
     info!("Shutting down gracefully...");
-    
+
     // Give ongoing requests time to complete
     tokio::time::sleep(config.server.shutdown_timeout).await;
-    
+
     info!("Shutdown complete");
-    
+
     Ok(())
 }
 
@@ -385,7 +385,7 @@ mod tests {
     fn test_config_from_env() {
         std::env::set_var("DATABASE_URL", "postgres://localhost/test");
         std::env::set_var("DB_MAX_CONNECTIONS", "50");
-        
+
         let config = ProductionConfig::from_env().unwrap();
         assert_eq!(config.database.max_connections, 50);
         assert_eq!(config.server.port, 8080);

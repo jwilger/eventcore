@@ -82,7 +82,7 @@ where
                 _ => ApiVersion::default(),
             })
             .unwrap_or_default();
-        
+
         Ok(version)
     }
 }
@@ -120,7 +120,7 @@ impl ContentVersion {
             ContentVersion::V2 // Default to latest
         }
     }
-    
+
     fn to_content_type(&self) -> &'static str {
         match self {
             ContentVersion::V1 => "application/vnd.eventcore.v1+json",
@@ -231,7 +231,7 @@ Version commands to handle different API versions:
 struct CreateTask {
     #[stream]
     task_id: StreamId,
-    
+
     title: TaskTitle,
     description: TaskDescription,
     assigned_to: Vec<UserId>,
@@ -242,7 +242,7 @@ struct CreateTask {
 // Version-specific command builders
 mod command_builders {
     use super::*;
-    
+
     pub fn from_v1_request(req: v1::CreateTaskRequest) -> Result<CreateTask, ApiError> {
         Ok(CreateTask {
             task_id: StreamId::from(format!("task-{}", TaskId::new())),
@@ -253,7 +253,7 @@ mod command_builders {
             priority: Priority::Normal, // Default for V1
         })
     }
-    
+
     pub fn from_v2_request(req: v2::CreateTaskRequest) -> Result<CreateTask, ApiError> {
         Ok(CreateTask {
             task_id: StreamId::from(format!("task-{}", TaskId::new())),
@@ -295,7 +295,7 @@ struct TaskData {
 // Response transformers
 mod response_transformers {
     use super::*;
-    
+
     pub fn to_v1_response(task: TaskData) -> v1::TaskResponse {
         v1::TaskResponse {
             id: task.id.to_string(),
@@ -308,7 +308,7 @@ mod response_transformers {
             updated_at: task.updated_at,
         }
     }
-    
+
     pub fn to_v2_response(task: TaskData) -> v2::TaskResponse {
         v2::TaskResponse {
             id: task.id.to_string(),
@@ -345,25 +345,25 @@ async fn deprecated_middleware(
     next: Next,
 ) -> Response {
     let mut response = next.run(request).await;
-    
+
     // Add deprecation headers
     response.headers_mut().insert(
         "Sunset",
         HeaderValue::from_static("Sat, 31 Dec 2024 23:59:59 GMT"),
     );
-    
+
     response.headers_mut().insert(
         "Deprecation",
         HeaderValue::from_static("true"),
     );
-    
+
     response.headers_mut().insert(
         "Link",
         HeaderValue::from_static(
             "</api/v2/docs>; rel=\"successor-version\""
         ),
     );
-    
+
     response
 }
 
@@ -488,7 +488,7 @@ async fn migrate_task_format(
             subtasks: format!("/api/v2/tasks/{}/subtasks", v1_task.id),
         },
     };
-    
+
     Ok(Json(v2_task))
 }
 
@@ -498,7 +498,7 @@ async fn migrate_tasks_bulk(
 ) -> Result<Json<BulkMigrationResponse>, ApiError> {
     let mut migrated = Vec::new();
     let mut errors = Vec::new();
-    
+
     for task_id in request.task_ids {
         match migrate_single_task(&task_id).await {
             Ok(task) => migrated.push(task),
@@ -508,7 +508,7 @@ async fn migrate_tasks_bulk(
             }),
         }
     }
-    
+
     Ok(Json(BulkMigrationResponse {
         migrated_count: migrated.len(),
         error_count: errors.len(),
@@ -523,18 +523,18 @@ async fn migrate_tasks_bulk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_v1_compatibility() {
         let app = create_app();
-        
+
         // V1 request format
         let v1_request = serde_json::json!({
             "title": "Test Task",
             "description": "Test Description",
             "assigned_to": "user123"
         });
-        
+
         let response = app
             .clone()
             .oneshot(
@@ -547,20 +547,20 @@ mod tests {
             )
             .await
             .unwrap();
-        
+
         assert_eq!(response.status(), StatusCode::CREATED);
-        
+
         // Verify deprecation headers
         assert_eq!(
             response.headers().get("Deprecation").unwrap(),
             "true"
         );
     }
-    
+
     #[tokio::test]
     async fn test_v2_enhancements() {
         let app = create_app();
-        
+
         // V2 request with new features
         let v2_request = serde_json::json!({
             "title": "Test Task",
@@ -569,7 +569,7 @@ mod tests {
             "tags": ["urgent", "backend"],
             "priority": "high"
         });
-        
+
         let response = app
             .oneshot(
                 Request::builder()
@@ -581,21 +581,21 @@ mod tests {
             )
             .await
             .unwrap();
-        
+
         assert_eq!(response.status(), StatusCode::CREATED);
-        
+
         let body: v2::TaskResponse = serde_json::from_slice(
             &hyper::body::to_bytes(response.into_body()).await.unwrap()
         ).unwrap();
-        
+
         assert_eq!(body.assigned_to.len(), 2);
         assert_eq!(body.tags.len(), 2);
     }
-    
+
     #[tokio::test]
     async fn test_version_negotiation() {
         let app = create_app();
-        
+
         // Test header-based versioning
         let response = app
             .clone()
@@ -608,12 +608,12 @@ mod tests {
             )
             .await
             .unwrap();
-        
+
         // Should return V1 format
         let body: v1::TaskResponse = serde_json::from_slice(
             &hyper::body::to_bytes(response.into_body()).await.unwrap()
         ).unwrap();
-        
+
         assert!(body.assigned_to.is_string()); // V1 uses string
     }
 }
@@ -698,6 +698,7 @@ API versioning in EventCore applications:
 - ✅ **Backward compatibility** - Maintain old versions gracefully
 
 Key patterns:
+
 1. Choose a versioning strategy and stick to it
 2. Transform between versions at API boundaries
 3. Keep internal representations version-agnostic

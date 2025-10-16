@@ -9,7 +9,7 @@ What happens in a task management system? Let's think through a typical workflow
 ```
 Events (Orange - things that happened):
 - Task Created
-- Task Assigned 
+- Task Assigned
 - Task Started
 - Comment Added
 - Task Completed
@@ -28,7 +28,7 @@ Timeline →
             Task Created ──┬── Task Assigned ──┬── Comment Added ──┬── Task Completed
                           │                    │                   │
 User: Alice               │   User: Bob       │   User: Bob      │   User: Bob
-Title: "Fix login bug"    │   Assignee: Bob   │   "Found issue"  │   
+Title: "Fix login bug"    │   Assignee: Bob   │   "Found issue"  │
                           │                    │                   │
 Stream: task-123          │   Streams:        │   Stream:        │   Streams:
                           │   - task-123      │   - task-123     │   - task-123
@@ -41,27 +41,27 @@ Notice how some operations involve multiple streams - this is where EventCore sh
 
 For each event, what user action triggered it?
 
-| Command (Blue) | → | Events (Orange) | Streams Involved |
-|----------------|---|-----------------|------------------|
-| Create Task | → | Task Created | task |
-| Assign Task | → | Task Assigned | task, assignee |
-| Start Task | → | Task Started | task, user |
-| Add Comment | → | Comment Added | task |
-| Complete Task | → | Task Completed | task, user |
-| Reopen Task | → | Task Reopened | task, user |
-| Change Priority | → | Priority Changed | task |
-| Cancel Task | → | Task Cancelled | task, user |
+| Command (Blue)  | →   | Events (Orange)  | Streams Involved |
+| --------------- | --- | ---------------- | ---------------- |
+| Create Task     | →   | Task Created     | task             |
+| Assign Task     | →   | Task Assigned    | task, assignee   |
+| Start Task      | →   | Task Started     | task, user       |
+| Add Comment     | →   | Comment Added    | task             |
+| Complete Task   | →   | Task Completed   | task, user       |
+| Reopen Task     | →   | Task Reopened    | task, user       |
+| Change Priority | →   | Priority Changed | task             |
+| Cancel Task     | →   | Task Cancelled   | task, user       |
 
 ## Step 4: Design Read Models
 
 What questions do users need answered?
 
-| Question | Read Model (Green) | Updated By Events |
-|----------|-------------------|-------------------|
-| "What are my tasks?" | User Task List | Assigned, Completed, Cancelled |
-| "What's the task status?" | Task Details | All task events |
-| "What's the team workload?" | Team Dashboard | Created, Assigned, Completed |
-| "What happened to this task?" | Task History | All events (audit log) |
+| Question                      | Read Model (Green) | Updated By Events              |
+| ----------------------------- | ------------------ | ------------------------------ |
+| "What are my tasks?"          | User Task List     | Assigned, Completed, Cancelled |
+| "What's the task status?"     | Task Details       | All task events                |
+| "What's the team workload?"   | Team Dashboard     | Created, Assigned, Completed   |
+| "What happened to this task?" | Task History       | All events (audit log)         |
 
 ## Step 5: Discover Business Rules
 
@@ -130,6 +130,7 @@ struct AssignTask {
 ```
 
 This command will:
+
 1. Read both streams atomically
 2. Validate the assignment
 3. Write events to both streams
@@ -150,7 +151,7 @@ struct TaskState {
     creator: UserName,
 }
 
-// State for user operations  
+// State for user operations
 #[derive(Default)]
 struct UserTasksState {
     user_name: UserName,
@@ -174,7 +175,7 @@ Timeline →
              │                                        │
     Streams affected:                        Streams affected:
     - task-123                               - task-123
-    - user-alice                             - user-alice  
+    - user-alice                             - user-alice
                                              - user-bob
 ```
 
@@ -280,7 +281,7 @@ pub enum TaskEvent {
         creator: UserName,
         created_at: DateTime<Utc>,
     },
-    
+
     // Assignment events - note these affect multiple streams
     Assigned {
         task_id: TaskId,
@@ -288,27 +289,27 @@ pub enum TaskEvent {
         assigned_by: UserName,
         assigned_at: DateTime<Utc>,
     },
-    
+
     Unassigned {
         task_id: TaskId,
         previous_assignee: UserName,
         unassigned_by: UserName,
         unassigned_at: DateTime<Utc>,
     },
-    
+
     // Work events
     Started {
         task_id: TaskId,
         started_by: UserName,
         started_at: DateTime<Utc>,
     },
-    
+
     Completed {
         task_id: TaskId,
         completed_by: UserName,
         completed_at: DateTime<Utc>,
     },
-    
+
     // Collaboration events
     CommentAdded {
         task_id: TaskId,
@@ -317,7 +318,7 @@ pub enum TaskEvent {
         author: UserName,
         commented_at: DateTime<Utc>,
     },
-    
+
     // Management events
     PriorityChanged {
         task_id: TaskId,
@@ -326,7 +327,7 @@ pub enum TaskEvent {
         changed_by: UserName,
         changed_at: DateTime<Utc>,
     },
-    
+
     DueDateSet {
         task_id: TaskId,
         due_date: DateTime<Utc>,
@@ -345,14 +346,14 @@ pub enum UserEvent {
         task_id: TaskId,
         assigned_at: DateTime<Utc>,
     },
-    
+
     /// Track when user completes a task
     TaskCompleted {
         user_name: UserName,
         task_id: TaskId,
         completed_at: DateTime<Utc>,
     },
-    
+
     /// Track workload changes
     WorkloadUpdated {
         user_name: UserName,
@@ -372,7 +373,7 @@ pub enum SystemEvent {
 // Required conversions for EventCore
 impl TryFrom<&SystemEvent> for SystemEvent {
     type Error = std::convert::Infallible;
-    
+
     fn try_from(value: &SystemEvent) -> Result<Self, Self::Error> {
         Ok(value.clone())
     }

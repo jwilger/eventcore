@@ -11,7 +11,7 @@ EventCore's multi-stream event sourcing pattern requires careful index optimizat
 The most common query pattern in EventCore uses PostgreSQL's `ANY($1)` syntax:
 
 ```sql
-SELECT event_id, stream_id, event_version, event_type, event_data, metadata, 
+SELECT event_id, stream_id, event_version, event_type, event_data, metadata,
        causation_id, correlation_id, user_id, created_at
 FROM events
 WHERE stream_id = ANY($1)
@@ -20,6 +20,7 @@ LIMIT $2
 ```
 
 This pattern is used by:
+
 - Command execution (reading multiple streams atomically)
 - Projection building (reading related streams)
 - Saga coordination (reading participating streams)
@@ -29,11 +30,13 @@ This pattern is used by:
 EventCore creates the following indexes automatically:
 
 #### Primary Indexes
+
 - `idx_events_stream_id` - Single column index on stream_id
 - `idx_events_created_at` - For temporal queries
 - `idx_events_correlation_id` - For saga coordination
 
 #### Multi-Stream Optimization
+
 - `idx_events_multistream_any` - Composite index on (stream_id, event_id)
   - Optimizes the `WHERE stream_id = ANY($1) ORDER BY event_id` pattern
   - Allows index-only scans for event ID ordering
@@ -44,6 +47,7 @@ EventCore creates the following indexes automatically:
 ### 1. Query Planning
 
 PostgreSQL's query planner handles `ANY($1)` efficiently when:
+
 - The array size is reasonable (< 1000 streams)
 - Proper indexes exist on stream_id
 - Statistics are up to date
@@ -67,7 +71,7 @@ Check index effectiveness:
 
 ```sql
 -- View index usage statistics
-SELECT 
+SELECT
     schemaname,
     tablename,
     indexname,
@@ -79,7 +83,7 @@ WHERE tablename = 'events'
 ORDER BY idx_scan DESC;
 
 -- Check for missing indexes
-SELECT 
+SELECT
     schemaname,
     tablename,
     attname,
@@ -114,7 +118,7 @@ let config = PostgresConfigBuilder::new()
 Multi-stream workloads can cause index bloat. Monitor with:
 
 ```sql
-SELECT 
+SELECT
     schemaname,
     tablename,
     indexname,
@@ -131,14 +135,14 @@ For production systems:
 
 ```sql
 -- Create new index concurrently
-CREATE INDEX CONCURRENTLY idx_events_multistream_any_new 
+CREATE INDEX CONCURRENTLY idx_events_multistream_any_new
 ON events(stream_id, event_id);
 
 -- Drop old index
 DROP INDEX idx_events_multistream_any;
 
 -- Rename new index
-ALTER INDEX idx_events_multistream_any_new 
+ALTER INDEX idx_events_multistream_any_new
 RENAME TO idx_events_multistream_any;
 ```
 

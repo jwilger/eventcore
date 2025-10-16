@@ -50,6 +50,7 @@ Checking versions and writing events within the same transaction prevents time-o
 - **Contention**: Multiple streams mean more potential for lock contention under high concurrency
 
 These trade-offs are acceptable because:
+
 - PostgreSQL and similar RDBMS systems are widely available and production-ready
 - Correctness is more important than raw throughput for most business operations
 - Performance is still adequate (current benchmarks: 25-50 ops/sec multi-stream)
@@ -90,6 +91,7 @@ These trade-offs are acceptable because:
 Implement multi-stream operations as a series of single-stream operations with compensation logic for rollback.
 
 **Rejected Because:**
+
 - Introduces eventual consistency where immediate consistency is required
 - Compensation logic is complex and error-prone
 - Defeats the core value proposition of EventCore
@@ -100,6 +102,7 @@ Implement multi-stream operations as a series of single-stream operations with c
 Implement distributed 2PC across multiple storage instances.
 
 **Rejected Because:**
+
 - Significantly more complex than single-transaction approach
 - 2PC coordination adds failure modes (coordinator failure, participant timeout)
 - Unnecessary when single storage instance can handle all streams
@@ -111,6 +114,7 @@ Implement distributed 2PC across multiple storage instances.
 Write all events to a single append-only log, then distribute to stream-specific stores.
 
 **Rejected Because:**
+
 - Adds complexity of log coordination and distribution
 - Introduces eventual consistency to per-stream views
 - Requires additional infrastructure for log management
@@ -121,6 +125,7 @@ Write all events to a single append-only log, then distribute to stream-specific
 Implement custom locking mechanism in EventCore library code.
 
 **Rejected Because:**
+
 - Reinvents the wheel - databases already do this well
 - Difficult to implement correctly across distributed systems
 - Does not provide durability guarantees on process crash

@@ -30,26 +30,26 @@ impl EncryptedField {
     ) -> Result<Self, EncryptionError> {
         let cipher = Aes256Gcm::new(key.into());
         let nonce = Nonce::from_slice(b"unique nonce"); // Use random nonce
-        
+
         let ciphertext = cipher
             .encrypt(nonce, plaintext.as_bytes())
             .map_err(|_| EncryptionError::EncryptionFailed)?;
-        
+
         Ok(Self {
             ciphertext,
             nonce: nonce.to_vec(),
             key_id,
         })
     }
-    
+
     fn decrypt(&self, key: &[u8; 32]) -> Result<String, EncryptionError> {
         let cipher = Aes256Gcm::new(key.into());
         let nonce = Nonce::from_slice(&self.nonce);
-        
+
         let plaintext = cipher
             .decrypt(nonce, self.ciphertext.as_ref())
             .map_err(|_| EncryptionError::DecryptionFailed)?;
-        
+
         String::from_utf8(plaintext)
             .map_err(|_| EncryptionError::InvalidUtf8)
     }
@@ -82,7 +82,7 @@ impl SecureEvent {
     ) -> Result<Self, EncryptionError> {
         let json = serde_json::to_string(&event)?;
         let encrypted = EncryptedField::encrypt(&json, key, key_id)?;
-        
+
         Ok(Self::Encrypted {
             payload: encrypted,
             event_type,
@@ -96,12 +96,14 @@ impl SecureEvent {
 ### Key Storage
 
 Never store encryption keys in:
+
 - Source code
 - Configuration files
 - Environment variables (in production)
 - Event payloads
 
 Use proper key management:
+
 - AWS KMS
 - Azure Key Vault
 - HashiCorp Vault
@@ -122,16 +124,16 @@ impl KeyManager {
         let key = self.keys
             .get(&self.current_key_id)
             .ok_or(Error::KeyNotFound)?;
-        
+
         EncryptedField::encrypt(data, &key.material, self.current_key_id.clone())
     }
-    
+
     fn decrypt(&self, field: &EncryptedField) -> Result<String, Error> {
         // Use the key ID stored with the encrypted data
         let key = self.keys
             .get(&field.key_id)
             .ok_or(Error::KeyNotFound)?;
-        
+
         field.decrypt(&key.material)
     }
 }
@@ -153,7 +155,7 @@ fn deterministic_encrypt(
     let mut hasher = Sha256::new();
     hasher.update(key);
     hasher.update(plaintext.as_bytes());
-    
+
     base64::encode(hasher.finalize())
 }
 
@@ -199,7 +201,7 @@ impl KeyManager {
     async fn shred_user_data(&mut self, user_id: &UserId) -> Result<(), Error> {
         // Delete user-specific encryption keys
         self.user_keys.remove(user_id);
-        
+
         // Events remain but are now unreadable
         Ok(())
     }
@@ -209,6 +211,7 @@ impl KeyManager {
 ### PCI DSS
 
 Never store in events:
+
 - Full credit card numbers
 - CVV/CVC codes
 - PIN numbers
@@ -217,6 +220,7 @@ Never store in events:
 ### HIPAA
 
 Encrypt all Protected Health Information (PHI):
+
 - Patient names
 - Medical record numbers
 - Health conditions
@@ -273,7 +277,7 @@ impl<'a> SecureEventBuilder<'a> {
     ) -> Result<SecureUserEvent, Error> {
         let email_hash = self.crypto.hash_email(&email);
         let encrypted_pii = self.crypto.encrypt_pii(&pii).await?;
-        
+
         Ok(SecureUserEvent {
             base: Event::new(),
             payload: SecureUserPayload::UserRegistered {

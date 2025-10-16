@@ -122,7 +122,7 @@ async fn handle_command(cmd: Command, user: AuthenticatedUser) -> Result<()> {
     if !user.can_access_stream(&cmd.stream_id()) {
         return Err(CommandError::Unauthorized);
     }
-    
+
     executor.execute(cmd).await
 }
 ```
@@ -201,6 +201,7 @@ Specific compliance documentation is in development.
 ## Contact
 
 For non-security questions, please use:
+
 - GitHub Issues for bug reports and feature requests
 - GitHub Discussions for questions and community support
 

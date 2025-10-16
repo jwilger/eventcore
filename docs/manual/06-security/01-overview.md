@@ -5,6 +5,7 @@ This guide covers security best practices when building applications with EventC
 ## Overview
 
 EventCore provides a solid foundation for secure applications through:
+
 - Strong type safety that prevents many common vulnerabilities
 - Immutable event storage providing natural audit trails
 - Built-in concurrency control preventing data races
@@ -15,16 +16,19 @@ However, EventCore is a library, not a complete application framework. Security 
 ## What EventCore Provides
 
 ### Type Safety
+
 - Validated domain types using `nutype` prevent injection attacks
 - Exhaustive pattern matching eliminates undefined behavior
 - Memory safety guaranteed by Rust
 
 ### Concurrency Control
+
 - Optimistic locking prevents lost updates
 - Version checking ensures consistency
 - Atomic multi-stream operations maintain integrity
 
 ### Resource Protection
+
 - Configurable timeouts prevent runaway operations
 - Batch size limits prevent memory exhaustion
 - Retry limits prevent infinite loops
@@ -32,7 +36,9 @@ However, EventCore is a library, not a complete application framework. Security 
 ## What You Must Implement
 
 ### Authentication & Authorization
+
 EventCore does not provide:
+
 - User authentication
 - Stream-level access control
 - Command authorization
@@ -41,14 +47,18 @@ EventCore does not provide:
 You must implement these at the application layer.
 
 ### Data Protection
+
 EventCore stores events as-is. You must:
+
 - Encrypt sensitive data before storing
 - Implement key management
 - Handle data retention/deletion
 - Ensure compliance with regulations
 
 ### Input Validation
+
 While EventCore validates its own types, you must:
+
 - Validate all user input
 - Sanitize data before processing
 - Implement rate limiting

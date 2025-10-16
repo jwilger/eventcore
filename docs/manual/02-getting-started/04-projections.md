@@ -5,6 +5,7 @@ Projections transform your event streams into read models optimized for queries.
 ## What Are Projections?
 
 Projections are read-side views built from events. They:
+
 - Listen to event streams
 - Apply events to build state
 - Optimize for specific queries
@@ -42,10 +43,10 @@ pub struct TaskSummary {
 pub struct UserTaskListProjection {
     /// Tasks indexed by user
     tasks_by_user: HashMap<UserName, HashMap<TaskId, TaskSummary>>,
-    
+
     /// Reverse index: task to user
     task_assignments: HashMap<TaskId, UserName>,
-    
+
     /// Task details cache
     task_details: HashMap<TaskId, TaskDetails>,
 }
@@ -73,7 +74,7 @@ impl UserTaskListProjection {
             })
             .unwrap_or_default()
     }
-    
+
     /// Get active task count for a user
     pub fn get_active_task_count(&self, user: &UserName) -> usize {
         self.tasks_by_user
@@ -85,7 +86,7 @@ impl UserTaskListProjection {
             })
             .unwrap_or(0)
     }
-    
+
     /// Get task by ID
     pub fn get_task(&self, task_id: &TaskId) -> Option<&TaskSummary> {
         self.task_assignments
@@ -114,7 +115,7 @@ impl CqrsProjection for UserTaskListProjection {
         }
         Ok(())
     }
-    
+
     fn name(&self) -> &str {
         "user_task_list"
     }
@@ -122,8 +123,8 @@ impl CqrsProjection for UserTaskListProjection {
 
 impl UserTaskListProjection {
     fn apply_task_event(
-        &mut self, 
-        event: &TaskEvent, 
+        &mut self,
+        event: &TaskEvent,
         occurred_at: &DateTime<Utc>
     ) -> Result<(), ProjectionError> {
         match event {
@@ -138,7 +139,7 @@ impl UserTaskListProjection {
                     }
                 );
             }
-            
+
             TaskEvent::Assigned { task_id, assignee, assigned_at, .. } => {
                 // Remove from previous assignee if any
                 if let Some(previous_user) = self.task_assignments.get(task_id) {
@@ -146,13 +147,13 @@ impl UserTaskListProjection {
                         user_tasks.remove(task_id);
                     }
                 }
-                
+
                 // Add to new assignee
                 let task_details = self.task_details.get(task_id)
                     .ok_or_else(|| ProjectionError::InvalidState(
                         format!("Task {} not found in cache", task_id)
                     ))?;
-                
+
                 let summary = TaskSummary {
                     id: *task_id,
                     title: task_details.title.clone(),
@@ -161,15 +162,15 @@ impl UserTaskListProjection {
                     assigned_at: *assigned_at,
                     completed_at: None,
                 };
-                
+
                 self.tasks_by_user
                     .entry(assignee.clone())
                     .or_default()
                     .insert(*task_id, summary);
-                
+
                 self.task_assignments.insert(*task_id, assignee.clone());
             }
-            
+
             TaskEvent::Unassigned { task_id, previous_assignee, .. } => {
                 // Remove from assignee
                 if let Some(user_tasks) = self.tasks_by_user.get_mut(previous_assignee) {
@@ -177,51 +178,51 @@ impl UserTaskListProjection {
                 }
                 self.task_assignments.remove(task_id);
             }
-            
+
             TaskEvent::Started { task_id, .. } => {
                 // Update status
                 if let Some(user) = self.task_assignments.get(task_id) {
                     if let Some(task) = self.tasks_by_user
                         .get_mut(user)
-                        .and_then(|tasks| tasks.get_mut(task_id)) 
+                        .and_then(|tasks| tasks.get_mut(task_id))
                     {
                         task.status = TaskStatus::InProgress;
                     }
                 }
             }
-            
+
             TaskEvent::Completed { task_id, completed_at, .. } => {
                 // Update status and completion time
                 if let Some(user) = self.task_assignments.get(task_id) {
                     if let Some(task) = self.tasks_by_user
                         .get_mut(user)
-                        .and_then(|tasks| tasks.get_mut(task_id)) 
+                        .and_then(|tasks| tasks.get_mut(task_id))
                     {
                         task.status = TaskStatus::Completed;
                         task.completed_at = Some(*completed_at);
                     }
                 }
             }
-            
+
             TaskEvent::PriorityChanged { task_id, new_priority, .. } => {
                 // Update priority in cache and summary
                 if let Some(details) = self.task_details.get_mut(task_id) {
                     details.priority = *new_priority;
                 }
-                
+
                 if let Some(user) = self.task_assignments.get(task_id) {
                     if let Some(task) = self.tasks_by_user
                         .get_mut(user)
-                        .and_then(|tasks| tasks.get_mut(task_id)) 
+                        .and_then(|tasks| tasks.get_mut(task_id))
                     {
                         task.priority = *new_priority;
                     }
                 }
             }
-            
+
             _ => {} // Handle other events as needed
         }
-        
+
         Ok(())
     }
 }
@@ -246,22 +247,22 @@ use chrono::{DateTime, Utc, Datelike};
 pub struct TeamStatisticsProjection {
     /// Total tasks created
     pub total_tasks_created: u64,
-    
+
     /// Tasks by status
     pub tasks_by_status: HashMap<TaskStatus, u64>,
-    
+
     /// Tasks by priority
     pub tasks_by_priority: HashMap<Priority, u64>,
-    
+
     /// User statistics
     pub user_stats: HashMap<UserName, UserStatistics>,
-    
+
     /// Daily completion rates
     pub daily_completions: HashMap<String, u64>, // Date string -> count
-    
+
     /// Average completion time in hours
     pub avg_completion_hours: f64,
-    
+
     /// Completion times for average calculation
     completion_times: Vec<f64>,
 }
@@ -282,15 +283,15 @@ impl TeamStatisticsProjection {
         if self.total_tasks_created == 0 {
             return 0.0;
         }
-        
+
         let completed = self.tasks_by_status
             .get(&TaskStatus::Completed)
             .copied()
             .unwrap_or(0);
-            
+
         (completed as f64 / self.total_tasks_created as f64) * 100.0
     }
-    
+
     /// Get most productive user
     pub fn most_productive_user(&self) -> Option<(&UserName, u64)> {
         self.user_stats
@@ -298,18 +299,18 @@ impl TeamStatisticsProjection {
             .max_by_key(|(_, stats)| stats.tasks_completed)
             .map(|(user, stats)| (user, stats.tasks_completed))
     }
-    
+
     /// Get workload distribution
     pub fn workload_distribution(&self) -> Vec<(UserName, f64)> {
         let total_active: u64 = self.user_stats
             .values()
             .map(|s| s.tasks_in_progress)
             .sum();
-            
+
         if total_active == 0 {
             return vec![];
         }
-        
+
         self.user_stats
             .iter()
             .filter(|(_, stats)| stats.tasks_in_progress > 0)
@@ -337,7 +338,7 @@ impl CqrsProjection for TeamStatisticsProjection {
         }
         Ok(())
     }
-    
+
     fn name(&self) -> &str {
         "team_statistics"
     }
@@ -345,8 +346,8 @@ impl CqrsProjection for TeamStatisticsProjection {
 
 impl TeamStatisticsProjection {
     fn apply_task_event(
-        &mut self, 
-        event: &TaskEvent, 
+        &mut self,
+        event: &TaskEvent,
         occurred_at: &DateTime<Utc>
     ) -> Result<(), ProjectionError> {
         match event {
@@ -355,58 +356,58 @@ impl TeamStatisticsProjection {
                 *self.tasks_by_status.entry(TaskStatus::Open).or_insert(0) += 1;
                 *self.tasks_by_priority.entry(Priority::default()).or_insert(0) += 1;
             }
-            
+
             TaskEvent::Assigned { assignee, .. } => {
                 let stats = self.user_stats.entry(assignee.clone()).or_default();
                 stats.tasks_assigned += 1;
                 stats.tasks_in_progress += 1;
             }
-            
+
             TaskEvent::Completed { task_id, completed_by, completed_at, .. } => {
                 // Update status counts
-                *self.tasks_by_status.entry(TaskStatus::Open).or_insert(0) = 
+                *self.tasks_by_status.entry(TaskStatus::Open).or_insert(0) =
                     self.tasks_by_status.get(&TaskStatus::Open).unwrap_or(&0).saturating_sub(1);
                 *self.tasks_by_status.entry(TaskStatus::Completed).or_insert(0) += 1;
-                
+
                 // Update user stats
                 let stats = self.user_stats.entry(completed_by.clone()).or_default();
                 stats.tasks_completed += 1;
                 stats.tasks_in_progress = stats.tasks_in_progress.saturating_sub(1);
-                
+
                 // Track daily completions
                 let date_key = completed_at.format("%Y-%m-%d").to_string();
                 *self.daily_completions.entry(date_key).or_insert(0) += 1;
-                
+
                 // Calculate completion time (would need task creation time)
                 // For demo, using a placeholder
                 let completion_hours = 24.0; // In real app, calculate from creation
                 self.completion_times.push(completion_hours);
                 stats.completion_times.push(completion_hours);
-                
+
                 // Update averages
-                self.avg_completion_hours = self.completion_times.iter().sum::<f64>() 
+                self.avg_completion_hours = self.completion_times.iter().sum::<f64>()
                     / self.completion_times.len() as f64;
-                stats.avg_completion_hours = stats.completion_times.iter().sum::<f64>() 
+                stats.avg_completion_hours = stats.completion_times.iter().sum::<f64>()
                     / stats.completion_times.len() as f64;
             }
-            
+
             TaskEvent::CommentAdded { author, .. } => {
                 let stats = self.user_stats.entry(author.clone()).or_default();
                 stats.total_comments += 1;
             }
-            
+
             TaskEvent::PriorityChanged { old_priority, new_priority, .. } => {
-                *self.tasks_by_priority.entry(*old_priority).or_insert(0) = 
+                *self.tasks_by_priority.entry(*old_priority).or_insert(0) =
                     self.tasks_by_priority.get(old_priority).unwrap_or(&0).saturating_sub(1);
                 *self.tasks_by_priority.entry(*new_priority).or_insert(0) += 1;
             }
-            
+
             _ => {}
         }
-        
+
         Ok(())
     }
-    
+
     fn apply_user_event(&mut self, event: &UserEvent) -> Result<(), ProjectionError> {
         // Handle user-specific events if needed
         Ok(())
@@ -423,8 +424,8 @@ EventCore provides infrastructure for running projections:
 ```rust
 use eventcore::prelude::*;
 use eventcore::cqrs::{
-    CqrsProjectionRunner, 
-    InMemoryCheckpointStore, 
+    CqrsProjectionRunner,
+    InMemoryCheckpointStore,
     InMemoryReadModelStore,
     ProjectionRunnerConfig,
 };
@@ -433,19 +434,19 @@ use eventcore_memory::InMemoryEventStore;
 async fn setup_projections() -> Result<(), Box<dyn std::error::Error>> {
     // Event store
     let event_store = InMemoryEventStore::<SystemEvent>::new();
-    
+
     // Projection infrastructure
     let checkpoint_store = InMemoryCheckpointStore::new();
     let read_model_store = InMemoryReadModelStore::new();
-    
+
     // Create projection
     let mut task_list_projection = UserTaskListProjection::default();
-    
+
     // Configure runner
     let config = ProjectionRunnerConfig::default()
         .with_batch_size(100)
         .with_checkpoint_frequency(50);
-    
+
     // Create and start runner
     let runner = CqrsProjectionRunner::new(
         event_store.clone(),
@@ -453,17 +454,17 @@ async fn setup_projections() -> Result<(), Box<dyn std::error::Error>> {
         read_model_store.clone(),
         config,
     );
-    
+
     // Run projection
     runner.run_projection(&mut task_list_projection).await?;
-    
+
     // Query the projection
     let alice_tasks = task_list_projection.get_user_tasks(
         &UserName::try_new("alice").unwrap()
     );
-    
+
     println!("Alice has {} tasks", alice_tasks.len());
-    
+
     Ok(())
 }
 ```
@@ -479,27 +480,27 @@ async fn query_tasks(
     projection: &UserTaskListProjection,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let alice = UserName::try_new("alice").unwrap();
-    
+
     // Get all tasks for Alice
     let all_tasks = projection.get_user_tasks(&alice);
-    
+
     // Filter high priority tasks
     let high_priority: Vec<_> = all_tasks
         .iter()
         .filter(|t| t.priority == Priority::High)
         .collect();
-    
+
     // Get active tasks only
     let active_tasks: Vec<_> = all_tasks
         .iter()
         .filter(|t| matches!(t.status, TaskStatus::Open | TaskStatus::InProgress))
         .collect();
-    
+
     println!("Alice's tasks:");
     println!("- Total: {}", all_tasks.len());
     println!("- High priority: {}", high_priority.len());
     println!("- Active: {}", active_tasks.len());
-    
+
     Ok(())
 }
 ```
@@ -520,17 +521,17 @@ struct ProjectionService {
 impl ProjectionService {
     async fn start_real_time_updates(self) {
         let mut last_position = EventId::default();
-        
+
         loop {
             // Poll for new events
             let events = self.event_store
                 .read_all_events(ReadOptions::default().after(last_position))
                 .await
                 .unwrap_or_default();
-            
+
             if !events.is_empty() {
                 let mut projection = self.projection.write().await;
-                
+
                 for event in &events {
                     if let Err(e) = projection.apply(event).await {
                         eprintln!("Projection error: {}", e);
@@ -538,7 +539,7 @@ impl ProjectionService {
                     last_position = event.id.clone();
                 }
             }
-            
+
             // Sleep before next poll
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
@@ -558,15 +559,15 @@ async fn rebuild_projection(
     projection: &mut UserTaskListProjection,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let coordinator = RebuildCoordinator::new(event_store);
-    
+
     // Clear existing state
     *projection = UserTaskListProjection::default();
-    
+
     // Rebuild from beginning
     let strategy = RebuildStrategy::FromBeginning;
-    
+
     coordinator.rebuild(projection, strategy).await?;
-    
+
     println!("Projection rebuilt successfully");
     Ok(())
 }
@@ -581,15 +582,15 @@ Testing projections is straightforward:
 mod tests {
     use super::*;
     use eventcore::testing::prelude::*;
-    
+
     #[tokio::test]
     async fn test_user_task_list_projection() {
         let mut projection = UserTaskListProjection::default();
-        
+
         // Create test events
         let task_id = TaskId::new();
         let alice = UserName::try_new("alice").unwrap();
-        
+
         // Apply created event
         let created_event = create_test_event(
             StreamId::from_static("task-123"),
@@ -601,9 +602,9 @@ mod tests {
                 created_at: Utc::now(),
             })
         );
-        
+
         projection.apply(&created_event).await.unwrap();
-        
+
         // Apply assigned event
         let assigned_event = create_test_event(
             StreamId::from_static("task-123"),
@@ -614,20 +615,20 @@ mod tests {
                 assigned_at: Utc::now(),
             })
         );
-        
+
         projection.apply(&assigned_event).await.unwrap();
-        
+
         // Verify
         let tasks = projection.get_user_tasks(&alice);
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].id, task_id);
         assert_eq!(tasks[0].status, TaskStatus::Open);
     }
-    
+
     #[tokio::test]
     async fn test_statistics_projection() {
         let mut projection = TeamStatisticsProjection::default();
-        
+
         // Apply multiple events
         for i in 0..10 {
             let event = create_test_event(
@@ -642,7 +643,7 @@ mod tests {
             );
             projection.apply(&event).await.unwrap();
         }
-        
+
         assert_eq!(projection.total_tasks_created, 10);
         assert_eq!(projection.completion_rate(), 0.0);
     }
@@ -733,6 +734,7 @@ Projections in EventCore:
 - ✅ Allow multiple views of the same data
 
 Key benefits:
+
 - **Flexibility**: Change read models without touching events
 - **Performance**: Optimized for specific queries
 - **Evolution**: Add new projections as needs change

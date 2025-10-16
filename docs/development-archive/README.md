@@ -5,24 +5,29 @@ This directory contains development-related documentation that was created durin
 ## Contents
 
 ### `/analysis/`
+
 - Performance monitoring analysis
 - Schema and performance issue investigations
 
 ### `/benchmarks/`
+
 - Performance reports and benchmark results
 - Optimization tracking documents
 
 ### `/design/`
+
 - Design documents and architectural decisions
 - Integration design notes
 
 ### `/implementation/`
+
 - Implementation-specific documentation
 - PostgreSQL adapter internals
 - Connection tuning guides
 - Index optimization notes
 
 ### Other Development Docs
+
 - Build and versioning procedures
 - Publishing workflows
 - Testing strategies

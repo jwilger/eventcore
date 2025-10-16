@@ -7,7 +7,7 @@ The performance validation tests have been implemented correctly but cannot exec
 ## Problems Identified
 
 1. **Missing Columns**: The database `events` table is missing expected columns:
-   - `correlation_id` 
+   - `correlation_id`
    - `causation_id`
    - `current_version` (expected by the PostgreSQL adapter)
 
@@ -22,6 +22,7 @@ The performance validation tests have been implemented correctly but cannot exec
 ## Test Implementation Status
 
 ✅ **Fixed Issues**:
+
 - Removed buggy shared metrics collection causing impossible success rates (134.6%, 0.1%)
 - Fixed overflow errors in metrics calculation
 - Converted tests to use PostgreSQL instead of meaningless in-memory benchmarks
@@ -29,6 +30,7 @@ The performance validation tests have been implemented correctly but cannot exec
 - Created comprehensive reporting framework
 
 ❌ **Blocked By Schema Issues**:
+
 - Tests cannot execute due to missing database columns
 - PostgreSQL adapter expects schema that doesn't match actual database
 
@@ -48,7 +50,7 @@ The performance validation tests have been implemented correctly but cannot exec
 
 The test framework is now correct and ready to execute once schema issues are resolved:
 
-- **Single-stream test**: 1,000 financial transactions 
+- **Single-stream test**: 1,000 financial transactions
 - **Multi-stream test**: 500 e-commerce orders (2-5 streams each)
 - **Batch write test**: 20 batches of 100 events each
 - **Metrics**: Throughput, latency percentiles (P50, P95, P99), success rates
@@ -62,6 +64,7 @@ The test framework is now correct and ready to execute once schema issues are re
 ## Test Execution
 
 Once schema is fixed, run:
+
 ```bash
 cargo test --package eventcore test_performance_targets --features testing -- --ignored --nocapture
 ```

@@ -7,6 +7,7 @@
 **Workflow:** Infrastructure Library Development
 
 **Version 3.0 Changes:**
+
 - SPLIT I-008 (Event Subscriptions) → I-008 (Basic Subscriptions) + I-009 (Checkpointing)
 - MOVED Snapshot Support from I-009 → I-012 (after Performance Benchmarking)
 - SPLIT Macros from I-012 → I-013 (require!) + I-014 (emit!)
@@ -23,6 +24,7 @@ This document outlines the technical increment plan for developing EventCore, a 
 **Core Value Proposition:** EventCore eliminates the artificial constraints of traditional event sourcing by enabling atomic multi-stream operations while maintaining type safety, strong consistency guarantees, and developer ergonomics.
 
 **Development Philosophy:**
+
 - **Type-Driven Development:** Types enforce domain constraints at compile time FROM INCREMENT 1
 - **Correctness Over Performance:** Multi-stream atomicity is non-negotiable
 - **Infrastructure Neutrality:** Library, not framework - no business domain assumptions
@@ -82,6 +84,7 @@ Increments are organized as **end-to-end vertical slices** that library consumer
 **Critical Principle:** Each increment is a complete vertical slice testable from library consumer perspective. Domain types and error handling are included from I-001 (not separate increments).
 
 Each increment:
+
 - Provides end-to-end functionality developers can integrate immediately
 - Testable as integration test from consumer perspective
 - Includes all infrastructure needed (types, errors, storage, execution)
@@ -102,32 +105,38 @@ Enable library consumer (application developer) to create and execute a complete
 This increment includes ALL infrastructure needed for end-to-end single-stream command execution:
 
 **Domain Types (with validation):**
+
 - StreamId, EventId, CorrelationId, CausationId (all using `nutype`)
 - Event and EventMetadata structures
 - Parse-don't-validate pattern throughout
 
 **Error Handling:**
+
 - Structured error hierarchy (EventStoreError, CommandError, ValidationError, ConcurrencyError)
 - Error classification (Retriable vs Permanent)
 - Full error context with `thiserror`
 
 **Storage:**
+
 - InMemoryEventStore implementing EventStore trait
 - Version-based optimistic concurrency control
 - Atomic single-stream append operations
 
 **Command System:**
+
 - CommandStreams and CommandLogic traits (manual implementation, no macro yet)
 - Command execution context for event emission
 - State reconstruction via apply()
 - Business logic via handle()
 
 **Executor:**
+
 - CommandExecutor orchestrating read → apply → handle → write
 - NO retry logic - returns ConcurrencyError on version conflicts
 - Correlation/causation tracking
 
 **Integration Test Example:**
+
 - Complete BankAccount command (deposit/withdraw)
 - Demonstrates type safety, error handling, version conflict detection
 
@@ -170,6 +179,7 @@ Scenario: Developer handles version conflict manually
 **API Entry Point:** Library consumer imports core types, store, command traits, and executor from the eventcore crate.
 
 **Integration Testing Approach:**
+
 - Test complete end-to-end command execution from consumer perspective
 - Verify type safety with validated domain types (StreamId, EventId, etc.)
 - Test event storage and retrieval
@@ -177,6 +187,7 @@ Scenario: Developer handles version conflict manually
 - Test business rule enforcement through proper error types
 
 **Manual Verification Steps:**
+
 1. Create new Rust project: `cargo new example-app`
 2. Add `eventcore = "0.1"` to Cargo.toml
 3. Copy bank account example from documentation
@@ -186,6 +197,7 @@ Scenario: Developer handles version conflict manually
 7. Time to first working command: < 30 minutes for developer new to EventCore
 
 **Documentation Requirements:**
+
 - Getting Started guide with bank account example
 - API docs for all public types with examples
 - Integration test template developers can copy
@@ -209,18 +221,21 @@ None. This is the first increment and includes everything needed for basic funct
 ### Technical Notes
 
 **Type-Driven Development from Day 1:**
+
 - All domain types use `nutype` for validation (no String primitives)
 - Error types use `thiserror` for structured errors
 - Result types throughout (no unwrap/expect in library code)
 - Phantom types for compile-time safety (preparation for macro in I-005)
 
 **Why In-Memory First:**
+
 - Enables fast TDD for all subsequent increments
 - Zero external dependencies for library consumers
 - Perfect for testing and development
 - Real EventStore implementation (not a mock)
 
 **Performance Expectations:**
+
 - In-memory operations: microseconds per command
 - Adequate for testing, development, and small-scale production
 - Version conflict detection: 100% accurate
@@ -247,16 +262,19 @@ Add automatic retry on version conflicts so developers don't have to handle Conc
 ### What's Included
 
 **Automatic Retry Logic:**
+
 - Hardcoded exponential backoff: 10ms, 20ms, 40ms, 80ms, 160ms
 - Hardcoded max attempts: 5 retries
 - Jitter (random variation) to prevent thundering herd
 - Re-reads stream state on each retry attempt
 
 **Basic Observability:**
+
 - Log retry attempts with attempt number and stream ID
 - Log final outcome (success after N attempts or exhausted retries)
 
 **Behavior Change from I-001:**
+
 - ConcurrencyError now triggers automatic retry instead of being returned
 - Developer no longer needs to handle retry logic manually
 - Commands "just work" under typical contention
@@ -317,24 +335,28 @@ Scenario: Jitter prevents thundering herd
 ### Integration Requirements
 
 **Behavioral Evolution from I-001:**
+
 - I-001: ConcurrencyError returned to developer immediately
 - I-002: ConcurrencyError triggers automatic retry (up to 5 attempts)
 - This is a breaking behavior change but vastly improves developer experience
 - Developer can still see exhausted retry errors if contention is extreme
 
 **Implementation Approach:**
+
 - Add retry loop to CommandExecutor around execute() method
 - Catch ConcurrencyError and retry with exponential backoff
 - Re-read stream state on each retry (fresh data)
 - Max 5 attempts then return ConcurrencyError with retry context
 
 **Testing Requirements:**
+
 - Integration tests with injected conflicts verifying retry behavior
 - Verify backoff timing (approximately 10ms, 20ms, 40ms...)
 - Verify jitter adds randomness (not exact delays)
 - Verify exhausted retries return proper error
 
 **Documentation Requirements:**
+
 - Explain behavior change from I-001 (automatic vs manual retry)
 - Document hardcoded defaults (5 attempts, exponential backoff)
 - Note that I-003 will add configuration for advanced tuning
@@ -363,6 +385,7 @@ Enable library consumers to customize retry behavior for their specific workload
 ### What's Included
 
 **RetryPolicy Configuration:**
+
 - RetryPolicy builder pattern for custom configuration
 - Configurable max attempts (override default 5)
 - Configurable backoff strategies: exponential (default), linear, fixed
@@ -370,12 +393,14 @@ Enable library consumers to customize retry behavior for their specific workload
 - Per-executor policy (different policies for different executors)
 
 **Advanced Observability:**
+
 - Integration with `tracing` crate for distributed tracing
 - Metrics hooks compatible with Prometheus (retry rates, success after N attempts)
 - Structured log format with correlation ID
 - Retry attempt context in error messages
 
 **Testing Utilities:**
+
 - RetryPolicy with max_attempts=0 for disabling retry in tests
 - Chaos testing support to inject conflicts systematically
 - Benchmarks showing retry impact on latency
@@ -431,22 +456,26 @@ Scenario: Developer uses distributed tracing
 ### Integration Requirements
 
 **API Enhancement Approach:**
+
 - RetryPolicy builder with fluent interface
 - Builder methods: max_attempts(), backoff_strategy(), base_delay(), multiplier()
 - Executor accepts optional RetryPolicy (defaults to I-002 hardcoded policy)
 - Policy is immutable after creation
 
 **Migration Path from I-002:**
+
 - I-002 behavior unchanged if no RetryPolicy provided
 - Explicit policy overrides defaults
 - Backward compatible - no breaking changes
 
 **Observability Integration:**
+
 - `tracing` spans around retry attempts with metadata
 - Metrics hooks called on retry attempt and final outcome
 - Error messages include retry context (attempted N times)
 
 **Testing Requirements:**
+
 - Integration tests with different retry policies
 - Chaos tests verifying retry behavior under injected conflicts
 - Benchmarks comparing exponential vs linear vs fixed backoff
@@ -475,22 +504,26 @@ Enable library consumers to create commands that atomically read from and write 
 ### What's Included
 
 **Multi-Stream Command Support:**
+
 - Commands declare multiple stream IDs
 - Executor reads all declared streams before handle()
 - State reconstruction from events across multiple streams
 - Atomic write to all streams with version checking for each
 
 **Enhanced InMemoryEventStore:**
+
 - Atomic append across multiple streams
 - Version checking for all streams in single operation
 - All-or-nothing guarantee (no partial writes)
 
 **Concurrency Testing:**
+
 - Property-based tests with concurrent multi-stream commands
 - Verification that NO partial state is ever observable
 - Stress tests with high contention on multiple streams
 
 **Example Implementation:**
+
 - TransferMoney command demonstrating atomic debit/credit
 - Shows value over saga pattern (simpler, consistent)
 
@@ -539,18 +572,21 @@ Scenario: Developer understands value over sagas
 ### Integration Requirements
 
 **API Enhancement Approach:**
+
 - Commands declare multiple StreamId fields
 - CommandLogic trait supports state types representing multiple streams
 - Context allows emitting events to any declared stream
 - Atomic write across all streams with version checking per stream
 
 **Concurrency Testing Requirements:**
+
 - Property tests with 10+ concurrent multi-stream commands
 - Verify invariant: sum(all account balances) never changes during transfers
 - Stress tests with intentional conflicts (same streams accessed concurrently)
 - NO partial state observable at any point
 
 **Performance Expectations:**
+
 - Multi-stream commands slower than single-stream (coordination overhead)
 - Target: <100ms P95 for 2-stream commands under low contention
 - Correctness maintained even under high contention
@@ -578,6 +614,7 @@ Enable library consumers to use production-ready PostgreSQL storage with ACID tr
 ### What's Included
 
 **PostgreSQL Adapter (Separate Crate):**
+
 - `eventcore-postgres` crate implementing EventStore trait
 - Connection pooling (sqlx)
 - ACID transaction support for multi-stream atomicity
@@ -585,6 +622,7 @@ Enable library consumers to use production-ready PostgreSQL storage with ACID tr
 - Schema migrations (sql scripts)
 
 **Event Schema Design:**
+
 - Events table with UUID primary keys
 - Stream ID and version columns with unique constraint
 - Event type and data stored as JSONB
@@ -593,6 +631,7 @@ Enable library consumers to use production-ready PostgreSQL storage with ACID tr
 - Indexes optimized for stream-based queries
 
 **Integration Tests:**
+
 - Real PostgreSQL tests (via Docker Compose)
 - Multi-stream atomicity verified with ACID transactions
 - Concurrent command tests with actual database contention
@@ -647,23 +686,27 @@ Scenario: Developer migrates schema safely
 ### Integration Requirements
 
 **Separate Crate Approach:**
+
 - Separate `eventcore-postgres` crate implementing EventStore trait
 - Application adds both eventcore and eventcore-postgres dependencies
 - Store creation with PostgreSQL connection string
 - Executor accepts PostgresEventStore same as InMemoryEventStore
 
 **Docker Compose for Testing:**
+
 - Docker Compose configuration for local PostgreSQL instance
 - Environment variables for database connection
 - Port mapping for development access
 
 **Integration Testing Approach:**
+
 - All tests run against real PostgreSQL (not mocks)
 - CI runs PostgreSQL in container
 - Tests verify ACID properties under concurrency
 - Schema migration tests included
 
 **Documentation Requirements:**
+
 - Connection configuration guide
 - Schema migration strategy
 - Backup/restore procedures
@@ -698,6 +741,7 @@ Eliminate infrastructure boilerplate by auto-generating CommandStreams trait imp
 ### What's Included
 
 **Procedural Macro (Separate Crate):**
+
 - `eventcore-macros` crate with proc-macro
 - `#[derive(Command)]` generates CommandStreams trait
 - `#[stream]` field attribute marks stream fields
@@ -705,12 +749,14 @@ Eliminate infrastructure boilerplate by auto-generating CommandStreams trait imp
 - Generated code is inspectable (cargo expand)
 
 **Macro Features:**
+
 - Supports single and multiple `#[stream]` fields
 - Generates extract_streams() implementation
 - Creates phantom types for emit! macro integration
 - Helpful compile errors when #[stream] missing
 
 **Documentation:**
+
 - Before/after examples showing boilerplate elimination
 - Macro expansion verification in tests
 - Common mistakes and error messages guide
@@ -758,17 +804,20 @@ Scenario: Developer migrates from manual to macro
 ### Integration Requirements
 
 **Macro Crate Setup:**
+
 - Separate `eventcore-macros` crate with proc-macro type
 - Dependencies on syn, quote, and proc-macro2 for AST manipulation
 - Re-exported through main eventcore crate for convenience
 
 **Developer Experience Improvement:**
+
 - Before: Manual CommandStreams trait implementation (~30 lines infrastructure)
 - After: #[derive(Command)] with #[stream] attributes (~5 lines)
 - Developer focuses only on business logic (apply/handle methods)
 - Significant reduction in boilerplate code
 
 **Testing Approach:**
+
 - Macro expansion tests using trybuild for compile-fail scenarios
 - Integration tests comparing macro vs manual implementation
 - cargo-expand verification in CI to detect unexpected changes
@@ -797,18 +846,21 @@ Enable commands to discover additional streams at runtime based on state, suppor
 ### What's Included
 
 **StreamResolver Trait:**
+
 - Optional trait for commands with state-dependent streams
 - resolve_additional_streams(state) method
 - Executor support for multi-pass discovery
 - Incremental re-reading of static streams (optimization)
 
 **Discovery Integration:**
+
 - Static streams declared with #[stream] (or manual)
 - Dynamic streams discovered via resolver
 - All streams (static + dynamic) participate in atomicity
 - Deduplication prevents re-reading same stream twice
 
 **Example Implementation:**
+
 - ProcessPayment command discovering payment method streams
 - Shows when to use static vs dynamic vs hybrid
 
@@ -857,18 +909,21 @@ Scenario: Developer verifies atomicity with discovery
 ### Integration Requirements
 
 **API Addition Approach:**
+
 - StreamResolver trait with resolve_additional_streams method
 - Method examines state and returns additional stream IDs
 - Executor calls resolver after reading static streams
 - Incremental re-reading optimizes performance
 
 **Decision Framework Documentation:**
+
 - **Static:** Streams known at compile time (e.g., TransferMoney always needs two accounts)
 - **Dynamic:** Streams determined by state (e.g., payment processing depends on payment method)
 - **Hybrid:** Mix of static and dynamic (e.g., order stream static, payment stream dynamic)
 - When in doubt, start static (simpler) and migrate to dynamic if needed
 
 **Migration Guide:**
+
 - Refactoring path from static to dynamic declarations
 - Backward compatibility considerations
 - Performance implications of discovery
@@ -896,18 +951,21 @@ Enable developers to subscribe to event streams and process events in order. Thi
 ### What's Included
 
 **EventSubscription Trait:**
+
 - subscribe(stream_ids) method returning event iterator/stream
 - Delivers events in stream order
 - Works with both PostgreSQL and in-memory backends
 - Poll-based or callback-based consumption (developer choice)
 
 **Subscription Features:**
-- Subscribe to one or more streams (pattern matching like "account-*")
+
+- Subscribe to one or more streams (pattern matching like "account-\*")
 - Process events to build read models
 - Events delivered in order within each stream
 - Simple iteration over events
 
 **Example Implementation:**
+
 - AccountBalance projection showing simple read model built from subscription
 - Live event processing example (not restart-safe yet)
 
@@ -951,18 +1009,21 @@ Scenario: Subscription starts fresh without checkpoint
 ### Integration Requirements
 
 **API Addition Approach:**
+
 - EventSubscription trait with subscribe() method
 - Subscribe returns async stream of events (Stream<Item = Event>)
 - Developer iterates and processes events
 - Simple poll-based or callback-based consumption
 
 **Usage Pattern:**
+
 - Create subscription with stream pattern
 - Iterate over events as they arrive
 - Process each event to update read model
 - No checkpoint management yet (manual tracking only)
 
 **Documentation Requirements:**
+
 - Explain subscription lifecycle (start, process, end)
 - Document ordering guarantees (per-stream ordering)
 - Note checkpoint limitation (I-009 will add)
@@ -990,23 +1051,27 @@ Add checkpoint storage and resume capability to subscriptions, enabling reliable
 ### What's Included
 
 **Checkpoint Storage:**
+
 - save_checkpoint(subscription_id, position) method
 - load_checkpoint(subscription_id) returns last saved position
 - Checkpoint stored alongside events (same database)
 - Automatic checkpoint advancement as events process
 
 **Resume from Checkpoint:**
+
 - On restart, subscription loads last checkpoint
 - Events delivered starting from checkpoint position + 1
 - Projection rebuilds only new events since last checkpoint
 - Idempotent event processing supported
 
 **Projection Rebuilding:**
+
 - Reset checkpoint to version 0 for complete rebuild
 - Replay all historical events
 - Useful for projection schema changes or bug fixes
 
 **Example Enhancement:**
+
 - AccountBalance projection now checkpoint-aware
 - Demonstrates restart safety and incremental processing
 
@@ -1052,6 +1117,7 @@ Scenario: Developer handles checkpoint failure gracefully
 ### Integration Requirements
 
 **API Enhancement Approach:**
+
 - Add checkpoint methods to EventSubscription trait
 - save_checkpoint(subscription_id, EventPosition)
 - load_checkpoint(subscription_id) -> Option<EventPosition>
@@ -1059,17 +1125,20 @@ Scenario: Developer handles checkpoint failure gracefully
 - Checkpoints stored in same backend (PostgreSQL table, in-memory map)
 
 **Checkpoint Schema (PostgreSQL):**
+
 - subscription_checkpoints table
 - Columns: subscription_id, position (version + stream), updated_at
 - Unique constraint on subscription_id
 - Upsert semantics for save_checkpoint
 
 **Migration from I-008:**
+
 - I-008 subscriptions still work without checkpointing
 - Adding checkpoint is opt-in (backward compatible)
 - Developer can start with simple subscription, add checkpointing later
 
 **Documentation Requirements:**
+
 - When to checkpoint (frequency trade-offs)
 - How to handle checkpoint failures
 - Idempotent event processing patterns
@@ -1098,6 +1167,7 @@ Enable robust testing by injecting failures (read errors, write errors, version 
 ### What's Included
 
 **Chaos Configuration:**
+
 - Configurable failure injection rates
 - Read failures, write failures, version conflict injection
 - Deterministic chaos for reproducible tests
@@ -1142,6 +1212,7 @@ Establish performance baselines and track regressions using Criterion.rs benchma
 ### What's Included
 
 **Benchmark Suite:**
+
 - Single-stream command execution
 - Multi-stream command execution
 - Event append throughput
@@ -1189,18 +1260,21 @@ Optimize state reconstruction for long-lived streams by periodically saving snap
 ### What's Included
 
 **SnapshotStore Trait:**
+
 - save_snapshot(stream_id, version, state) method
 - load_snapshot(stream_id) returns (version, state)
 - Snapshots stored alongside events
 - Automatic snapshot creation at configurable intervals
 
 **Executor Integration:**
+
 - Check for snapshot before reading events
 - If snapshot exists, start from snapshot version
 - Apply only events after snapshot
 - Configurable snapshot frequency based on benchmarking data
 
 **Snapshot Strategy Informed by Benchmarks:**
+
 - Use benchmark data to determine optimal snapshot frequency
 - Balance storage cost vs reconstruction time
 - Document when snapshots are necessary (stream length threshold)
@@ -1245,18 +1319,21 @@ Scenario: Developer measures snapshot impact
 ### Integration Requirements
 
 **API Addition Approach:**
+
 - SnapshotStore trait with save_snapshot and load_snapshot methods
 - Save method accepts stream ID, version, and serializable state
 - Load method returns optional (version, state) tuple
 - Generic over state type with Serialize/Deserialize bounds
 
 **Benchmark-Driven Configuration:**
+
 - Documentation includes benchmark data justifying snapshot thresholds
 - Recommended snapshot frequencies for different stream sizes
 - Storage vs performance trade-off analysis
 - When to enable snapshots (not always necessary)
 
 **Documentation Requirements:**
+
 - Snapshot strategy guide based on benchmark results
 - Storage implications (snapshot size estimation)
 - Snapshot cleanup strategies (old snapshot removal)
@@ -1286,12 +1363,14 @@ Provide ergonomic macro for business rule validation with early return, making v
 ### What's Included
 
 **require! Macro:**
+
 - Simple condition checking with early return
 - Returns CommandError::BusinessRuleViolation on failure
 - Descriptive error messages from validation expressions
 - Format string support for dynamic error messages
 
 **Macro Features:**
+
 - Concise syntax: `require!(condition, "error message")`
 - Format args: `require!(balance >= amount, "Insufficient funds: have {}, need {}", balance, amount)`
 - Expands to readable if/return pattern
@@ -1332,12 +1411,14 @@ Scenario: Developer migrates from manual validation
 ### Integration Requirements
 
 **Macro Implementation:**
+
 - Declarative macro (not proc-macro) - simpler implementation
 - Expands to: `if !condition { return Err(CommandError::BusinessRuleViolation(message.to_string())); }`
 - Supports format args via format! macro
-- Works in any function returning Result<_, CommandError>
+- Works in any function returning Result<\_, CommandError>
 
 **Usage Pattern:**
+
 ```rust
 fn handle(&self, ctx: &mut Context) -> Result<(), CommandError> {
     require!(self.amount > 0, "Amount must be positive");
@@ -1370,17 +1451,20 @@ Provide type-safe event emission macro with compile-time verification that event
 ### What's Included
 
 **emit! Macro:**
+
 - Compile-time verification that stream is declared in command
 - Works with phantom types from #[derive(Command)]
 - Concise syntax for event emission
 - IDE autocomplete support for stream names
 
 **Type Safety Features:**
+
 - Phantom types ensure events only emitted to declared streams
 - Compile error if emitting to undeclared stream
 - Type-safe stream references (no string-based stream names at emission)
 
 **Macro Features:**
+
 - Concise syntax: `emit!(ctx, self.account_id, AccountDebited { amount })`
 - Integrates with derive macro's generated phantom types
 - Descriptive compile errors when stream not declared
@@ -1420,17 +1504,20 @@ Scenario: Developer benefits from IDE autocomplete
 ### Integration Requirements
 
 **Macro Implementation:**
+
 - Procedural macro (needs to inspect types) or declarative with clever typing
 - Works with phantom types from #[derive(Command)]
 - Expands to: `ctx.emit(stream_id, event)`
 - Type safety via phantom type markers on context
 
 **Integration with derive macro:**
+
 - Derive macro generates phantom types for each #[stream] field
 - emit! macro uses phantom types for compile-time verification
 - Stream names from derive macro available to emit! macro
 
 **Usage Pattern:**
+
 ```rust
 #[derive(Command)]
 struct TransferMoney {
@@ -1468,30 +1555,35 @@ Audit and ensure completeness, consistency, and quality of documentation written
 **What This Audit Covers:** This is NOT "write all documentation at the end" - each increment I-001 through I-014 includes its own documentation. This increment ensures that documentation is complete, consistent across increments, and ready for library release.
 
 **Philosophy Change from Original Plan:**
+
 - OLD: "Write comprehensive documentation at end"
 - NEW: "Documentation is incremental from I-001, audit completeness at end"
 
 ### What's Included
 
 **Completeness Audit:**
+
 - Verify each increment has Getting Started section
 - Check API docs completeness (all public items documented)
 - Ensure examples directory has working code for each major feature
 - Verify troubleshooting guide covers all error types
 
 **Consistency Audit:**
+
 - Terminology consistency across all docs (e.g., "stream" vs "event stream")
 - Code style consistency in examples
 - Cross-references between docs are accurate
 - Version compatibility information is current
 
 **Quality Audit:**
+
 - Onboarding time: Can new developer implement first command in < 30 min?
 - Error scenarios: Are common issues documented with solutions?
 - Conceptual clarity: Are event sourcing concepts explained for newcomers?
 - Migration guides: Are upgrade paths documented?
 
 **Documentation Gaps to Fill:**
+
 - Missing API docs (if any)
 - Undocumented features or edge cases
 - Missing examples for complex scenarios
@@ -1535,6 +1627,7 @@ Scenario: Audit identifies and fills gaps
 ### Integration Requirements
 
 **Audit Process:**
+
 1. Review each increment's documentation for completeness
 2. Check cross-references and links
 3. Verify examples compile and run
@@ -1542,6 +1635,7 @@ Scenario: Audit identifies and fills gaps
 5. Review API docs with `cargo doc --open`
 
 **Documentation Checklist:**
+
 - [ ] Getting Started guide (complete and tested)
 - [ ] API reference (all public items documented)
 - [ ] Conceptual introduction (event sourcing fundamentals)
@@ -1552,6 +1646,7 @@ Scenario: Audit identifies and fills gaps
 - [ ] Upgrade/migration guides (version compatibility)
 
 **Quality Metrics:**
+
 - Time to first command: < 30 minutes (tested with real developer)
 - API doc coverage: 100% of public items
 - Example coverage: All major features have working examples
@@ -1577,30 +1672,35 @@ Audit and ensure consistency, clarity, and actionability of error messages writt
 **What This Audit Covers:** This is NOT "add error messages at the end" - error quality is foundational from I-001. This increment ensures error messages are consistent in format, provide appropriate context, and are actionable across all increments.
 
 **Philosophy Change from Original Plan:**
+
 - OLD: "Polish error messages at end"
 - NEW: "Error quality is foundational from I-001, audit consistency at end"
 
 ### What's Included
 
 **Consistency Audit:**
+
 - Error message format consistency (e.g., always include context)
 - Error type usage consistency (BusinessRuleViolation vs Permanent errors)
 - Context inclusion patterns (stream IDs, versions, command types)
 - Action suggestion patterns ("Automatic retry will..." vs "Increase...")
 
 **Clarity Audit:**
+
 - Are error messages understandable to library consumers?
 - Do messages explain WHAT failed and WHY?
 - Are technical terms explained or linked to docs?
 - Are error codes/types meaningful?
 
 **Actionability Audit:**
+
 - Does each error suggest next steps?
 - Are links to documentation included where helpful?
 - Do validation errors show actual vs expected values?
 - Are retry/recovery paths documented?
 
 **Error Quality Standards:**
+
 - Context: Always include relevant IDs (stream, command, correlation)
 - Explanation: What failed and why
 - Action: What developer should do next
@@ -1651,6 +1751,7 @@ Scenario: Audit identifies and fixes inconsistencies
 ### Integration Requirements
 
 **Audit Process:**
+
 1. Review all error types (EventStoreError, CommandError, ValidationError, ConcurrencyError)
 2. Check error message format consistency
 3. Verify context inclusion (IDs, versions, values)
@@ -1658,6 +1759,7 @@ Scenario: Audit identifies and fixes inconsistencies
 5. Review error documentation completeness
 
 **Error Message Checklist:**
+
 - [ ] Context: All errors include relevant IDs and values
 - [ ] Explanation: All errors explain what failed and why
 - [ ] Action: All errors suggest next steps
@@ -1666,6 +1768,7 @@ Scenario: Audit identifies and fixes inconsistencies
 - [ ] Testing: Error scenarios tested and validated
 
 **Quality Metrics:**
+
 - Context coverage: 100% of errors include relevant context
 - Actionability: 100% of errors suggest next steps
 - Documentation links: Key error types link to troubleshooting guide
@@ -1686,6 +1789,7 @@ I-001 (error hierarchy foundational from start), I-015 (documentation to link to
 ## Implementation Roadmap
 
 ### Phase 1: Core Functionality (Weeks 1-4)
+
 - **I-001: Single-Stream Command End-to-End** (Week 1-2) - 🎯 COMPLETE WORKING SYSTEM (no retry)
 - **I-002: Automatic Retry with Defaults** (Week 2) - Add automatic retry without configuration
 - **I-003: Configurable Retry Policies** (Week 3) - Add retry configuration and observability
@@ -1694,6 +1798,7 @@ I-001 (error hierarchy foundational from start), I-015 (documentation to link to
 **Milestone:** Core value proposition (multi-stream atomicity) fully implemented with in-memory backend.
 
 ### Phase 2: Production Readiness (Weeks 5-7)
+
 - **I-005: PostgreSQL Production Backend** (Week 5-6) - 🎯 PRODUCTION READY
 - **I-006: Command Derive Macro** (Week 7) - Developer ergonomics
 - **I-007: Dynamic Stream Discovery** (Week 7) - Advanced workflows
@@ -1701,6 +1806,7 @@ I-001 (error hierarchy foundational from start), I-015 (documentation to link to
 **Milestone:** Library ready for production use with excellent ergonomics.
 
 ### Phase 3: Advanced Features (Weeks 8-11)
+
 - **I-008: Basic Event Subscriptions** (Week 8) - Subscribe and process events (no checkpointing)
 - **I-009: Checkpointing for Subscriptions** (Week 9) - Add checkpoint/resume capability
 - **I-010: Chaos Testing Infrastructure** (Week 9) - Failure injection for robust testing
@@ -1710,6 +1816,7 @@ I-001 (error hierarchy foundational from start), I-015 (documentation to link to
 **Milestone:** Advanced capabilities for complex scenarios with data-driven optimization.
 
 ### Phase 4: Developer Experience Polish (Weeks 12-14)
+
 - **I-013: require! Macro** (Week 12) - Ergonomic business rule validation
 - **I-014: emit! Macro** (Week 12) - Type-safe event emission with phantom types
 - **I-015: Documentation Completeness Audit** (Week 13) - Ensure doc quality across increments
@@ -1722,24 +1829,28 @@ I-001 (error hierarchy foundational from start), I-015 (documentation to link to
 ## Success Criteria
 
 ### Developer Experience
+
 - ✅ New developer implements first command in under 30 minutes
 - ✅ Typical command requires fewer than 50 lines of code (with macro)
 - ✅ Type errors provide clear guidance on fixes
 - ✅ Documentation examples are copy-paste ready
 
 ### Correctness
+
 - ✅ Multi-stream atomicity verified via concurrent integration tests
 - ✅ Version conflicts detected 100% of the time
 - ✅ No data corruption possible under any failure scenario
 - ✅ Retry logic eventually succeeds or fails clearly
 
 ### Performance
+
 - ✅ Single-stream throughput adequate for business operations (50+ ops/sec)
 - ✅ Multi-stream operations maintain correctness at scale
 - ✅ Memory usage remains bounded under load
 - ✅ No memory leaks under sustained operation
 
 ### Adoption
+
 - ✅ API intuitive to Rust developers familiar with async
 - ✅ Examples cover common use cases (banking, e-commerce)
 - ✅ Community contributions feasible via clear extension points
@@ -1750,11 +1861,13 @@ I-001 (error hierarchy foundational from start), I-015 (documentation to link to
 ## References
 
 ### Core Documentation
+
 - **REQUIREMENTS_ANALYSIS.md:** Functional and non-functional requirements (FR-1 through FR-6, NFR-1 through NFR-5)
 - **ARCHITECTURE.md:** System design and component interactions
 - **CLAUDE.md:** Project philosophy and development patterns
 
 ### Architectural Decision Records
+
 - **ADR-001:** Multi-Stream Atomicity Implementation Strategy
 - **ADR-002:** Event Store Trait Design
 - **ADR-003:** Type System Patterns for Domain Safety
@@ -1766,6 +1879,7 @@ I-001 (error hierarchy foundational from start), I-015 (documentation to link to
 - **ADR-009:** Stream Resolver Design for Dynamic Discovery
 
 ### Process Documentation
+
 - **~/.claude/processes/STORY_PLANNING.md:** Planning methodology (adapted for library development)
 - **~/.claude/processes/DOCUMENTATION_PHILOSOPHY.md:** WHAT/WHY not HOW principles
 - **~/.claude/processes/INTEGRATION_VALIDATION.md:** Testing and verification requirements
@@ -1803,6 +1917,7 @@ I-001 (error hierarchy foundational from start), I-015 (documentation to link to
 
 **Document Status:** Version 3.0 - Progressive Disclosure Restructure Complete
 **Key Improvements:**
+
 - Subscription complexity split for learning curve (I-008 basic → I-009 checkpointing)
 - Snapshot optimization data-driven (after I-011 benchmarks)
 - Macro complexity progressive (I-013 simple require! → I-014 complex emit!)

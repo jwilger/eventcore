@@ -5,6 +5,7 @@ Welcome to the EventCore manual! This comprehensive guide will take you from und
 ## 📚 Table of Contents
 
 ### [Part 1: Introduction](./01-introduction/README.md)
+
 Start here if you're new to EventCore or event sourcing.
 
 - [Chapter 1.1: What is EventCore?](./01-introduction/01-what-is-eventcore.md)
@@ -13,6 +14,7 @@ Start here if you're new to EventCore or event sourcing.
 - [Chapter 1.4: Architecture Overview](./01-introduction/04-architecture.md)
 
 ### [Part 2: Getting Started](./02-getting-started/README.md)
+
 A complete walkthrough building a task management system.
 
 - [Chapter 2.1: Setting Up Your Project](./02-getting-started/01-setup.md)
@@ -22,6 +24,7 @@ A complete walkthrough building a task management system.
 - [Chapter 2.5: Testing Your Application](./02-getting-started/05-testing.md)
 
 ### [Part 3: Core Concepts](./03-core-concepts/README.md)
+
 Deep dive into EventCore's design and features.
 
 - [Chapter 3.1: Commands and the Macro System](./03-core-concepts/01-commands-and-macros.md)
@@ -31,6 +34,7 @@ Deep dive into EventCore's design and features.
 - [Chapter 3.5: Error Handling](./03-core-concepts/05-error-handling.md)
 
 ### [Part 4: Building Web APIs](./04-building-apis/README.md)
+
 Integrate EventCore with web frameworks.
 
 - [Chapter 4.1: API Design Principles](./04-building-apis/01-api-design.md)
@@ -39,6 +43,7 @@ Integrate EventCore with web frameworks.
 - [Chapter 4.4: Real-time Updates with WebSockets](./04-building-apis/04-websockets.md)
 
 ### [Part 5: Advanced Topics](./05-advanced-topics/README.md)
+
 Advanced patterns and lower-level APIs.
 
 - [Chapter 5.1: CQRS and Read Models](./05-advanced-topics/01-cqrs.md)
@@ -48,6 +53,7 @@ Advanced patterns and lower-level APIs.
 - [Chapter 5.5: Performance Optimization](./05-advanced-topics/05-performance.md)
 
 ### [Part 6: Operations](./06-operations/README.md)
+
 Deploy and operate EventCore applications.
 
 - [Chapter 6.1: Deployment Strategies](./06-operations/01-deployment.md)
@@ -56,6 +62,7 @@ Deploy and operate EventCore applications.
 - [Chapter 6.4: Troubleshooting](./06-operations/04-troubleshooting.md)
 
 ### [Part 7: Reference](./07-reference/README.md)
+
 API documentation and reference material.
 
 - [Chapter 7.1: API Reference](./07-reference/01-api-reference.md)
@@ -74,16 +81,19 @@ If you want to jump right in:
 ## 📖 Reading Path
 
 ### For Event Sourcing Beginners
+
 1. Start with [Event Modeling Fundamentals](./01-introduction/03-event-modeling.md)
 2. Work through the complete [Getting Started](./02-getting-started/README.md) tutorial
 3. Study [Core Concepts](./03-core-concepts/README.md) as needed
 
 ### For Experienced Developers
+
 1. Skim [Architecture Overview](./01-introduction/04-architecture.md)
 2. Jump to [Commands and the Macro System](./03-core-concepts/01-commands-and-macros.md)
 3. Review [API examples](./04-building-apis/02-axum-integration.md)
 
 ### For Production Deployment
+
 1. Review [Multi-Stream Atomicity](./03-core-concepts/04-multi-stream-atomicity.md) guarantees
 2. Study [Operations](./06-operations/README.md) thoroughly
 3. Understand [Performance Optimization](./05-advanced-topics/05-performance.md)

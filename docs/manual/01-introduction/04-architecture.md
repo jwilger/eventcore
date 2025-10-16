@@ -46,6 +46,7 @@ struct ApproveOrder {
 ```
 
 **Responsibilities:**
+
 - Declare stream dependencies via `#[stream]` attributes
 - Implement business validation rules
 - Generate events representing what happened
@@ -65,6 +66,7 @@ let result = executor.execute(&command).await?;
 ```
 
 **Execution Flow:**
+
 1. **Read Phase**: Fetch all declared streams
 2. **Reconstruct State**: Apply events to build current state
 3. **Execute Command**: Run business logic
@@ -84,6 +86,7 @@ pub trait EventStore: Send + Sync {
 ```
 
 **Guarantees:**
+
 - Atomic multi-stream writes
 - Optimistic concurrency control
 - Global ordering via UUIDv7 event IDs
@@ -111,6 +114,7 @@ impl CqrsProjection for OrderSummaryProjection {
 ```
 
 **Capabilities:**
+
 - Real-time updates from event streams
 - Rebuild from any point in time
 - Multiple projections from same events
@@ -163,6 +167,7 @@ Query Read Model ──────→ Optimized for specific access patterns
 EventCore's key innovation is atomic operations across multiple streams:
 
 ### Traditional Event Sourcing
+
 ```
 Account A         Account B
     │                 │
@@ -172,6 +177,7 @@ Account A         Account B
 ```
 
 ### EventCore Approach
+
 ```
         TransferMoney Command
                │
@@ -210,13 +216,14 @@ let result = executor
 EventCore leverages Rust's type system for correctness:
 
 ### Stream Access Control
+
 ```rust
 // Compile-time enforcement
 impl TransferMoney {
     fn handle(&self, read_streams: ReadStreams<Self::StreamSet>) {
         // ✅ Can only write to declared streams
         StreamWrite::new(&read_streams, self.from_account, event)?;
-        
+
         // ❌ Compile error - stream not declared!
         StreamWrite::new(&read_streams, other_stream, event)?;
     }
@@ -224,6 +231,7 @@ impl TransferMoney {
 ```
 
 ### Validated Types
+
 ```rust
 // Parse, don't validate
 #[nutype(validate(greater = 0))]
@@ -237,6 +245,7 @@ transfer_money(amount);              // No validation needed
 ## Deployment Architecture
 
 ### Simple Deployment
+
 ```
 ┌─────────────┐     ┌──────────────┐
 │  Your App   │────▶│  PostgreSQL  │
@@ -244,6 +253,7 @@ transfer_money(amount);              // No validation needed
 ```
 
 ### Production Deployment
+
 ```
                     Load Balancer
                          │
@@ -272,16 +282,19 @@ transfer_money(amount);              // No validation needed
 EventCore is optimized for correctness and developer productivity:
 
 ### Throughput
+
 - **Single-stream commands**: ~83 ops/sec (PostgreSQL), 187,711 ops/sec (in-memory)
-- **Multi-stream commands**: ~25-50 ops/sec (PostgreSQL)  
+- **Multi-stream commands**: ~25-50 ops/sec (PostgreSQL)
 - **Batch operations**: 750,000-820,000 events/sec (in-memory)
 
 ### Latency
+
 - **Command execution**: 10-20ms (typical)
 - **Conflict retry**: +5-10ms per retry
 - **Projection lag**: <100ms (typical)
 
 ### Scaling Strategies
+
 1. **Vertical**: Larger PostgreSQL instance
 2. **Read Scaling**: PostgreSQL read replicas
 3. **Stream Sharding**: Partition by stream ID
@@ -301,6 +314,7 @@ pub enum CommandError {
 ```
 
 Errors are categorized for appropriate handling:
+
 - **Retriable**: Concurrency conflicts, transient failures
 - **Non-retriable**: Validation failures, business rule violations
 - **Fatal**: Infrastructure failures, panic recovery
@@ -311,8 +325,8 @@ Built-in instrumentation for production visibility:
 
 ```rust
 // Automatic metrics
-eventcore.commands.executed{command="TransferMoney", status="success"} 
-eventcore.events.written{stream="account-123"} 
+eventcore.commands.executed{command="TransferMoney", status="success"}
+eventcore.events.written{stream="account-123"}
 eventcore.retries{reason="concurrency_conflict"}
 
 // Structured logging

@@ -7,14 +7,18 @@ In the modern age of fast computers and cheap storage, event sourcing should be 
 Traditional CRUD databases were designed in an era of expensive storage and slow computers. They optimize for storage efficiency by throwing away history - a terrible trade-off in today's world. Here's why event sourcing, and specifically EventCore, should be your default choice:
 
 ### 1. **History is Free**
+
 Storage costs have plummeted. The complete history of your business operations costs pennies to store but provides immense value:
+
 - Debug production issues by replaying events
 - Satisfy any future audit requirement
 - Build new features on historical data
 - Prove compliance retroactively
 
 ### 2. **CRUD Lies About Your Business**
+
 CRUD operations (Create, Read, Update, Delete) are technical concepts that don't match business reality:
+
 - "Update" erases the reason for change
 - "Delete" pretends things never existed
 - State-based models lose critical business context
@@ -22,7 +26,9 @@ CRUD operations (Create, Read, Update, Delete) are technical concepts that don't
 Event sourcing captures what actually happened: "CustomerChangedAddress", "OrderCancelled", "PriceAdjusted"
 
 ### 3. **Future-Proof by Default**
+
 With EventCore, you never have to say "we didn't track that":
+
 - New reporting requirements? Replay events into new projections
 - Need to add analytics? The data is already there
 - Compliance rules changed? Full history available
@@ -36,6 +42,7 @@ While event sourcing should be the default, EventCore specifically excels by sol
 **Problem**: Your business operations span multiple entities that must change together.
 
 **Example**: E-commerce order fulfillment
+
 ```rust
 #[derive(Command, Clone)]
 struct FulfillOrder {
@@ -57,6 +64,7 @@ struct FulfillOrder {
 **Problem**: Need complete audit trail and strong consistency for money movements.
 
 **Example**: Payment processing
+
 ```rust
 #[derive(Command, Clone)]
 struct ProcessPayment {
@@ -71,7 +79,8 @@ struct ProcessPayment {
 }
 ```
 
-**Why EventCore**: 
+**Why EventCore**:
+
 - Every state change is recorded
 - Natural audit log for compliance
 - Atomic operations prevent partial payments
@@ -82,6 +91,7 @@ struct ProcessPayment {
 **Problem**: Multiple users modifying shared resources with conflict resolution needs.
 
 **Example**: Project management tool
+
 ```rust
 #[derive(Command, Clone)]
 struct MoveTaskToColumn {
@@ -97,6 +107,7 @@ struct MoveTaskToColumn {
 ```
 
 **Why EventCore**:
+
 - Event streams enable real-time updates
 - Natural conflict resolution through events
 - Complete history of who did what when
@@ -106,6 +117,7 @@ struct MoveTaskToColumn {
 **Problem**: Regulations require you to show complete history of data changes.
 
 **Example**: Healthcare records
+
 ```rust
 #[derive(Command, Clone)]
 struct UpdatePatientRecord {
@@ -119,6 +131,7 @@ struct UpdatePatientRecord {
 ```
 
 **Why EventCore**:
+
 - Immutable event log satisfies auditors
 - Can prove system state at any point in time
 - Natural GDPR compliance (event-level data retention)
@@ -128,6 +141,7 @@ struct UpdatePatientRecord {
 **Problem**: Your domain has complex rules that span multiple aggregates.
 
 **Example**: Insurance claim processing
+
 ```rust
 #[derive(Command, Clone)]
 struct ProcessClaim {
@@ -143,6 +157,7 @@ struct ProcessClaim {
 ```
 
 **Why EventCore**:
+
 - Commands match business operations exactly
 - No artificial aggregate boundaries
 - Domain events become first-class citizens
@@ -154,6 +169,7 @@ struct ProcessClaim {
 **Myth**: Event sourcing adds unnecessary complexity.
 
 **Reality**: EventCore makes it simpler than CRUD:
+
 - No O/R mapping impedance mismatch
 - Commands map directly to business operations
 - No "load-modify-save" race conditions
@@ -163,7 +179,8 @@ struct ProcessClaim {
 
 **Myth**: Event sourcing is slow because it stores everything.
 
-**Reality**: 
+**Reality**:
+
 - EventCore achieves ~83 ops/sec with PostgreSQL - plenty for most business applications
 - Read models can be optimized for any query pattern
 - No complex joins needed - data is pre-projected
@@ -174,6 +191,7 @@ struct ProcessClaim {
 **Myth**: Storing all events is expensive.
 
 **Reality**: Let's do the math:
+
 - Average event size: ~1KB
 - 1000 events/day = 365K events/year = 365MB/year
 - S3 storage cost: ~$0.023/GB/month = $0.10/year
@@ -184,6 +202,7 @@ struct ProcessClaim {
 **Myth**: You can't delete data with event sourcing.
 
 **Reality**: EventCore provides better privacy controls:
+
 - Crypto-shredding: Delete encryption keys to make data unreadable
 - Event-level retention policies
 - Selective projection rebuilding
@@ -194,6 +213,7 @@ struct ProcessClaim {
 ### Large Binary Data
 
 For systems with large binary data (images, videos), use a hybrid approach:
+
 - Store metadata and operations as events
 - Store binaries in object storage (S3)
 - Best of both worlds
@@ -201,6 +221,7 @@ For systems with large binary data (images, videos), use a hybrid approach:
 ### Graph-Heavy Queries
 
 For social networks or recommendation engines:
+
 - Use EventCore for the write side
 - Project into graph databases for queries
 - Maintain consistency through event streams
@@ -208,6 +229,7 @@ For social networks or recommendation engines:
 ### Cache-Like Workloads
 
 For session storage or caching:
+
 - These aren't business operations
 - Use appropriate tools (Redis)
 - EventCore for business logic, Redis for caching
@@ -217,11 +239,13 @@ For session storage or caching:
 ### From Traditional Database
 
 **Good fit if**:
+
 - You need better audit trails
 - Business rules span multiple tables
 - You're already using event-driven architecture
 
 **Poor fit if**:
+
 - Current solution works well
 - No complex business rules
 - Just need basic CRUD
@@ -229,11 +253,13 @@ For session storage or caching:
 ### From Microservices
 
 **Good fit if**:
+
 - Struggling with distributed transactions
 - Need better consistency guarantees
 - Want to simplify architecture
 
 **Poor fit if**:
+
 - True service isolation is required
 - Different teams own different services
 - Services use different tech stacks
@@ -241,11 +267,13 @@ For session storage or caching:
 ## Performance Considerations
 
 EventCore is optimized for:
+
 - ✅ Correctness and consistency
-- ✅ Complex business operations  
+- ✅ Complex business operations
 - ✅ Audit and compliance needs
 
 EventCore is NOT optimized for:
+
 - ❌ Maximum throughput (~83 ops/sec with PostgreSQL)
 - ❌ Minimum latency (ms-level operations)
 - ❌ Large binary data
@@ -257,8 +285,9 @@ Instead of asking "Do I need event sourcing?", ask:
 **"Can I afford to throw away my business history?"**
 
 In an era of:
+
 - Regulatory scrutiny
-- Data-driven decisions  
+- Data-driven decisions
 - Machine learning opportunities
 - Debugging production issues
 - Changing business requirements
@@ -268,6 +297,7 @@ The answer is almost always **NO**.
 ## Decision Framework
 
 ### Start with EventCore for:
+
 - ✅ **Any line-of-business application** - Your default choice
 - ✅ **Multi-entity operations** - EventCore's sweet spot
 - ✅ **Financial systems** - Audit trail included
@@ -276,6 +306,7 @@ The answer is almost always **NO**.
 - ✅ **Domain-driven design** - Commands match your domain
 
 ### Consider Alternatives Only For:
+
 - 🤔 **Pure caching layers** - Use Redis alongside EventCore
 - 🤔 **Binary blob storage** - Hybrid approach with S3
 - 🤔 **>1000 ops/sec** - Add caching or consider specialized solutions
@@ -285,6 +316,7 @@ The answer is almost always **NO**.
 In 2024 and beyond, the question isn't "Why event sourcing?" but "Why would you throw away your business history?"
 
 EventCore makes event sourcing practical by:
+
 - Eliminating aggregate boundary problems
 - Providing multi-stream atomicity
 - Making it type-safe and simple

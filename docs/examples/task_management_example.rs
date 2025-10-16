@@ -679,9 +679,9 @@ impl Command for CompleteTaskCommand {
                 .iter()
                 .map(|dep_id| dep_id.stream_id())
                 .collect();
-            
+
             stream_resolver.add_streams(dependency_streams);
-            
+
             // For this example, we'll assume dependencies are satisfied
             // In a real system, you'd validate each dependency's status
         }
@@ -845,7 +845,7 @@ async fn create_user(
         email,
         role,
     };
-    
+
     executor.execute(&command, command, ExecutionOptions::default()).await?;
     Ok(())
 }
@@ -865,7 +865,7 @@ async fn create_project(
         owner_id,
         deadline,
     };
-    
+
     executor.execute(&command, command, ExecutionOptions::default()).await?;
     Ok(())
 }
@@ -1020,7 +1020,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 1: Create users
     println!("👥 Creating team members...");
-    
+
     let project_manager_id = types::UserId::try_new("sarah-pm".to_string()).unwrap();
     let developer_id = types::UserId::try_new("alex-dev".to_string()).unwrap();
     let designer_id = types::UserId::try_new("maya-design".to_string()).unwrap();
@@ -1033,7 +1033,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 2: Create project
     println!("\n🚀 Creating project...");
-    
+
     let project_id = types::ProjectId::try_new("mobile-app-v2".to_string()).unwrap();
     let project_name = types::ProjectName::try_new("Mobile App Redesign v2.0".to_string()).unwrap();
     let deadline = chrono::Utc::now() + chrono::Duration::days(90);
@@ -1051,7 +1051,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 3: Create tasks
     println!("\n📝 Creating tasks...");
-    
+
     let design_task_id = types::TaskId::try_new("design-wireframes".to_string()).unwrap();
     let dev_task_id = types::TaskId::try_new("implement-ui".to_string()).unwrap();
     let review_task_id = types::TaskId::try_new("code-review".to_string()).unwrap();
@@ -1086,7 +1086,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 4: Assign tasks
     println!("\n👩‍💼 Assigning tasks to team members...");
-    
+
     let assign_design = AssignTaskCommand {
         task_id: design_task_id.clone(),
         assignee_id: designer_id.clone(),
@@ -1107,7 +1107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 5: Start time tracking
     println!("\n⏱️  Starting time tracking session...");
-    
+
     let start_time = StartTimeEntryCommand {
         task_id: design_task_id.clone(),
         user_id: designer_id.clone(),
@@ -1119,7 +1119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 6: Try to start another time entry (should fail)
     println!("\n❌ Attempting to start second time entry (should fail)...");
-    
+
     let start_time_2 = StartTimeEntryCommand {
         task_id: dev_task_id.clone(),
         user_id: designer_id.clone(), // Same user
@@ -1133,7 +1133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 7: Complete a task
     println!("\n✅ Completing design task...");
-    
+
     let complete_design = CompleteTaskCommand {
         task_id: design_task_id.clone(),
         completed_by: designer_id.clone(),
@@ -1146,7 +1146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 8: Try to assign task to overloaded user
     println!("\n⚠️  Testing assignment limits...");
-    
+
     // Create multiple tasks and try to assign them all to one person
     for i in 1..=12 {
         let task_id = types::TaskId::try_new(format!("bulk-task-{}", i)).unwrap();
@@ -1202,7 +1202,7 @@ mod tests {
         // Create project and user first
         let project_id = types::ProjectId::try_new("test-project".to_string()).unwrap();
         let user_id = types::UserId::try_new("test-user".to_string()).unwrap();
-        
+
         create_project(
             &executor,
             project_id.clone(),
@@ -1237,7 +1237,7 @@ mod tests {
 
         let project_id = types::ProjectId::try_new("test-project".to_string()).unwrap();
         let user_id = types::UserId::try_new("test-user".to_string()).unwrap();
-        
+
         create_project(
             &executor,
             project_id.clone(),
@@ -1271,7 +1271,7 @@ mod tests {
             };
 
             let result = executor.execute(&assign_task, assign_task, ExecutionOptions::default()).await;
-            
+
             if i <= 10 {
                 assert!(result.is_ok(), "Assignment {} should succeed", i);
             } else {
@@ -1288,7 +1288,7 @@ mod tests {
 
         let user_id = types::UserId::try_new("test-user".to_string()).unwrap();
         let task_id = types::TaskId::try_new("test-task".to_string()).unwrap();
-        
+
         create_user(&executor, user_id.clone(), "Test User".to_string(), "test@example.com".to_string(), "Developer".to_string()).await.unwrap();
 
         // Start first time entry

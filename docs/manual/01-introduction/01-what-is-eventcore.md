@@ -35,7 +35,7 @@ EventCore introduces **dynamic consistency boundaries** - each command defines w
 struct TransferMoney {
     #[stream]
     from_account: StreamId,  // Read and write this stream
-    #[stream]  
+    #[stream]
     to_account: StreamId,    // Read and write this stream too
     amount: Money,
 }
@@ -50,6 +50,7 @@ struct TransferMoney {
 ## Key Concepts
 
 ### 1. **Event Streams**
+
 Instead of aggregates, EventCore uses streams - ordered sequences of events identified by a StreamId:
 
 ```rust
@@ -60,6 +61,7 @@ let order_123 = StreamId::from_static("order-123");
 ```
 
 ### 2. **Multi-Stream Commands**
+
 Commands can read from and write to multiple streams atomically:
 
 ```rust
@@ -76,6 +78,7 @@ struct FulfillOrder {
 ```
 
 ### 3. **Type-Safe Stream Access**
+
 The macro system ensures you can only write to streams you declared:
 
 ```rust
@@ -95,6 +98,7 @@ let events = vec![
 ```
 
 ### 4. **Optimistic Concurrency Control**
+
 EventCore tracks stream versions to detect conflicts:
 
 1. Command reads streams at specific versions

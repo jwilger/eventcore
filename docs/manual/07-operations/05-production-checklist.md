@@ -7,6 +7,7 @@ This chapter provides a comprehensive checklist for deploying EventCore applicat
 ### Security
 
 #### Authentication and Authorization
+
 - [ ] **JWT secret key** configured and secured
 - [ ] **Token expiration** properly configured
 - [ ] **Role-based access control** implemented and tested
@@ -52,7 +53,7 @@ pub struct SecurityAuditor;
 impl SecurityAuditor {
     pub fn audit_configuration(config: &AppConfig) -> SecurityAudit {
         let mut findings = Vec::new();
-        
+
         // Check JWT configuration
         if config.jwt.secret_key.len() < 32 {
             findings.push(SecurityFinding {
@@ -62,7 +63,7 @@ impl SecurityAuditor {
                 recommendation: "Use a secret key of at least 256 bits (32 bytes)".to_string(),
             });
         }
-        
+
         // Check CORS configuration
         if config.cors.allowed_origins.contains(&"*".to_string()) {
             findings.push(SecurityFinding {
@@ -72,7 +73,7 @@ impl SecurityAuditor {
                 recommendation: "Restrict CORS to specific trusted domains".to_string(),
             });
         }
-        
+
         // Check HTTPS enforcement
         if !config.server.force_https {
             findings.push(SecurityFinding {
@@ -82,7 +83,7 @@ impl SecurityAuditor {
                 recommendation: "Enable HTTPS enforcement for all endpoints".to_string(),
             });
         }
-        
+
         // Check rate limiting
         if config.rate_limiting.requests_per_minute == 0 {
             findings.push(SecurityFinding {
@@ -92,13 +93,14 @@ impl SecurityAuditor {
                 recommendation: "Configure appropriate rate limits for API endpoints".to_string(),
             });
         }
-        
+
         SecurityAudit { findings }
     }
 }
 ```
 
 #### Database Security
+
 - [ ] **Database credentials** stored in secrets management
 - [ ] **Connection encryption** (SSL/TLS) enabled
 - [ ] **Database user permissions** follow principle of least privilege
@@ -118,18 +120,19 @@ SHOW ssl;
 SELECT datname, datacl FROM pg_database;
 
 -- Check table-level permissions
-SELECT schemaname, tablename, tableowner, tablespace, hasindexes, hasrules, hastriggers 
-FROM pg_tables 
+SELECT schemaname, tablename, tableowner, tablespace, hasindexes, hasrules, hastriggers
+FROM pg_tables
 WHERE schemaname = 'public';
 
 -- Verify no wildcard permissions
-SELECT * FROM information_schema.table_privileges 
+SELECT * FROM information_schema.table_privileges
 WHERE grantee = 'PUBLIC';
 ```
 
 ### Performance
 
 #### Resource Limits
+
 - [ ] **CPU limits** set appropriately
 - [ ] **Memory limits** configured with buffer
 - [ ] **Database connection pool** sized correctly
@@ -146,16 +149,16 @@ metadata:
   namespace: eventcore
 spec:
   limits:
-  - type: Container
-    default:
-      memory: "512Mi"
-      cpu: "500m"
-    defaultRequest:
-      memory: "256Mi"
-      cpu: "250m"
-    max:
-      memory: "2Gi"
-      cpu: "2000m"
+    - type: Container
+      default:
+        memory: "512Mi"
+        cpu: "500m"
+      defaultRequest:
+        memory: "256Mi"
+        cpu: "250m"
+      max:
+        memory: "2Gi"
+        cpu: "2000m"
 ---
 apiVersion: v1
 kind: ResourceQuota
@@ -172,6 +175,7 @@ spec:
 ```
 
 #### Performance Benchmarks
+
 - [ ] **Load testing** completed with realistic scenarios
 - [ ] **Performance baselines** established
 - [ ] **Scalability limits** identified
@@ -195,31 +199,31 @@ pub struct PerformanceTargets {
 impl PerformanceValidator {
     pub async fn validate_performance(&self) -> Result<PerformanceValidationResult, ValidationError> {
         let mut results = PerformanceValidationResult::default();
-        
+
         // Test command latency
         let latency_test = self.test_command_latency().await?;
         results.latency_passed = latency_test.p95_latency_ms <= self.target_metrics.max_p95_latency_ms;
-        
+
         // Test throughput
         let throughput_test = self.test_throughput().await?;
         results.throughput_passed = throughput_test.requests_per_second >= self.target_metrics.min_throughput_rps;
-        
+
         // Test error rate
         let error_test = self.test_error_rate().await?;
         results.error_rate_passed = error_test.error_rate <= self.target_metrics.max_error_rate;
-        
+
         // Test memory usage
         let memory_test = self.test_memory_usage().await?;
         results.memory_passed = memory_test.peak_memory_mb <= self.target_metrics.max_memory_usage_mb;
-        
-        results.overall_passed = results.latency_passed && 
-                                 results.throughput_passed && 
-                                 results.error_rate_passed && 
+
+        results.overall_passed = results.latency_passed &&
+                                 results.throughput_passed &&
+                                 results.error_rate_passed &&
                                  results.memory_passed;
-        
+
         Ok(results)
     }
-    
+
     async fn test_command_latency(&self) -> Result<LatencyTestResult, ValidationError> {
         // Implement latency testing
         // Execute sample commands and measure response times
@@ -228,7 +232,7 @@ impl PerformanceValidator {
             avg_latency_ms: 25,
         })
     }
-    
+
     async fn test_throughput(&self) -> Result<ThroughputTestResult, ValidationError> {
         // Implement throughput testing
         // Execute concurrent commands and measure RPS
@@ -252,6 +256,7 @@ pub struct PerformanceValidationResult {
 ### Reliability
 
 #### High Availability
+
 - [ ] **Multiple replicas** deployed
 - [ ] **Pod disruption budgets** configured
 - [ ] **Health checks** implemented and tested
@@ -286,26 +291,27 @@ spec:
   template:
     spec:
       containers:
-      - name: eventcore-app
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 8080
-          initialDelaySeconds: 10
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 3
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-          initialDelaySeconds: 60
-          periodSeconds: 30
-          timeoutSeconds: 5
-          failureThreshold: 3
+        - name: eventcore-app
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
 ```
 
 #### Backup and Recovery
+
 - [ ] **Automated backups** configured and tested
 - [ ] **Backup verification** automated
 - [ ] **Recovery procedures** documented and tested
@@ -320,28 +326,28 @@ pub struct BackupValidator;
 impl BackupValidator {
     pub async fn validate_backup_system(&self) -> Result<BackupValidationResult, ValidationError> {
         let mut result = BackupValidationResult::default();
-        
+
         // Test backup creation
         result.backup_creation = self.test_backup_creation().await?;
-        
+
         // Test backup verification
         result.backup_verification = self.test_backup_verification().await?;
-        
+
         // Test restore functionality
         result.restore_capability = self.test_restore_capability().await?;
-        
+
         // Test backup schedule
         result.backup_schedule = self.verify_backup_schedule().await?;
-        
+
         // Test retention policy
         result.retention_policy = self.verify_retention_policy().await?;
-        
-        result.overall_passed = result.backup_creation && 
-                                result.backup_verification && 
-                                result.restore_capability && 
-                                result.backup_schedule && 
+
+        result.overall_passed = result.backup_creation &&
+                                result.backup_verification &&
+                                result.restore_capability &&
+                                result.backup_schedule &&
                                 result.retention_policy;
-        
+
         Ok(result)
     }
 }
@@ -360,6 +366,7 @@ pub struct BackupValidationResult {
 ### Monitoring and Observability
 
 #### Metrics Collection
+
 - [ ] **Application metrics** exported to Prometheus
 - [ ] **Business metrics** tracked
 - [ ] **Infrastructure metrics** monitored
@@ -375,27 +382,27 @@ pub struct MetricsValidator {
 impl MetricsValidator {
     pub async fn validate_metrics(&self) -> Result<MetricsValidationResult, ValidationError> {
         let mut result = MetricsValidationResult::default();
-        
+
         // Check core application metrics
         result.core_metrics = self.check_core_metrics().await?;
-        
+
         // Check business metrics
         result.business_metrics = self.check_business_metrics().await?;
-        
+
         // Check infrastructure metrics
         result.infrastructure_metrics = self.check_infrastructure_metrics().await?;
-        
+
         // Verify metric freshness
         result.metrics_current = self.check_metrics_freshness().await?;
-        
-        result.overall_passed = result.core_metrics && 
-                                result.business_metrics && 
-                                result.infrastructure_metrics && 
+
+        result.overall_passed = result.core_metrics &&
+                                result.business_metrics &&
+                                result.infrastructure_metrics &&
                                 result.metrics_current;
-        
+
         Ok(result)
     }
-    
+
     async fn check_core_metrics(&self) -> Result<bool, ValidationError> {
         let required_metrics = vec![
             "eventcore_commands_total",
@@ -404,19 +411,20 @@ impl MetricsValidator {
             "eventcore_active_streams",
             "eventcore_projection_lag_seconds",
         ];
-        
+
         for metric in required_metrics {
             if !self.prometheus_client.metric_exists(metric).await? {
                 return Ok(false);
             }
         }
-        
+
         Ok(true)
     }
 }
 ```
 
 #### Logging
+
 - [ ] **Structured logging** implemented
 - [ ] **Log aggregation** configured
 - [ ] **Log retention** policies set
@@ -425,6 +433,7 @@ impl MetricsValidator {
 - [ ] **Sensitive data** excluded from logs
 
 #### Alerting
+
 - [ ] **Critical alerts** configured
 - [ ] **Warning alerts** tuned to reduce noise
 - [ ] **Alert routing** configured for different severities
@@ -434,36 +443,37 @@ impl MetricsValidator {
 ```yaml
 # Alerting validation checklist
 groups:
-- name: eventcore-critical
-  rules:
-  - alert: EventCoreDown
-    expr: up{job="eventcore"} == 0
-    for: 1m
-    labels:
-      severity: critical
-    annotations:
-      summary: "EventCore service is down"
-      
-  - alert: HighErrorRate
-    expr: rate(eventcore_command_errors_total[5m]) / rate(eventcore_commands_total[5m]) > 0.05
-    for: 3m
-    labels:
-      severity: critical
-    annotations:
-      summary: "High error rate detected"
-      
-  - alert: DatabaseConnectionFailure
-    expr: eventcore_connection_pool_errors_total > 0
-    for: 1m
-    labels:
-      severity: critical
-    annotations:
-      summary: "Database connection issues"
+  - name: eventcore-critical
+    rules:
+      - alert: EventCoreDown
+        expr: up{job="eventcore"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "EventCore service is down"
+
+      - alert: HighErrorRate
+        expr: rate(eventcore_command_errors_total[5m]) / rate(eventcore_commands_total[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate detected"
+
+      - alert: DatabaseConnectionFailure
+        expr: eventcore_connection_pool_errors_total > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection issues"
 ```
 
 ## Deployment Checklist
 
 ### Environment Configuration
+
 - [ ] **Environment variables** properly set
 - [ ] **Secrets** configured and mounted
 - [ ] **Config maps** updated
@@ -472,6 +482,7 @@ groups:
 - [ ] **Network policies** configured
 
 ### Database Setup
+
 - [ ] **Database migrations** applied and verified
 - [ ] **Database indexes** created and optimized
 - [ ] **Database monitoring** configured
@@ -480,6 +491,7 @@ groups:
 - [ ] **Read replicas** configured if needed
 
 ### Infrastructure
+
 - [ ] **DNS records** configured
 - [ ] **Load balancer** configured
 - [ ] **SSL certificates** installed and valid
@@ -490,6 +502,7 @@ groups:
 ## Post-Deployment Verification
 
 ### Functional Testing
+
 - [ ] **Smoke tests** pass
 - [ ] **Critical user journeys** work
 - [ ] **API endpoints** respond correctly
@@ -507,36 +520,36 @@ pub struct PostDeploymentValidator {
 impl PostDeploymentValidator {
     pub async fn run_validation_suite(&self) -> Result<ValidationSuite, ValidationError> {
         let mut suite = ValidationSuite::default();
-        
+
         // Test 1: Health check
         suite.health_check = self.test_health_endpoint().await?;
-        
+
         // Test 2: Authentication
         suite.authentication = self.test_authentication().await?;
-        
+
         // Test 3: Core functionality
         suite.core_functionality = self.test_core_functionality().await?;
-        
+
         // Test 4: Performance
         suite.performance = self.test_basic_performance().await?;
-        
+
         // Test 5: Error handling
         suite.error_handling = self.test_error_handling().await?;
-        
-        suite.overall_passed = suite.health_check && 
-                               suite.authentication && 
-                               suite.core_functionality && 
-                               suite.performance && 
+
+        suite.overall_passed = suite.health_check &&
+                               suite.authentication &&
+                               suite.core_functionality &&
+                               suite.performance &&
                                suite.error_handling;
-        
+
         Ok(suite)
     }
-    
+
     async fn test_health_endpoint(&self) -> Result<bool, ValidationError> {
         let response = reqwest::get(&format!("{}/health", self.base_url)).await?;
         Ok(response.status().is_success())
     }
-    
+
     async fn test_authentication(&self) -> Result<bool, ValidationError> {
         // Test with valid token
         let client = reqwest::Client::new();
@@ -545,20 +558,20 @@ impl PostDeploymentValidator {
             .header("Authorization", format!("Bearer {}", self.auth_token))
             .send()
             .await?;
-        
+
         if !response.status().is_success() {
             return Ok(false);
         }
-        
+
         // Test without token (should fail)
         let response = client
             .get(&format!("{}/api/v1/test", self.base_url))
             .send()
             .await?;
-        
+
         Ok(response.status() == 401)
     }
-    
+
     async fn test_core_functionality(&self) -> Result<bool, ValidationError> {
         // Test a simple command execution
         let client = reqwest::Client::new();
@@ -567,14 +580,14 @@ impl PostDeploymentValidator {
             "first_name": "Test",
             "last_name": "User"
         });
-        
+
         let response = client
             .post(&format!("{}/api/v1/users", self.base_url))
             .header("Authorization", format!("Bearer {}", self.auth_token))
             .json(&create_user_payload)
             .send()
             .await?;
-        
+
         Ok(response.status().is_success())
     }
 }
@@ -591,6 +604,7 @@ pub struct ValidationSuite {
 ```
 
 ### Performance Validation
+
 - [ ] **Response times** within acceptable limits
 - [ ] **Throughput** meets requirements
 - [ ] **Resource usage** within limits
@@ -599,6 +613,7 @@ pub struct ValidationSuite {
 - [ ] **Database performance** optimal
 
 ### Monitoring Validation
+
 - [ ] **Metrics** flowing to monitoring system
 - [ ] **Logs** being collected and indexed
 - [ ] **Traces** visible in tracing system
@@ -609,6 +624,7 @@ pub struct ValidationSuite {
 ## Ongoing Operations Checklist
 
 ### Daily Checks
+
 - [ ] **System health** green across all services
 - [ ] **Error rates** within acceptable thresholds
 - [ ] **Performance metrics** meeting SLOs
@@ -617,6 +633,7 @@ pub struct ValidationSuite {
 - [ ] **Security alerts** reviewed
 
 ### Weekly Checks
+
 - [ ] **Backup verification** completed successfully
 - [ ] **Performance trends** analyzed
 - [ ] **Capacity planning** reviewed
@@ -625,6 +642,7 @@ pub struct ValidationSuite {
 - [ ] **Documentation** updated as needed
 
 ### Monthly Checks
+
 - [ ] **Disaster recovery** procedures tested
 - [ ] **Security audit** completed
 - [ ] **Performance benchmarks** updated
@@ -760,6 +778,7 @@ echo "✅ All health checks passed!"
 ## Emergency Procedures
 
 ### Incident Response
+
 1. **Assess severity** using incident severity matrix
 2. **Activate incident response team** if critical
 3. **Create incident tracking** (ticket/channel)
@@ -769,6 +788,7 @@ echo "✅ All health checks passed!"
 7. **Document lessons learned** and improvements
 
 ### Rollback Procedures
+
 ```bash
 #!/bin/bash
 # emergency-rollback.sh
@@ -808,6 +828,7 @@ Production readiness checklist for EventCore:
 - ✅ **Operations** - Deployment validation, health checks, incident response
 
 Key principles:
+
 1. **Validate everything** - Don't assume anything works in production
 2. **Automate checks** - Use scripts and tools for consistent validation
 3. **Monitor continuously** - Track all critical metrics and logs

@@ -95,16 +95,19 @@ graph TB
 **Purpose:** Pluggable storage abstraction supporting atomic multi-stream operations.
 
 **Core Operations:**
+
 - **Read**: Query events from one or more streams
 - **Atomic Append**: Write events to multiple streams atomically with version checking
 
 **Key Characteristics:**
+
 - Atomicity mechanisms internal to backend implementations (PostgreSQL ACID, in-memory locks)
 - Version-based optimistic concurrency control (ADR-007)
 - Metadata preservation for audit and tracing (ADR-005)
 - Separate EventSubscription trait for projection building
 
 **Storage Backend Examples:**
+
 - `eventcore-postgres`: Production backend using PostgreSQL ACID transactions
 - `eventcore-memory`: In-memory backend for testing with optional chaos injection
 
@@ -117,22 +120,26 @@ graph TB
 **Components:**
 
 **Command Macro (`#[derive(Command)]`):**
+
 - Generates infrastructure boilerplate from `#[stream]` field attributes
 - Creates phantom types for compile-time stream tracking
 - Implements CommandStreams trait (infrastructure)
 - Enables `emit!` macro for type-safe event emission
 
 **CommandStreams Trait (Macro-Generated):**
+
 - Extracts stream IDs from command fields
 - Manages phantom types for compile-time access control
 - Pure infrastructure - no business logic
 
 **CommandLogic Trait (Developer-Implemented):**
+
 - `apply(state, event)`: Reconstruct state from event history
 - `handle(state, context)`: Validate business rules and produce events
 - Domain-specific logic only
 
 **StreamResolver Trait (Optional, ADR-009):**
+
 - `resolve_additional_streams(state)`: Discover streams at runtime based on state
 - Enables state-dependent stream requirements (payment processing, order fulfillment)
 - Integrates with static declarations for hybrid static/dynamic stream sets
@@ -191,6 +198,7 @@ sequenceDiagram
 ```
 
 **Retry Logic:**
+
 - Automatic retry on ConcurrencyError (version conflicts)
 - Exponential backoff reduces contention (10ms, 20ms, 40ms, ...)
 - Configurable max attempts and backoff strategy
@@ -207,16 +215,19 @@ sequenceDiagram
 **Patterns:**
 
 **Validated Domain Types:**
+
 - `StreamId`, `EventId`, `CorrelationId`, `CausationId` - all validated newtypes using `nutype`
 - Construction returns Result with descriptive validation errors
 - Types guarantee validity after construction (parse, don't validate)
 
 **Phantom Types:**
+
 - Compile-time stream access control in commands
 - `StreamWrite<StreamSet, Event>` prevents writing to undeclared streams
 - Zero runtime cost (erased by compiler)
 
 **Total Functions:**
+
 - All public APIs return Result types
 - No unwrap/expect in library code
 - Error paths explicit in signatures
@@ -257,10 +268,12 @@ graph TD
 ```
 
 **Error Classification:**
+
 - **Retriable Errors**: ConcurrencyError, network timeouts → automatic retry
 - **Permanent Errors**: ValidationError, BusinessRuleViolation → immediate failure
 
 **Error Context:**
+
 - Correlation ID: Links related operations across command executions
 - Causation Chain: Tracks causal relationships between commands and events
 - Operation Context: Stream IDs, command type, diagnostic information
@@ -273,22 +286,24 @@ graph TD
 
 **Standard Metadata Fields:**
 
-| Field | Type | Purpose |
-|-------|------|---------|
-| Event ID | UUIDv7 | Globally unique, time-ordered identifier |
-| Stream ID | StreamId | Stream this event belongs to |
-| Stream Version | u64 | Position within stream (monotonic) |
-| Timestamp | DateTime | Commit time (not command initiation) |
+| Field          | Type          | Purpose                                    |
+| -------------- | ------------- | ------------------------------------------ |
+| Event ID       | UUIDv7        | Globally unique, time-ordered identifier   |
+| Stream ID      | StreamId      | Stream this event belongs to               |
+| Stream Version | u64           | Position within stream (monotonic)         |
+| Timestamp      | DateTime      | Commit time (not command initiation)       |
 | Correlation ID | CorrelationId | Groups events from same business operation |
-| Causation ID | CausationId | Identifies immediate cause (command/event) |
+| Causation ID   | CausationId   | Identifies immediate cause (command/event) |
 
 **Custom Metadata:**
+
 - Generic type parameter `M: Serialize + DeserializeOwned`
 - Applications define domain-specific metadata structures
 - Type-safe extension point maintaining ADR-003 principles
 - Examples: actor attribution, tenant IDs, compliance data
 
 **Immutability Guarantee:**
+
 - Once committed, metadata never changes
 - Storage backends enforce integrity (constraints, append-only)
 - Audit trail integrity for compliance
@@ -351,6 +366,7 @@ impl CommandLogic for TransferMoney {
 **3. Automatic Retry on Conflict:**
 
 If concurrent command committed to `from_account` between read and write:
+
 - ConcurrencyError returned by EventStore
 - Executor applies exponential backoff (10ms first retry)
 - Return to Phase 2: re-read both streams with fresh versions
@@ -480,16 +496,19 @@ Errors flow through layers with context accumulation:
 ### Correctness Guarantees
 
 **Multi-Stream Atomicity:**
+
 - All events written or none - no partial updates
 - Achieved via storage-native transactions (PostgreSQL ACID)
 - Extends to dynamically discovered streams
 
 **Optimistic Concurrency Control:**
+
 - Version conflicts detected 100% of the time
 - Atomic version checking prevents time-of-check-to-time-of-use races
 - No lost updates possible
 
 **Type Safety:**
+
 - Illegal states unrepresentable at compile time
 - Validated domain types prevent invalid data
 - Total functions ensure explicit error handling
@@ -501,28 +520,33 @@ Errors flow through layers with context accumulation:
 EventCore's architecture prioritizes correctness over raw throughput, with performance goals that reflect real-world business operation requirements:
 
 **Target Latency (Under Normal Load):**
+
 - Single-stream commands: <50ms P95 (typical user operation response time requirement)
 - Multi-stream commands: <100ms P95 (reflects additional coordination overhead)
 - Batch operations: Sub-second for 1000+ events (bulk processing efficiency)
 
 **Throughput Expectations:**
+
 - Low contention scenarios: Hundreds of commands/second per instance (typical business workload)
 - Moderate contention: Automatic retry maintains throughput with increased latency
 - High contention: Stream partitioning and application design required for scale
 
 **Scalability Characteristics:**
+
 - Horizontal scaling via read replicas for read-heavy projections
 - Vertical scaling for write throughput (limited by storage backend transaction capacity)
 - Stream-level parallelism (different streams = concurrent execution)
 - Command-level parallelism (optimistic concurrency allows concurrent attempts)
 
 **Design Trade-offs:**
+
 - Correctness guaranteed even under extreme contention (no shortcuts)
 - Multi-stream atomicity maintained at all scales (no degradation)
 - Performance optimization within correctness constraints (caching, batching, read replicas)
 - Exponential backoff reduces contention on retry (prioritizes success over immediate completion)
 
 **Contention Management:**
+
 - Exponential backoff with jitter prevents thundering herd
 - Hot stream detection enables targeted optimization (partitioning, caching)
 - Configurable retry policies adapt to application-specific contention patterns
@@ -531,17 +555,20 @@ EventCore's architecture prioritizes correctness over raw throughput, with perfo
 ### Developer Experience
 
 **Minimal Boilerplate:**
+
 - `#[derive(Command)]` eliminates infrastructure code
 - Developers write only `apply()` and `handle()` methods
 - Automatic retry - zero manual retry logic
 - Typical command: <50 lines of code
 
 **Compile-Time Safety:**
+
 - Invalid stream access caught by compiler
 - Type errors provide clear guidance
 - `emit!` macro ensures type-safe event emission
 
 **Clear Error Messages:**
+
 - Structured errors with actionable context
 - Version conflicts identify which streams conflicted
 - Business rule violations explain which rule failed
@@ -549,21 +576,25 @@ EventCore's architecture prioritizes correctness over raw throughput, with perfo
 ### Extensibility
 
 **Storage Backends:**
+
 - EventStore trait enables custom backends
 - PostgreSQL and in-memory implementations provided
 - Community backends possible (SQLite, EventStoreDB, etc.)
 
 **Custom Metadata:**
+
 - Generic type parameter for application-specific metadata
 - Type-safe extension without framework assumptions
 - Supports domain-specific audit, compliance, analytics
 
 **Retry Policies:**
+
 - Configurable max attempts, backoff strategy
 - Custom policies for specific command types
 - Circuit breakers for sustained contention
 
 **Dynamic Discovery:**
+
 - StreamResolver trait for runtime stream determination
 - Supports complex state-dependent workflows
 - Optional - simple commands remain simple
@@ -612,6 +643,7 @@ graph TB
 ```
 
 **Components:**
+
 - **Web API:** Commands received from HTTP requests, executed via executor
 - **Background Workers:** Long-running processes executing scheduled commands
 - **PostgreSQL:** Production event store with ACID transactions
@@ -642,6 +674,7 @@ graph TB
 ```
 
 **Characteristics:**
+
 - In-memory backend for fast tests without external dependencies
 - Chaos injection for testing failure scenarios
 - Same EventStore trait - tests verify real behavior
@@ -649,12 +682,14 @@ graph TB
 ### Infrastructure Requirements
 
 **Production (PostgreSQL):**
+
 - PostgreSQL 15+ for ACID transaction support
 - Connection pooling for concurrent command execution
 - Indexes on stream_id, event_id, timestamp for query performance
 - Separate projection storage (application choice)
 
 **Development:**
+
 - In-memory backend sufficient for most testing
 - Docker Compose for local PostgreSQL if needed
 - Nix development environment with all tools
@@ -664,16 +699,19 @@ graph TB
 ### What's Required
 
 **Storage Backends Must Provide:**
+
 - Atomic multi-stream append operations
 - Version-based optimistic concurrency control
 - Metadata preservation (standard + custom)
 - Event ordering guarantees
 
 **Commands Must Implement:**
+
 - CommandLogic trait (apply, handle)
 - Valid stream declarations (static via `#[stream]` or dynamic via StreamResolver)
 
 **Applications Must Handle:**
+
 - Correlation/causation ID generation or propagation
 - Custom metadata definition (if needed)
 - Retry policy configuration for deployment environment
@@ -681,11 +719,13 @@ graph TB
 ### What's Optional
 
 **Not Required:**
+
 - Dynamic stream discovery (StreamResolver) - only when genuinely state-dependent
 - Custom metadata - standard fields sufficient for many use cases
 - Event subscriptions - only if building projections
 
 **Configurable:**
+
 - Retry policy (max attempts, backoff strategy)
 - Event store backend (PostgreSQL, in-memory, custom)
 - Async runtime (Tokio, async-std)
@@ -694,6 +734,7 @@ graph TB
 ### Extension Points
 
 **Well-Defined Extension Boundaries:**
+
 - **EventStore Trait:** Implement custom storage backends
 - **Custom Metadata Type:** Define application-specific metadata structures
 - **StreamResolver Trait:** Implement dynamic stream discovery
@@ -705,6 +746,7 @@ graph TB
 ### Storage Backend Integration
 
 **Trait Contract:**
+
 ```rust
 // Conceptual - shows WHAT, not HOW
 trait EventStore {
@@ -715,28 +757,33 @@ trait EventStore {
 ```
 
 **Implementation Requirements:**
+
 - Atomic append across multiple streams
 - Version checking within transaction boundary
 - Metadata preservation
 - Error classification (retriable vs permanent)
 
 **Provided Implementations:**
+
 - `eventcore-postgres`: Production backend (separate crate)
 - `eventcore-memory`: Testing backend (separate crate)
 
 ### Macro Crate Integration
 
 **Procedural Macro Distribution:**
+
 - `eventcore-macros` crate with `proc-macro = true`
 - Generated code references core eventcore types
 - Versioned in lockstep with core library
 
 **Generated Artifacts:**
+
 - CommandStreams trait implementation
 - Phantom types for stream access control
 - Integration with emit! macro
 
 **Developer View:**
+
 ```rust
 #[derive(Command)]  // From eventcore-macros
 struct MyCommand {
@@ -748,6 +795,7 @@ struct MyCommand {
 ### Application Integration Patterns
 
 **Web Framework Integration (Axum example):**
+
 ```rust
 // Handler receives command, uses executor
 async fn transfer_handler(
@@ -760,6 +808,7 @@ async fn transfer_handler(
 ```
 
 **Background Job Processing:**
+
 ```rust
 // Worker executes scheduled commands
 async fn process_scheduled_commands(executor: &CommandExecutor) {
@@ -770,6 +819,7 @@ async fn process_scheduled_commands(executor: &CommandExecutor) {
 ```
 
 **Observability Integration:**
+
 - Correlation IDs integrate with OpenTelemetry spans
 - Error context supports structured logging
 - Metrics track retry rates, conflict patterns
@@ -780,17 +830,20 @@ async fn process_scheduled_commands(executor: &CommandExecutor) {
 ### Potential Enhancements
 
 **Performance Optimizations:**
+
 - Snapshot support for long-lived streams
 - Read-through caching for hot streams
 - Batch command execution
 - Adaptive retry policies based on observed conflict rates
 
 **Enhanced Discovery:**
+
 - Discovery hints for executor optimization
 - Static analysis tools for anti-pattern detection
 - Lazy stream loading (defer reading until needed)
 
 **Observability:**
+
 - Circuit breakers for sustained high conflict rates
 - Monitoring dashboards for contention analysis
 - Performance profiling integration
@@ -798,12 +851,14 @@ async fn process_scheduled_commands(executor: &CommandExecutor) {
 ### Architectural Stability
 
 **Core Commitments:**
+
 - Multi-stream atomicity remains foundational guarantee
 - Type-driven development patterns continue throughout
 - Automatic retry on version conflicts non-negotiable
 - EventStore trait remains primary abstraction boundary
 
 **Evolution Strategy:**
+
 - Additive changes preferred (new traits, optional features)
 - Breaking changes require major version bump
 - Backward compatibility via feature flags where possible

@@ -5,6 +5,7 @@ This comprehensive tutorial walks you through building a complete task managemen
 ## What We'll Build
 
 A task management system with:
+
 - Creating and managing tasks
 - Assigning tasks to users
 - Comments and activity tracking
@@ -29,6 +30,7 @@ A task management system with:
 ## Learning Outcomes
 
 By the end of this tutorial, you'll understand:
+
 - How to model domains with events
 - Using EventCore's macro system
 - Building multi-stream commands
@@ -38,6 +40,7 @@ By the end of this tutorial, you'll understand:
 ## Code Repository
 
 The complete code for this tutorial is available at:
+
 ```bash
 git clone https://github.com/your-org/eventcore-task-tutorial
 cd eventcore-task-tutorial
