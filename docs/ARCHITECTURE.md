@@ -1,8 +1,8 @@
 # EventCore Architecture
 
-**Document Version:** 1.0
-**Date:** 2025-10-13
-**Phase:** 4 - Architecture Synthesis
+**Document Version:** 1.1
+**Date:** 2025-10-17
+**Phase:** 4 - Architecture Synthesis (Updated for ADR-011)
 
 ## Overview
 
@@ -118,8 +118,8 @@ graph TB
 
 **Storage Backend Examples:**
 
-- `eventcore-postgres`: Production backend using PostgreSQL ACID transactions
-- `eventcore-memory`: In-memory backend for testing with optional chaos injection
+- `eventcore-postgres`: Production backend using PostgreSQL ACID transactions (separate crate)
+- `InMemoryEventStore`: In-memory backend for testing with optional chaos injection (included in main `eventcore` crate)
 
 **Why This Design:** Pushes atomicity complexity into battle-tested storage layers where it belongs, keeping library code simple while enabling backend flexibility.
 
@@ -713,8 +713,10 @@ graph TB
 
 **Characteristics:**
 
-- In-memory backend for fast tests without external dependencies
-- Chaos injection for testing failure scenarios
+- `InMemoryEventStore` included in main `eventcore` crate (ADR-011)
+- Zero external dependencies - uses only `std::collections`
+- Fast tests without Docker or PostgreSQL setup
+- Optional chaos injection for testing failure scenarios
 - Same EventStore trait - tests verify real behavior
 
 ### Infrastructure Requirements
@@ -728,8 +730,9 @@ graph TB
 
 **Development:**
 
-- In-memory backend sufficient for most testing
-- Docker Compose for local PostgreSQL if needed
+- `InMemoryEventStore` from main crate sufficient for most testing
+- Single dependency (`cargo add eventcore`) provides complete working system
+- Docker Compose for local PostgreSQL if needed for integration tests
 - Nix development environment with all tools
 
 ## Design Constraints
@@ -803,8 +806,8 @@ trait EventStore {
 
 **Provided Implementations:**
 
-- `eventcore-postgres`: Production backend (separate crate)
-- `eventcore-memory`: Testing backend (separate crate)
+- `eventcore-postgres`: Production backend with ACID transactions (separate crate for heavyweight dependencies)
+- `InMemoryEventStore`: Testing backend (included in main `eventcore` crate per ADR-011)
 
 ### Macro Crate Integration
 
@@ -918,6 +921,7 @@ This architecture synthesizes the following accepted ADRs:
 - **ADR-008:** Command Executor and Retry Logic
 - **ADR-009:** Stream Resolver Design for Dynamic Discovery
 - **ADR-010:** Free Function API Design Philosophy
+- **ADR-011:** In-Memory Event Store Crate Location
 
 Refer to individual ADRs for detailed rationale, alternatives considered, and specific implementation guidance.
 

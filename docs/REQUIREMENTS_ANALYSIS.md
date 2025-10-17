@@ -330,12 +330,13 @@ EventCore addresses the fundamental limitation of traditional event sourcing: **
 - Adapter SHALL be distributed as separate `eventcore-postgres` crate
 - WHY: PostgreSQL is primary production storage backend
 
-**IR-1.2 In-Memory Adapter**
+**IR-1.2 In-Memory Adapter** _(Superseded by ADR-011)_
 
+- ~~Adapter SHALL be distributed as separate `eventcore-memory` crate~~
+- **UPDATE:** `InMemoryEventStore` is now included in the main `eventcore` crate (see ADR-011)
 - Adapter SHALL provide fast in-memory storage for testing
 - Adapter SHALL support optional chaos injection
-- Adapter SHALL be distributed as separate `eventcore-memory` crate
-- WHY: Fast tests without external dependencies
+- WHY: Fast tests without external dependencies; integration in main crate simplifies testing and reduces dependency management overhead
 
 **IR-1.3 Adapter Extension**
 
