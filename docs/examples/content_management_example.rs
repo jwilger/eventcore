@@ -2,7 +2,7 @@
 //!
 //! This example demonstrates EventCore usage in a content management system scenario.
 //! It shows advanced patterns including:
-//! 
+//!
 //! - Content lifecycle management (draft -> published -> archived)
 //! - Multi-user collaboration with permissions
 //! - Cross-entity operations (content + user + permissions)
@@ -130,7 +130,7 @@ pub enum ContentEvent {
         archived_at: chrono::DateTime<chrono::Utc>,
         reason: String,
     },
-    
+
     // User management events
     UserCreated {
         user_id: types::UserId,
@@ -145,7 +145,7 @@ pub enum ContentEvent {
         changed_by: types::UserId,
         changed_at: chrono::DateTime<chrono::Utc>,
     },
-    
+
     // Audit events
     ActionAudited {
         user_id: types::UserId,
@@ -433,7 +433,7 @@ impl Command for PublishContentCommand {
                     state.content.status = Some(types::ContentStatus::Published);
                 }
             }
-            
+
             // Apply events to user state
             ContentEvent::UserCreated {
                 email, role, created_at, ..
@@ -450,14 +450,14 @@ impl Command for PublishContentCommand {
                     state.editor.role = Some(new_role.clone());
                 }
             }
-            
+
             // Track audit configuration
             ContentEvent::ActionAudited { .. } => {
                 if event.stream_id.as_ref() == "audit-log" {
                     state.audit_enabled = true;
                 }
             }
-            
+
             _ => {}
         }
     }
@@ -537,7 +537,7 @@ impl Command for PublishContentCommand {
         // Event 2: Create audit log entry
         let mut metadata = HashMap::new();
         metadata.insert("content_id".to_string(), input.content_id.as_ref().to_string());
-        metadata.insert("content_title".to_string(), 
+        metadata.insert("content_title".to_string(),
             state.content.title.as_ref().map(|t| t.as_ref()).unwrap_or("Unknown").to_string());
         metadata.insert("editor_role".to_string(), format!("{:?}", editor_role));
 
@@ -574,7 +574,7 @@ async fn create_user(
         email: email.to_string(),
         role,
     };
-    
+
     executor.execute(&command, command, ExecutionOptions::default()).await?;
     Ok(())
 }
@@ -650,19 +650,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 1: Create users with different roles
     println!("📝 Creating users...");
-    
+
     let author_id = types::UserId::try_new("alice-writer".to_string()).unwrap();
     let editor_id = types::UserId::try_new("bob-editor".to_string()).unwrap();
-    
+
     create_user(&executor, &author_id, "alice@example.com", types::UserRole::Author).await?;
     create_user(&executor, &editor_id, "bob@example.com", types::UserRole::Editor).await?;
-    
+
     println!("✅ Created author: {}", author_id.as_ref());
     println!("✅ Created editor: {}", editor_id.as_ref());
 
     // Step 2: Author creates content
     println!("\n📄 Creating content...");
-    
+
     let content_id = types::ContentId::try_new("my-first-article".to_string()).unwrap();
     let title = types::ContentTitle::try_new("Introduction to EventCore".to_string()).unwrap();
 
@@ -677,7 +677,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 3: Author updates content body
     println!("\n✏️  Updating content...");
-    
+
     let body = types::ContentBody::try_new(
         "EventCore is a powerful multi-stream event sourcing library that enables atomic operations across multiple entities...".to_string()
     ).unwrap();
@@ -693,7 +693,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 4: Try to publish as author (should fail - only editors can publish)
     println!("\n❌ Attempting to publish as author (should fail)...");
-    
+
     let publish_attempt = PublishContentCommand {
         content_id: content_id.clone(),
         published_by: author_id.clone(),
@@ -706,7 +706,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 5: Editor publishes content (multi-stream operation)
     println!("\n🚀 Publishing content as editor...");
-    
+
     let publish_command = PublishContentCommand {
         content_id: content_id.clone(),
         published_by: editor_id.clone(),
@@ -719,7 +719,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 6: Demonstrate the audit trail
     println!("\n📊 Audit trail created:");
-    println!("   - Content lifecycle tracked");  
+    println!("   - Content lifecycle tracked");
     println!("   - User permissions verified");
     println!("   - Publishing action logged with metadata");
 
@@ -751,7 +751,7 @@ mod tests {
         // Create content
         let content_id = types::ContentId::try_new("test-content".to_string()).unwrap();
         let title = types::ContentTitle::try_new("Test Article".to_string()).unwrap();
-        
+
         let create_command = CreateContentCommand {
             content_id: content_id.clone(),
             title,
@@ -784,7 +784,7 @@ mod tests {
 
         let content_id = types::ContentId::try_new("test-content".to_string()).unwrap();
         let title = types::ContentTitle::try_new("Test Article".to_string()).unwrap();
-        
+
         let create_command = CreateContentCommand {
             content_id: content_id.clone(),
             title,
@@ -804,7 +804,7 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("cannot publish content"));
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_successful_publishing_workflow() {
         let event_store = InMemoryEventStore::new();
         let executor = CommandExecutor::new(event_store);
@@ -812,14 +812,14 @@ mod tests {
         // Create author and editor
         let author_id = types::UserId::try_new("test-author".to_string()).unwrap();
         let editor_id = types::UserId::try_new("test-editor".to_string()).unwrap();
-        
+
         create_user(&executor, &author_id, "author@test.com", types::UserRole::Author).await.unwrap();
         create_user(&executor, &editor_id, "editor@test.com", types::UserRole::Editor).await.unwrap();
 
         // Create content with body
         let content_id = types::ContentId::try_new("test-content".to_string()).unwrap();
         let title = types::ContentTitle::try_new("Test Article".to_string()).unwrap();
-        
+
         let create_command = CreateContentCommand {
             content_id: content_id.clone(),
             title,
@@ -845,7 +845,7 @@ mod tests {
 
         let result = executor.execute(&publish_command, publish_command, ExecutionOptions::default()).await;
         assert!(result.is_ok());
-        
+
         // Verify multiple events were written (content + audit)
         let events_written = result.unwrap().events_written.len();
         assert_eq!(events_written, 2); // ContentPublished + ActionAudited

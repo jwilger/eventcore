@@ -3,17 +3,20 @@
 ## Test Categories
 
 ### Unit Tests
+
 - Run in pre-commit hooks
 - Fast, isolated tests of individual components
 - Run with: `cargo test --lib --bins` or `cargo test-unit`
 
 ### Integration Tests
+
 - Run in CI
 - Test interactions between components
 - Include database integration tests
 - Run with: `cargo test --workspace`
 
 ### Performance Tests
+
 - **NOT run in CI or pre-commit hooks**
 - Require controlled environment for accurate results
 - Must be run explicitly
@@ -24,18 +27,24 @@
 ## Running Tests
 
 ### Pre-commit Hook
+
 Automatically runs: `cargo test --workspace --lib --bins`
+
 - Only unit tests
 - Fast feedback loop
 
 ### CI Pipeline
+
 Runs: `cargo nextest run --workspace`
+
 - Unit tests
 - Integration tests
 - Excludes performance tests
 
 ### Performance Testing
+
 Run explicitly with: `cargo test-perf`
+
 - Requires release mode for accurate results: `cargo test-perf --release`
 - Should be run on dedicated hardware or controlled environment
 - Not suitable for CI due to:
@@ -44,6 +53,7 @@ Run explicitly with: `cargo test-perf`
   - Inconsistent timing measurements
 
 ### All Tests Including Performance
+
 Run with: `cargo test-all`
 
 ## Test Organization

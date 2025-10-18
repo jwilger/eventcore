@@ -30,7 +30,7 @@ pub struct CreateTask {
     /// The task stream - will contain all task events
     #[stream]
     pub task_id: StreamId,
-    
+
     /// Task details
     pub title: TaskTitle,
     pub description: TaskDescription,
@@ -142,10 +142,10 @@ use eventcore_macros::Command;
 pub struct AssignTask {
     #[stream]
     pub task_id: StreamId,
-    
+
     #[stream]
     pub assignee_id: StreamId,
-    
+
     pub assigned_by: UserName,
 }
 
@@ -171,7 +171,7 @@ pub struct AssignTaskState {
     task_title: String,
     current_assignee: Option<UserName>,
     task_status: TaskStatus,
-    
+
     // User state
     user_exists: bool,
     user_name: Option<UserName>,
@@ -231,12 +231,12 @@ impl CommandLogic for AssignTask {
             state.task_exists,
             "Cannot assign non-existent task"
         );
-        
+
         require!(
             state.task_status != TaskStatus::Completed,
             "Cannot assign completed task"
         );
-        
+
         require!(
             state.task_status != TaskStatus::Cancelled,
             "Cannot assign cancelled task"
@@ -332,10 +332,10 @@ use eventcore_macros::Command;
 pub struct CompleteTask {
     #[stream]
     pub task_id: StreamId,
-    
+
     #[stream]
     pub user_id: StreamId,
-    
+
     pub completed_by: UserName,
 }
 
@@ -344,7 +344,7 @@ pub struct CompleteTaskState {
     task_exists: bool,
     task_status: TaskStatus,
     assignee: Option<UserName>,
-    
+
     user_name: Option<UserName>,
     completed_count: u32,
 }
@@ -397,12 +397,12 @@ impl CommandLogic for CompleteTask {
             state.task_exists,
             "Cannot complete non-existent task"
         );
-        
+
         require!(
             state.task_status != TaskStatus::Completed,
             "Task is already completed"
         );
-        
+
         require!(
             state.task_status != TaskStatus::Cancelled,
             "Cannot complete cancelled task"
@@ -430,7 +430,7 @@ impl CommandLogic for CompleteTask {
                     completed_at: now,
                 })
             )?,
-            
+
             // Update user's completion stats
             StreamWrite::new(
                 &read_streams,
@@ -459,7 +459,7 @@ impl From<&StreamId> for TaskId {
         let id_str = stream_id.as_ref()
             .strip_prefix("task-")
             .unwrap_or(stream_id.as_ref());
-        
+
         TaskId(Uuid::parse_str(id_str).unwrap_or_else(|_| Uuid::nil()))
     }
 }
@@ -470,8 +470,8 @@ impl From<&StreamId> for UserName {
         let name = stream_id.as_ref()
             .strip_prefix("user-")
             .unwrap_or(stream_id.as_ref());
-        
-        UserName::try_new(name).unwrap_or_else(|_| 
+
+        UserName::try_new(name).unwrap_or_else(|_|
             UserName::try_new("unknown").unwrap()
         )
     }
@@ -495,7 +495,7 @@ mod command_tests {
         // Setup
         let store = InMemoryEventStore::new();
         let executor = CommandExecutor::new(store);
-        
+
         // Create command
         let task_id = TaskId::new();
         let command = CreateTask::new(
@@ -504,14 +504,14 @@ mod command_tests {
             TaskDescription::try_new("Add unit tests").unwrap(),
             UserName::try_new("alice").unwrap(),
         ).unwrap();
-        
+
         // Execute
         let result = executor.execute(&command).await.unwrap();
-        
+
         // Verify
         assert_eq!(result.events_written.len(), 1);
         assert_eq!(result.streams_affected.len(), 1);
-        
+
         // Try to create again - should fail
         let result = executor.execute(&command).await;
         assert!(result.is_err());
@@ -521,7 +521,7 @@ mod command_tests {
     async fn test_assign_task() {
         let store = InMemoryEventStore::new();
         let executor = CommandExecutor::new(store);
-        
+
         // First create a task
         let task_id = TaskId::new();
         let create = CreateTask::new(
@@ -530,18 +530,18 @@ mod command_tests {
             TaskDescription::try_new("Description").unwrap(),
             UserName::try_new("alice").unwrap(),
         ).unwrap();
-        
+
         executor.execute(&create).await.unwrap();
-        
+
         // Now assign it
         let assign = AssignTask::new(
             task_id,
             UserName::try_new("bob").unwrap(),
             UserName::try_new("alice").unwrap(),
         ).unwrap();
-        
+
         let result = executor.execute(&assign).await.unwrap();
-        
+
         // Should write to both task and user streams
         assert_eq!(result.events_written.len(), 3); // Assigned + UserAssigned + Workload
         assert_eq!(result.streams_affected.len(), 2); // task and user streams
@@ -554,52 +554,52 @@ mod command_tests {
 Update the demo in `src/main.rs`:
 
 ```rust
-async fn run_demo<ES: EventStore>(executor: CommandExecutor<ES>) 
--> Result<(), Box<dyn std::error::Error>> 
+async fn run_demo<ES: EventStore>(executor: CommandExecutor<ES>)
+-> Result<(), Box<dyn std::error::Error>>
 where
     ES::Event: From<SystemEvent> + TryInto<SystemEvent>,
 {
     println!("🚀 EventCore Task Management Demo");
     println!("================================\n");
-    
+
     // Create a task
     let task_id = TaskId::new();
     println!("1. Creating task {}...", task_id);
-    
+
     let create = CreateTask::new(
         task_id,
         TaskTitle::try_new("Build awesome features").unwrap(),
         TaskDescription::try_new("Use EventCore to build great things").unwrap(),
         UserName::try_new("alice").unwrap(),
     )?;
-    
+
     let result = executor.execute(&create).await?;
     println!("   ✅ Task created with {} event(s)\n", result.events_written.len());
-    
+
     // Assign the task
     println!("2. Assigning task to Bob...");
-    
+
     let assign = AssignTask::new(
         task_id,
         UserName::try_new("bob").unwrap(),
         UserName::try_new("alice").unwrap(),
     )?;
-    
+
     let result = executor.execute(&assign).await?;
     println!("   ✅ Task assigned, {} stream(s) updated\n", result.streams_affected.len());
-    
+
     // Complete the task
     println!("3. Bob completes the task...");
-    
+
     let complete = CompleteTask {
         task_id: StreamId::from_static(&format!("task-{}", task_id)),
         user_id: StreamId::from_static("user-bob"),
         completed_by: UserName::try_new("bob").unwrap(),
     };
-    
+
     let result = executor.execute(&complete).await?;
     println!("   ✅ Task completed!\n", );
-    
+
     println!("Demo complete! 🎉");
     Ok(())
 }
@@ -633,7 +633,7 @@ async fn handle(
         stream_resolver.add_streams(vec![manager_stream]);
         // EventCore will re-execute with the additional stream
     }
-    
+
     // Continue with logic...
 }
 ```

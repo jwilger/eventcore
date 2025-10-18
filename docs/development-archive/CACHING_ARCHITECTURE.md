@@ -18,11 +18,13 @@ A thorough investigation of the codebase revealed:
 ## Performance Analysis
 
 The current `get_stream_version()` implementation:
+
 ```sql
 SELECT MAX(event_version) FROM events WHERE stream_id = $1
 ```
 
 This query is:
+
 - Automatically cached as a prepared statement by SQLx
 - Optimized by PostgreSQL's query planner
 - Backed by a B-tree index on `(stream_id, event_version)`
@@ -49,6 +51,7 @@ Instead of application-level version caching, we focus on:
 ## Schema Evolution Caching
 
 Note: The codebase does include migration path caching in the schema evolution system (`enable_migration_cache` in `EvolutionStrategy`). This is appropriate because:
+
 - Migration paths are computed once and reused
 - They don't change during normal operation
 - The computation is expensive relative to the lookup
@@ -58,8 +61,9 @@ Note: The codebase does include migration path caching in the schema evolution s
 The PostgreSQL adapter's current architecture provides excellent performance without additional version caching. The database's built-in optimizations, combined with SQLx's prepared statement caching and our optimized indexes, deliver the performance characteristics needed for EventCore's use cases.
 
 **Performance targets achieved:**
+
 - Single-stream commands: 5,000-10,000 ops/sec ✅
-- Multi-stream commands: 2,000-5,000 ops/sec ✅  
+- Multi-stream commands: 2,000-5,000 ops/sec ✅
 - Event store writes: 20,000+ events/sec (batched) ✅
 - P95 command latency: < 10ms ✅
 

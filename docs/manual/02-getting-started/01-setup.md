@@ -79,6 +79,7 @@ taskmaster/
 ```
 
 Create the directories:
+
 ```bash
 mkdir -p src/domain/commands
 mkdir -p src/projections
@@ -90,6 +91,7 @@ mkdir -p src/api
 Let's create the basic module structure:
 
 ### `src/main.rs`
+
 ```rust
 mod domain;
 mod projections;
@@ -126,9 +128,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize event store (in-memory for now)
     let event_store = InMemoryEventStore::new();
     let executor = CommandExecutor::new(event_store);
-    
+
     let cli = Cli::parse();
-    
+
     match cli.command {
         Commands::Create { title, description } => {
             println!("Creating task: {} - {}", title, description);
@@ -143,25 +145,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_demo(executor).await?;
         }
     }
-    
+
     Ok(())
 }
 
-async fn run_demo<ES: EventStore>(executor: CommandExecutor<ES>) 
--> Result<(), Box<dyn std::error::Error>> 
+async fn run_demo<ES: EventStore>(executor: CommandExecutor<ES>)
+-> Result<(), Box<dyn std::error::Error>>
 where
     ES::Event: From<domain::events::TaskEvent> + TryInto<domain::events::TaskEvent>,
 {
     println!("🚀 EventCore Task Management Demo");
     println!("================================\n");
-    
+
     // We'll add demo code as we build features
-    
+
     Ok(())
 }
 ```
 
 ### `src/domain/mod.rs`
+
 ```rust
 pub mod types;
 pub mod events;
@@ -173,6 +176,7 @@ pub use events::*;
 ```
 
 ### `src/domain/types.rs`
+
 ```rust
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
@@ -299,6 +303,7 @@ impl Default for TaskStatus {
 ```
 
 ### `src/domain/events.rs`
+
 ```rust
 use super::types::*;
 use serde::{Deserialize, Serialize};
@@ -316,7 +321,7 @@ pub enum TaskEvent {
         creator: UserName,
         created_at: DateTime<Utc>,
     },
-    
+
     /// Task was assigned to a user
     Assigned {
         task_id: TaskId,
@@ -324,14 +329,14 @@ pub enum TaskEvent {
         assigned_by: UserName,
         assigned_at: DateTime<Utc>,
     },
-    
+
     /// Task was unassigned
     Unassigned {
         task_id: TaskId,
         unassigned_by: UserName,
         unassigned_at: DateTime<Utc>,
     },
-    
+
     /// Task priority was changed
     PriorityChanged {
         task_id: TaskId,
@@ -340,7 +345,7 @@ pub enum TaskEvent {
         changed_by: UserName,
         changed_at: DateTime<Utc>,
     },
-    
+
     /// Comment was added to task
     CommentAdded {
         task_id: TaskId,
@@ -348,14 +353,14 @@ pub enum TaskEvent {
         author: UserName,
         commented_at: DateTime<Utc>,
     },
-    
+
     /// Task was completed
     Completed {
         task_id: TaskId,
         completed_by: UserName,
         completed_at: DateTime<Utc>,
     },
-    
+
     /// Task was reopened after completion
     Reopened {
         task_id: TaskId,
@@ -363,7 +368,7 @@ pub enum TaskEvent {
         reopened_at: DateTime<Utc>,
         reason: Option<String>,
     },
-    
+
     /// Task was cancelled
     Cancelled {
         task_id: TaskId,
@@ -376,7 +381,7 @@ pub enum TaskEvent {
 // Required for EventCore's type conversion
 impl TryFrom<&TaskEvent> for TaskEvent {
     type Error = std::convert::Infallible;
-    
+
     fn try_from(value: &TaskEvent) -> Result<Self, Self::Error> {
         Ok(value.clone())
     }
@@ -384,6 +389,7 @@ impl TryFrom<&TaskEvent> for TaskEvent {
 ```
 
 ### `src/domain/commands/mod.rs`
+
 ```rust
 mod create_task;
 mod assign_task;
@@ -395,6 +401,7 @@ pub use complete_task::*;
 ```
 
 ### `src/projections/mod.rs`
+
 ```rust
 mod task_list;
 mod statistics;
@@ -412,6 +419,7 @@ cargo build
 ```
 
 You should see output like:
+
 ```
    Compiling taskmaster v0.1.0
     Finished dev [unoptimized + debuginfo] target(s) in X.XXs
@@ -426,29 +434,29 @@ Add to `src/main.rs`:
 mod tests {
     use super::*;
     use crate::domain::types::*;
-    
+
     #[test]
     fn test_validated_types() {
         // Valid title
         let title = TaskTitle::try_new("Fix the bug").unwrap();
         assert_eq!(title.as_ref(), "Fix the bug");
-        
+
         // Empty title should fail
         assert!(TaskTitle::try_new("").is_err());
-        
+
         // Whitespace is trimmed
         let title = TaskTitle::try_new("  Trimmed  ").unwrap();
         assert_eq!(title.as_ref(), "Trimmed");
     }
-    
+
     #[test]
     fn test_task_id_generation() {
         let id1 = TaskId::new();
         let id2 = TaskId::new();
-        
+
         // IDs should be unique
         assert_ne!(id1, id2);
-        
+
         // IDs should be sortable by creation time (UUIDv7 property)
         assert!(id1.0 < id2.0);
     }
@@ -456,6 +464,7 @@ mod tests {
 ```
 
 Run the tests:
+
 ```bash
 cargo test
 ```
@@ -465,6 +474,7 @@ cargo test
 If you want to use PostgreSQL instead of the in-memory store:
 
 1. Start PostgreSQL with Docker:
+
 ```bash
 docker run -d \
   --name eventcore-postgres \
@@ -475,6 +485,7 @@ docker run -d \
 ```
 
 2. Update `Cargo.toml`:
+
 ```toml
 [dependencies]
 eventcore-postgres = "0.1"
@@ -482,6 +493,7 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"] }
 ```
 
 3. Set environment variable:
+
 ```bash
 export DATABASE_URL="postgres://postgres:password@localhost/taskmaster"
 ```
@@ -489,6 +501,7 @@ export DATABASE_URL="postgres://postgres:password@localhost/taskmaster"
 ## Summary
 
 We've set up:
+
 - ✅ A new Rust project with EventCore dependencies
 - ✅ Domain types with validation using `nutype`
 - ✅ Event definitions for our task system

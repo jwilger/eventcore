@@ -34,7 +34,7 @@ impl JwtConfig {
     fn create_access_token(&self, user: &User) -> Result<String, ApiError> {
         let now = Utc::now();
         let exp = now + self.access_token_duration;
-        
+
         let claims = Claims {
             sub: user.id.to_string(),
             exp: exp.timestamp() as usize,
@@ -42,7 +42,7 @@ impl JwtConfig {
             roles: user.roles.clone(),
             permissions: user.permissions.clone(),
         };
-        
+
         encode(
             &Header::default(),
             &claims,
@@ -50,12 +50,12 @@ impl JwtConfig {
         )
         .map_err(|_| ApiError::internal("Failed to create token"))
     }
-    
+
     fn validate_token(&self, token: &str) -> Result<Claims, ApiError> {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.set_issuer(&[&self.issuer]);
         validation.set_audience(&[&self.audience]);
-        
+
         decode::<Claims>(
             token,
             &DecodingKey::from_secret(self.secret.as_ref()),
@@ -96,18 +96,18 @@ async fn login(
     // Validate credentials
     let email = Email::try_new(request.email)
         .map_err(|_| ApiError::bad_request("Invalid email"))?;
-    
+
     // Execute authentication command
     let command = AuthenticateUser {
         email: email.clone(),
         password: Password::from(request.password),
     };
-    
+
     let result = state.executor
         .execute(&command)
         .await
         .map_err(|_| ApiError::unauthorized("Invalid credentials"))?;
-    
+
     // Get user from projection
     let user = state.projections
         .read()
@@ -117,20 +117,20 @@ async fn login(
         .get_user_by_email(&email)
         .await?
         .ok_or_else(|| ApiError::unauthorized("Invalid credentials"))?;
-    
+
     // Create tokens
     let access_token = state.jwt_config.create_access_token(&user)?;
     let refresh_token = state.jwt_config.create_refresh_token(&user)?;
-    
+
     // Store refresh token (for revocation)
     let store_command = StoreRefreshToken {
         user_id: user.id.clone(),
         token_hash: hash_token(&refresh_token),
         expires_at: Utc::now() + state.jwt_config.refresh_token_duration,
     };
-    
+
     state.executor.execute(&store_command).await?;
-    
+
     Ok(Json(LoginResponse {
         access_token,
         refresh_token,
@@ -172,13 +172,13 @@ where
             .extensions
             .get::<JwtConfig>()
             .ok_or_else(|| ApiError::internal("JWT config not found"))?;
-        
+
         // Extract token from Authorization header
         let token = extract_bearer_token(&parts.headers)?;
-        
+
         // Validate token
         let claims = jwt_config.validate_token(token)?;
-        
+
         Ok(AuthenticatedUser {
             id: UserId::try_new(claims.sub)?,
             roles: claims.roles,
@@ -235,11 +235,11 @@ impl AuthenticatedUser {
     pub fn has_role(&self, role: &str) -> bool {
         self.roles.contains(&role.to_string())
     }
-    
+
     pub fn has_any_role(&self, roles: &[&str]) -> bool {
         roles.iter().any(|role| self.has_role(role))
     }
-    
+
     pub fn has_all_roles(&self, roles: &[&str]) -> bool {
         roles.iter().all(|role| self.has_role(role))
     }
@@ -264,7 +264,7 @@ async fn admin_endpoint(
     // other params...
 ) -> Result<Json<AdminData>, ApiError> {
     require_role(&user, "admin").await?;
-    
+
     // Admin-only logic...
 }
 ```
@@ -280,13 +280,13 @@ enum Permission {
     UpdateTask,
     DeleteTask,
     AssignTask,
-    
+
     // User permissions
     CreateUser,
     ReadUser,
     UpdateUser,
     DeleteUser,
-    
+
     // Admin permissions
     ViewAnalytics,
     ManageSystem,
@@ -296,7 +296,7 @@ impl AuthenticatedUser {
     pub fn has_permission(&self, permission: &str) -> bool {
         self.permissions.contains(&permission.to_string())
     }
-    
+
     pub fn can(&self, action: Permission) -> bool {
         self.has_permission(&action.to_string())
     }
@@ -310,7 +310,7 @@ async fn create_task_handler(
     if !user.can(Permission::CreateTask) {
         return Err(ApiError::forbidden("Cannot create tasks"));
     }
-    
+
     // Create task...
 }
 ```
@@ -336,40 +336,40 @@ impl ResourceAuthorizer for TaskAuthorizer {
         if user.has_role("admin") {
             return true;
         }
-        
+
         // Check if user owns or is assigned to task
         if let Ok(Some(task)) = self.projection.get_task(task_id).await {
-            return task.created_by == user.id || 
+            return task.created_by == user.id ||
                    task.assigned_to == Some(user.id.clone());
         }
-        
+
         false
     }
-    
+
     async fn can_write(&self, user: &AuthenticatedUser, task_id: &str) -> bool {
         // Similar logic for write permissions
         if user.has_role("admin") || user.has_role("manager") {
             return true;
         }
-        
+
         // Check ownership or assignment
         if let Ok(Some(task)) = self.projection.get_task(task_id).await {
             return task.assigned_to == Some(user.id.clone());
         }
-        
+
         false
     }
-    
+
     async fn can_delete(&self, user: &AuthenticatedUser, task_id: &str) -> bool {
         // Only admins and creators can delete
         if user.has_role("admin") {
             return true;
         }
-        
+
         if let Ok(Some(task)) = self.projection.get_task(task_id).await {
             return task.created_by == user.id;
         }
-        
+
         false
     }
 }
@@ -384,17 +384,17 @@ Embed authorization in commands:
 struct UpdateTask {
     #[stream]
     task_id: StreamId,
-    
+
     title: Option<TaskTitle>,
     description: Option<TaskDescription>,
-    
+
     // Who is making the change
     updated_by: UserId,
 }
 
 impl CommandLogic for UpdateTask {
     // ... other implementations
-    
+
     async fn handle(
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
@@ -408,7 +408,7 @@ impl CommandLogic for UpdateTask {
             self.updated_by,
             self.task_id
         );
-        
+
         // Proceed with update...
     }
 }
@@ -420,12 +420,12 @@ impl TaskState {
         if self.created_by == *user_id {
             return true;
         }
-        
+
         // Assigned user can update
         if self.assigned_to == Some(user_id.clone()) {
             return true;
         }
-        
+
         // Check roles (would need to be passed in state)
         false
     }
@@ -461,10 +461,10 @@ where
             .get("X-API-Key")
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| ApiError::unauthorized("Missing API key"))?;
-        
+
         // Look up API key (from cache/database)
         let api_key = validate_api_key(key).await?;
-        
+
         Ok(api_key)
     }
 }
@@ -472,17 +472,17 @@ where
 async fn validate_api_key(key: &str) -> Result<ApiKey, ApiError> {
     // Hash the key for lookup
     let key_hash = hash_api_key(key);
-    
+
     // Look up in projection/cache
     let api_key = get_api_key_by_hash(&key_hash)
         .await?
         .ok_or_else(|| ApiError::unauthorized("Invalid API key"))?;
-    
+
     // Check if expired
     if api_key.expires_at < Utc::now() {
         return Err(ApiError::unauthorized("API key expired"));
     }
-    
+
     Ok(api_key)
 }
 ```
@@ -517,20 +517,20 @@ async fn oauth_login(
         Some(oauth.token_url),
     )
     .set_redirect_uri(oauth.redirect_url);
-    
+
     // Generate PKCE challenge
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-    
+
     // Generate authorization URL
     let (auth_url, csrf_token) = client
         .authorize_url(CsrfToken::new_random)
         .add_scope(Scope::new("read:user".to_string()))
         .set_pkce_challenge(pkce_challenge)
         .url();
-    
+
     // Store CSRF token and PKCE verifier (in session/cache)
     store_oauth_state(&csrf_token, &pkce_verifier).await?;
-    
+
     Ok(Redirect::to(auth_url.as_str()))
 }
 
@@ -540,21 +540,21 @@ async fn oauth_callback(
 ) -> Result<Json<LoginResponse>, ApiError> {
     // Verify CSRF token
     let (stored_csrf, pkce_verifier) = get_oauth_state(&params.state).await?;
-    
+
     if stored_csrf != params.state {
         return Err(ApiError::bad_request("Invalid state parameter"));
     }
-    
+
     // Exchange code for token
     let token_result = exchange_code_for_token(
         &state.oauth_config,
         &params.code,
         &pkce_verifier,
     ).await?;
-    
+
     // Get user info from provider
     let user_info = fetch_user_info(&token_result.access_token()).await?;
-    
+
     // Create or update user in EventCore
     let command = CreateOrUpdateOAuthUser {
         provider: "github".to_string(),
@@ -562,13 +562,13 @@ async fn oauth_callback(
         email: user_info.email,
         name: user_info.name,
     };
-    
+
     state.executor.execute(&command).await?;
-    
+
     // Create JWT tokens
     let user = get_user_by_email(&user_info.email).await?;
     let access_token = state.jwt_config.create_access_token(&user)?;
-    
+
     Ok(Json(LoginResponse {
         access_token,
         // ... other fields
@@ -585,10 +585,10 @@ Track active sessions:
 struct CreateSession {
     #[stream]
     user_id: StreamId,
-    
+
     #[stream]
     session_id: StreamId,
-    
+
     ip_address: IpAddr,
     user_agent: String,
     expires_at: DateTime<Utc>,
@@ -598,10 +598,10 @@ struct CreateSession {
 struct RevokeSession {
     #[stream]
     session_id: StreamId,
-    
+
     #[stream]
     user_id: StreamId,
-    
+
     reason: RevocationReason,
 }
 
@@ -613,7 +613,7 @@ async fn validate_session(
     next: Next,
 ) -> Result<Response, ApiError> {
     let session_id = extract_session_id(&request)?;
-    
+
     // Check if session is valid
     let session = state.projections
         .read()
@@ -623,22 +623,22 @@ async fn validate_session(
         .get_session(&session_id)
         .await?
         .ok_or_else(|| ApiError::unauthorized("Invalid session"))?;
-    
+
     // Verify session belongs to user
     if session.user_id != user.id {
         return Err(ApiError::unauthorized("Session mismatch"));
     }
-    
+
     // Check expiration
     if session.expires_at < Utc::now() {
         return Err(ApiError::unauthorized("Session expired"));
     }
-    
+
     // Check if revoked
     if session.revoked {
         return Err(ApiError::unauthorized("Session revoked"));
     }
-    
+
     Ok(next.run(request).await)
 }
 ```
@@ -653,33 +653,33 @@ async fn security_headers_middleware(
     next: Next,
 ) -> Response {
     let mut response = next.run(request).await;
-    
+
     let headers = response.headers_mut();
-    
+
     // Prevent clickjacking
     headers.insert(
         "X-Frame-Options",
         HeaderValue::from_static("DENY"),
     );
-    
+
     // XSS protection
     headers.insert(
         "X-Content-Type-Options",
         HeaderValue::from_static("nosniff"),
     );
-    
+
     // CSP
     headers.insert(
         "Content-Security-Policy",
         HeaderValue::from_static("default-src 'self'"),
     );
-    
+
     // HSTS
     headers.insert(
         "Strict-Transport-Security",
         HeaderValue::from_static("max-age=31536000; includeSubDomains"),
     );
-    
+
     response
 }
 ```
@@ -690,7 +690,7 @@ async fn security_headers_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn create_test_token(user_id: &str, roles: Vec<&str>) -> String {
         let claims = Claims {
             sub: user_id.to_string(),
@@ -699,18 +699,18 @@ mod tests {
             roles: roles.into_iter().map(|s| s.to_string()).collect(),
             permissions: vec![],
         };
-        
+
         encode(
             &Header::default(),
             &claims,
             &EncodingKey::from_secret(TEST_SECRET.as_ref()),
         ).unwrap()
     }
-    
+
     #[tokio::test]
     async fn test_authentication_required() {
         let app = create_test_app();
-        
+
         // No token
         let response = app
             .oneshot(
@@ -721,17 +721,17 @@ mod tests {
             )
             .await
             .unwrap();
-        
+
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
-    
+
     #[tokio::test]
     async fn test_role_authorization() {
         let app = create_test_app();
-        
+
         // User token without admin role
         let token = create_test_token("user123", vec!["user"]);
-        
+
         let response = app
             .oneshot(
                 Request::builder()
@@ -742,7 +742,7 @@ mod tests {
             )
             .await
             .unwrap();
-        
+
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }
@@ -770,6 +770,7 @@ Authentication and authorization in EventCore:
 - ✅ **Testable** - Easy to test security rules
 
 Key patterns:
+
 1. Authenticate early in the request pipeline
 2. Embed authorization in commands
 3. Use projections for fast permission lookups

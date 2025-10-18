@@ -29,6 +29,7 @@ struct UserRegistered {
 ## EventCore's Schema Evolution Approach
 
 EventCore uses a combination of:
+
 1. **Serde defaults** - Handle missing fields gracefully
 2. **Event versioning** - Explicit version tracking
 3. **Migration functions** - Transform old formats to new
@@ -45,14 +46,14 @@ These changes don't break existing events:
 struct UserRegistered {
     user_id: UserId,
     email: String,
-    
+
     // New optional fields with defaults
     #[serde(default)]
     first_name: Option<String>,
-    
+
     #[serde(default)]
     last_name: Option<String>,
-    
+
     #[serde(default)]
     preferences: UserPreferences,
 }
@@ -76,11 +77,11 @@ struct OrderPlaced {
     order_id: OrderId,
     customer_id: CustomerId,
     items: Vec<OrderItem>,
-    
+
     // New field with computed default
     #[serde(default = "default_currency")]
     currency: Currency,
-    
+
     // New field with timestamp default
     #[serde(default = "Utc::now")]
     placed_at: DateTime<Utc>,
@@ -100,11 +101,11 @@ enum PaymentMethod {
     CreditCard { last_four: String },
     BankTransfer { account: String },
     PayPal { email: String },
-    
+
     // New variants - old events still deserialize
     ApplePay { device_id: String },
     GooglePay { account_id: String },
-    
+
     // Unknown variant fallback
     #[serde(other)]
     Unknown,
@@ -193,7 +194,7 @@ enum UserRegisteredVersioned {
         email: String,
         username: String,
     },
-    
+
     #[serde(rename = "2")]
     V2 {
         user_id: UserId,
@@ -201,7 +202,7 @@ enum UserRegisteredVersioned {
         first_name: String,
         last_name: String,
     },
-    
+
     #[serde(rename = "3")]
     V3 {
         user_id: UserId,
@@ -212,18 +213,18 @@ enum UserRegisteredVersioned {
 
 impl VersionedEvent for UserRegisteredVersioned {
     const EVENT_TYPE: &'static str = "UserRegistered";
-    
+
     fn current_version() -> u32 {
         3
     }
-    
+
     fn migrate_to_current(self) -> Self {
         match self {
             UserRegisteredVersioned::V1 { user_id, email, username } => {
                 // V1 → V2: Convert string ID, extract names from username
                 let (first_name, last_name) = split_username(&username);
                 let user_id = UserId::try_new(user_id).unwrap_or_else(|_| UserId::new());
-                
+
                 UserRegisteredVersioned::V2 {
                     user_id,
                     email,
@@ -264,12 +265,12 @@ impl Migration<UserRegisteredV1, UserRegisteredV2> for UserRegisteredV1ToV2 {
         // Complex migration logic
         let user_id = parse_legacy_user_id(&v1.user_id)?;
         let (first_name, last_name) = extract_names_from_username(&v1.username)?;
-        
+
         // Validate converted data
         if first_name.is_empty() {
             return Err(MigrationError::InvalidData("Empty first name".to_string()));
         }
-        
+
         Ok(UserRegisteredV2 {
             user_id,
             email: v1.email,
@@ -284,7 +285,7 @@ fn parse_legacy_user_id(legacy_id: &str) -> Result<UserId, MigrationError> {
     if legacy_id.starts_with("user_") {
         let numeric_part = legacy_id.strip_prefix("user_")
             .ok_or_else(|| MigrationError::InvalidData("Invalid legacy ID format".to_string()))?;
-        
+
         let uuid = Uuid::new_v5(&Uuid::NAMESPACE_OID, numeric_part.as_bytes());
         Ok(UserId::from(uuid))
     } else if let Ok(uuid) = Uuid::parse_str(legacy_id) {
@@ -310,12 +311,12 @@ struct MySchemaRegistry {
 impl MySchemaRegistry {
     fn new() -> Self {
         let mut registry = SchemaRegistry::new();
-        
+
         // Register event types with versions
         registry.register::<UserRegisteredV1>("UserRegistered", 1);
         registry.register::<UserRegisteredV2>("UserRegistered", 2);
         registry.register::<UserRegisteredV3>("UserRegistered", 3);
-        
+
         // Register migrations
         registry.add_migration::<UserRegisteredV1, UserRegisteredV2>(
             UserRegisteredV1ToV2
@@ -323,10 +324,10 @@ impl MySchemaRegistry {
         registry.add_migration::<UserRegisteredV2, UserRegisteredV3>(
             UserRegisteredV2ToV3
         );
-        
+
         Self { registry }
     }
-    
+
     fn deserialize_event(&self, event_type: &str, version: u32, data: &[u8]) -> Result<Box<dyn Any>, SerializationError> {
         self.registry.deserialize_and_migrate(event_type, version, data)
     }
@@ -343,11 +344,11 @@ Commands evolve differently than events because they don't need historical compa
 struct CreateUser {
     // V1 fields
     email: Email,
-    
+
     // V2 additions - no historical constraint
     first_name: FirstName,
     last_name: LastName,
-    
+
     // V3 additions
     initial_preferences: UserPreferences,
     referral_code: Option<ReferralCode>,
@@ -358,7 +359,7 @@ impl CreateUser {
     pub fn builder() -> CreateUserBuilder {
         CreateUserBuilder::default()
     }
-    
+
     // V1-style constructor
     pub fn from_email(email: Email) -> Self {
         Self {
@@ -369,7 +370,7 @@ impl CreateUser {
             referral_code: None,
         }
     }
-    
+
     // V2-style constructor
     pub fn with_name(email: Email, first_name: FirstName, last_name: LastName) -> Self {
         Self {
@@ -396,23 +397,23 @@ impl CreateUserBuilder {
         self.email = Some(email);
         self
     }
-    
+
     pub fn name(mut self, first: FirstName, last: LastName) -> Self {
         self.first_name = Some(first);
         self.last_name = Some(last);
         self
     }
-    
+
     pub fn preferences(mut self, prefs: UserPreferences) -> Self {
         self.initial_preferences = Some(prefs);
         self
     }
-    
+
     pub fn referral_code(mut self, code: ReferralCode) -> Self {
         self.referral_code = Some(code);
         self
     }
-    
+
     pub fn build(self) -> Result<CreateUser, ValidationError> {
         Ok(CreateUser {
             email: self.email.ok_or(ValidationError::MissingField("email"))?,
@@ -434,11 +435,11 @@ State structures also need to evolve with events:
 struct UserState {
     exists: bool,
     email: String,
-    
+
     // V2 fields with defaults
     first_name: Option<String>,
     last_name: Option<String>,
-    
+
     // V3 fields
     profile: Option<UserProfile>,
     preferences: UserPreferences,
@@ -447,7 +448,7 @@ struct UserState {
 impl CommandLogic for CreateUser {
     type State = UserState;
     type Event = UserEvent;
-    
+
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
             UserEvent::RegisteredV1 { user_id, email, username } => {
@@ -485,7 +486,7 @@ Projections need to handle schema changes too:
 impl Projection for UserListProjection {
     type Event = UserEvent;
     type Error = ProjectionError;
-    
+
     async fn apply(&mut self, event: &StoredEvent<Self::Event>) -> Result<(), Self::Error> {
         match &event.payload {
             // Handle all versions of user registration
@@ -540,19 +541,19 @@ struct ProductCreated {
     product_id: ProductId,
     name: String,
     price: Money,
-    
+
     // V2 additions
     #[serde(default)]
     category: Option<Category>,
     #[serde(default)]
     tags: Vec<Tag>,
-    
+
     // V3 additions
     #[serde(default)]
     metadata: ProductMetadata,
     #[serde(default)]
     variants: Vec<ProductVariant>,
-    
+
     // V4 additions
     #[serde(default)]
     seo_info: Option<SeoInfo>,
@@ -653,7 +654,7 @@ impl LazyUserEvent {
 #[cfg(test)]
 mod migration_tests {
     use super::*;
-    
+
     #[test]
     fn test_v1_to_v2_migration() {
         let v1_event = UserRegisteredV1 {
@@ -661,16 +662,16 @@ mod migration_tests {
             email: "john.doe@example.com".to_string(),
             username: "john_doe".to_string(),
         };
-        
+
         let migration = UserRegisteredV1ToV2;
         let v2_event = migration.migrate(v1_event).unwrap();
-        
+
         assert!(v2_event.user_id.to_string().contains("123"));
         assert_eq!(v2_event.email, "john.doe@example.com");
         assert_eq!(v2_event.first_name, "john");
         assert_eq!(v2_event.last_name, "doe");
     }
-    
+
     #[test]
     fn test_serialization_roundtrip() {
         let v2_event = UserRegisteredV2 {
@@ -679,17 +680,17 @@ mod migration_tests {
             first_name: "Test".to_string(),
             last_name: "User".to_string(),
         };
-        
+
         // Serialize
         let json = serde_json::to_string(&v2_event).unwrap();
-        
+
         // Deserialize
         let deserialized: UserRegisteredV2 = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(v2_event.user_id, deserialized.user_id);
         assert_eq!(v2_event.email, deserialized.email);
     }
-    
+
     #[test]
     fn test_backward_compatibility() {
         // V1 JSON without new fields
@@ -697,10 +698,10 @@ mod migration_tests {
             "user_id": "550e8400-e29b-41d4-a716-446655440000",
             "email": "legacy@example.com"
         }"#;
-        
+
         // Should deserialize into V2 with defaults
         let v2_event: UserRegisteredV2 = serde_json::from_str(v1_json).unwrap();
-        
+
         assert_eq!(v2_event.email, "legacy@example.com");
         assert!(v2_event.first_name.is_empty()); // Default
         assert!(v2_event.last_name.is_empty()); // Default
@@ -725,13 +726,13 @@ proptest! {
             email: email.clone(),
             username,
         };
-        
+
         let migration = UserRegisteredV1ToV2;
         let v2 = migration.migrate(v1).unwrap();
-        
+
         // Core data should be preserved
         prop_assert_eq!(v2.email, email);
-        
+
         // User ID should be convertible
         prop_assert!(v2.user_id.to_string().len() > 0);
     }
@@ -760,6 +761,7 @@ Schema evolution in EventCore:
 - ✅ **Testable** - Comprehensive test support
 
 Key patterns:
+
 1. Use serde defaults for backward compatibility
 2. Version events explicitly for breaking changes
 3. Write migration functions for complex transformations

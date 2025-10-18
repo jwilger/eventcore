@@ -49,6 +49,7 @@ These queries cannot benefit from prepared statement caching as each variation r
 ### Optimization Tips
 
 1. **Connection Pool Size**: Ensure adequate connections to benefit from caching
+
    ```rust
    let config = PostgresConfig {
        max_connections: 25,  // Adjust based on workload
@@ -58,6 +59,7 @@ These queries cannot benefit from prepared statement caching as each variation r
    ```
 
 2. **Connection Lifetime**: Longer-lived connections improve cache hit rates
+
    ```rust
    let config = PostgresConfig {
        max_lifetime: Duration::from_secs(3600),  // 1 hour
@@ -73,13 +75,14 @@ These queries cannot benefit from prepared statement caching as each variation r
 While EventCore doesn't explicitly track prepared statement metrics (as they're managed by SQLx), you can monitor overall query performance through:
 
 1. **PostgreSQL Statistics**:
+
    ```sql
    -- View prepared statement usage
    SELECT * FROM pg_prepared_statements;
-   
+
    -- Monitor query performance
-   SELECT * FROM pg_stat_statements 
-   WHERE query LIKE '%events%' 
+   SELECT * FROM pg_stat_statements
+   WHERE query LIKE '%events%'
    ORDER BY total_time DESC;
    ```
 

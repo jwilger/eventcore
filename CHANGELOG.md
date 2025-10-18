@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - Comprehensive interactive documentation tutorials
 - Enhanced error diagnostics with miette integration
 - Fluent CommandExecutorBuilder API for configuration
@@ -28,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Complete CI/CD pipeline with PostgreSQL integration
 
 ### Changed
+
 - Replaced aggregate-per-command terminology with multi-stream event sourcing
 - Made PostgreSQL adapter generic over event type for better type safety
 - Updated Command trait to include StreamResolver for flexible stream discovery
@@ -35,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved CI configuration with PostgreSQL services and coverage optimization
 
 ### Fixed
+
 - PostgreSQL schema initialization concurrency issues in CI
 - All pre-commit hook failures across the codebase
 - CI workflow syntax errors and configuration issues
@@ -42,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Race conditions in concurrent command execution
 
 ### Security
+
 - Forbid unsafe code throughout the workspace
 - Comprehensive security audit integration in CI
 - Protection against dependency vulnerabilities
@@ -49,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.3] - 2025-07-07
 
 ### Fixed
+
 - PostgreSQL test configuration (missing TEST_DATABASE_URL) in PR #31
 - Documentation sync script symlink issue in PR #31
 - Cargo.toml version specifications for crates.io publishing in PR #33
@@ -59,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Publishing order to resolve dev-dependency circular dependencies
 
 ### Changed
+
 - Implemented workspace dependencies for internal crates to enable automatic lockstep versioning
 - Updated publishing order to macros → memory → postgres → eventcore
 - Added PR template compliance rules to CLAUDE.md
@@ -67,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed version numbers from internal workspace dependencies for cleaner dependency management
 
 ### Added
+
 - PR template compliance enforcement in development workflow
 - Definition of Done bot configuration for automatic PR checklists
 - Critical rule #4 to CLAUDE.md: Always stop and ask for help rather than taking shortcuts
@@ -74,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.2] - 2025-07-05
 
 ### Fixed
+
 - Rand crate v0.9.1 deprecation errors:
   - Updated `thread_rng()` to `rng()` across codebase
   - Updated `gen()` to `random()` and `gen_range()` to `random_range()`
@@ -88,12 +96,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Replaced deprecated `bincode::serialize()` and `bincode::deserialize()` functions
 
 ### Changed
+
 - Updated actions/configure-pages from v4 to v5 (PR #3)
 - Updated codecov/codecov-action from v3 to v5 (PR #4)
 
 ## [0.1.1] - 2025-07-05
 
 ### Added
+
 - Modern documentation website with mdBook
   - GitHub Pages deployment workflow
   - Custom EventCore branding and responsive design
@@ -114,12 +124,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub MCP server integration for all GitHub operations
 
 ### Fixed
+
 - Outdated Command trait references (now CommandLogic) in documentation
 - Broken documentation links in README.md
 - License information to reflect MIT-only licensing
 - Doctest compilation error in resource.rs
 
 ### Changed
+
 - Reorganized documentation structure (renumbered operations to 07, reference to 08)
 - Consolidated documentation to single source (symlinked docs/manual to website/src/manual)
 - Updated PR template to remove redundant pre-merge checklist and add Review Focus section
@@ -129,6 +141,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - Initial Release
 
 ### Added
+
 - **Core Event Sourcing Foundation**
   - `StreamId`, `EventId`, `EventVersion` types with validation
   - Command trait system with type-safe execution
@@ -214,18 +227,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Migration guides and best practices
 
 ### Performance
+
 - Target: 5,000-10,000 single-stream commands/sec
 - Target: 2,000-5,000 multi-stream commands/sec
 - Target: 20,000+ events/sec (batched writes)
 - Target: P95 command latency < 10ms
 
 ### Breaking Changes
+
 - N/A (initial release)
 
 ### Migration Guide
+
 - N/A (initial release)
 
 ### Dependencies
+
 - **Rust**: Minimum supported version 1.70.0
 - **PostgreSQL**: Version 15+ (for PostgreSQL adapter)
 - **Key Dependencies**:
@@ -238,6 +255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `proptest` 1.7+ for property-based testing
 
 ### Architecture Highlights
+
 - **Multi-Stream Event Sourcing**: Commands define their own consistency boundaries
 - **Type-Driven Development**: Leverage Rust's type system for domain modeling
 - **Functional Core, Imperative Shell**: Pure business logic with side effects at boundaries
@@ -251,12 +269,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 EventCore follows [Semantic Versioning](https://semver.org/) with the following guidelines:
 
 ### Major Version (X.0.0)
+
 - Breaking changes to public APIs
 - Changes to the Command trait signature
 - Database schema changes requiring migration
 - Changes to serialization format requiring migration
 
 ### Minor Version (0.X.0)
+
 - New features and capabilities
 - New optional methods on traits
 - New crates in the workspace
@@ -264,13 +284,16 @@ EventCore follows [Semantic Versioning](https://semver.org/) with the following 
 - New configuration options
 
 ### Patch Version (0.0.X)
+
 - Bug fixes
 - Documentation improvements
 - Dependency updates (compatible versions)
 - Internal refactoring without API changes
 
 ### Workspace Versioning
+
 All crates in the EventCore workspace share the same version number to ensure compatibility:
+
 - `eventcore` (core library)
 - `eventcore-postgres` (PostgreSQL adapter)
 - `eventcore-memory` (in-memory adapter)
@@ -279,11 +302,13 @@ All crates in the EventCore workspace share the same version number to ensure co
 - `eventcore-macros` (procedural macros)
 
 ### Pre-release Versions
+
 - Alpha: `X.Y.Z-alpha.N` - Early development, APIs may change
 - Beta: `X.Y.Z-beta.N` - Feature complete, testing phase
 - RC: `X.Y.Z-rc.N` - Release candidate, final testing
 
 ### Compatibility Promise
+
 - **Patch versions**: Fully compatible, safe to upgrade
 - **Minor versions**: Backward compatible, safe to upgrade
 - **Major versions**: May contain breaking changes, migration guide provided
@@ -301,6 +326,7 @@ When contributing to EventCore:
 5. Add property-based tests for new functionality
 
 ### Commit Message Format
+
 ```
 type(scope): description
 

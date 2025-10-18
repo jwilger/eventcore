@@ -11,6 +11,7 @@ Instead of storing current state in a database, event sourcing:
 3. **Guarantees consistency** - Same events always produce same state
 
 Think of it like a bank account:
+
 - Traditional: Store balance = $1000
 - Event Sourcing: Store deposits and withdrawals, calculate balance
 
@@ -24,7 +25,7 @@ Every command defines how events modify state:
 impl CommandLogic for TransferMoney {
     type State = AccountState;
     type Event = BankEvent;
-    
+
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
             BankEvent::AccountOpened { initial_balance, owner } => {
@@ -124,16 +125,16 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
                 .entry(*date)
                 .or_default()
                 .push(TransactionSummary { customer: *customer, amount: *amount });
-            
+
             // Update pre-computed values
             *state.customer_lifetime_values.entry(*customer).or_default() += amount;
-            
+
             // Maintain sorted top customers
             state.top_customers.insert((*amount, *customer));
             if state.top_customers.len() > 100 {
                 state.top_customers.pop_first();
             }
-            
+
             // Recalculate daily average for this date
             let daily_total: Money = state.transactions_by_day[date]
                 .iter()
@@ -165,10 +166,10 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
             // Record phase duration
             let duration = event.occurred_at - started_at;
             state.phase_durations.insert(*phase, duration);
-            
+
             // Mark as completed
             state.completed_phases.insert(*phase);
-            
+
             // Transition to next phase
             state.current_phase = phase.next_phase();
             state.last_transition = event.occurred_at;
@@ -186,13 +187,13 @@ When commands read multiple streams, state combines data from all:
 struct ProcessPayment {
     #[stream]
     order_id: StreamId,
-    
+
     #[stream]
     customer_id: StreamId,
-    
+
     #[stream]
     payment_method_id: StreamId,
-    
+
     amount: Money,
 }
 
@@ -200,11 +201,11 @@ struct ProcessPayment {
 struct PaymentState {
     // From order stream
     order: OrderInfo,
-    
-    // From customer stream  
+
+    // From customer stream
     customer: CustomerInfo,
     customer_payment_history: Vec<PaymentRecord>,
-    
+
     // From payment method stream
     payment_method: PaymentMethodInfo,
     recent_charges: Vec<ChargeAttempt>,
@@ -213,17 +214,17 @@ struct PaymentState {
 fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
     // Events from different streams update different parts of state
     match (&event.stream_id, &event.payload) {
-        (stream_id, PaymentEvent::Order(order_event)) 
+        (stream_id, PaymentEvent::Order(order_event))
             if stream_id == &self.order_id => {
             // Update order portion of state
             apply_order_event(&mut state.order, order_event);
         }
-        (stream_id, PaymentEvent::Customer(customer_event)) 
+        (stream_id, PaymentEvent::Customer(customer_event))
             if stream_id == &self.customer_id => {
             // Update customer portion of state
             apply_customer_event(&mut state.customer, customer_event);
         }
-        (stream_id, PaymentEvent::PaymentMethod(pm_event)) 
+        (stream_id, PaymentEvent::PaymentMethod(pm_event))
             if stream_id == &self.payment_method_id => {
             // Update payment method portion of state
             apply_payment_method_event(&mut state.payment_method, pm_event);
@@ -246,7 +247,7 @@ struct AccountState {
     exists: bool,
     balance: Money,
     status: AccountStatus,
-    
+
     // Optional expensive data
     transaction_history: Option<Vec<Transaction>>,
     statistics: Option<AccountStatistics>,
@@ -260,7 +261,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         }
         // ...
     }
-    
+
     // Only build history if requested
     if state.transaction_history.is_some() {
         if let Some(tx) = event_to_transaction(&event) {
@@ -279,7 +280,7 @@ async fn handle(&self, /* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamS
     if self.requires_history() {
         state.transaction_history = Some(Vec::new());
     }
-    
+
     // State reconstruction will populate history
     // ...
 }
@@ -296,7 +297,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
     if event.occurred_at < cutoff_date {
         return; // Skip events older than 90 days
     }
-    
+
     match &event.payload {
         // Process only recent events
     }
@@ -319,14 +320,14 @@ struct MemoizedState {
 impl MemoizedState {
     fn risk_score(&mut self) -> RiskScore {
         let now = Utc::now();
-        
+
         // Check cache validity (1 hour)
         if let Some((cached_at, score)) = self.cached_risk_score {
             if now - cached_at < Duration::hours(1) {
                 return score;
             }
         }
-        
+
         // Calculate expensive risk score
         let score = calculate_risk_score(self);
         self.cached_risk_score = Some((now, score));
@@ -344,33 +345,33 @@ impl MemoizedState {
 mod tests {
     use super::*;
     use eventcore::testing::builders::*;
-    
+
     #[test]
     fn test_balance_calculation() {
         let command = TransferMoney { /* ... */ };
         let mut state = AccountState::default();
-        
+
         // Create test events
         let events = vec![
-            create_event(BankEvent::AccountOpened { 
+            create_event(BankEvent::AccountOpened {
                 initial_balance: 1000,
                 owner: "Alice".to_string(),
             }),
-            create_event(BankEvent::MoneyDeposited { 
+            create_event(BankEvent::MoneyDeposited {
                 amount: 500,
                 reference: "Salary".to_string(),
             }),
-            create_event(BankEvent::MoneyWithdrawn { 
+            create_event(BankEvent::MoneyWithdrawn {
                 amount: 200,
                 reference: "Rent".to_string(),
             }),
         ];
-        
+
         // Apply events
         for event in events {
             command.apply(&mut state, &event);
         }
-        
+
         // Verify final state
         assert_eq!(state.balance, 1300); // 1000 + 500 - 200
         assert_eq!(state.transaction_count, 2);
@@ -392,14 +393,14 @@ proptest! {
     ) {
         let command = TransferMoney { /* ... */ };
         let mut state = AccountState::default();
-        
+
         // Open account
         let open_event = create_event(BankEvent::AccountOpened {
             initial_balance: 0,
             owner: "Test".to_string(),
         });
         command.apply(&mut state, &open_event);
-        
+
         // Apply deposits
         for amount in deposits {
             let event = create_event(BankEvent::MoneyDeposited {
@@ -408,7 +409,7 @@ proptest! {
             });
             command.apply(&mut state, &event);
         }
-        
+
         // Apply withdrawals
         for amount in withdrawals {
             let event = create_event(BankEvent::MoneyWithdrawn {
@@ -417,7 +418,7 @@ proptest! {
             });
             command.apply(&mut state, &event);
         }
-        
+
         // Balance should never be negative due to saturating_sub
         prop_assert!(state.balance >= 0);
     }
@@ -436,18 +437,18 @@ fn test_commutative_operations() {
         create_tag_added_event("async"),
         create_tag_added_event("eventstore"),
     ];
-    
+
     // Apply in different orders
     let mut state1 = TagState::default();
     for event in &events {
         apply_tag_event(&mut state1, event);
     }
-    
+
     let mut state2 = TagState::default();
     for event in events.iter().rev() {
         apply_tag_event(&mut state2, event);
     }
-    
+
     // Final state should be the same
     assert_eq!(state1.tags, state2.tags);
 }
@@ -458,6 +459,7 @@ fn test_commutative_operations() {
 ### 1. Mutable External State
 
 ❌ **Wrong**: Depending on external state
+
 ```rust
 fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
     match &event.payload {
@@ -470,6 +472,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
 ```
 
 ✅ **Right**: Store everything in events
+
 ```rust
 fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
     match &event.payload {
@@ -484,6 +487,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
 ### 2. Non-Deterministic Operations
 
 ❌ **Wrong**: Using current time
+
 ```rust
 fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
     match &event.payload {
@@ -496,6 +500,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
 ```
 
 ✅ **Right**: Calculate in handle() if needed
+
 ```rust
 async fn handle(
     &self,
@@ -505,7 +510,7 @@ async fn handle(
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
     // Calculate age here, not in apply()
     let age_in_days = (Utc::now() - state.created_at).num_days();
-    
+
     // Use for business logic...
 }
 ```
@@ -513,6 +518,7 @@ async fn handle(
 ### 3. Unbounded State Growth
 
 ❌ **Wrong**: Keeping everything forever
+
 ```rust
 fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
     match &event.payload {
@@ -525,6 +531,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
 ```
 
 ✅ **Right**: Keep bounded state
+
 ```rust
 fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
     match &event.payload {
@@ -536,7 +543,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
                     state.recent_errors.remove(0);
                 }
             }
-            
+
             // Track counts instead of full data
             *state.entries_by_level.entry(*level).or_default() += 1;
         }
@@ -560,7 +567,7 @@ struct TemporalState {
 
 fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
     let old_value = state.current_value;
-    
+
     match &event.payload {
         ValueEvent::Changed { new_value } => {
             state.current_value = *new_value;
@@ -595,7 +602,7 @@ Calculate derived values efficiently:
 struct DerivedState {
     // Raw data
     orders: Vec<Order>,
-    
+
     // Derived data (calculated in apply)
     total_revenue: Money,
     average_order_value: Option<Money>,
@@ -607,7 +614,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         OrderEvent::Placed { order } => {
             // Update raw data
             state.orders.push(order.clone());
-            
+
             // Update derived data incrementally
             state.total_revenue += order.total;
             state.average_order_value = Some(
@@ -632,6 +639,7 @@ State reconstruction in EventCore:
 - ✅ **Flexible** - Support any state structure
 
 Best practices:
+
 1. Keep apply() functions pure and deterministic
 2. Pre-calculate expensive derived data
 3. Design state for your command's needs

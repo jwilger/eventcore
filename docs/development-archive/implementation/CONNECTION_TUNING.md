@@ -5,6 +5,7 @@ This guide provides detailed information on tuning EventCore's PostgreSQL connec
 ## Understanding Connection Pools
 
 Connection pooling is critical for PostgreSQL performance because:
+
 - Creating new database connections is expensive (~50-100ms)
 - PostgreSQL has a per-connection memory overhead (~10MB)
 - Connection limits prevent database overload
@@ -14,7 +15,9 @@ Connection pooling is critical for PostgreSQL performance because:
 ### Pool Size Configuration
 
 #### `max_connections` (default: 20)
+
 The maximum number of connections in the pool. This should be set based on:
+
 - Number of concurrent requests your application handles
 - PostgreSQL's `max_connections` setting (default: 100)
 - Available memory on database server
@@ -22,7 +25,9 @@ The maximum number of connections in the pool. This should be set based on:
 **Formula**: `max_connections = min(expected_concurrent_requests * 1.2, postgres_max_connections * 0.8)`
 
 #### `min_connections` (default: 2)
+
 Minimum idle connections to maintain. Benefits:
+
 - Eliminates connection startup latency for initial requests
 - Provides instant capacity for traffic spikes
 - Costs: Idle connection memory on database server
@@ -32,12 +37,14 @@ Minimum idle connections to maintain. Benefits:
 ### Timeout Configuration
 
 #### `connect_timeout` (default: 10s)
+
 How long to wait when acquiring a connection from the pool.
 
 - **Short timeouts (1-5s)**: Fail fast, good for user-facing APIs
 - **Long timeouts (10-30s)**: Better for batch jobs, background workers
 
 #### `query_timeout` (default: 30s)
+
 Maximum time for individual query execution.
 
 - **OLTP workloads**: 1-10 seconds
@@ -45,6 +52,7 @@ Maximum time for individual query execution.
 - **Batch operations**: May need no timeout
 
 #### `idle_timeout` (default: 600s)
+
 How long a connection can remain idle before being closed.
 
 - **High traffic**: 300-600 seconds (5-10 minutes)
@@ -52,9 +60,11 @@ How long a connection can remain idle before being closed.
 - **Cost-sensitive**: 30-60 seconds
 
 #### `max_lifetime` (default: 1800s)
+
 Maximum lifetime of a connection regardless of activity.
 
 Benefits of connection recycling:
+
 - Prevents memory leaks in long-lived connections
 - Distributes load after database failovers
 - Clears connection-specific state
@@ -62,6 +72,7 @@ Benefits of connection recycling:
 ## Workload-Specific Configurations
 
 ### High-Throughput OLTP
+
 ```rust
 let config = PostgresConfigBuilder::new()
     .database_url(url)
@@ -75,6 +86,7 @@ let config = PostgresConfigBuilder::new()
 ```
 
 ### Batch Processing
+
 ```rust
 let config = PostgresConfigBuilder::new()
     .database_url(url)
@@ -87,6 +99,7 @@ let config = PostgresConfigBuilder::new()
 ```
 
 ### Microservices
+
 ```rust
 let config = PostgresConfigBuilder::new()
     .database_url(url)
@@ -103,6 +116,7 @@ let config = PostgresConfigBuilder::new()
 ### Built-in Health Checks
 
 EventCore performs automatic health checks including:
+
 - Basic connectivity tests
 - Connection pool status monitoring
 - Query performance benchmarking
@@ -158,6 +172,7 @@ let (task, stop_signal) = store.start_pool_monitoring();
 ## PostgreSQL Server Tuning
 
 ### Database Configuration
+
 ```sql
 -- Increase connection limit if needed
 ALTER SYSTEM SET max_connections = 200;
@@ -177,7 +192,7 @@ ALTER SYSTEM SET statement_timeout = '30s';
 ### Connection Limits by Tier
 
 - **Development**: 20-50 connections
-- **Small Production**: 50-100 connections  
+- **Small Production**: 50-100 connections
 - **Medium Production**: 100-300 connections
 - **Large Production**: 300-1000 connections (use pgBouncer)
 
@@ -186,6 +201,7 @@ ALTER SYSTEM SET statement_timeout = '30s';
 ### Problem: "Too many connections" errors
 
 **Solutions**:
+
 1. Reduce `max_connections` in EventCore config
 2. Check for connection leaks (connections not returned to pool)
 3. Implement connection pooling at database level (pgBouncer)
@@ -194,6 +210,7 @@ ALTER SYSTEM SET statement_timeout = '30s';
 ### Problem: High connection acquisition time
 
 **Solutions**:
+
 1. Increase `min_connections` to maintain warm connections
 2. Reduce `idle_timeout` to free connections faster
 3. Increase `max_connections` if utilization is high
@@ -202,6 +219,7 @@ ALTER SYSTEM SET statement_timeout = '30s';
 ### Problem: Intermittent connection failures
 
 **Solutions**:
+
 1. Enable `test_before_acquire` (impacts performance)
 2. Reduce `max_lifetime` to refresh connections more often
 3. Check network stability between application and database
@@ -227,23 +245,23 @@ let config = PostgresConfigBuilder::new()
     // Pool sizing based on expected load
     .max_connections(40)  // Support 30-35 concurrent operations
     .min_connections(5)   // Keep 5 connections warm
-    
+
     // Timeouts for reliability
     .connect_timeout(Duration::from_secs(5))     // Fail fast if overloaded
     .query_timeout(Some(Duration::from_secs(10))) // Prevent runaway queries
-    
+
     // Connection lifecycle
     .idle_timeout(Some(Duration::from_secs(300)))   // 5 minute idle timeout
     .max_lifetime(Some(Duration::from_secs(3600)))  // Recycle hourly
-    
+
     // Performance optimizations
     .test_before_acquire(false)  // Trust connection state
-    
+
     // Retry configuration
     .max_retries(3)
     .retry_base_delay(Duration::from_millis(100))
     .retry_max_delay(Duration::from_secs(2))
-    
+
     .build();
 
 // Initialize with monitoring

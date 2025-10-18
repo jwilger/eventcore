@@ -7,6 +7,7 @@ EventCore already has comprehensive internal metrics and tracing infrastructure.
 ## Current State
 
 EventCore provides:
+
 - **Metrics**: Counter, Gauge, Timer implementations with comprehensive domain-specific metrics
 - **Tracing**: TraceContext and span management with correlation IDs
 - **Health checks**: System health monitoring capabilities
@@ -34,6 +35,7 @@ pub trait TracingExporter: Send + Sync {
 ### 2. OpenTelemetry Integration
 
 #### Dependencies
+
 ```toml
 [dependencies]
 opentelemetry = { version = "0.27", features = ["metrics", "trace"], optional = true }
@@ -43,6 +45,7 @@ tracing-opentelemetry = { version = "0.28", optional = true }
 ```
 
 #### Implementation Strategy
+
 1. Create `OpenTelemetryExporter` that implements both `MetricsExporter` and `TracingExporter`
 2. Map EventCore metrics to OpenTelemetry instruments:
    - Counter → Counter
@@ -54,12 +57,14 @@ tracing-opentelemetry = { version = "0.28", optional = true }
 ### 3. Prometheus Integration
 
 #### Dependencies
+
 ```toml
 [dependencies]
 prometheus = { version = "0.13", optional = true }
 ```
 
 #### Implementation Strategy
+
 1. Create `PrometheusExporter` that implements `MetricsExporter`
 2. Map EventCore metrics to Prometheus metrics:
    - Counter → prometheus::Counter
@@ -71,6 +76,7 @@ prometheus = { version = "0.13", optional = true }
 ### 4. Feature Flags
 
 Make integrations optional via feature flags:
+
 ```toml
 [features]
 default = []
@@ -101,12 +107,14 @@ event_store.register_exporter(Box::new(prometheus_exporter));
 ## Metric Naming Conventions
 
 ### OpenTelemetry
+
 - `eventcore.commands.total` (counter)
 - `eventcore.commands.duration` (histogram)
 - `eventcore.events.written` (counter)
 - `eventcore.streams.active` (gauge)
 
 ### Prometheus
+
 - `eventcore_commands_total` (counter)
 - `eventcore_command_duration_seconds` (histogram)
 - `eventcore_events_written_total` (counter)

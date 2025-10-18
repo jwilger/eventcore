@@ -3,6 +3,9 @@
 /target/
 **/target/
 
+/node_modules/
+**/node_modules/
+
 # Remove Cargo.lock from gitignore as backup, since this is a library project
 # Cargo.lock
 
@@ -37,6 +40,9 @@
 # Local cargo tools installed by nix flake
 .cargo-bin/
 
+# Cargo audit advisory database (project-local)
+.cargo-advisory-db/
+
 # Coverage reports
 *.profraw
 *.profdata
@@ -64,15 +70,4 @@ website/src/logo.png
 
 # Claude Code local settings
 .claude/settings.local.json
-
-
-# Added by cargo
-
-/target
-
-
-# Added by cargo
-#
-# already existing elements were commented out
-
-#/target
+.cargo-advisory-db..lock

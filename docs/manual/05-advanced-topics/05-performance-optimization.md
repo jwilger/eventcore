@@ -17,29 +17,29 @@ lazy_static! {
         "eventcore_commands_per_second",
         "Commands executed per second"
     ).unwrap();
-    
+
     static ref EVENTS_PER_SECOND: Counter = register_counter!(
-        "eventcore_events_per_second", 
+        "eventcore_events_per_second",
         "Events written per second"
     ).unwrap();
-    
+
     // Latency metrics
     static ref COMMAND_LATENCY: Histogram = register_histogram!(
         "eventcore_command_latency_seconds",
         "Command execution latency"
     ).unwrap();
-    
+
     static ref EVENT_STORE_LATENCY: Histogram = register_histogram!(
         "eventcore_event_store_latency_seconds",
         "Event store operation latency"
     ).unwrap();
-    
+
     // Resource usage
     static ref ACTIVE_STREAMS: Gauge = register_gauge!(
         "eventcore_active_streams",
         "Number of active event streams"
     ).unwrap();
-    
+
     static ref MEMORY_USAGE: Gauge = register_gauge!(
         "eventcore_memory_usage_bytes",
         "Memory usage in bytes"
@@ -62,7 +62,7 @@ impl PerformanceMetrics {
         COMMANDS_PER_SECOND.inc();
         COMMAND_LATENCY.observe(duration.as_secs_f64());
     }
-    
+
     fn record_events_written(&self, count: usize) {
         EVENTS_PER_SECOND.inc_by(count as f64);
     }
@@ -79,12 +79,12 @@ struct PerformanceTargets {
     // Throughput targets
     pub min_commands_per_second: f64,      // 100+ commands/sec
     pub min_events_per_second: f64,        // 1000+ events/sec
-    
+
     // Latency targets
     pub max_p50_latency: Duration,         // <10ms
     pub max_p95_latency: Duration,         // <50ms
     pub max_p99_latency: Duration,         // <100ms
-    
+
     // Resource targets
     pub max_memory_usage_mb: f64,          // <1GB per service
     pub max_cpu_usage_percent: f64,        // <70%
@@ -102,7 +102,7 @@ impl PerformanceTargets {
             max_cpu_usage_percent: 70.0,
         }
     }
-    
+
     fn development() -> Self {
         Self {
             min_commands_per_second: 10.0,
@@ -152,11 +152,11 @@ impl OptimizedPostgresConfig {
             command_timeout: Duration::from_secs(30),
         }
     }
-    
+
     async fn create_pool(&self) -> Result<Pool<Postgres>, sqlx::Error> {
         let options = sqlx::postgres::PgConnectOptions::from_url(&url::Url::parse(&self.database_url)?)?
             .application_name("eventcore-optimized");
-        
+
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(self.max_connections)
             .min_connections(self.min_connections)
@@ -177,7 +177,7 @@ struct OptimizedPostgresEventStore {
 impl OptimizedPostgresEventStore {
     async fn new(config: OptimizedPostgresConfig) -> Result<Self, sqlx::Error> {
         let pool = config.create_pool().await?;
-        
+
         Ok(Self {
             pool,
             config,
@@ -196,7 +196,7 @@ Batch database operations for better throughput:
 impl EventStore for OptimizedPostgresEventStore {
     type Event = serde_json::Value;
     type Error = EventStoreError;
-    
+
     async fn write_events_batch(
         &self,
         events: Vec<EventToWrite<Self::Event>>,
@@ -204,26 +204,26 @@ impl EventStore for OptimizedPostgresEventStore {
         if events.is_empty() {
             return Ok(WriteResult { events_written: 0 });
         }
-        
+
         // Batch events by stream for version checking
         let mut stream_batches: HashMap<StreamId, Vec<_>> = HashMap::new();
         for event in events {
             stream_batches.entry(event.stream_id.clone()).or_default().push(event);
         }
-        
+
         let mut transaction = self.pool.begin().await?;
         let mut total_written = 0;
-        
+
         for (stream_id, batch) in stream_batches {
             let written = self.write_stream_batch(&mut transaction, stream_id, batch).await?;
             total_written += written;
         }
-        
+
         transaction.commit().await?;
-        
+
         Ok(WriteResult { events_written: total_written })
     }
-    
+
     async fn write_stream_batch(
         &self,
         transaction: &mut sqlx::Transaction<'_, Postgres>,
@@ -233,10 +233,10 @@ impl EventStore for OptimizedPostgresEventStore {
         if events.is_empty() {
             return Ok(0);
         }
-        
+
         // Check current version
         let current_version = self.get_stream_version(&mut *transaction, &stream_id).await?;
-        
+
         // Validate expected versions
         let expected_version = events[0].expected_version;
         if expected_version != current_version {
@@ -246,22 +246,22 @@ impl EventStore for OptimizedPostgresEventStore {
                 actual: current_version,
             });
         }
-        
+
         // Prepare batch insert
         let mut values = Vec::new();
         let mut parameters = Vec::new();
         let mut param_index = 1;
-        
+
         for (i, event) in events.iter().enumerate() {
             let version = current_version.0 + i as u64 + 1;
             let event_id = EventId::new_v7();
-            
+
             values.push(format!(
                 "(${}, ${}, ${}, ${}, ${}, ${}, ${})",
                 param_index, param_index + 1, param_index + 2, param_index + 3,
                 param_index + 4, param_index + 5, param_index + 6
             ));
-            
+
             parameters.extend([
                 event_id.as_ref(),
                 stream_id.as_ref(),
@@ -271,22 +271,22 @@ impl EventStore for OptimizedPostgresEventStore {
                 &serde_json::to_string(&event.metadata)?,
                 &Utc::now().to_rfc3339(),
             ]);
-            
+
             param_index += 7;
         }
-        
+
         let query = format!(
             "INSERT INTO events (id, stream_id, version, event_type, payload, metadata, occurred_at) VALUES {}",
             values.join(", ")
         );
-        
+
         let mut query_builder = sqlx::query(&query);
         for param in parameters {
             query_builder = query_builder.bind(param);
         }
-        
+
         let rows_affected = query_builder.execute(&mut **transaction).await?.rows_affected();
-        
+
         Ok(rows_affected as usize)
     }
 }
@@ -307,34 +307,34 @@ impl OptimizedPostgresEventStore {
     ) -> Result<StreamEvents<Self::Event>, Self::Error> {
         let query = "
             SELECT id, stream_id, version, event_type, payload, metadata, occurred_at
-            FROM events 
+            FROM events
             WHERE stream_id = $1 AND version >= $2
             ORDER BY version ASC
             LIMIT $3
         ";
-        
+
         let rows = sqlx::query(query)
             .bind(stream_id.as_ref())
             .bind(from_version.as_ref())
             .bind(page_size as i64)
             .fetch_all(&self.pool)
             .await?;
-        
+
         let events = rows.into_iter()
             .map(|row| self.row_to_event(row))
             .collect::<Result<Vec<_>, _>>()?;
-        
+
         let version = events.last()
             .map(|e| e.version)
             .unwrap_or(from_version);
-        
+
         Ok(StreamEvents {
             stream_id: stream_id.clone(),
             version,
             events,
         })
     }
-    
+
     // Multi-stream reading with parallel queries
     async fn read_multiple_streams(
         &self,
@@ -344,11 +344,11 @@ impl OptimizedPostgresEventStore {
         let futures = stream_ids.into_iter().map(|stream_id| {
             self.read_stream(&stream_id, options.clone())
         });
-        
+
         let results = futures::future::try_join_all(futures).await?;
         Ok(results)
     }
-    
+
     // Optimized subscription reading
     async fn read_all_events_from(
         &self,
@@ -357,18 +357,18 @@ impl OptimizedPostgresEventStore {
     ) -> Result<Vec<StoredEvent<Self::Event>>, Self::Error> {
         let query = "
             SELECT id, stream_id, version, event_type, payload, metadata, occurred_at
-            FROM events 
+            FROM events
             WHERE occurred_at > $1
             ORDER BY occurred_at ASC
             LIMIT $2
         ";
-        
+
         let rows = sqlx::query(query)
             .bind(position.timestamp)
             .bind(batch_size as i64)
             .fetch_all(&self.pool)
             .await?;
-        
+
         rows.into_iter()
             .map(|row| self.row_to_event(row))
             .collect()
@@ -400,16 +400,16 @@ impl OptimizedCommandExecutor {
             cache_size: 1000,
         }
     }
-    
+
     async fn execute_with_caching<C: Command>(
         &self,
         command: &C,
     ) -> CommandResult<ExecutionResult> {
         let read_streams = self.read_streams_for_command(command).await?;
-        
+
         // Try to get cached state
         let cached_state = self.get_cached_state::<C>(&read_streams).await;
-        
+
         let state = match cached_state {
             Some(state) => state,
             None => {
@@ -419,21 +419,21 @@ impl OptimizedCommandExecutor {
                 state
             }
         };
-        
+
         // Execute command
         let mut stream_resolver = StreamResolver::new();
         let events = command.handle(read_streams, state, &mut stream_resolver).await?;
-        
+
         // Write events and invalidate cache
         let result = self.write_events(events).await?;
         self.invalidate_cache_for_streams(&result.affected_streams).await;
-        
+
         Ok(result)
     }
-    
+
     async fn get_cached_state<C: Command>(&self, read_streams: &ReadStreams<C::StreamSet>) -> Option<C::State> {
         let cache = self.state_cache.read().await;
-        
+
         // Check if all streams are cached and up-to-date
         for stream_data in read_streams.iter() {
             if let Some(cached) = cache.get(&stream_data.stream_id) {
@@ -445,14 +445,14 @@ impl OptimizedCommandExecutor {
                 return None;
             }
         }
-        
+
         // All streams cached - reconstruct state from cache
         self.reconstruct_from_cache(read_streams).await
     }
-    
+
     async fn cache_state<C: Command>(&self, read_streams: &ReadStreams<C::StreamSet>, state: &C::State) {
         let mut cache = self.state_cache.write().await;
-        
+
         for stream_data in read_streams.iter() {
             let cached_data = CachedStreamData {
                 stream_id: stream_data.stream_id.clone(),
@@ -460,7 +460,7 @@ impl OptimizedCommandExecutor {
                 events: stream_data.events.clone(),
                 cached_at: Utc::now(),
             };
-            
+
             cache.put(stream_data.stream_id.clone(), Arc::new(cached_data));
         }
     }
@@ -489,7 +489,7 @@ trait StreamingEventStore {
         stream_id: &StreamId,
         from_version: EventVersion,
     ) -> impl Stream<Item = Result<StoredEvent<serde_json::Value>, EventStoreError>>;
-    
+
     fn stream_all_events(
         &self,
         from_position: EventPosition,
@@ -505,36 +505,36 @@ impl StreamingEventStore for OptimizedPostgresEventStore {
         let pool = self.pool.clone();
         let stream_id = stream_id.clone();
         let page_size = 100;
-        
+
         async_stream::try_stream! {
             let mut current_version = from_version;
-            
+
             loop {
                 let query = "
                     SELECT id, stream_id, version, event_type, payload, metadata, occurred_at
-                    FROM events 
+                    FROM events
                     WHERE stream_id = $1 AND version >= $2
                     ORDER BY version ASC
                     LIMIT $3
                 ";
-                
+
                 let rows = sqlx::query(query)
                     .bind(stream_id.as_ref())
                     .bind(current_version.as_ref())
                     .bind(page_size as i64)
                     .fetch_all(&pool)
                     .await?;
-                
+
                 if rows.is_empty() {
                     break;
                 }
-                
+
                 for row in rows {
                     let event = self.row_to_event(row)?;
                     current_version = EventVersion::from(event.version.as_u64() + 1);
                     yield event;
                 }
-                
+
                 if rows.len() < page_size {
                     break;
                 }
@@ -548,23 +548,23 @@ impl StreamingEventStore for OptimizedPostgresEventStore {
 impl Projection for StreamingProjection {
     type Event = serde_json::Value;
     type Error = ProjectionError;
-    
+
     async fn rebuild_from_stream(
         &mut self,
         event_stream: impl Stream<Item = Result<StoredEvent<Self::Event>, EventStoreError>>,
     ) -> Result<(), Self::Error> {
         let mut stream = std::pin::pin!(event_stream);
-        
+
         while let Some(event_result) = stream.next().await {
             let event = event_result?;
             self.apply(&event).await?;
-            
+
             // Checkpoint every 1000 events
             if event.version.as_u64() % 1000 == 0 {
                 self.save_checkpoint(event.version).await?;
             }
         }
-        
+
         Ok(())
     }
 }
@@ -595,24 +595,24 @@ impl ParallelCommandExecutor {
             stream_locks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-    
+
     async fn execute_batch<C: Command>(
         &self,
         commands: Vec<C>,
     ) -> Vec<CommandResult<ExecutionResult>> {
         // Group commands by affected streams
         let stream_groups = self.group_by_streams(&commands).await;
-        
+
         let futures = stream_groups.into_iter().map(|(streams, commands)| {
             self.execute_stream_group(streams, commands)
         });
-        
+
         let results = futures::future::join_all(futures).await;
-        
+
         // Flatten results
         results.into_iter().flatten().collect()
     }
-    
+
     async fn execute_stream_group<C: Command>(
         &self,
         affected_streams: HashSet<StreamId>,
@@ -620,49 +620,49 @@ impl ParallelCommandExecutor {
     ) -> Vec<CommandResult<ExecutionResult>> {
         // Acquire locks for all streams in this group
         let _locks = self.acquire_stream_locks(&affected_streams).await;
-        
+
         // Execute commands sequentially within the group
         let mut results = Vec::new();
-        
+
         for command in commands {
             let _permit = self.concurrency_limit.acquire().await.unwrap();
             let result = self.inner.execute(&command).await;
             results.push(result);
         }
-        
+
         results
     }
-    
+
     async fn group_by_streams<C: Command>(
         &self,
         commands: &[C],
     ) -> HashMap<HashSet<StreamId>, Vec<C>> {
         let mut groups = HashMap::new();
-        
+
         for command in commands {
             let streams = command.read_streams(&command).into_iter().collect();
             groups.entry(streams).or_insert_with(Vec::new).push(command.clone());
         }
-        
+
         groups
     }
-    
+
     async fn acquire_stream_locks(
         &self,
         stream_ids: &HashSet<StreamId>,
     ) -> Vec<tokio::sync::MutexGuard<'_, ()>> {
         let mut locks = Vec::new();
-        
+
         // Sort stream IDs to prevent deadlocks
         let mut sorted_streams: Vec<_> = stream_ids.iter().collect();
         sorted_streams.sort();
-        
+
         for stream_id in sorted_streams {
             let lock = {
                 let stream_locks = self.stream_locks.read().await;
                 stream_locks.get(stream_id).cloned()
             };
-            
+
             let lock = match lock {
                 Some(lock) => lock,
                 None => {
@@ -672,10 +672,10 @@ impl ParallelCommandExecutor {
                         .clone()
                 }
             };
-            
+
             locks.push(lock.lock().await);
         }
-        
+
         locks
     }
 }
@@ -715,27 +715,27 @@ where
         Fut: Future<Output = Vec<R>> + Send,
     {
         let (sender, receiver) = mpsc::unbounded_channel();
-        
+
         tokio::spawn(Self::batch_worker(receiver, batch_size, batch_timeout, processor));
-        
+
         Self {
             sender,
             batch_size,
             batch_timeout,
         }
     }
-    
+
     async fn process(&self, item: T) -> Result<R, BatchError> {
         let (response_sender, response_receiver) = oneshot::channel();
-        
+
         self.sender.send(BatchItem {
             item,
             response_sender,
         })?;
-        
+
         response_receiver.await.map_err(BatchError::Cancelled)
     }
-    
+
     async fn batch_worker<F, Fut>(
         mut receiver: mpsc::UnboundedReceiver<BatchItem<T, R>>,
         batch_size: usize,
@@ -749,7 +749,7 @@ where
         let mut batch = Vec::new();
         let mut senders = Vec::new();
         let mut timer = interval(batch_timeout);
-        
+
         loop {
             select! {
                 item = receiver.recv() => {
@@ -757,7 +757,7 @@ where
                         Some(BatchItem { item, response_sender }) => {
                             batch.push(item);
                             senders.push(response_sender);
-                            
+
                             if batch.len() >= batch_size {
                                 Self::process_batch(&processor, &mut batch, &mut senders).await;
                             }
@@ -773,7 +773,7 @@ where
             }
         }
     }
-    
+
     async fn process_batch<F, Fut>(
         processor: &F,
         batch: &mut Vec<T>,
@@ -786,12 +786,12 @@ where
         if batch.is_empty() {
             return;
         }
-        
+
         let items = std::mem::take(batch);
         let response_senders = std::mem::take(senders);
-        
+
         let results = processor(items).await;
-        
+
         for (sender, result) in response_senders.into_iter().zip(results) {
             let _ = sender.send(result); // Ignore send errors
         }
@@ -805,7 +805,7 @@ impl OptimizedPostgresEventStore {
     fn new_with_batching(pool: Pool<Postgres>) -> (Self, EventBatch) {
         let store = Self::new(pool);
         let store_clone = store.clone();
-        
+
         let batch_processor = BatchProcessor::new(
             100,                           // Batch size
             Duration::from_millis(10),     // Batch timeout
@@ -819,7 +819,7 @@ impl OptimizedPostgresEventStore {
                 }
             }
         );
-        
+
         (store, batch_processor)
     }
 }
@@ -837,13 +837,13 @@ trait IncrementalProjection {
     type Event;
     type State;
     type Error;
-    
+
     async fn apply_incremental(
         &mut self,
         event: &StoredEvent<Self::Event>,
         previous_state: Option<&Self::State>,
     ) -> Result<Self::State, Self::Error>;
-    
+
     async fn get_checkpoint(&self) -> Result<EventVersion, Self::Error>;
     async fn save_checkpoint(&self, version: EventVersion) -> Result<(), Self::Error>;
 }
@@ -859,7 +859,7 @@ impl IncrementalProjection for OptimizedUserProjection {
     type Event = UserEvent;
     type State = HashMap<UserId, UserSummary>;
     type Error = ProjectionError;
-    
+
     async fn apply_incremental(
         &mut self,
         event: &StoredEvent<Self::Event>,
@@ -867,7 +867,7 @@ impl IncrementalProjection for OptimizedUserProjection {
     ) -> Result<Self::State, Self::Error> {
         // Clone state if provided, otherwise start fresh
         let mut state = previous_state.cloned().unwrap_or_default();
-        
+
         // Apply only this event
         match &event.payload {
             UserEvent::Registered { user_id, email, profile } => {
@@ -886,22 +886,22 @@ impl IncrementalProjection for OptimizedUserProjection {
                 }
             }
         }
-        
+
         // Update checkpoint
         self.last_processed_version = event.version;
-        
+
         // Save checkpoint periodically
         if event.version.as_u64() % self.checkpoint_interval == 0 {
             self.save_checkpoint(event.version).await?;
         }
-        
+
         Ok(state)
     }
-    
+
     async fn get_checkpoint(&self) -> Result<EventVersion, Self::Error> {
         Ok(self.last_processed_version)
     }
-    
+
     async fn save_checkpoint(&self, version: EventVersion) -> Result<(), Self::Error> {
         // Save to persistent storage
         // Implementation depends on your checkpoint store
@@ -917,22 +917,22 @@ Use database materialized views for query optimization:
 ```sql
 -- Create materialized view for user summaries
 CREATE MATERIALIZED VIEW user_summaries AS
-SELECT 
+SELECT
     (payload->>'user_id')::uuid as user_id,
     payload->>'email' as email,
     payload->'profile'->>'display_name' as display_name,
     occurred_at as created_at,
     occurred_at as updated_at
-FROM events 
+FROM events
 WHERE event_type = 'UserRegistered'
 UNION ALL
-SELECT 
+SELECT
     (payload->>'user_id')::uuid as user_id,
     NULL as email,
     payload->'profile'->>'display_name' as display_name,
     NULL as created_at,
     occurred_at as updated_at
-FROM events 
+FROM events
 WHERE event_type = 'UserProfileUpdated';
 
 -- Create indexes for fast queries
@@ -959,9 +959,9 @@ fn benchmark_command_execution(c: &mut Criterion) {
         InMemoryEventStore::new()
     });
     let executor = CommandExecutor::new(store);
-    
+
     let mut group = c.benchmark_group("command_execution");
-    
+
     for concurrency in [1, 10, 50, 100].iter() {
         group.bench_with_input(
             BenchmarkId::new("create_user", concurrency),
@@ -975,16 +975,16 @@ fn benchmark_command_execution(c: &mut Criterion) {
                             last_name: LastName::try_new("Test".to_string()).unwrap(),
                         })
                         .collect();
-                    
+
                     let futures = commands.into_iter().map(|cmd| executor.execute(&cmd));
                     let results = futures::future::join_all(futures).await;
-                    
+
                     black_box(results);
                 });
             }
         );
     }
-    
+
     group.finish();
 }
 
@@ -993,9 +993,9 @@ fn benchmark_event_store_operations(c: &mut Criterion) {
     let store = rt.block_on(async {
         PostgresEventStore::new("postgresql://localhost/eventcore_bench").await.unwrap()
     });
-    
+
     let mut group = c.benchmark_group("event_store");
-    
+
     for batch_size in [1, 10, 100, 1000].iter() {
         group.bench_with_input(
             BenchmarkId::new("write_events", batch_size),
@@ -1010,14 +1010,14 @@ fn benchmark_event_store_operations(c: &mut Criterion) {
                             expected_version: EventVersion::from(0),
                         })
                         .collect();
-                    
+
                     let result = store.write_events(events).await;
                     black_box(result);
                 });
             }
         );
     }
-    
+
     group.finish();
 }
 
@@ -1058,15 +1058,15 @@ impl MemoryUsageReport {
 #[cfg(test)]
 mod memory_tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_memory_usage_during_batch_execution() {
         let initial_memory = MemoryUsageReport::capture();
-        
+
         // Execute large batch of commands
         let store = InMemoryEventStore::new();
         let executor = CommandExecutor::new(store);
-        
+
         let commands: Vec<_> = (0..10000)
             .map(|i| CreateUser {
                 email: Email::try_new(format!("user{}@example.com", i)).unwrap(),
@@ -1074,19 +1074,19 @@ mod memory_tests {
                 last_name: LastName::try_new("Test".to_string()).unwrap(),
             })
             .collect();
-        
+
         let peak_memory = MemoryUsageReport::capture();
-        
+
         for command in commands {
             executor.execute(&command).await.unwrap();
         }
-        
+
         let final_memory = MemoryUsageReport::capture();
-        
+
         println!("Initial memory: {:?}", initial_memory);
         println!("Peak memory: {:?}", peak_memory);
         println!("Final memory: {:?}", final_memory);
-        
+
         // Assert memory doesn't grow unbounded
         let memory_growth = final_memory.current_memory.saturating_sub(initial_memory.current_memory);
         assert!(memory_growth < 100 * 1024 * 1024, "Memory growth too large: {} bytes", memory_growth);
@@ -1114,19 +1114,19 @@ impl PerformanceMonitor {
     fn new() -> Self {
         let registry = Registry::new();
         let metrics = PerformanceMetrics::new(&registry);
-        
+
         Self { registry, metrics }
     }
-    
+
     async fn metrics_handler(&self) -> String {
         let encoder = TextEncoder::new();
         let metric_families = self.registry.gather();
         encoder.encode_to_string(&metric_families).unwrap()
     }
-    
+
     fn dashboard_routes(&self) -> Router {
         let monitor = self.clone();
-        
+
         Router::new()
             .route("/metrics", get(move || monitor.metrics_handler()))
             .route("/health", get(|| async { "OK" }))
@@ -1146,7 +1146,7 @@ const DASHBOARD_HTML: &str = r#"
 </head>
 <body>
     <h1>EventCore Performance Metrics</h1>
-    
+
     <div style="display: flex; flex-wrap: wrap;">
         <div style="width: 50%; padding: 10px;">
             <canvas id="throughputChart"></canvas>
@@ -1161,7 +1161,7 @@ const DASHBOARD_HTML: &str = r#"
             <canvas id="streamsChart"></canvas>
         </div>
     </div>
-    
+
     <script>
         // Real-time dashboard implementation
         async function updateMetrics() {
@@ -1170,7 +1170,7 @@ const DASHBOARD_HTML: &str = r#"
             // Parse Prometheus metrics and update charts
             parseAndUpdateCharts(text);
         }
-        
+
         setInterval(updateMetrics, 5000); // Update every 5 seconds
         updateMetrics(); // Initial load
     </script>
@@ -1203,12 +1203,12 @@ impl PerformanceAlerting {
             alert_enabled: Arc::new(AtomicBool::new(true)),
         }
     }
-    
+
     async fn check_metrics(&self, metrics: &PerformanceMetrics) {
         if !self.alert_enabled.load(Ordering::Relaxed) {
             return;
         }
-        
+
         // Check command latency
         if metrics.p95_command_latency > self.thresholds.max_p95_latency {
             self.send_alert(
@@ -1220,7 +1220,7 @@ impl PerformanceAlerting {
                 )
             ).await;
         }
-        
+
         // Check throughput
         if metrics.commands_per_second < self.thresholds.min_commands_per_second {
             self.send_alert(
@@ -1232,7 +1232,7 @@ impl PerformanceAlerting {
                 )
             ).await;
         }
-        
+
         // Check memory usage
         if metrics.memory_usage_mb > self.thresholds.max_memory_usage_mb {
             self.send_alert(
@@ -1245,30 +1245,30 @@ impl PerformanceAlerting {
             ).await;
         }
     }
-    
+
     async fn send_alert(&self, alert_type: &str, message: &str) {
         let mut last_alerts = self.last_alert.lock().await;
         let now = Utc::now();
-        
+
         // Check cooldown
         if let Some(last_time) = last_alerts.get(alert_type) {
             if now.signed_duration_since(*last_time) < self.alert_cooldown {
                 return; // Still in cooldown
             }
         }
-        
+
         // Send alert (implement your alerting system)
         self.dispatch_alert(alert_type, message).await;
-        
+
         // Update last alert time
         last_alerts.insert(alert_type.to_string(), now);
     }
-    
+
     async fn dispatch_alert(&self, alert_type: &str, message: &str) {
         // Implementation depends on your alerting system
         // Examples: Slack, PagerDuty, email, etc.
         tracing::error!("PERFORMANCE ALERT [{}]: {}", alert_type, message);
-        
+
         // Example: Send to Slack
         if let Ok(webhook_url) = std::env::var("SLACK_WEBHOOK_URL") {
             let payload = json!({
@@ -1276,7 +1276,7 @@ impl PerformanceAlerting {
                 "channel": "#alerts",
                 "username": "EventCore Monitor"
             });
-            
+
             let client = reqwest::Client::new();
             let _ = client.post(&webhook_url)
                 .json(&payload)
@@ -1309,6 +1309,7 @@ Performance optimization in EventCore:
 - ✅ **Production monitoring** - Dashboards and alerting
 
 Key strategies:
+
 1. Optimize the event store with connection pooling and batching
 2. Use streaming for large datasets to minimize memory usage
 3. Implement parallel execution for independent commands

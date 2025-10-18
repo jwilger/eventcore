@@ -7,7 +7,7 @@ Event modeling is a visual technique for designing event-driven systems. It help
 Event modeling is a method of describing systems using three core elements:
 
 1. **Events** (Orange) - Things that happened
-2. **Commands** (Blue) - Things users want to do  
+2. **Commands** (Blue) - Things users want to do
 3. **Read Models** (Green) - Views of current state
 
 The genius is in its simplicity: model your system on a timeline showing what happens when.
@@ -31,6 +31,7 @@ Events (what happened):
 ```
 
 **Key principles:**
+
 - Past tense ("Created" not "Create")
 - Record facts ("Task Completed" not "Complete Task")
 - Include relevant data in event names
@@ -50,6 +51,7 @@ Time →
 ```
 
 This visual representation helps you:
+
 - See the flow of your system
 - Identify missing events
 - Understand event relationships
@@ -62,7 +64,7 @@ Commands trigger events. Look at each event and ask "What user action caused thi
 Command (Blue)           →  Event (Orange)
 ─────────────────────────────────────────
 Create Task              →  Task Created
-Assign Task              →  Task Assigned  
+Assign Task              →  Task Assigned
 Complete Task            →  Task Completed
 Add Comment              →  Comment Added
 ```
@@ -132,13 +134,14 @@ Deleted  Unpublished
 
 Events:
 - ArticleDrafted
-- ArticlePublished  
+- ArticlePublished
 - ArticleUnpublished
 - ArticleArchived
 - ArticleDeleted
 ```
 
 In EventCore:
+
 ```rust
 #[derive(Command, Clone)]
 struct PublishArticle {
@@ -156,7 +159,7 @@ When multiple entities participate:
 
 ```
 Money Transfer Timeline:
-                          
+
 Source Account ──────┬──────────────┬─────────
                      ↓              ↑
                 Money Withdrawn     │
@@ -167,6 +170,7 @@ Target Account ──────────────┬──────�
 ```
 
 In EventCore, this is ONE atomic command:
+
 ```rust
 #[derive(Command, Clone)]
 struct TransferMoney {
@@ -190,6 +194,7 @@ Order Created → Payment Processed → Inventory Reserved → Order Shipped
 ```
 
 Each step might be a separate command or one complex command:
+
 ```rust
 #[derive(Command, Clone)]
 struct FulfillOrder {
@@ -209,6 +214,7 @@ struct FulfillOrder {
 ### 1. Events Become Rust Enums
 
 Your discovered events:
+
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum TaskEvent {
@@ -222,6 +228,7 @@ enum TaskEvent {
 ### 2. Commands Become EventCore Commands
 
 Your identified commands:
+
 ```rust
 #[derive(Command, Clone)]
 struct CreateTask {
@@ -234,7 +241,7 @@ struct CreateTask {
 impl CommandLogic for CreateTask {
     type Event = TaskEvent;
     type State = TaskState;
-    
+
     async fn handle(
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
@@ -242,7 +249,7 @@ impl CommandLogic for CreateTask {
         _resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         require!(!state.exists, "Task already exists");
-        
+
         Ok(vec![
             StreamWrite::new(
                 &read_streams,
@@ -260,6 +267,7 @@ impl CommandLogic for CreateTask {
 ### 3. Read Models Become Projections
 
 Your view requirements:
+
 ```rust
 #[derive(Default)]
 struct TasksByUserProjection {
@@ -288,6 +296,7 @@ Let's practice with a simple domain:
 ### Step 1: Brainstorm Events
 
 What happens in a coffee shop?
+
 - Customer Entered
 - Order Placed
 - Payment Received
@@ -359,15 +368,17 @@ struct PlaceAndPayOrder {
 ## Common Pitfalls
 
 ❌ **Modeling State Instead of Events**
+
 ```rust
 // Bad: Thinking in state
 AccountUpdated { balance: 100 }
 
-// Good: Thinking in events  
+// Good: Thinking in events
 MoneyDeposited { amount: 50 }
 ```
 
 ❌ **Technical Events**
+
 ```rust
 // Bad: Technical focus
 DatabaseRecordInserted
@@ -377,6 +388,7 @@ CustomerRegistered
 ```
 
 ❌ **Missing the Why**
+
 ```rust
 // Bad: Just the what
 PriceChanged { new_price: 100 }
@@ -388,6 +400,7 @@ PriceReducedForSale { original: 150, sale_price: 100, reason: "Black Friday" }
 ## Summary
 
 Event modeling helps you:
+
 1. Understand your domain before coding
 2. Discover events, commands, and read models
 3. Design systems that map naturally to EventCore

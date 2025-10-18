@@ -10,26 +10,28 @@ EventCore follows [Semantic Versioning 2.0.0](https://semver.org/) with workspac
 
 The EventCore workspace consists of:
 
-| Crate | Purpose | Type |
-|-------|---------|------|
-| `eventcore` | Core library with traits and types | Library |
-| `eventcore-postgres` | PostgreSQL adapter implementation | Library |
-| `eventcore-memory` | In-memory adapter for testing | Library |
-| `eventcore-examples` | Example implementations and patterns | Examples |
-| `eventcore-benchmarks` | Performance benchmarks | Tools |
-| `eventcore-macros` | Procedural macros for ergonomics | Macros |
+| Crate                  | Purpose                              | Type     |
+| ---------------------- | ------------------------------------ | -------- |
+| `eventcore`            | Core library with traits and types   | Library  |
+| `eventcore-postgres`   | PostgreSQL adapter implementation    | Library  |
+| `eventcore-memory`     | In-memory adapter for testing        | Library  |
+| `eventcore-examples`   | Example implementations and patterns | Examples |
+| `eventcore-benchmarks` | Performance benchmarks               | Tools    |
+| `eventcore-macros`     | Procedural macros for ergonomics     | Macros   |
 
 ## Version Synchronization
 
 **All crates share the same version number** to ensure compatibility and avoid dependency hell.
 
 ### Benefits
+
 - **Simplified dependency management**: Users specify one version for the entire ecosystem
 - **Guaranteed compatibility**: All crates at the same version work together
 - **Clear upgrade path**: Single version bump upgrades entire ecosystem
 - **Reduced confusion**: No matrix of compatible versions to manage
 
 ### Example
+
 ```toml
 [dependencies]
 eventcore = "0.2.0"
@@ -44,6 +46,7 @@ eventcore-memory = "0.2.0"    # Same version
 Breaking changes that require user code modifications:
 
 #### Core Library (`eventcore`)
+
 - Changes to public trait signatures (Command, EventStore, Projection)
 - Removal of public types or methods
 - Changes to error types and their variants
@@ -51,15 +54,18 @@ Breaking changes that require user code modifications:
 - Changes to serialization format
 
 #### Database Adapters
+
 - Database schema changes requiring migration
 - Changes to configuration structures
 - Removal of adapter methods
 
 #### Macros
+
 - Changes to macro syntax or generated code
 - New required attributes or parameters
 
 #### Examples
+
 ```rust
 // v1.0.0 -> v2.0.0: Breaking change
 // Before
@@ -69,7 +75,7 @@ impl Command for MyCommand {
 
 // After - StreamResolver parameter added
 impl Command for MyCommand {
-    async fn handle(&self, read_streams: ReadStreams<Self::StreamSet>, state: Self::State, 
+    async fn handle(&self, read_streams: ReadStreams<Self::StreamSet>, state: Self::State,
                    input: Self::Input, stream_resolver: &mut StreamResolver) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>>
 }
 ```
@@ -79,6 +85,7 @@ impl Command for MyCommand {
 Backward-compatible additions:
 
 #### New Features
+
 - New optional trait methods with default implementations
 - New configuration options with sensible defaults
 - New crates added to workspace
@@ -87,11 +94,12 @@ Backward-compatible additions:
 - New event store backends
 
 #### Examples
+
 ```rust
 // v1.1.0: New optional method
 trait EventStore {
     // Existing methods...
-    
+
     // New method with default implementation
     async fn get_stream_metadata(&self, stream_id: &StreamId) -> Result<StreamMetadata, EventStoreError> {
         Ok(StreamMetadata::default())
@@ -104,6 +112,7 @@ trait EventStore {
 Non-breaking fixes and improvements:
 
 #### Bug Fixes
+
 - Fixes to incorrect behavior
 - Performance optimizations
 - Documentation improvements
@@ -112,6 +121,7 @@ Non-breaking fixes and improvements:
 - Test improvements
 
 #### Examples
+
 - Fixing race conditions in concurrent operations
 - Correcting error messages
 - Improving documentation examples
@@ -120,24 +130,28 @@ Non-breaking fixes and improvements:
 ## Pre-release Versions
 
 ### Alpha (X.Y.Z-alpha.N)
+
 - Early development phase
 - APIs may change significantly
 - Not recommended for production
 - Breaking changes possible between alpha versions
 
 ### Beta (X.Y.Z-beta.N)
+
 - Feature complete for the release
 - API stabilization phase
 - Limited breaking changes
 - Suitable for early adopters and testing
 
 ### Release Candidate (X.Y.Z-rc.N)
+
 - Final testing phase
 - API frozen
 - Only critical bug fixes
 - Production readiness validation
 
 ### Example Release Timeline
+
 ```
 1.0.0-alpha.1  -> API design and early implementation
 1.0.0-alpha.2  -> Core features complete
@@ -150,12 +164,14 @@ Non-breaking fixes and improvements:
 ## Migration Strategy
 
 ### Breaking Changes
+
 - **Migration Guide**: Detailed guide in CHANGELOG.md
 - **Deprecation Period**: Mark old APIs as deprecated for one minor version
 - **Code Examples**: Before/after examples for all breaking changes
 - **Tooling**: Migration scripts where possible
 
 ### Database Schema Changes
+
 - **Schema Migrations**: SQL scripts for database changes
 - **Backward Compatibility**: Support reading old and new formats during transition
 - **Migration Tools**: Command-line tools for data migration
@@ -163,22 +179,26 @@ Non-breaking fixes and improvements:
 ## Release Process
 
 ### 1. Version Planning
+
 - Determine version type based on changes
 - Update all Cargo.toml files with new version
 - Update CHANGELOG.md with release notes
 
 ### 2. Pre-release Testing
+
 - All tests must pass on multiple Rust versions
 - Integration tests with real databases
 - Performance benchmarks within targets
 - Security audit clean
 
 ### 3. Documentation
+
 - Update all documentation
 - Verify examples work with new version
 - Update migration guides if needed
 
 ### 4. Release Execution
+
 ```bash
 # 1. Update versions in workspace
 cargo workspaces version X.Y.Z
@@ -195,6 +215,7 @@ cargo publish -p eventcore-postgres
 ```
 
 ### 5. Post-release
+
 - Update documentation websites
 - Announce on relevant channels
 - Monitor for issues
@@ -202,24 +223,28 @@ cargo publish -p eventcore-postgres
 ## Compatibility Matrix
 
 ### Minimum Supported Rust Version (MSRV)
+
 - **Current**: 1.70.0
 - **Policy**: Update MSRV only on minor versions
 - **Rationale**: Balance between new features and compatibility
 
 ### Database Compatibility
-| EventCore Version | PostgreSQL |
-|-------------------|------------|
-| 0.1.x | 15+ |
-| 1.x.x | 15+ |
-| 2.x.x | 16+ (planned) |
+
+| EventCore Version | PostgreSQL    |
+| ----------------- | ------------- |
+| 0.1.x             | 15+           |
+| 1.x.x             | 15+           |
+| 2.x.x             | 16+ (planned) |
 
 ### Feature Compatibility
+
 - **Feature flags**: Maintain backward compatibility within major versions
 - **Optional dependencies**: Clearly documented breaking changes
 
 ## Version Constraints for Users
 
 ### Recommended Constraints
+
 ```toml
 [dependencies]
 # Exact version for maximum stability
@@ -233,6 +258,7 @@ eventcore = "^1.2.3"
 ```
 
 ### Development Dependencies
+
 ```toml
 [dev-dependencies]
 # More relaxed for examples and testing
@@ -242,15 +268,18 @@ eventcore-memory = "1.0"
 ## Breaking Change Policy
 
 ### Communication
+
 - **Advance Notice**: Major breaking changes announced in advance
 - **RFC Process**: Significant changes go through RFC process
 - **Community Input**: Breaking changes discussed with community
 
 ### Timing
+
 - **Regular Schedule**: Major versions on predictable schedule
 - **Emergency Only**: Unplanned breaking changes only for security
 
 ### Deprecation Process
+
 1. **Mark as deprecated** with clear migration path
 2. **One minor version warning period** minimum
 3. **Remove in next major version**
@@ -258,6 +287,7 @@ eventcore-memory = "1.0"
 ## Version Metadata
 
 ### Cargo.toml Metadata
+
 ```toml
 [package]
 version = "1.2.3"
@@ -269,6 +299,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 ```
 
 ### Build Metadata
+
 - **Build date**: Embedded in release builds
 - **Git commit**: SHA embedded for traceability
 - **Feature flags**: Document enabled features
@@ -276,11 +307,13 @@ rustdoc-args = ["--cfg", "docsrs"]
 ## Monitoring and Metrics
 
 ### Version Adoption
+
 - Track download statistics by version
 - Monitor issue reports by version
 - User feedback on migration experience
 
 ### Quality Metrics
+
 - Test coverage per version
 - Performance regression detection
 - Documentation completeness
@@ -288,11 +321,13 @@ rustdoc-args = ["--cfg", "docsrs"]
 ## Emergency Procedures
 
 ### Security Vulnerabilities
+
 - **Immediate patch**: Security fixes bypass normal process
 - **All supported versions**: Backport to all maintained versions
 - **Clear communication**: Security advisories with details
 
 ### Critical Bugs
+
 - **Hotfix process**: Fast-track for critical production issues
 - **Minimal changes**: Only fix the critical issue
 - **Follow-up release**: Proper fix in next regular release

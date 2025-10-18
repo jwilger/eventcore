@@ -5,6 +5,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 ## OWASP Top 10 (2021) Compliance
 
 ### A01:2021 – Broken Access Control
+
 - [ ] Implement authorization checks before command execution
 - [ ] Use role-based or attribute-based access control
 - [ ] Default to denying access (fail secure)
@@ -12,6 +13,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Implement rate limiting on sensitive operations
 
 ### A02:2021 – Cryptographic Failures
+
 - [ ] Encrypt all sensitive data at rest (use provided encryption patterns)
 - [ ] Use strong, modern encryption algorithms (AES-256-GCM)
 - [ ] Implement proper key management (never store keys in code)
@@ -19,6 +21,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Don't store passwords - use proper hashing (Argon2id, bcrypt, or scrypt)
 
 ### A03:2021 – Injection
+
 - [x] Use EventCore's validated types (`nutype`) for all inputs
 - [x] SQL queries use parameterized statements (via `sqlx`)
 - [ ] Validate and sanitize all external data at boundaries
@@ -26,6 +29,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Escape output data appropriately for context
 
 ### A04:2021 – Insecure Design
+
 - [x] Type-driven development prevents many design flaws
 - [ ] Implement business logic limits (e.g., transaction limits)
 - [ ] Use EventCore's command validation for business rules
@@ -33,6 +37,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Document and test security requirements
 
 ### A05:2021 – Security Misconfiguration
+
 - [ ] Remove default accounts and passwords
 - [ ] Disable unnecessary features and services
 - [ ] Keep all dependencies updated (use Dependabot)
@@ -40,6 +45,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Use environment-specific configurations securely
 
 ### A06:2021 – Vulnerable and Outdated Components
+
 - [x] Automated dependency scanning with `cargo audit`
 - [x] Dependabot configured for automatic updates
 - [ ] Regular manual review of dependencies
@@ -47,6 +53,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Subscribe to security advisories for critical dependencies
 
 ### A07:2021 – Identification and Authentication Failures
+
 - [ ] Implement proper session management
 - [ ] Use secure password policies
 - [ ] Implement account lockout mechanisms
@@ -54,6 +61,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Log authentication attempts (success and failure)
 
 ### A08:2021 – Software and Data Integrity Failures
+
 - [x] Use signed commits (GPG)
 - [ ] Verify third-party library integrity
 - [ ] Implement code review process
@@ -61,6 +69,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Validate event integrity in event store
 
 ### A09:2021 – Security Logging and Monitoring Failures
+
 - [x] EventCore provides automatic audit trail via event sourcing
 - [ ] Log all security events (auth, authz, validation failures)
 - [ ] Protect logs from tampering (append-only)
@@ -68,6 +77,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Implement alerting for security events
 
 ### A10:2021 – Server-Side Request Forgery (SSRF)
+
 - [ ] Validate and sanitize all URLs
 - [ ] Use allow-lists for external services
 - [ ] Implement network segmentation
@@ -77,6 +87,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 ## NIST Cybersecurity Framework
 
 ### Identify (ID)
+
 - [ ] Asset inventory maintained
 - [ ] Data classification implemented
 - [ ] Risk assessment completed
@@ -84,6 +95,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Business environment documented
 
 ### Protect (PR)
+
 - [x] Access control implemented (see authentication guide)
 - [x] Data security controls in place (encryption)
 - [ ] Security awareness training
@@ -91,6 +103,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Protective technology deployed
 
 ### Detect (DE)
+
 - [x] Anomaly detection via event patterns
 - [ ] Continuous monitoring implemented
 - [ ] Detection processes tested
@@ -98,6 +111,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Impact analysis capabilities
 
 ### Respond (RS)
+
 - [ ] Response plan documented
 - [ ] Communications plan established
 - [ ] Incident analysis procedures
@@ -105,6 +119,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Improvements incorporated
 
 ### Recover (RC)
+
 - [ ] Recovery plan documented
 - [ ] Event replay tested
 - [ ] Communications during recovery
@@ -114,6 +129,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 ## SOC 2 Type II
 
 ### Security
+
 - [x] Encryption of sensitive data
 - [x] Access controls implemented
 - [ ] Vulnerability management process
@@ -121,6 +137,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Security monitoring active
 
 ### Availability
+
 - [ ] SLA defined and monitored
 - [ ] Capacity planning process
 - [ ] Disaster recovery plan
@@ -128,6 +145,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Redundancy implemented
 
 ### Processing Integrity
+
 - [x] Input validation via types
 - [x] Event immutability guaranteed
 - [ ] Error handling procedures
@@ -135,6 +153,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Processing monitoring
 
 ### Confidentiality
+
 - [x] Data classification scheme
 - [x] Encryption for confidential data
 - [ ] Access on need-to-know basis
@@ -142,6 +161,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Secure disposal procedures
 
 ### Privacy
+
 - [ ] Privacy notice provided
 - [ ] Consent mechanisms implemented
 - [ ] Data subject rights supported
@@ -151,6 +171,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 ## PCI DSS (if handling payment cards)
 
 ### Build and Maintain Secure Systems
+
 - [x] Security in development lifecycle
 - [ ] Change control procedures
 - [ ] Security patches applied timely
@@ -158,6 +179,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Code reviews conducted
 
 ### Protect Cardholder Data
+
 - [ ] Never store full PAN unencrypted
 - [ ] Never store CVV/CVC
 - [ ] Use tokenization where possible
@@ -165,6 +187,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Document data flows
 
 ### Maintain Vulnerability Management
+
 - [x] Anti-virus on applicable systems
 - [x] Secure development practices
 - [ ] Regular security testing
@@ -172,6 +195,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Vulnerability scanning quarterly
 
 ### Implement Strong Access Control
+
 - [ ] Restrict access to cardholder data
 - [ ] Unique IDs for each user
 - [ ] Restrict physical access
@@ -179,6 +203,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Regular access reviews
 
 ### Monitor and Test Networks
+
 - [x] Audit trails via event sourcing
 - [ ] Daily log review process
 - [ ] File integrity monitoring
@@ -186,6 +211,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] IDS/IPS implementation
 
 ### Maintain Information Security Policy
+
 - [ ] Security policy established
 - [ ] Annual policy review
 - [ ] Security awareness program
@@ -195,6 +221,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 ## GDPR Compliance
 
 ### Lawful Basis
+
 - [ ] Legal basis documented for processing
 - [ ] Consent mechanisms implemented where required
 - [ ] Legitimate interest assessments completed
@@ -202,6 +229,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Children's data considerations
 
 ### Individual Rights
+
 - [ ] Right to access implemented
 - [ ] Right to rectification supported
 - [ ] Right to erasure (crypto-shredding)
@@ -209,6 +237,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Right to object honored
 
 ### Privacy by Design
+
 - [x] Data minimization in event design
 - [x] Purpose limitation enforced
 - [ ] Storage limitation implemented
@@ -216,6 +245,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Default privacy settings
 
 ### Security of Processing
+
 - [x] Encryption implemented
 - [x] Access controls enforced
 - [ ] Regular testing conducted
@@ -223,6 +253,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Breach procedures defined
 
 ### Accountability
+
 - [ ] Processing records maintained
 - [ ] DPO appointed (if required)
 - [ ] Privacy notices published
@@ -232,6 +263,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 ## HIPAA Compliance (if handling health data)
 
 ### Administrative Safeguards
+
 - [ ] Security officer designated
 - [ ] Workforce training completed
 - [ ] Access management procedures
@@ -239,6 +271,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Risk assessment conducted
 
 ### Physical Safeguards
+
 - [ ] Facility access controls
 - [ ] Workstation security
 - [ ] Device and media controls
@@ -246,6 +279,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Access logs maintained
 
 ### Technical Safeguards
+
 - [x] Access controls via EventCore
 - [x] Audit logs automatic
 - [x] Integrity controls (immutable events)
@@ -253,6 +287,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Transmission security
 
 ### Organizational Requirements
+
 - [ ] Business associate agreements
 - [ ] Workforce compliance
 - [ ] Administrative requirements
@@ -262,6 +297,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 ## Compliance Maintenance
 
 ### Regular Reviews
+
 - [ ] Quarterly dependency updates
 - [ ] Annual security assessment
 - [ ] Bi-annual penetration testing
@@ -269,6 +305,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Weekly security metrics review
 
 ### Documentation
+
 - [ ] Policies and procedures current
 - [ ] Risk register maintained
 - [ ] Incident log updated
@@ -276,6 +313,7 @@ This checklist helps ensure EventCore-based applications meet common security an
 - [ ] Audit evidence retained
 
 ### Continuous Improvement
+
 - [ ] Lessons learned process
 - [ ] Security metrics tracking
 - [ ] Benchmark against standards

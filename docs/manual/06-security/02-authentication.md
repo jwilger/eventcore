@@ -41,15 +41,15 @@ async fn auth_middleware(
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    
+
     let user = auth
         .verify_token(token)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    
+
     // Add user to request extensions
     req.extensions_mut().insert(user);
-    
+
     Ok(next.run(req).await)
 }
 ```
@@ -83,14 +83,14 @@ impl<A: StreamAuthorization> CommandAuthorizationLayer<A> {
                 return Err(AuthError::Forbidden(stream_id));
             }
         }
-        
+
         // Check write permissions
         for stream_id in command.write_streams() {
             if !self.auth.can_write(user, &stream_id).await {
                 return Err(AuthError::Forbidden(stream_id));
             }
         }
-        
+
         Ok(())
     }
 }
@@ -116,7 +116,7 @@ impl User {
     fn has_role(&self, role: &Role) -> bool {
         self.roles.contains(role)
     }
-    
+
     fn can_execute_command(&self, command_type: &str) -> bool {
         match command_type {
             "CreateAccount" => self.has_role(&Role::Admin),
@@ -180,21 +180,21 @@ impl ReadModelStore for SecureAccountStore {
         user: &User,
     ) -> Result<Option<AccountReadModel>> {
         let account = self.inner.get_account(account_id).await?;
-        
+
         // Apply row-level security
         match account {
             Some(acc) if self.user_can_view(&acc, user) => Ok(Some(acc)),
             _ => Ok(None),
         }
     }
-    
+
     async fn list_accounts(
         &self,
         user: &User,
         filter: AccountFilter,
     ) -> Result<Vec<AccountReadModel>> {
         let accounts = self.inner.list_accounts(filter).await?;
-        
+
         // Filter based on permissions
         Ok(accounts
             .into_iter()
@@ -212,17 +212,17 @@ Redact sensitive fields:
 impl AccountReadModel {
     fn redact_for_user(&self, user: &User) -> Self {
         let mut redacted = self.clone();
-        
+
         if !user.has_role(&Role::Admin) {
             redacted.ssn = None;
             redacted.tax_id = None;
         }
-        
+
         if !user.has_role(&Role::Financial) {
             redacted.balance = None;
             redacted.credit_limit = None;
         }
-        
+
         redacted
     }
 }

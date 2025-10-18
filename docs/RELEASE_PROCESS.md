@@ -11,6 +11,7 @@ The project uses a hybrid approach for fully automated releases:
 3. **[release-plz](https://release-plz.dev/)** - Creates GitHub releases and git tags after successful publishing
 
 This combination ensures reliable, automated releases without manual intervention while maintaining:
+
 - Correct dependency ordering during publishing (cargo-workspaces)
 - Consistent changelog generation and GitHub releases (release-plz)
 - Automated version management and PR creation (release-plz)
@@ -22,6 +23,7 @@ This combination ensures reliable, automated releases without manual interventio
 cargo-workspaces automatically determines and uses the correct publishing order based on the dependency graph. It handles the topological sorting internally, ensuring packages are always published in the correct order.
 
 **The dependency graph (automatically handled by cargo-workspaces):**
+
 1. `eventcore-macros` (no internal dependencies)
 2. `eventcore` (depends on eventcore-macros)
 3. `eventcore-memory` (depends on eventcore)
@@ -85,18 +87,21 @@ This separation prevents manual version bumps from triggering immediate publishi
 ### "Package already published" errors
 
 If you see errors about packages already being published, check:
+
 1. Which packages have actually been published to crates.io
 2. Continue manual publishing from the next package in the dependency order
 
 ### Version mismatch errors
 
 If you see errors about version requirements not being met:
+
 1. Ensure all workspace dependencies in `Cargo.toml` use the same version
 2. Check that the versions match what's in the package's `Cargo.toml`
 
 ### Pre-commit hook failures
 
 Always ensure pre-commit hooks pass before attempting to publish. The hooks run:
+
 - Code formatting
 - Linting
 - Tests

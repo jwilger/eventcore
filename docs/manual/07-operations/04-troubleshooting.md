@@ -9,6 +9,7 @@ This chapter provides comprehensive troubleshooting guidance for EventCore appli
 #### Issue: Commands timing out
 
 **Symptoms:**
+
 - Commands taking longer than expected
 - Timeout errors in logs
 - Degraded system performance
@@ -23,12 +24,12 @@ async fn debug_command_execution<C: Command>(
     executor: &CommandExecutor,
 ) -> CommandResult<ExecutionResult> {
     let start = std::time::Instant::now();
-    
+
     tracing::debug!(
         command_type = std::any::type_name::<C>(),
         "Starting command execution"
     );
-    
+
     // Check stream access patterns
     let read_streams = command.read_streams(&command);
     tracing::debug!(
@@ -36,12 +37,12 @@ async fn debug_command_execution<C: Command>(
         streams = ?read_streams,
         "Command will read from streams"
     );
-    
+
     // Time each phase
     let read_start = std::time::Instant::now();
     let result = executor.execute(command).await;
     let total_duration = start.elapsed();
-    
+
     match &result {
         Ok(execution_result) => {
             tracing::info!(
@@ -58,7 +59,7 @@ async fn debug_command_execution<C: Command>(
             );
         }
     }
-    
+
     result
 }
 ```
@@ -66,13 +67,14 @@ async fn debug_command_execution<C: Command>(
 **Common causes and solutions:**
 
 1. **Database connection pool exhaustion**
+
    ```rust
    // Check connection pool metrics
    async fn diagnose_connection_pool(pool: &sqlx::PgPool) {
        let pool_options = pool.options();
        let pool_size = pool.size();
        let idle_connections = pool.num_idle();
-       
+
        tracing::info!(
            max_connections = pool_options.get_max_connections(),
            current_size = pool_size,
@@ -80,7 +82,7 @@ async fn debug_command_execution<C: Command>(
            active_connections = pool_size - idle_connections,
            "Connection pool status"
        );
-       
+
        // Alert if pool utilization is high
        let utilization = (pool_size as f64) / (pool_options.get_max_connections() as f64);
        if utilization > 0.8 {
@@ -93,9 +95,10 @@ async fn debug_command_execution<C: Command>(
    ```
 
 2. **Long-running database queries**
+
    ```sql
    -- PostgreSQL: Check for long-running queries
-   SELECT 
+   SELECT
        pid,
        now() - pg_stat_activity.query_start AS duration,
        query,
@@ -106,6 +109,7 @@ async fn debug_command_execution<C: Command>(
    ```
 
 3. **Lock contention on streams**
+
    ```rust
    // Implement lock timeout and retry
    async fn execute_with_lock_retry<C: Command>(
@@ -114,7 +118,7 @@ async fn debug_command_execution<C: Command>(
        max_retries: u32,
    ) -> CommandResult<ExecutionResult> {
        let mut retry_count = 0;
-       
+
        loop {
            match executor.execute(command).await {
                Ok(result) => return Ok(result),
@@ -123,11 +127,11 @@ async fn debug_command_execution<C: Command>(
                    if retry_count >= max_retries {
                        return Err(CommandError::ConcurrencyConflict(streams));
                    }
-                   
+
                    // Exponential backoff
                    let delay = Duration::from_millis(100 * 2_u64.pow(retry_count - 1));
                    tokio::time::sleep(delay).await;
-                   
+
                    tracing::warn!(
                        retry_attempt = retry_count,
                        delay_ms = delay.as_millis(),
@@ -144,6 +148,7 @@ async fn debug_command_execution<C: Command>(
 #### Issue: Command validation failures
 
 **Symptoms:**
+
 - Validation errors in command processing
 - Business rule violations
 - Data consistency issues
@@ -156,13 +161,13 @@ async fn debug_command_execution<C: Command>(
 pub enum DetailedValidationError {
     #[error("Field validation failed: {field} - {reason}")]
     FieldValidation { field: String, reason: String },
-    
+
     #[error("Business rule violation: {rule} - {context}")]
     BusinessRule { rule: String, context: String },
-    
+
     #[error("State precondition failed: expected {expected}, found {actual}")]
     StatePrecondition { expected: String, actual: String },
-    
+
     #[error("Reference validation failed: {reference_type} {reference_id} not found")]
     ReferenceNotFound { reference_type: String, reference_id: String },
 }
@@ -179,7 +184,7 @@ pub fn validate_transfer_command(
             reason: format!("Amount must be positive, got {}", command.amount),
         });
     }
-    
+
     // Check account state
     if !state.is_active {
         return Err(DetailedValidationError::StatePrecondition {
@@ -187,7 +192,7 @@ pub fn validate_transfer_command(
             actual: "inactive account".to_string(),
         });
     }
-    
+
     // Check sufficient balance
     if state.balance < command.amount {
         return Err(DetailedValidationError::BusinessRule {
@@ -198,7 +203,7 @@ pub fn validate_transfer_command(
             ),
         });
     }
-    
+
     Ok(())
 }
 ```
@@ -224,13 +229,13 @@ impl EventStoreMonitor {
         let start = std::time::Instant::now();
         let result = operation.await;
         let duration = start.elapsed();
-        
+
         // Record latency
         {
             let mut tracker = self.latency_tracker.lock().await;
             tracker.record_operation(operation_name, duration, result.is_ok());
         }
-        
+
         // Alert on high latency
         if duration > Duration::from_millis(1000) {
             tracing::warn!(
@@ -240,10 +245,10 @@ impl EventStoreMonitor {
                 "High latency event store operation"
             );
         }
-        
+
         result
     }
-    
+
     pub async fn get_performance_report(&self) -> PerformanceReport {
         let tracker = self.latency_tracker.lock().await;
         tracker.generate_report()
@@ -269,30 +274,30 @@ impl LatencyTracker {
             success,
             timestamp: Utc::now(),
         };
-        
+
         self.operations
             .entry(operation.to_string())
             .or_insert_with(Vec::new)
             .push(metric);
-        
+
         // Keep only recent metrics (last hour)
         let cutoff = Utc::now() - chrono::Duration::hours(1);
         for metrics in self.operations.values_mut() {
             metrics.retain(|m| m.timestamp > cutoff);
         }
     }
-    
+
     pub fn generate_report(&self) -> PerformanceReport {
         let mut report = PerformanceReport::default();
-        
+
         for (operation, metrics) in &self.operations {
             if metrics.is_empty() {
                 continue;
             }
-            
+
             let durations: Vec<_> = metrics.iter().map(|m| m.duration).collect();
             let success_rate = metrics.iter().filter(|m| m.success).count() as f64 / metrics.len() as f64;
-            
+
             let operation_stats = OperationStats {
                 operation_name: operation.clone(),
                 total_operations: metrics.len(),
@@ -301,10 +306,10 @@ impl LatencyTracker {
                 p95_duration: calculate_percentile(&durations, 0.95),
                 p99_duration: calculate_percentile(&durations, 0.99),
             };
-            
+
             report.operations.push(operation_stats);
         }
-        
+
         report
     }
 }
@@ -321,7 +326,7 @@ fn calculate_percentile(durations: &[Duration], percentile: f64) -> Duration {
 
 ```sql
 -- Check for blocking queries
-SELECT 
+SELECT
     blocked_locks.pid AS blocked_pid,
     blocked_activity.usename AS blocked_user,
     blocking_locks.pid AS blocking_pid,
@@ -329,19 +334,19 @@ SELECT
     blocked_activity.query AS blocked_statement,
     blocking_activity.query AS blocking_statement
 FROM pg_catalog.pg_locks blocked_locks
-JOIN pg_catalog.pg_stat_activity blocked_activity 
+JOIN pg_catalog.pg_stat_activity blocked_activity
     ON blocked_activity.pid = blocked_locks.pid
-JOIN pg_catalog.pg_locks blocking_locks 
+JOIN pg_catalog.pg_locks blocking_locks
     ON blocking_locks.locktype = blocked_locks.locktype
     AND blocking_locks.DATABASE IS NOT DISTINCT FROM blocked_locks.DATABASE
     AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation
     AND blocking_locks.pid != blocked_locks.pid
-JOIN pg_catalog.pg_stat_activity blocking_activity 
+JOIN pg_catalog.pg_stat_activity blocking_activity
     ON blocking_activity.pid = blocking_locks.pid
 WHERE NOT blocked_locks.GRANTED;
 
 -- Check index usage
-SELECT 
+SELECT
     schemaname,
     tablename,
     indexname,
@@ -353,7 +358,7 @@ WHERE idx_scan < 100
 ORDER BY idx_scan;
 
 -- Check table and index sizes
-SELECT 
+SELECT
     schemaname,
     tablename,
     pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
@@ -375,10 +380,10 @@ pub struct CorruptionDetector {
 impl CorruptionDetector {
     pub async fn scan_for_corruption(&self) -> Result<CorruptionReport, ScanError> {
         let mut report = CorruptionReport::default();
-        
+
         // Scan all streams
         let all_streams = self.event_store.list_all_streams().await?;
-        
+
         for stream_id in all_streams {
             match self.scan_stream(&stream_id).await {
                 Ok(stream_report) => {
@@ -399,19 +404,19 @@ impl CorruptionDetector {
                 }
             }
         }
-        
+
         report.scan_completed_at = Utc::now();
         Ok(report)
     }
-    
+
     async fn scan_stream(&self, stream_id: &StreamId) -> Result<StreamCorruptionReport, ScanError> {
         let mut report = StreamCorruptionReport {
             stream_id: stream_id.clone(),
             issues: Vec::new(),
         };
-        
+
         let events = self.event_store.read_stream(stream_id, ReadOptions::default()).await?;
-        
+
         // Check version sequence
         for (i, event) in events.events.iter().enumerate() {
             let expected_version = EventVersion::from(i as u64 + 1);
@@ -422,7 +427,7 @@ impl CorruptionDetector {
                     actual_version: event.version,
                 });
             }
-            
+
             // Check event structure
             if let Err(e) = self.validate_event_structure(event) {
                 report.issues.push(CorruptionIssue::StructuralError {
@@ -431,32 +436,32 @@ impl CorruptionDetector {
                 });
             }
         }
-        
+
         Ok(report)
     }
-    
+
     fn validate_event_structure(&self, event: &StoredEvent) -> Result<(), String> {
         // Check UUID format
         if event.id.is_nil() {
             return Err("Nil event ID".to_string());
         }
-        
+
         // Check payload can be deserialized
         match serde_json::from_value::<serde_json::Value>(event.payload.clone()) {
             Ok(_) => {}
             Err(e) => return Err(format!("Invalid payload JSON: {}", e)),
         }
-        
+
         // Check timestamp is reasonable
         let now = Utc::now();
         if event.occurred_at > now + chrono::Duration::minutes(5) {
             return Err("Event timestamp is in the future".to_string());
         }
-        
+
         if event.occurred_at < (now - chrono::Duration::days(10 * 365)) {
             return Err("Event timestamp is too old".to_string());
         }
-        
+
         Ok(())
     }
 }
@@ -515,18 +520,18 @@ pub struct ProjectionLagMonitor {
 impl ProjectionLagMonitor {
     pub async fn check_all_projections(&self) -> Result<Vec<ProjectionLagReport>, MonitorError> {
         let mut reports = Vec::new();
-        
+
         let projections = self.projection_manager.list_projections().await?;
         let latest_event_time = self.get_latest_event_time().await?;
-        
+
         for projection_name in projections {
             let report = self.check_projection_lag(&projection_name, latest_event_time).await?;
             reports.push(report);
         }
-        
+
         Ok(reports)
     }
-    
+
     async fn check_projection_lag(
         &self,
         projection_name: &str,
@@ -535,12 +540,12 @@ impl ProjectionLagMonitor {
         let checkpoint = self.projection_manager
             .get_checkpoint(projection_name)
             .await?;
-        
+
         let lag = match checkpoint.last_processed_at {
             Some(last_processed) => latest_event_time.signed_duration_since(last_processed),
             None => chrono::Duration::max_value(), // Never processed
         };
-        
+
         let status = if lag > chrono::Duration::minutes(30) {
             ProjectionStatus::Critical
         } else if lag > chrono::Duration::minutes(5) {
@@ -548,7 +553,7 @@ impl ProjectionLagMonitor {
         } else {
             ProjectionStatus::Healthy
         };
-        
+
         Ok(ProjectionLagReport {
             projection_name: projection_name.to_string(),
             lag_duration: lag,
@@ -558,7 +563,7 @@ impl ProjectionLagMonitor {
             events_processed: checkpoint.events_processed,
         })
     }
-    
+
     async fn get_latest_event_time(&self) -> Result<DateTime<Utc>, MonitorError> {
         // Get the timestamp of the most recent event across all streams
         self.event_store.get_latest_event_time().await
@@ -604,15 +609,15 @@ impl ProjectionRebuilder {
             strategy = ?strategy,
             "Starting projection rebuild"
         );
-        
+
         let start_time = Utc::now();
-        
+
         // Create backup of current projection state
         let backup_id = self.backup_projection_state(projection_name).await?;
-        
+
         // Reset projection state
         self.projection_manager.reset_projection(projection_name).await?;
-        
+
         // Rebuild based on strategy
         let rebuild_result = match strategy {
             RebuildStrategy::Full => {
@@ -625,21 +630,21 @@ impl ProjectionRebuilder {
                 self.rebuild_from_event(projection_name, event_id).await
             }
         };
-        
+
         match rebuild_result {
             Ok(stats) => {
                 // Rebuild successful - clean up backup
                 self.cleanup_projection_backup(backup_id).await?;
-                
+
                 let duration = Utc::now().signed_duration_since(start_time);
-                
+
                 tracing::info!(
                     projection_name = projection_name,
                     events_processed = stats.events_processed,
                     duration_seconds = duration.num_seconds(),
                     "Projection rebuild completed successfully"
                 );
-                
+
                 Ok(RebuildResult {
                     success: true,
                     events_processed: stats.events_processed,
@@ -654,9 +659,9 @@ impl ProjectionRebuilder {
                     error = %e,
                     "Projection rebuild failed, restoring from backup"
                 );
-                
+
                 self.restore_projection_from_backup(projection_name, backup_id).await?;
-                
+
                 Err(RebuildError::RebuildFailed {
                     original_error: Box::new(e),
                     backup_restored: true,
@@ -664,27 +669,27 @@ impl ProjectionRebuilder {
             }
         }
     }
-    
+
     async fn rebuild_from_beginning(&self, projection_name: &str) -> Result<RebuildStats, RebuildError> {
         let mut stats = RebuildStats::default();
-        
+
         // Get all events in chronological order
         let events = self.event_store.read_all_events_ordered().await?;
-        
+
         // Process events in batches
         let batch_size = 1000;
         for chunk in events.chunks(batch_size) {
             self.projection_manager
                 .process_events_batch(projection_name, chunk)
                 .await?;
-            
+
             stats.events_processed += chunk.len() as u64;
-            
+
             // Checkpoint every batch
             self.projection_manager
                 .save_checkpoint(projection_name)
                 .await?;
-            
+
             // Progress reporting
             if stats.events_processed % 10000 == 0 {
                 tracing::info!(
@@ -694,7 +699,7 @@ impl ProjectionRebuilder {
                 );
             }
         }
-        
+
         Ok(stats)
     }
 }
@@ -760,19 +765,19 @@ impl CommandTracer {
             completed: false,
             result: None,
         };
-        
+
         let mut traces = self.traces.lock().unwrap();
         traces.insert(trace_id, trace);
-        
+
         tracing::info!(
             trace_id = %trace_id,
             command_type = std::any::type_name::<C>(),
             "Started command trace"
         );
-        
+
         trace_id
     }
-    
+
     pub fn add_phase(&self, trace_id: Uuid, phase_name: &str, details: HashMap<String, String>) {
         let mut traces = self.traces.lock().unwrap();
         if let Some(trace) = traces.get_mut(&trace_id) {
@@ -784,7 +789,7 @@ impl CommandTracer {
             });
         }
     }
-    
+
     pub fn complete_phase(&self, trace_id: Uuid) {
         let mut traces = self.traces.lock().unwrap();
         if let Some(trace) = traces.get_mut(&trace_id) {
@@ -795,15 +800,15 @@ impl CommandTracer {
             }
         }
     }
-    
+
     pub fn complete_trace(&self, trace_id: Uuid, result: Result<String, String>) {
         let mut traces = self.traces.lock().unwrap();
         if let Some(trace) = traces.get_mut(&trace_id) {
             trace.completed = true;
             trace.result = Some(result);
-            
+
             let total_duration = Utc::now().signed_duration_since(trace.start_time);
-            
+
             tracing::info!(
                 trace_id = %trace_id,
                 duration_ms = total_duration.num_milliseconds(),
@@ -813,12 +818,12 @@ impl CommandTracer {
             );
         }
     }
-    
+
     pub fn get_trace(&self, trace_id: Uuid) -> Option<CommandTrace> {
         let traces = self.traces.lock().unwrap();
         traces.get(&trace_id).cloned()
     }
-    
+
     pub fn get_recent_traces(&self, limit: usize) -> Vec<CommandTrace> {
         let traces = self.traces.lock().unwrap();
         let mut trace_list: Vec<_> = traces.values().cloned().collect();
@@ -834,16 +839,16 @@ pub async fn execute_with_tracing<C: Command>(
     tracer: &CommandTracer,
 ) -> CommandResult<ExecutionResult> {
     let trace_id = tracer.start_trace(command);
-    
+
     // Phase 1: Stream Reading
     tracer.add_phase(trace_id, "stream_reading", hashmap! {
         "streams_to_read".to_string() => command.read_streams(command).len().to_string(),
     });
-    
+
     let result = executor.execute(command).await;
-    
+
     tracer.complete_phase(trace_id);
-    
+
     // Complete trace
     let trace_result = match &result {
         Ok(execution_result) => Ok(format!(
@@ -853,9 +858,9 @@ pub async fn execute_with_tracing<C: Command>(
         )),
         Err(e) => Err(e.to_string()),
     };
-    
+
     tracer.complete_trace(trace_id, trace_result);
-    
+
     result
 }
 ```
@@ -905,7 +910,7 @@ impl PerformanceProfiler {
             enabled,
         }
     }
-    
+
     pub async fn profile_operation<F, T>(&self, operation_name: &str, operation: F) -> T
     where
         F: Future<Output = T>,
@@ -913,16 +918,16 @@ impl PerformanceProfiler {
         if !self.enabled {
             return operation.await;
         }
-        
+
         let memory_before = self.get_current_memory_usage();
         let start_time = Utc::now();
         let start_instant = std::time::Instant::now();
-        
+
         let result = operation.await;
-        
+
         let duration = start_instant.elapsed();
         let memory_after = self.get_current_memory_usage();
-        
+
         let sample = PerformanceSample {
             timestamp: start_time,
             duration,
@@ -931,7 +936,7 @@ impl PerformanceProfiler {
             success: true, // Would need to be determined by operation type
             metadata: HashMap::new(),
         };
-        
+
         // Record sample
         let mut profiles = self.profiles.lock().await;
         let profile = profiles.entry(operation_name.to_string()).or_insert_with(|| {
@@ -941,29 +946,29 @@ impl PerformanceProfiler {
                 statistics: ProfileStatistics::default(),
             }
         });
-        
+
         profile.samples.push(sample);
-        
+
         // Update statistics
         self.update_statistics(profile);
-        
+
         // Keep only recent samples (last hour)
         let cutoff = Utc::now() - chrono::Duration::hours(1);
         profile.samples.retain(|s| s.timestamp > cutoff);
-        
+
         result
     }
-    
+
     fn update_statistics(&self, profile: &mut PerformanceProfile) {
         if profile.samples.is_empty() {
             return;
         }
-        
+
         let mut durations: Vec<_> = profile.samples.iter().map(|s| s.duration).collect();
         durations.sort();
-        
+
         let success_count = profile.samples.iter().filter(|s| s.success).count();
-        
+
         profile.statistics = ProfileStatistics {
             total_samples: profile.samples.len(),
             success_rate: success_count as f64 / profile.samples.len() as f64,
@@ -976,13 +981,13 @@ impl PerformanceProfiler {
                 .sum::<i64>() / profile.samples.len() as i64,
         };
     }
-    
+
     fn get_current_memory_usage(&self) -> usize {
         // Platform-specific memory usage detection
         // This is a simplified implementation
         0
     }
-    
+
     pub async fn get_profile_report(&self) -> HashMap<String, ProfileStatistics> {
         let profiles = self.profiles.lock().await;
         profiles.iter()
@@ -1023,7 +1028,7 @@ impl LogAnalyzer {
             log_patterns: Self::default_patterns(),
         }
     }
-    
+
     fn default_patterns() -> Vec<LogPattern> {
         vec![
             LogPattern {
@@ -1058,10 +1063,10 @@ impl LogAnalyzer {
             },
         ]
     }
-    
+
     pub async fn analyze_logs(&self, log_entries: &[LogEntry]) -> LogAnalysisReport {
         let mut report = LogAnalysisReport::default();
-        
+
         for entry in log_entries {
             for pattern in &self.log_patterns {
                 if self.matches_pattern(&entry.message, &pattern.pattern) {
@@ -1073,7 +1078,7 @@ impl LogAnalyzer {
                         action: pattern.action.clone(),
                         occurrences: 1,
                     };
-                    
+
                     // Aggregate similar issues
                     if let Some(existing) = report.issues.iter_mut()
                         .find(|i| i.pattern_name == issue.pattern_name) {
@@ -1088,7 +1093,7 @@ impl LogAnalyzer {
                 }
             }
         }
-        
+
         // Sort by severity and occurrence count
         report.issues.sort_by(|a, b| {
             match (&a.severity, &b.severity) {
@@ -1101,10 +1106,10 @@ impl LogAnalyzer {
                 _ => b.occurrences.cmp(&a.occurrences),
             }
         });
-        
+
         report
     }
-    
+
     fn matches_pattern(&self, message: &str, pattern: &str) -> bool {
         use regex::Regex;
         if let Ok(regex) = Regex::new(pattern) {
@@ -1146,19 +1151,22 @@ pub struct LogEntry {
 **Runbook 1: High Command Latency**
 
 1. **Check connection pool status**
+
    ```bash
    curl http://localhost:9090/metrics | grep eventcore_connection_pool
    ```
 
 2. **Analyze slow queries**
+
    ```sql
-   SELECT query, mean_time, calls 
-   FROM pg_stat_statements 
-   ORDER BY mean_time DESC 
+   SELECT query, mean_time, calls
+   FROM pg_stat_statements
+   ORDER BY mean_time DESC
    LIMIT 10;
    ```
 
 3. **Check for lock contention**
+
    ```sql
    SELECT * FROM pg_locks WHERE NOT granted;
    ```
@@ -1171,16 +1179,19 @@ pub struct LogEntry {
 **Runbook 2: Projection Lag**
 
 1. **Check projection status**
+
    ```bash
    curl http://localhost:8080/health/projections
    ```
 
 2. **Identify lagging projections**
+
    ```bash
    curl http://localhost:9090/metrics | grep projection_lag
    ```
 
 3. **Restart projection processing**
+
    ```bash
    kubectl delete pod -l app=eventcore-projections
    ```
@@ -1193,16 +1204,19 @@ pub struct LogEntry {
 **Runbook 3: Memory Issues**
 
 1. **Check memory usage**
+
    ```bash
    kubectl top pods -l app=eventcore
    ```
 
 2. **Analyze memory patterns**
+
    ```bash
    curl http://localhost:9090/metrics | grep memory_usage
    ```
 
 3. **Generate heap dump if needed**
+
    ```bash
    kubectl exec -it eventcore-app -- kill -USR1 1
    ```
@@ -1236,6 +1250,7 @@ EventCore troubleshooting:
 - ✅ **Runbook automation** - Standardized troubleshooting procedures
 
 Key components:
+
 1. Use comprehensive monitoring to detect issues early
 2. Implement systematic debugging approaches for complex problems
 3. Maintain detailed logs with proper correlation and context

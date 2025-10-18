@@ -14,20 +14,20 @@ Each service owns its event streams and commands:
 struct CreateUser {
     #[stream]
     user_id: StreamId,
-    
+
     email: Email,
     profile: UserProfile,
 }
 
-// Order Service  
+// Order Service
 #[derive(Command, Clone)]
 struct CreateOrder {
     #[stream]
     order_id: StreamId,
-    
+
     #[stream]
     customer_id: StreamId, // References user from User Service
-    
+
     items: Vec<OrderItem>,
 }
 
@@ -36,10 +36,10 @@ struct CreateOrder {
 struct ProcessPayment {
     #[stream]
     payment_id: StreamId,
-    
+
     #[stream]
     order_id: StreamId, // References order from Order Service
-    
+
     amount: Money,
     method: PaymentMethod,
 }
@@ -70,7 +70,7 @@ impl MessageBusPublisher {
         let topic = self.topic_mapping
             .get(&E::event_type())
             .ok_or(PublishError::UnknownEventType)?;
-        
+
         let message = DistributedEvent {
             event_id: event.id,
             event_type: E::event_type(),
@@ -82,11 +82,11 @@ impl MessageBusPublisher {
             published_at: Utc::now(),
             service_id: self.service_id(),
         };
-        
+
         self.bus.publish(topic, &message).await?;
         Ok(())
     }
-    
+
     fn service_id(&self) -> String {
         std::env::var("SERVICE_ID").unwrap_or_else(|_| "unknown".to_string())
     }
@@ -127,7 +127,7 @@ impl OrderEventHandler {
         match event.event_type.as_str() {
             "UserRegistered" => {
                 let user_registered: UserRegisteredEvent = serde_json::from_value(event.payload)?;
-                
+
                 // Create customer profile in order service
                 let command = CreateCustomerProfile {
                     customer_id: StreamId::from(format!("customer-{}", user_registered.user_id)),
@@ -135,19 +135,19 @@ impl OrderEventHandler {
                     email: user_registered.email,
                     preferences: CustomerPreferences::default(),
                 };
-                
+
                 self.executor.execute(&command).await?;
             }
             "UserUpdated" => {
                 // Handle user updates
                 let user_updated: UserUpdatedEvent = serde_json::from_value(event.payload)?;
-                
+
                 let command = UpdateCustomerProfile {
                     customer_id: StreamId::from(format!("customer-{}", user_updated.user_id)),
                     email: user_updated.email,
                     profile_updates: user_updated.profile_changes,
                 };
-                
+
                 self.executor.execute(&command).await?;
             }
             _ => {
@@ -171,15 +171,15 @@ async fn setup_event_subscriptions(
             handler.handle_user_events(event).await
         })
     }).await?;
-    
-    // Subscribe to payment events  
+
+    // Subscribe to payment events
     subscriber.subscribe("payment-events", move |event| {
         let handler = handler.clone();
         Box::pin(async move {
             handler.handle_payment_events(event).await
         })
     }).await?;
-    
+
     Ok(())
 }
 ```
@@ -193,7 +193,7 @@ Handle distributed transactions with the saga pattern:
 struct DistributedOrderSaga {
     #[stream]
     saga_id: StreamId,
-    
+
     order_details: OrderDetails,
     customer_id: UserId,
 }
@@ -212,7 +212,7 @@ struct DistributedSagaState {
 impl CommandLogic for DistributedOrderSaga {
     type State = DistributedSagaState;
     type Event = SagaEvent;
-    
+
     async fn handle(
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
@@ -296,7 +296,7 @@ impl DistributedOrderSaga {
             }
         }
     }
-    
+
     async fn handle_compensation(
         &self,
         read_streams: &ReadStreams<DistributedOrderSagaStreamSet>,
@@ -362,7 +362,7 @@ impl ExternalServiceClient {
             .timeout(self.timeout)
             .send()
             .await?;
-        
+
         if response.status().is_success() {
             let result: CreateOrderResponse = response.json().await?;
             Ok(result.order_id)
@@ -373,21 +373,21 @@ impl ExternalServiceClient {
             })
         }
     }
-    
+
     async fn cancel_order(&self, order_id: OrderId) -> Result<(), ServiceError> {
         let response = self.http_client
             .delete(&format!("{}/orders/{}", self.service_url, order_id))
             .timeout(self.timeout)
             .send()
             .await?;
-        
+
         if !response.status().is_success() {
             return Err(ServiceError::RequestFailed {
                 status: response.status(),
                 body: response.text().await.unwrap_or_default(),
             });
         }
-        
+
         Ok(())
     }
 }
@@ -423,18 +423,18 @@ struct OrderView {
 impl Projection for CrossServiceOrderProjection {
     type Event = DistributedEvent;
     type Error = ProjectionError;
-    
+
     async fn apply(&mut self, event: &StoredEvent<Self::Event>) -> Result<(), Self::Error> {
         match event.payload.event_type.as_str() {
             "OrderCreated" => {
-                let order_created: OrderCreatedEvent = 
+                let order_created: OrderCreatedEvent =
                     serde_json::from_value(event.payload.payload.clone())?;
-                
+
                 // Get customer info from user service
                 let customer_info = self.user_service_client
                     .get_customer_info(order_created.customer_id)
                     .await?;
-                
+
                 let order_view = OrderView {
                     order_id: order_created.order_id,
                     customer_info,
@@ -445,22 +445,22 @@ impl Projection for CrossServiceOrderProjection {
                     created_at: event.occurred_at,
                     updated_at: event.occurred_at,
                 };
-                
+
                 self.orders.insert(order_created.order_id, order_view);
             }
             "PaymentProcessed" => {
-                let payment_processed: PaymentProcessedEvent = 
+                let payment_processed: PaymentProcessedEvent =
                     serde_json::from_value(event.payload.payload.clone())?;
-                
+
                 if let Some(order) = self.orders.get_mut(&payment_processed.order_id) {
                     order.payment_status = PaymentStatus::Completed;
                     order.updated_at = event.occurred_at;
                 }
             }
             "ShipmentDispatched" => {
-                let shipment_dispatched: ShipmentDispatchedEvent = 
+                let shipment_dispatched: ShipmentDispatchedEvent =
                     serde_json::from_value(event.payload.payload.clone())?;
-                
+
                 if let Some(order) = self.orders.get_mut(&shipment_dispatched.order_id) {
                     order.shipping_status = ShippingStatus::Dispatched;
                     order.updated_at = event.occurred_at;
@@ -468,7 +468,7 @@ impl Projection for CrossServiceOrderProjection {
             }
             _ => {} // Ignore other events
         }
-        
+
         Ok(())
     }
 }
@@ -507,31 +507,31 @@ impl EventFederationHub {
                 rule.source_service == event.service_id &&
                 self.matches_pattern(&event.event_type, &rule.event_pattern)
             });
-        
+
         for rule in applicable_rules {
             let transformed_event = if let Some(ref transformation) = rule.transformation {
                 self.transform_event(event, transformation)?
             } else {
                 event.clone()
             };
-            
+
             for target_service in &rule.target_services {
                 if let Some(publisher) = self.publishers.get(target_service) {
                     publisher.publish_federated_event(&transformed_event).await?;
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     fn matches_pattern(&self, event_type: &str, pattern: &str) -> bool {
         // Simple pattern matching - could be more sophisticated
-        pattern == "*" || 
+        pattern == "*" ||
         pattern == event_type ||
         (pattern.ends_with("*") && event_type.starts_with(&pattern[..pattern.len()-1]))
     }
-    
+
     fn transform_event(&self, event: &DistributedEvent, transformation: &str) -> Result<DistributedEvent, FederationError> {
         // Apply transformation rules
         match transformation {
@@ -607,7 +607,7 @@ impl ConsulServiceRegistry {
             },
             registered_at: Utc::now(),
         };
-        
+
         self.register_service(service).await
     }
 }
@@ -653,7 +653,7 @@ impl ServiceCircuitBreaker {
                 _ => {}
             }
         }
-        
+
         // Update to half-open if we were open
         {
             let mut state = self.state.write().await;
@@ -661,7 +661,7 @@ impl ServiceCircuitBreaker {
                 *state = CircuitBreakerState::HalfOpen;
             }
         }
-        
+
         // Execute operation with timeout
         match tokio::time::timeout(self.config.timeout, operation).await {
             Ok(Ok(result)) => {
@@ -682,7 +682,7 @@ impl ServiceCircuitBreaker {
             }
         }
     }
-    
+
     async fn record_failure(&self) {
         let mut state = self.state.write().await;
         match *state {
@@ -706,10 +706,10 @@ impl ServiceCircuitBreaker {
 enum CircuitBreakerError<E> {
     #[error("Circuit breaker is open")]
     CircuitOpen,
-    
+
     #[error("Operation timed out")]
     Timeout,
-    
+
     #[error("Operation failed: {0}")]
     OperationFailed(E),
 }
@@ -739,16 +739,16 @@ impl DistributedCommandExecutor {
             .span_builder(format!("execute_command_{}", std::any::type_name::<C>()))
             .with_kind(SpanKind::Internal)
             .start(&self.tracer);
-        
+
         if let Some(parent) = parent_context {
             span.set_parent(parent);
         }
-        
+
         let _guard = span.enter();
-        
+
         span.set_attribute("command.type", std::any::type_name::<C>());
         span.set_attribute("service.name", self.service_name());
-        
+
         match self.inner.execute(command).await {
             Ok(result) => {
                 span.set_attribute("command.success", true);
@@ -808,47 +808,47 @@ struct DistributedMetrics {
 impl DistributedMetrics {
     fn new(service_name: &str) -> Self {
         let registry = Registry::new();
-        
+
         let commands_total = Counter::new(
             "eventcore_commands_total",
             "Total commands executed"
         ).unwrap();
-        
+
         let command_duration = Histogram::new(
             "eventcore_command_duration_seconds",
             "Command execution duration"
         ).unwrap();
-        
+
         let command_errors = Counter::new(
-            "eventcore_command_errors_total", 
+            "eventcore_command_errors_total",
             "Total command errors"
         ).unwrap();
-        
+
         let events_published = Counter::new(
             "eventcore_events_published_total",
             "Total events published"
         ).unwrap();
-        
+
         let events_consumed = Counter::new(
             "eventcore_events_consumed_total",
             "Total events consumed"
         ).unwrap();
-        
+
         let event_lag = Gauge::new(
             "eventcore_event_lag_seconds",
             "Event processing lag"
         ).unwrap();
-        
+
         let service_health = Gauge::new(
             "eventcore_service_health",
             "Service health status (0=down, 1=up)"
         ).unwrap();
-        
+
         let active_connections = Gauge::new(
             "eventcore_active_connections",
             "Number of active connections"
         ).unwrap();
-        
+
         // Register all metrics
         registry.register(Box::new(commands_total.clone())).unwrap();
         registry.register(Box::new(command_duration.clone())).unwrap();
@@ -858,7 +858,7 @@ impl DistributedMetrics {
         registry.register(Box::new(event_lag.clone())).unwrap();
         registry.register(Box::new(service_health.clone())).unwrap();
         registry.register(Box::new(active_connections.clone())).unwrap();
-        
+
         Self {
             registry,
             commands_total,
@@ -871,39 +871,39 @@ impl DistributedMetrics {
             active_connections,
         }
     }
-    
+
     fn record_command_executed(&self, command_type: &str, duration: Duration, success: bool) {
         self.commands_total
             .with_label_values(&[command_type])
             .inc();
-        
+
         self.command_duration
             .with_label_values(&[command_type])
             .observe(duration.as_secs_f64());
-        
+
         if !success {
             self.command_errors
                 .with_label_values(&[command_type])
                 .inc();
         }
     }
-    
+
     fn record_event_published(&self, event_type: &str) {
         self.events_published
             .with_label_values(&[event_type])
             .inc();
     }
-    
+
     fn record_event_consumed(&self, event_type: &str, lag: Duration) {
         self.events_consumed
             .with_label_values(&[event_type])
             .inc();
-        
+
         self.event_lag
             .with_label_values(&[event_type])
             .set(lag.as_secs_f64());
     }
-    
+
     async fn export_metrics(&self) -> String {
         use prometheus::Encoder;
         let encoder = prometheus::TextEncoder::new();
@@ -920,42 +920,42 @@ impl DistributedMetrics {
 mod distributed_tests {
     use super::*;
     use testcontainers::*;
-    
+
     #[tokio::test]
     async fn test_distributed_saga() {
         // Setup test environment with multiple services
         let docker = clients::Cli::default();
         let kafka_container = docker.run(images::kafka::Kafka::default());
         let postgres_container = docker.run(images::postgres::Postgres::default());
-        
+
         // Start services
         let user_service = start_user_service(&postgres_container).await;
         let order_service = start_order_service(&postgres_container).await;
         let payment_service = start_payment_service(&postgres_container).await;
-        
+
         // Setup event routing
         let event_hub = EventFederationHub::new(&kafka_container);
-        
+
         // Execute distributed saga
         let saga = DistributedOrderSaga {
             saga_id: StreamId::new(),
             order_details: create_test_order(),
             customer_id: create_test_customer(&user_service).await,
         };
-        
+
         let result = order_service.execute_saga(&saga).await;
-        
+
         // Verify all services were coordinated correctly
         assert!(result.is_ok());
-        
+
         // Verify final state across services
         let order = order_service.get_order(saga.order_details.order_id).await?;
         assert_eq!(order.status, OrderStatus::Completed);
-        
+
         let payment = payment_service.get_payment(saga.order_details.order_id).await?;
         assert_eq!(payment.status, PaymentStatus::Completed);
     }
-    
+
     #[tokio::test]
     async fn test_service_failure_compensation() {
         // Similar setup but simulate payment service failure
@@ -988,6 +988,7 @@ Distributed EventCore systems:
 - ✅ **Scalable** - Independent scaling of services
 
 Key patterns:
+
 1. Own your streams - each service owns its event streams
 2. Publish events - share state changes via events
 3. Use sagas - coordinate distributed transactions

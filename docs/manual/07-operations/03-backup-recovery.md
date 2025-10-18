@@ -17,24 +17,24 @@ metadata:
   namespace: eventcore
 spec:
   instances: 3
-  
+
   backup:
     target: prefer-standby
     retentionPolicy: "30d"
-    
+
     # Base backup configuration
     data:
       compression: gzip
       encryption: AES256
       jobs: 2
       immediateCheckpoint: true
-    
+
     # WAL archiving
     wal:
       compression: gzip
       encryption: AES256
       maxParallel: 2
-    
+
     # Backup schedule
     barmanObjectStore:
       destinationPath: "s3://eventcore-backups/postgres"
@@ -57,7 +57,7 @@ metadata:
   name: eventcore-backup-schedule
   namespace: eventcore
 spec:
-  schedule: "0 2 * * *"  # Daily at 2 AM
+  schedule: "0 2 * * *" # Daily at 2 AM
   backupOwnerReference: self
   cluster:
     name: eventcore-postgres
@@ -130,9 +130,9 @@ impl BackupManager {
     pub async fn create_full_backup(&self) -> Result<BackupMetadata, BackupError> {
         let backup_id = Uuid::new_v4();
         let start_time = Utc::now();
-        
+
         tracing::info!(backup_id = %backup_id, "Starting full backup");
-        
+
         // Create backup metadata
         let mut metadata = BackupMetadata {
             backup_id,
@@ -150,11 +150,11 @@ impl BackupManager {
                 latest_version: EventVersion::initial(),
             },
         };
-        
+
         // Get all streams
         let streams = self.event_store.list_all_streams().await?;
         metadata.total_streams = streams.len() as u64;
-        
+
         // Create backup writer
         let backup_path = format!("full-backup-{}.eventcore", backup_id);
         let mut writer = BackupWriter::new(
@@ -162,15 +162,15 @@ impl BackupManager {
             self.config.compression.clone(),
             self.config.encryption_enabled,
         ).await?;
-        
+
         // Write backup header
         writer.write_header(&metadata).await?;
-        
+
         // Backup each stream
         for stream_id in streams {
             let events = self.backup_stream(&stream_id, &mut writer).await?;
             metadata.total_events += events;
-            
+
             if metadata.total_events % 10000 == 0 {
                 tracing::info!(
                     backup_id = %backup_id,
@@ -179,19 +179,19 @@ impl BackupManager {
                 );
             }
         }
-        
+
         // Calculate checksums and finalize
         metadata.size_bytes = writer.finalize().await?;
         metadata.checksum = writer.calculate_checksum().await?;
-        
+
         // Store backup metadata
         self.storage.store_backup(&backup_path, &metadata).await?;
-        
+
         // Verify backup if configured
         if self.config.verify_after_backup {
             self.verify_backup(&backup_id).await?;
         }
-        
+
         let duration = Utc::now().signed_duration_since(start_time);
         tracing::info!(
             backup_id = %backup_id,
@@ -200,26 +200,26 @@ impl BackupManager {
             size_mb = metadata.size_bytes / (1024 * 1024),
             "Backup completed successfully"
         );
-        
+
         Ok(metadata)
     }
-    
+
     pub async fn create_incremental_backup(
         &self,
         since: DateTime<Utc>,
     ) -> Result<BackupMetadata, BackupError> {
         let backup_id = Uuid::new_v4();
         let start_time = Utc::now();
-        
+
         tracing::info!(
             backup_id = %backup_id,
             since = %since,
             "Starting incremental backup"
         );
-        
+
         // Query events since timestamp
         let events = self.event_store.read_events_since(since).await?;
-        
+
         let mut metadata = BackupMetadata {
             backup_id,
             created_at: start_time,
@@ -231,7 +231,7 @@ impl BackupManager {
             checksum: String::new(),
             event_range: self.calculate_event_range(&events),
         };
-        
+
         // Create backup writer
         let backup_path = format!("incremental-backup-{}.eventcore", backup_id);
         let mut writer = BackupWriter::new(
@@ -239,32 +239,32 @@ impl BackupManager {
             self.config.compression.clone(),
             self.config.encryption_enabled,
         ).await?;
-        
+
         // Write incremental backup
         writer.write_header(&metadata).await?;
-        
+
         let mut unique_streams = std::collections::HashSet::new();
         for event in events {
             writer.write_event(&event).await?;
             unique_streams.insert(event.stream_id.clone());
         }
-        
+
         metadata.total_streams = unique_streams.len() as u64;
         metadata.size_bytes = writer.finalize().await?;
         metadata.checksum = writer.calculate_checksum().await?;
-        
+
         self.storage.store_backup(&backup_path, &metadata).await?;
-        
+
         tracing::info!(
             backup_id = %backup_id,
             total_events = metadata.total_events,
             total_streams = metadata.total_streams,
             "Incremental backup completed"
         );
-        
+
         Ok(metadata)
     }
-    
+
     async fn backup_stream(
         &self,
         stream_id: &StreamId,
@@ -273,31 +273,31 @@ impl BackupManager {
         let mut event_count = 0;
         let mut from_version = EventVersion::initial();
         let batch_size = self.config.chunk_size;
-        
+
         loop {
             let options = ReadOptions::default()
                 .from_version(from_version)
                 .limit(batch_size);
-            
+
             let stream_events = self.event_store.read_stream(stream_id, options).await?;
-            
+
             if stream_events.events.is_empty() {
                 break;
             }
-            
+
             for event in &stream_events.events {
                 writer.write_event(event).await?;
                 event_count += 1;
             }
-            
+
             from_version = EventVersion::from(
                 stream_events.events.last().unwrap().version.as_u64() + 1
             );
         }
-        
+
         Ok(event_count)
     }
-    
+
     fn calculate_event_range(&self, events: &[StoredEvent]) -> EventRange {
         if events.is_empty() {
             let now = Utc::now();
@@ -308,10 +308,10 @@ impl BackupManager {
                 latest_version: EventVersion::initial(),
             };
         }
-        
+
         let earliest = events.iter().min_by_key(|e| e.occurred_at).unwrap();
         let latest = events.iter().max_by_key(|e| e.occurred_at).unwrap();
-        
+
         EventRange {
             earliest_event: earliest.occurred_at,
             latest_event: latest.occurred_at,
@@ -337,7 +337,7 @@ impl BackupWriter {
     ) -> Result<Self, BackupError> {
         let file = File::create(path).await?;
         let file = BufWriter::new(file);
-        
+
         Ok(Self {
             file,
             path: path.to_string(),
@@ -346,17 +346,17 @@ impl BackupWriter {
             bytes_written: 0,
         })
     }
-    
+
     async fn write_header(&mut self, metadata: &BackupMetadata) -> Result<(), BackupError> {
         let header = serde_json::to_string(metadata)?;
         let header_line = format!("EVENTCORE_BACKUP_HEADER:{}\n", header);
-        
+
         self.file.write_all(header_line.as_bytes()).await?;
         self.bytes_written += header_line.len() as u64;
-        
+
         Ok(())
     }
-    
+
     async fn write_event(&mut self, event: &StoredEvent) -> Result<(), BackupError> {
         let event_line = match self.compression {
             CompressionType::None => {
@@ -374,28 +374,28 @@ impl BackupWriter {
                 format!("{}\n", json) // Simplified for example
             }
         };
-        
+
         self.file.write_all(event_line.as_bytes()).await?;
         self.bytes_written += event_line.len() as u64;
-        
+
         Ok(())
     }
-    
+
     async fn finalize(&mut self) -> Result<u64, BackupError> {
         self.file.flush().await?;
         Ok(self.bytes_written)
     }
-    
+
     async fn calculate_checksum(&self) -> Result<String, BackupError> {
         // Calculate SHA-256 checksum of the backup file
         use sha2::{Sha256, Digest};
         use tokio::fs::File;
         use tokio::io::AsyncReadExt;
-        
+
         let mut file = File::open(&self.path).await?;
         let mut hasher = Sha256::new();
         let mut buffer = [0; 8192];
-        
+
         loop {
             let bytes_read = file.read(&mut buffer).await?;
             if bytes_read == 0 {
@@ -403,7 +403,7 @@ impl BackupWriter {
             }
             hasher.update(&buffer[..bytes_read]);
         }
-        
+
         Ok(format!("{:x}", hasher.finalize()))
     }
 }
@@ -424,45 +424,45 @@ impl PointInTimeRecovery {
         target_time: DateTime<Utc>,
     ) -> Result<RecoveryResult, RecoveryError> {
         tracing::info!(target_time = %target_time, "Starting point-in-time recovery");
-        
+
         // Find the best backup to start from
         let base_backup = self.find_best_base_backup(target_time).await?;
-        
+
         // Restore from base backup
         self.restore_from_backup(&base_backup.backup_id).await?;
-        
+
         // Apply incremental backups up to the target time
         let incremental_backups = self.find_incremental_backups_until(
             base_backup.created_at,
             target_time,
         ).await?;
-        
+
         for backup in incremental_backups {
             self.apply_incremental_backup(&backup.backup_id, Some(target_time)).await?;
         }
-        
+
         // Apply WAL entries up to the exact target time
         self.apply_wal_entries_until(target_time).await?;
-        
+
         // Verify recovery
         let recovery_result = self.verify_recovery(target_time).await?;
-        
+
         tracing::info!(
             target_time = %target_time,
             events_restored = recovery_result.events_restored,
             streams_restored = recovery_result.streams_restored,
             "Point-in-time recovery completed"
         );
-        
+
         Ok(recovery_result)
     }
-    
+
     async fn find_best_base_backup(
         &self,
         target_time: DateTime<Utc>,
     ) -> Result<BackupMetadata, RecoveryError> {
         let backups = self.backup_manager.list_backups().await?;
-        
+
         // Find the latest full backup before the target time
         let base_backup = backups
             .iter()
@@ -470,34 +470,34 @@ impl PointInTimeRecovery {
             .filter(|b| matches!(b.format, BackupFormat::JsonLines)) // Full backup indicator
             .max_by_key(|b| b.created_at)
             .ok_or(RecoveryError::NoSuitableBackup)?;
-        
+
         Ok(base_backup.clone())
     }
-    
+
     async fn restore_from_backup(&self, backup_id: &Uuid) -> Result<(), RecoveryError> {
         tracing::info!(backup_id = %backup_id, "Restoring from base backup");
-        
+
         // Clear the event store
         self.event_store.clear_all().await?;
-        
+
         // Read backup file
         let backup_reader = BackupReader::new(backup_id).await?;
         let metadata = backup_reader.read_metadata().await?;
-        
+
         tracing::info!(
             backup_id = %backup_id,
             total_events = metadata.total_events,
             "Reading backup events"
         );
-        
+
         // Restore events in batches
         let batch_size = 1000;
         let mut events_restored = 0;
-        
+
         while let Some(batch) = backup_reader.read_events_batch(batch_size).await? {
             self.event_store.write_events(batch).await?;
             events_restored += batch_size;
-            
+
             if events_restored % 10000 == 0 {
                 tracing::info!(
                     events_restored = events_restored,
@@ -505,25 +505,25 @@ impl PointInTimeRecovery {
                 );
             }
         }
-        
+
         Ok(())
     }
-    
+
     async fn apply_wal_entries_until(
         &self,
         target_time: DateTime<Utc>,
     ) -> Result<(), RecoveryError> {
         // Apply WAL (Write-Ahead Log) entries from PostgreSQL
         // This provides exact point-in-time recovery
-        
+
         let wal_entries = self.read_wal_entries_until(target_time).await?;
-        
+
         for entry in wal_entries {
             if entry.timestamp <= target_time {
                 self.apply_wal_entry(entry).await?;
             }
         }
-        
+
         Ok(())
     }
 }
@@ -556,19 +556,19 @@ data:
       storage: s3://eventcore-backups-primary
       schedule: "0 */6 * * *"  # Every 6 hours
       retention: "30d"
-      
+
     # Cross-region replication
     replicas:
       - region: us-west-2
         storage: s3://eventcore-backups-west
         sync_schedule: "0 1 * * *"  # Daily sync
         retention: "90d"
-        
+
       - region: eu-west-1
         storage: s3://eventcore-backups-eu
         sync_schedule: "0 2 * * *"  # Daily sync
         retention: "90d"
-    
+
     # Archive configuration
     archive:
       storage: glacier://eventcore-archive
@@ -596,13 +596,13 @@ impl DisasterRecoveryOrchestrator {
             trigger = ?trigger,
             "Disaster recovery triggered"
         );
-        
+
         // Assess the situation
         let assessment = self.assess_disaster_scope().await?;
-        
+
         // Choose recovery strategy
         let strategy = self.choose_recovery_strategy(&assessment).await?;
-        
+
         // Execute recovery
         match strategy {
             RecoveryStrategy::LocalRestore => {
@@ -616,22 +616,22 @@ impl DisasterRecoveryOrchestrator {
             }
         }
     }
-    
+
     async fn assess_disaster_scope(&self) -> Result<DisasterAssessment, DisasterRecoveryError> {
         let mut assessment = DisasterAssessment::default();
-        
+
         // Check primary database
         assessment.primary_db_accessible = self.health_checker
             .check_database_connectivity(&self.primary_region)
             .await
             .is_ok();
-        
+
         // Check backup availability
         assessment.backup_accessible = self.backup_manager
             .verify_backup_accessibility()
             .await
             .is_ok();
-        
+
         // Check replica regions
         for region in &self.failover_regions {
             let accessible = self.health_checker
@@ -640,13 +640,13 @@ impl DisasterRecoveryOrchestrator {
                 .is_ok();
             assessment.replica_regions.insert(region.clone(), accessible);
         }
-        
+
         // Estimate data loss
         assessment.estimated_data_loss = self.calculate_potential_data_loss().await?;
-        
+
         Ok(assessment)
     }
-    
+
     async fn execute_regional_failover(
         &self,
         target_region: &str,
@@ -655,22 +655,22 @@ impl DisasterRecoveryOrchestrator {
             target_region = target_region,
             "Executing regional failover"
         );
-        
+
         // 1. Promote replica in target region
         self.promote_replica(target_region).await?;
-        
+
         // 2. Update DNS to point to new region
         self.update_dns_routing(target_region).await?;
-        
+
         // 3. Scale up resources in target region
         self.scale_up_target_region(target_region).await?;
-        
+
         // 4. Verify system health
         let health_check = self.verify_system_health(target_region).await?;
-        
+
         // 5. Notify stakeholders
         self.notify_failover_completion(target_region, &health_check).await?;
-        
+
         Ok(RecoveryOutcome {
             strategy_used: RecoveryStrategy::RegionalFailover {
                 target_region: target_region.to_string(),
@@ -724,30 +724,30 @@ impl BackupVerifier {
         backup_id: &Uuid,
     ) -> Result<VerificationResult, VerificationError> {
         tracing::info!(backup_id = %backup_id, "Starting backup verification");
-        
+
         let mut result = VerificationResult::default();
-        
+
         // Verify checksum
         result.checksum_valid = self.verify_checksum(backup_id).await?;
-        
+
         // Verify metadata consistency
         result.metadata_consistent = self.verify_metadata(backup_id).await?;
-        
+
         // Verify event integrity
         result.events_valid = self.verify_events(backup_id).await?;
-        
+
         // Verify completeness (if verifying against live system)
         if let Ok(completeness) = self.verify_completeness(backup_id).await {
             result.completeness_verified = true;
             result.missing_events = completeness.missing_events;
         }
-        
+
         result.verification_time = Utc::now();
         result.overall_valid = result.checksum_valid &&
             result.metadata_consistent &&
             result.events_valid &&
             result.missing_events == 0;
-        
+
         if result.overall_valid {
             tracing::info!(backup_id = %backup_id, "Backup verification passed");
         } else {
@@ -757,22 +757,22 @@ impl BackupVerifier {
                 "Backup verification failed"
             );
         }
-        
+
         Ok(result)
     }
-    
+
     async fn verify_checksum(&self, backup_id: &Uuid) -> Result<bool, VerificationError> {
         let backup_metadata = self.backup_storage.get_metadata(backup_id).await?;
         let calculated_checksum = self.calculate_backup_checksum(backup_id).await?;
-        
+
         Ok(backup_metadata.checksum == calculated_checksum)
     }
-    
+
     async fn verify_events(&self, backup_id: &Uuid) -> Result<bool, VerificationError> {
         let backup_reader = BackupReader::new(backup_id).await?;
         let mut events_valid = true;
         let mut event_count = 0;
-        
+
         while let Some(event) = backup_reader.read_next_event().await? {
             // Verify event structure
             if !self.is_event_structurally_valid(&event) {
@@ -784,7 +784,7 @@ impl BackupVerifier {
                 events_valid = false;
                 break;
             }
-            
+
             // Verify event ordering (within stream)
             if !self.is_event_ordering_valid(&event) {
                 tracing::error!(
@@ -795,9 +795,9 @@ impl BackupVerifier {
                 events_valid = false;
                 break;
             }
-            
+
             event_count += 1;
-            
+
             if event_count % 10000 == 0 {
                 tracing::info!(
                     backup_id = %backup_id,
@@ -806,30 +806,30 @@ impl BackupVerifier {
                 );
             }
         }
-        
+
         Ok(events_valid)
     }
-    
+
     fn is_event_structurally_valid(&self, event: &StoredEvent) -> bool {
         // Verify required fields
         if event.id.is_nil() || event.stream_id.as_ref().is_empty() {
             return false;
         }
-        
+
         // Verify event ordering within stream
         if event.version.as_u64() == 0 {
             return false;
         }
-        
+
         // Verify timestamp is reasonable
         let now = Utc::now();
         if event.occurred_at > now || event.occurred_at < (now - chrono::Duration::days(3650)) {
             return false;
         }
-        
+
         true
     }
-    
+
     fn is_event_ordering_valid(&self, event: &StoredEvent) -> bool {
         // This would need to track ordering within streams
         // Simplified implementation for example
@@ -869,12 +869,12 @@ pub struct IntegrityMonitoringConfig {
 impl IntegrityMonitor {
     pub async fn start_monitoring(&self) -> Result<(), MonitoringError> {
         tracing::info!("Starting continuous integrity monitoring");
-        
+
         let mut interval = tokio::time::interval(self.monitoring_config.check_interval);
-        
+
         loop {
             interval.tick().await;
-            
+
             match self.perform_integrity_check().await {
                 Ok(report) => {
                     if !report.integrity_ok {
@@ -882,11 +882,11 @@ impl IntegrityMonitor {
                             corruption_count = report.corrupted_events,
                             "Data integrity issues detected"
                         );
-                        
+
                         if self.monitoring_config.alert_on_corruption {
                             self.send_corruption_alert(&report).await;
                         }
-                        
+
                         if self.monitoring_config.auto_repair {
                             self.attempt_auto_repair(&report).await;
                         }
@@ -900,42 +900,42 @@ impl IntegrityMonitor {
             }
         }
     }
-    
+
     async fn perform_integrity_check(&self) -> Result<IntegrityReport, MonitoringError> {
         let start_time = Utc::now();
         let mut report = IntegrityReport::default();
-        
+
         // Sample events for checking
         let sample_events = self.sample_events().await?;
         report.events_checked = sample_events.len() as u64;
-        
+
         for event in sample_events {
             // Check event integrity
             let integrity_check = self.check_event_integrity(&event).await?;
-            
+
             if !integrity_check.valid {
                 report.corrupted_events += 1;
                 report.corruption_details.push(integrity_check);
             }
         }
-        
+
         report.check_time = Utc::now();
         report.check_duration = report.check_time.signed_duration_since(start_time);
         report.integrity_ok = report.corrupted_events == 0;
-        
+
         Ok(report)
     }
-    
+
     async fn sample_events(&self) -> Result<Vec<StoredEvent>, MonitoringError> {
         // Sample a percentage of events for integrity checking
-        let sample_size = ((self.get_total_event_count().await? as f64) 
+        let sample_size = ((self.get_total_event_count().await? as f64)
             * self.monitoring_config.sample_percentage / 100.0) as usize;
-        
+
         // Use reservoir sampling or similar technique
         self.event_store.sample_events(sample_size).await
             .map_err(MonitoringError::EventStoreError)
     }
-    
+
     async fn check_event_integrity(&self, event: &StoredEvent) -> Result<EventIntegrityCheck, MonitoringError> {
         let mut check = EventIntegrityCheck {
             event_id: event.id,
@@ -943,24 +943,24 @@ impl IntegrityMonitor {
             valid: true,
             issues: Vec::new(),
         };
-        
+
         // Check payload can be deserialized
         if let Err(_) = serde_json::from_value::<serde_json::Value>(event.payload.clone()) {
             check.valid = false;
             check.issues.push("Payload deserialization failed".to_string());
         }
-        
+
         // Check metadata is valid
         if event.metadata.is_empty() {
             check.issues.push("Missing metadata".to_string());
         }
-        
+
         // Check event ordering within stream
         if let Err(_) = self.verify_event_ordering(event).await {
             check.valid = false;
             check.issues.push("Event ordering violation".to_string());
         }
-        
+
         Ok(check)
     }
 }
@@ -1007,53 +1007,53 @@ pub struct BackupTestConfig {
 impl BackupTestSuite {
     pub async fn run_comprehensive_backup_tests(&self) -> Result<TestResults, TestError> {
         tracing::info!("Starting comprehensive backup tests");
-        
+
         let mut results = TestResults::default();
-        
+
         // Test 1: Backup creation
         results.backup_creation = self.test_backup_creation().await?;
-        
+
         // Test 2: Backup verification
         results.backup_verification = self.test_backup_verification().await?;
-        
+
         // Test 3: Partial restore
         results.partial_restore = self.test_partial_restore().await?;
-        
+
         // Test 4: Full restore (if scheduled)
         if self.should_run_full_restore_test().await? {
             results.full_restore = Some(self.test_full_restore().await?);
         }
-        
+
         // Test 5: Point-in-time recovery
         results.point_in_time_recovery = self.test_point_in_time_recovery().await?;
-        
+
         // Test 6: Cross-region restore
         results.cross_region_restore = self.test_cross_region_restore().await?;
-        
+
         results.overall_success = results.all_tests_passed();
         results.test_time = Utc::now();
-        
+
         if results.overall_success {
             tracing::info!("All backup tests passed");
         } else {
             tracing::error!(results = ?results, "Some backup tests failed");
         }
-        
+
         Ok(results)
     }
-    
+
     async fn test_backup_creation(&self) -> Result<TestResult, TestError> {
         let start_time = Utc::now();
-        
+
         // Create test data
         let test_events = self.create_test_events(1000).await?;
         self.write_test_events(&test_events).await?;
-        
+
         // Create backup
         let backup_result = self.backup_manager.create_full_backup().await;
-        
+
         let duration = Utc::now().signed_duration_since(start_time);
-        
+
         match backup_result {
             Ok(metadata) => {
                 Ok(TestResult {
@@ -1075,29 +1075,29 @@ impl BackupTestSuite {
             }
         }
     }
-    
+
     async fn test_full_restore(&self) -> Result<TestResult, TestError> {
         let start_time = Utc::now();
-        
+
         // Get latest backup
         let latest_backup = self.backup_manager.get_latest_backup().await?;
-        
+
         // Create clean test environment
         let test_store = self.create_clean_test_store().await?;
-        
+
         // Perform restore
         let restore_result = self.restore_backup_to_store(
             &latest_backup.backup_id,
             &test_store,
         ).await;
-        
+
         let duration = Utc::now().signed_duration_since(start_time);
-        
+
         match restore_result {
             Ok(_) => {
                 // Verify restore completeness
                 let verification = self.verify_restore_completeness(&test_store).await?;
-                
+
                 Ok(TestResult {
                     test_name: "full_restore".to_string(),
                     success: verification.complete,
@@ -1178,6 +1178,7 @@ EventCore backup and recovery:
 - ✅ **Recovery orchestration** - Automated disaster recovery procedures
 
 Key components:
+
 1. Implement automated backup strategies with multiple approaches
 2. Design disaster recovery procedures for various failure scenarios
 3. Continuously monitor data integrity with automated verification

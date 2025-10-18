@@ -43,7 +43,7 @@ pub enum BusinessEvent {
         to_account: String,
         amount: u64,
     },
-    
+
     // Inventory events
     ProductStocked {
         product_id: String,
@@ -56,7 +56,7 @@ pub enum BusinessEvent {
         quantity: u32,
         order_id: String,
     },
-    
+
     // Capacity events
     ResourceAllocated {
         resource_id: String,
@@ -163,7 +163,7 @@ impl Command for OptimizedTransferCommand {
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         // Use optimized validation with caching
         let validation_results = input.validate_business_rules(&input.validation_cache).await?;
-        
+
         // Check if all validations passed
         for result in &validation_results {
             if !result.valid {
@@ -250,7 +250,7 @@ impl ProcessOrderCommand {
             validation_cache: ValidationCache::new(&ValidationProfile::Balanced),
         }
     }
-    
+
     fn total_amount(&self) -> u64 {
         self.items.iter().map(|item| item.price * item.quantity as u64).sum()
     }
@@ -268,13 +268,13 @@ impl Command for ProcessOrderCommand {
             StreamId::try_new(format!("account-{}", input.customer_account)).unwrap(),
             StreamId::try_new(format!("order-{}", input.order_id)).unwrap(),
         ];
-        
+
         for item in &input.items {
             streams.push(
                 StreamId::try_new(format!("inventory-{}-{}", item.product_id, item.warehouse_id)).unwrap()
             );
         }
-        
+
         streams
     }
 
@@ -293,34 +293,34 @@ impl Command for ProcessOrderCommand {
         let start_time = Instant::now();
         let validation_results = input.validate_business_rules(&input.validation_cache).await?;
         let validation_time = start_time.elapsed();
-        
+
         println!("📦 Order Processing Validation:");
         println!("   📋 Rules validated: {}", validation_results.len());
         println!("   ⏱️  Total time: {:?}", validation_time);
-        
+
         let mut cache_hits = 0;
         let mut cache_misses = 0;
-        
+
         for result in &validation_results {
             if !result.valid {
                 return Err(CommandError::BusinessRuleViolation(
                     result.error_message.clone().unwrap_or("Validation failed".to_string())
                 ));
             }
-            
+
             if result.from_cache {
                 cache_hits += 1;
             } else {
                 cache_misses += 1;
             }
         }
-        
+
         println!("   🎯 Cache hits: {}, misses: {}", cache_hits, cache_misses);
-        println!("   ⚡ Cache efficiency: {:.1}%", 
-            if cache_hits + cache_misses > 0 { 
-                100.0 * cache_hits as f64 / (cache_hits + cache_misses) as f64 
-            } else { 
-                0.0 
+        println!("   ⚡ Cache efficiency: {:.1}%",
+            if cache_hits + cache_misses > 0 {
+                100.0 * cache_hits as f64 / (cache_hits + cache_misses) as f64
+            } else {
+                0.0
             }
         );
 
@@ -412,19 +412,19 @@ impl BenchmarkCommand {
 
     pub async fn run_benchmark(&self) -> Duration {
         let start_time = Instant::now();
-        
+
         for i in 0..self.operations_count {
             let rule = BusinessRule::SufficientFunds {
                 account_id: format!("account-{}", i % 10), // Reuse accounts for cache hits
                 required_amount: 100 * (i as u64 + 1),
             };
-            
+
             let context = ValidationContext::new()
                 .with_balance(format!("account-{}", i % 10), 100000);
-            
+
             let _result = self.validation_cache.validate_business_rule(&rule, &context).await.unwrap();
         }
-        
+
         start_time.elapsed()
     }
 }
@@ -440,7 +440,7 @@ async fn setup_test_data(executor: &CommandExecutor<InMemoryEventStore<BusinessE
             account_id: format!("account-{}", i),
             initial_balance: 100000, // $1,000 in cents
         };
-        
+
         executor.event_store().append_events(
             vec![EventToWrite::new(
                 StreamId::try_new(format!("account-{}", i)).unwrap(),
@@ -458,7 +458,7 @@ async fn setup_test_data(executor: &CommandExecutor<InMemoryEventStore<BusinessE
             warehouse_id: "warehouse-main".to_string(),
             quantity: 100,
         };
-        
+
         executor.event_store().append_events(
             vec![EventToWrite::new(
                 StreamId::try_new(format!("inventory-product-{}-warehouse-main", i)).unwrap(),
@@ -492,7 +492,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 1: Single validation with caching
     println!("💰 Example 1: Single Transfer with Validation Caching");
     println!("------------------------------------------------");
-    
+
     let transfer_command = OptimizedTransferCommand::new(
         "account-0".to_string(),
         "account-1".to_string(),
@@ -509,7 +509,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 2: Batch validation for order processing
     println!("🛒 Example 2: Order Processing with Batch Validation");
     println!("-----------------------------------------------");
-    
+
     let order_items = vec![
         OrderItem {
             product_id: "product-0".to_string(),
@@ -530,36 +530,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             price: 1000, // $10 each
         },
     ];
-    
+
     let order_command = ProcessOrderCommand::new(
         "order-12345".to_string(),
         "account-5".to_string(),
         order_items,
     );
-    
+
     let order_result = executor.execute(&order_command, order_command, ExecutionOptions::default()).await?;
     println!("✅ Order processed: {} events written\n", order_result.events_written.len());
 
     // Example 3: Performance comparison across profiles
     println!("⚡ Example 3: Performance Profile Comparison");
     println!("------------------------------------------");
-    
+
     let profiles = vec![
         ("Conservative", ValidationProfile::Conservative),
         ("Balanced", ValidationProfile::Balanced),
         ("High Performance", ValidationProfile::HighPerformance),
     ];
-    
+
     for (name, profile) in profiles {
         let benchmark = BenchmarkCommand::new(&profile, 1000);
         let duration = benchmark.run_benchmark().await;
         let stats = benchmark.validation_cache.cache_stats();
-        
+
         println!("📈 {} Profile:", name);
         println!("   ⏱️  Total time: {:?}", duration);
         println!("   🎯 Cache hits: {}", stats.cache_hits);
         println!("   ❌ Cache misses: {}", stats.cache_misses);
-        println!("   📊 Hit ratio: {:.1}%", 
+        println!("   📊 Hit ratio: {:.1}%",
             if stats.cache_hits + stats.cache_misses > 0 {
                 100.0 * stats.cache_hits as f64 / (stats.cache_hits + stats.cache_misses) as f64
             } else {
@@ -596,7 +596,7 @@ mod tests {
 
         let rules = command.business_rules();
         assert_eq!(rules.len(), 1);
-        
+
         match &rules[0] {
             BusinessRule::SufficientFunds { account_id, required_amount } => {
                 assert_eq!(account_id, "account-alice");
@@ -662,10 +662,10 @@ mod tests {
     async fn test_performance_benchmark() {
         let benchmark = BenchmarkCommand::new(ValidationProfile::HighPerformance, 100);
         let duration = benchmark.run_benchmark().await;
-        
+
         // Should complete quickly due to caching
         assert!(duration < Duration::from_secs(1));
-        
+
         let stats = benchmark.validation_cache.cache_stats();
         assert!(stats.rules_evaluated > 0);
         assert!(stats.cache_hits > 0); // Should have cache hits due to account reuse

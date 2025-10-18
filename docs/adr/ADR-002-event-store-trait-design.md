@@ -28,6 +28,7 @@ The EventStore trait is the foundation contract between EventCore's command exec
 EventCore will define two separate traits for storage abstraction:
 
 **EventStore Trait - Core Operations:**
+
 1. **Read Streams**: Query operation to retrieve events from one or more streams
 2. **Atomic Append**: Single operation that appends events to multiple streams atomically with version checking
 3. **Version-Based Concurrency**: Expected versions provided in append operation for optimistic concurrency control
@@ -35,6 +36,7 @@ EventCore will define two separate traits for storage abstraction:
 5. **Atomicity as Implementation Detail**: HOW backends achieve atomicity (transactions, locks, etc.) is hidden from consumers
 
 **EventSubscription Trait - Projection Support:**
+
 1. **Separate Trait**: Subscriptions provided via companion trait, not mixed into EventStore
 2. **Long-Lived Streams**: Delivers events in real-time for projection building
 3. **Checkpointing**: Supports resuming from last processed position
@@ -51,6 +53,7 @@ Complexity of transaction management (how to achieve atomicity) is pushed into b
 **Why Atomicity as Implementation Detail:**
 
 Different backends achieve atomicity through different mechanisms:
+
 - PostgreSQL uses ACID database transactions
 - In-memory stores use mutex/lock-based synchronization
 - Future backends may use other techniques
@@ -60,6 +63,7 @@ Library consumers should not need to understand or manage these mechanisms. The 
 **Why Separate Subscription Trait:**
 
 Subscriptions have fundamentally different lifecycle and semantics from read/append operations:
+
 - Subscriptions are long-lived event streams; read/append are short request-response operations
 - Subscriptions deliver events asynchronously and continuously; read/append are one-shot operations
 - Not all backends may support subscriptions (e.g., simple file-based stores)
@@ -69,6 +73,7 @@ Subscriptions have fundamentally different lifecycle and semantics from read/app
 **Why Explicit Version Checking:**
 
 Making expected versions explicit in append operations:
+
 - Aligns with optimistic concurrency control pattern (read, compute, write with version check)
 - Makes conflict detection part of the API contract
 - Enables backends to implement version checking efficiently (e.g., PostgreSQL CHECK constraints)
@@ -82,6 +87,7 @@ Making expected versions explicit in append operations:
 - **No Streaming Reads**: Read operation loads all events into memory (acceptable for event sourcing where streams are bounded)
 
 These trade-offs are acceptable because:
+
 - Atomicity is fundamental requirement per ADR-001
 - Version conflicts are inherent to optimistic concurrency and handled by automatic retry
 - Event sourced streams are typically bounded in size (snapshots handle long streams)
@@ -128,6 +134,7 @@ These trade-offs are acceptable because:
 Combine read, append, and subscription operations in a single unified trait.
 
 **Rejected Because:**
+
 - Violates single responsibility principle - mixing short-lived operations with long-lived streams
 - Forces backends to implement both even if they only support core operations
 - Makes testing more complex (must mock multiple unrelated concerns)
@@ -140,6 +147,7 @@ Combine read, append, and subscription operations in a single unified trait.
 Provide explicit transaction or session handles that consumers must manage:
 
 **Rejected Because:**
+
 - Event sourcing's atomicity boundary is naturally the single append operation
 - Exposes implementation details (how backends achieve atomicity) in consumer API
 - Adds API complexity and learning curve without corresponding benefit
@@ -152,6 +160,7 @@ Provide explicit transaction or session handles that consumers must manage:
 Provide different traits for single-stream vs multi-stream operations:
 
 **Rejected Because:**
+
 - Creates artificial distinction in API when implementation is the same
 - Forces type system complexity to distinguish single vs multi-stream commands
 - Multi-stream append can trivially handle single-stream case
@@ -163,6 +172,7 @@ Provide different traits for single-stream vs multi-stream operations:
 Provide async stream/iterator interface for reading events instead of loading all into memory:
 
 **Rejected Because:**
+
 - Event sourced streams are typically bounded in size (snapshots handle long streams)
 - Adds API complexity (async iterators, backpressure, error handling mid-stream)
 - Most command logic needs full history to compute state
@@ -175,6 +185,7 @@ Provide async stream/iterator interface for reading events instead of loading al
 Allow appends without version checking, using timestamp-based ordering:
 
 **Rejected Because:**
+
 - Defeats optimistic concurrency control
 - Cannot detect concurrent modifications and conflicts
 - Lost updates become silent failures

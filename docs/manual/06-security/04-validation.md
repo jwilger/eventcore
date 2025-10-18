@@ -20,13 +20,13 @@ use validator::{Validate, ValidationError};
 struct CreateUserRequest {
     #[validate(length(min = 3, max = 50))]
     username: String,
-    
+
     #[validate(email)]
     email: String,
-    
+
     #[validate(length(min = 8), custom = "validate_password_strength")]
     password: String,
-    
+
     #[validate(range(min = 13, max = 120))]
     age: u8,
 }
@@ -36,11 +36,11 @@ fn validate_password_strength(password: &str) -> Result<(), ValidationError> {
     let has_lowercase = password.chars().any(|c| c.is_lowercase());
     let has_digit = password.chars().any(|c| c.is_digit(10));
     let has_special = password.chars().any(|c| !c.is_alphanumeric());
-    
+
     if !(has_uppercase && has_lowercase && has_digit && has_special) {
         return Err(ValidationError::new("weak_password"));
     }
-    
+
     Ok(())
 }
 
@@ -50,7 +50,7 @@ async fn create_user(
     // Validation happens automatically during deserialization
     request.validate()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    
+
     // Continue with validated data...
     Ok(StatusCode::CREATED)
 }
@@ -90,7 +90,7 @@ pub struct Money(u64); // In cents
 // Usage
 let username = Username::try_new("JohnDoe123")
     .map_err(|_| "Invalid username")?;
-    
+
 let email = Email::try_new("john@example.com")
     .map_err(|_| "Invalid email")?;
 ```
@@ -119,11 +119,11 @@ impl TransferMoney {
         if from == to {
             return Err(ValidationError::SameAccount);
         }
-        
+
         if amount.is_zero() {
             return Err(ValidationError::ZeroAmount);
         }
-        
+
         Ok(Self {
             from_account: from,
             to_account: to,
@@ -140,17 +140,17 @@ impl CommandLogic for TransferMoney {
             state.from_balance >= self.amount,
             CommandError::InsufficientFunds
         );
-        
+
         require!(
             state.to_account.is_active(),
             CommandError::AccountInactive
         );
-        
+
         require!(
             self.amount <= state.daily_limit_remaining,
             CommandError::DailyLimitExceeded
         );
-        
+
         // Proceed with valid transfer...
         Ok(vec![/* events */])
     }
@@ -235,14 +235,14 @@ impl RateLimiter {
         let mut limits = self.limits.lock().await;
         let now = Instant::now();
         let requests = limits.entry(key.to_string()).or_default();
-        
+
         // Remove old requests outside window
         requests.retain(|&time| now.duration_since(time) < self.window);
-        
+
         if requests.len() >= self.max_requests {
             return Err(RateLimitError::TooManyRequests);
         }
-        
+
         requests.push(now);
         Ok(())
     }
@@ -256,10 +256,10 @@ async fn execute_command(
 ) -> Result<(), Error> {
     // Rate limit by user
     rate_limiter.check_rate_limit(&user_id.to_string()).await?;
-    
+
     // Rate limit by IP for anonymous operations
     // rate_limiter.check_rate_limit(&ip_address).await?;
-    
+
     executor.execute(command).await
 }
 ```
@@ -285,26 +285,26 @@ impl FileValidator {
         if !self.allowed_types.contains(&content_type.to_string()) {
             return Err(ValidationError::InvalidFileType);
         }
-        
+
         // Read and check size
         let mut buffer = Vec::new();
         let bytes_read = file
             .take(self.max_size as u64 + 1)
             .read_to_end(&mut buffer)
             .await?;
-            
+
         if bytes_read > self.max_size {
             return Err(ValidationError::FileTooLarge);
         }
-        
+
         // Verify file magic numbers
         if !self.verify_file_signature(&buffer, content_type) {
             return Err(ValidationError::InvalidFileContent);
         }
-        
+
         Ok(buffer)
     }
-    
+
     fn verify_file_signature(&self, data: &[u8], content_type: &str) -> bool {
         match content_type {
             "image/jpeg" => data.starts_with(&[0xFF, 0xD8, 0xFF]),

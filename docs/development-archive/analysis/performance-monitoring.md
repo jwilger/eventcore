@@ -53,7 +53,7 @@ Monitor event store performance and health:
 ```rust
 // Event store metrics include:
 // - reads_total: Total read operations
-// - writes_total: Total write operations  
+// - writes_total: Total write operations
 // - events_written: Total events persisted
 // - events_read: Total events retrieved
 // - read_duration: Read operation times
@@ -65,7 +65,7 @@ Monitor event store performance and health:
 
 #### Key Performance Indicators
 
-1. **Event Store Throughput**: 
+1. **Event Store Throughput**:
    - Write throughput: `events_written / time_period`
    - Read throughput: `events_read / time_period`
    - Target: > 1000 events/second write, > 10000 events/second read
@@ -207,13 +207,13 @@ impl PrometheusExporter {
     pub fn new() -> Self {
         let registry = Registry::new();
         let metrics = MetricsRegistry::new();
-        
+
         // Register EventCore metrics with Prometheus
         // (Implementation would register gauge, counter, and histogram metrics)
-        
+
         Self { registry, metrics }
     }
-    
+
     pub fn export_metrics(&self) -> String {
         let encoder = TextEncoder::new();
         let metric_families = self.registry.gather();
@@ -229,6 +229,7 @@ impl PrometheusExporter {
 Create comprehensive dashboards for visual monitoring:
 
 #### Command Execution Dashboard
+
 ```json
 {
   "dashboard": {
@@ -245,7 +246,7 @@ Create comprehensive dashboards for visual monitoring:
       },
       {
         "title": "Command Duration P95",
-        "type": "graph", 
+        "type": "graph",
         "targets": [
           {
             "expr": "histogram_quantile(0.95, rate(eventcore_command_duration_bucket[5m]))"
@@ -267,6 +268,7 @@ Create comprehensive dashboards for visual monitoring:
 ```
 
 #### Event Store Dashboard
+
 ```json
 {
   "dashboard": {
@@ -330,12 +332,13 @@ command_tracer.record_completion(true, 1);
 ### Command Optimization
 
 1. **Reduce Stream Access**: Minimize streams read per command
+
    ```rust
    // Good: Read only required streams
    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
        vec![input.account_stream_id().clone()]
    }
-   
+
    // Bad: Read unnecessary streams
    fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
        vec![
@@ -347,6 +350,7 @@ command_tracer.record_completion(true, 1);
    ```
 
 2. **Optimize Event Size**: Keep events focused and minimal
+
    ```rust
    // Good: Focused event
    #[derive(Serialize, Deserialize)]
@@ -355,7 +359,7 @@ command_tracer.record_completion(true, 1);
        pub amount: Money,
        pub transaction_id: TransactionId,
    }
-   
+
    // Bad: Bloated event
    #[derive(Serialize, Deserialize)]
    pub struct AccountDebited {
@@ -380,9 +384,10 @@ command_tracer.record_completion(true, 1);
 ### Event Store Optimization
 
 1. **Connection Pooling**: Optimize database connections
+
    ```rust
    use sqlx::postgres::PgPoolOptions;
-   
+
    let pool = PgPoolOptions::new()
        .max_connections(20)
        .min_connections(5)
@@ -393,27 +398,29 @@ command_tracer.record_completion(true, 1);
    ```
 
 2. **Query Optimization**: Use efficient SQL queries
+
    ```sql
    -- Good: Use indexes effectively
-   SELECT event_data, version 
-   FROM events 
-   WHERE stream_id = $1 AND version > $2 
+   SELECT event_data, version
+   FROM events
+   WHERE stream_id = $1 AND version > $2
    ORDER BY version ASC
    LIMIT 1000;
-   
+
    -- Bad: Full table scan
-   SELECT event_data, version 
-   FROM events 
+   SELECT event_data, version
+   FROM events
    WHERE event_data LIKE '%account_id%'
    ORDER BY created_at DESC;
    ```
 
 3. **Batch Writes**: Write multiple events atomically
+
    ```rust
    // Batch multiple events in single transaction
    async fn write_events_batch(&self, events: Vec<EventToWrite>) -> Result<()> {
        let mut tx = self.pool.begin().await?;
-       
+
        for event in events {
            sqlx::query!(
                "INSERT INTO events (stream_id, event_data, version) VALUES ($1, $2, $3)",
@@ -424,7 +431,7 @@ command_tracer.record_completion(true, 1);
            .execute(&mut tx)
            .await?;
        }
-       
+
        tx.commit().await?;
        Ok(())
    }
@@ -433,6 +440,7 @@ command_tracer.record_completion(true, 1);
 ### Projection Optimization
 
 1. **Efficient State Updates**: Use incremental updates
+
    ```rust
    // Good: Incremental update
    impl ProjectionHandler<AccountDebited> for AccountBalanceProjection {
@@ -443,7 +451,7 @@ command_tracer.record_completion(true, 1);
            Ok(())
        }
    }
-   
+
    // Bad: Full recalculation
    impl ProjectionHandler<AccountDebited> for AccountBalanceProjection {
        async fn handle(&mut self, event: &AccountDebited) -> Result<()> {
@@ -456,12 +464,13 @@ command_tracer.record_completion(true, 1);
    ```
 
 2. **Parallel Processing**: Process independent projections concurrently
+
    ```rust
    use tokio::task::JoinSet;
-   
+
    async fn process_projections_parallel(&self, event: &Event) -> Result<()> {
        let mut join_set = JoinSet::new();
-       
+
        for projection in &self.projections {
            if projection.handles_event_type(&event.event_type) {
                let projection = projection.clone();
@@ -471,11 +480,11 @@ command_tracer.record_completion(true, 1);
                });
            }
        }
-       
+
        while let Some(result) = join_set.join_next().await {
            result??; // Handle errors appropriately
        }
-       
+
        Ok(())
    }
    ```
@@ -487,12 +496,14 @@ command_tracer.record_completion(true, 1);
 **Symptoms**: Command duration P95 > 1000ms
 
 **Investigation Steps**:
+
 1. Check database query performance
 2. Analyze stream access patterns
 3. Review concurrent command execution
 4. Examine event store connection health
 
 **Solutions**:
+
 - Optimize database indexes
 - Reduce streams accessed per command
 - Implement command queuing
@@ -503,12 +514,14 @@ command_tracer.record_completion(true, 1);
 **Symptoms**: Continuous memory growth, eventual OOM
 
 **Investigation Steps**:
+
 1. Profile memory allocations
 2. Check for circular references
 3. Review caching strategies
 4. Analyze event retention
 
 **Solutions**:
+
 - Implement proper cleanup in Drop impls
 - Use weak references where appropriate
 - Configure cache eviction policies
@@ -519,12 +532,14 @@ command_tracer.record_completion(true, 1);
 **Symptoms**: Projections falling behind event creation
 
 **Investigation Steps**:
+
 1. Check projection processing performance
 2. Analyze event volume patterns
 3. Review resource constraints
 4. Examine error rates
 
 **Solutions**:
+
 - Optimize projection handlers
 - Implement parallel processing
 - Scale projection infrastructure
@@ -535,12 +550,14 @@ command_tracer.record_completion(true, 1);
 **Symptoms**: High write latency, timeout errors
 
 **Investigation Steps**:
+
 1. Check database locks and conflicts
 2. Analyze concurrent write patterns
 3. Review transaction sizes
 4. Examine connection pool utilization
 
 **Solutions**:
+
 - Optimize transaction scope
 - Implement connection pooling
 - Use read replicas for queries
@@ -565,32 +582,32 @@ impl MonitoringService {
             logger: loggers::health_monitor(),
         }
     }
-    
+
     pub async fn start_monitoring(&self) {
         let mut interval = interval(Duration::from_secs(60));
-        
+
         loop {
             interval.tick().await;
-            
+
             self.collect_system_metrics().await;
             self.check_health_thresholds().await;
             self.update_dashboards().await;
         }
     }
-    
+
     async fn collect_system_metrics(&self) {
         // Collect system metrics
         let memory_usage = self.get_memory_usage();
         let cpu_usage = self.get_cpu_usage();
         let pool_stats = self.get_connection_pool_stats();
-        
+
         self.metrics.system_metrics.record_memory_usage(memory_usage);
         self.metrics.system_metrics.record_cpu_usage(cpu_usage);
         self.metrics.system_metrics.update_connection_pool(
             pool_stats.total,
             pool_stats.available
         );
-        
+
         self.logger.log_health_metrics(
             memory_usage / 1_000_000.0, // Convert to MB
             cpu_usage,
@@ -600,23 +617,23 @@ impl MonitoringService {
             )
         );
     }
-    
+
     async fn check_health_thresholds(&self) {
         let error_rate = self.metrics.error_metrics.calculate_error_rate(
             self.metrics.command_metrics.commands_executed.get()
         );
-        
+
         if error_rate > 5.0 {
             self.trigger_alert("high_error_rate", error_rate).await;
         }
-        
+
         if let Some(p95_duration) = self.metrics.command_metrics.command_duration.p95() {
             if p95_duration > Duration::from_millis(1000) {
                 self.trigger_alert("high_latency", p95_duration.as_millis() as f64).await;
             }
         }
     }
-    
+
     async fn trigger_alert(&self, alert_type: &str, value: f64) {
         self.logger.log_performance_alert(
             alert_type,
@@ -624,7 +641,7 @@ impl MonitoringService {
             value,
             &HashMap::new()
         );
-        
+
         // Send to alerting system (PagerDuty, Slack, etc.)
         self.send_alert_notification(alert_type, value).await;
     }

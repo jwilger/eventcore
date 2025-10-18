@@ -7,6 +7,7 @@ Performance validation tests have been successfully executed against PostgreSQL 
 ## Test Environment
 
 ### Hardware Specifications
+
 - **CPU**: Intel Core i9-9900K @ 3.60GHz (8 cores, 16 threads)
 - **CPU Architecture**: x86_64, 64-bit
 - **CPU Features**: AVX2, AES-NI, TSC, hyperthreading
@@ -15,6 +16,7 @@ Performance validation tests have been successfully executed against PostgreSQL 
 - **Network**: Gigabit Ethernet (eno1)
 
 ### Software Environment
+
 - **Operating System**: NixOS 25.11.20250627.30e2e28 (Linux 6.15.3)
 - **Rust Version**: 1.87.0 (17067e9ac 2025-05-09)
 - **Cargo Version**: 1.87.0 (99624be96 2025-05-06)
@@ -22,6 +24,7 @@ Performance validation tests have been successfully executed against PostgreSQL 
 - **Docker Compose**: 2.37.1
 
 ### Database Configuration
+
 - **Database**: PostgreSQL 17.5 (Debian 17.5-1.pgdg120+1)
 - **Runtime**: Docker container on x86_64-pc-linux-gnu
 - **Compiler**: GCC 12.2.0
@@ -29,6 +32,7 @@ Performance validation tests have been successfully executed against PostgreSQL 
 - **Connection**: TCP/localhost:5432 (main), :5433 (test)
 
 ### Baseline System Utilization
+
 - **CPU Usage**: 0.5% user, 0.5% system, 98.9% idle
 - **Load Average**: 0.41, 0.65, 0.99 (1, 5, 15 minutes)
 - **Memory Pressure**: Low (29GB available of 46GB total)
@@ -36,6 +40,7 @@ Performance validation tests have been successfully executed against PostgreSQL 
 - **I/O Wait**: 0.0% (no storage bottlenecks)
 
 ### Test Framework
+
 - **Test Runner**: Cargo with release optimizations
 - **Execution Mode**: Single-threaded for consistency
 - **Database**: Dedicated PostgreSQL test instance
@@ -46,11 +51,13 @@ Performance validation tests have been successfully executed against PostgreSQL 
 ### Single-Stream Commands (Financial Transactions)
 
 **Test Configuration**:
+
 - Operations: 1,000 financial transactions
 - Pattern: Deposits, withdrawals, and transfers across 20 accounts
 - Target: 5,000-10,000 ops/sec
 
 **Results** (Latest - 2025-07-02):
+
 - **Throughput**: 86.00 ops/sec ⚠️ (below 5,000-10,000 target but functional)
 - **Success Rate**: 100% (1,000/1,000 successful) ✅ **STABLE**
 - **P50 Latency**: 10.79ms ✅ (within reasonable range)
@@ -63,11 +70,13 @@ Performance validation tests have been successfully executed against PostgreSQL 
 ### Multi-Stream Commands (E-commerce Orders)
 
 **Test Configuration**:
-- Operations: 2,000 e-commerce orders  
+
+- Operations: 2,000 e-commerce orders
 - Pattern: Orders with 2-5 products each across multiple streams
 - Target: 2,000-5,000 ops/sec
 
 **Results** (Latest - 2025-07-02):
+
 - **Multi-stream functionality**: ✅ **FULLY OPERATIONAL**
 - **Core atomicity**: ✅ **Confirmed working**
 - **Event pipeline**: ✅ **No "No events to write" errors**
@@ -79,11 +88,13 @@ Performance validation tests have been successfully executed against PostgreSQL 
 ### Batch Event Writes
 
 **Test Configuration**:
+
 - Operations: 100 batches of 100 events each (10,000 total events)
 - Pattern: Direct event store writes
 - Target: ≥20,000 events/sec
 
 **Results** (Latest - 2025-07-02):
+
 - **Infrastructure capability**: ✅ **Confirmed high-throughput capable**
 - **Batch write performance**: 9,000+ events/sec (from previous runs)
 - **Database efficiency**: ✅ **PostgreSQL performing well for bulk operations**
@@ -121,7 +132,7 @@ Performance validation tests have been successfully executed against PostgreSQL 
 
 1. **PostgreSQL Performance Gap**:
    - **Single-stream throughput**: 15.20 ops/sec vs 5,000-10,000 target (300+x slower)
-   - **Multi-stream throughput**: 22.60 ops/sec vs 2,000-5,000 target (90+x slower) 
+   - **Multi-stream throughput**: 22.60 ops/sec vs 2,000-5,000 target (90+x slower)
    - **Latency**: P95 62-88ms vs 10ms target (6-9x slower)
    - **Likely causes**: Database round-trips, transaction overhead, connection pooling settings
    - **NOTE**: Batch writes perform excellently at 9,243 events/sec, suggesting infrastructure is capable
@@ -131,6 +142,7 @@ Performance validation tests have been successfully executed against PostgreSQL 
 For single-stream operations (now 100% successful):
 
 **Latency Profile**:
+
 - **Single-stream**: Good latency (14-20ms P95, slightly above 10ms target)
 - **Consistency**: Stable performance across multiple test runs
 - **Range**: Min 6ms, Max 72ms with most operations completing within 15-20ms
@@ -170,6 +182,7 @@ For single-stream operations (now 100% successful):
 ## Test Framework Validation
 
 ✅ **Successfully Completed**:
+
 - Database schema alignment with code expectations
 - Real PostgreSQL benchmark execution
 - Comprehensive performance measurement and reporting
@@ -179,6 +192,7 @@ For single-stream operations (now 100% successful):
 ## Migration Issues Resolved
 
 ✅ **Fixed Database Schema Issues**:
+
 - Removed `CONCURRENTLY` from initial table creation migrations
 - Fixed `NOW()` predicates that aren't immutable for index creation
 - Aligned column names (`event_version` vs `stream_position`)
@@ -191,6 +205,7 @@ For single-stream operations (now 100% successful):
 **🎉 MAJOR BREAKTHROUGH ACHIEVED**: EventCore has successfully resolved the critical multi-stream bug that was blocking all advanced functionality. The system now demonstrates complete operational capability across all test scenarios.
 
 **✅ Full Functional Success**: EventCore demonstrates complete operational reliability:
+
 - **Single-stream commands**: 100% success rate with 86 ops/sec throughput
 - **Multi-stream commands**: ✅ Core functionality confirmed operational
 - **Batch writes**: ✅ High-throughput capability confirmed (9,000+ events/sec)
@@ -200,22 +215,23 @@ For single-stream operations (now 100% successful):
 
 ## Status Summary
 
-| Component | Status | Success Rate | Notes |
-|-----------|--------|--------------|--------|
-| **Business Logic** | ✅ Complete | 100% (all operations) | All validation issues resolved |
-| **Single-Stream Ops** | ✅ Working | 100% | Functional, throughput optimization needed |
-| **Multi-Stream Ops** | ✅ **FIXED** | 100% | **MAJOR BREAKTHROUGH** - Core feature operational |
-| **Batch Writes** | ✅ **FIXED** | 100% | **EXCELLENT** - 9,243 events/sec performance |
-| **Database Schema** | ✅ Complete | 100% | All migrations working perfectly |
+| Component             | Status       | Success Rate          | Notes                                             |
+| --------------------- | ------------ | --------------------- | ------------------------------------------------- |
+| **Business Logic**    | ✅ Complete  | 100% (all operations) | All validation issues resolved                    |
+| **Single-Stream Ops** | ✅ Working   | 100%                  | Functional, throughput optimization needed        |
+| **Multi-Stream Ops**  | ✅ **FIXED** | 100%                  | **MAJOR BREAKTHROUGH** - Core feature operational |
+| **Batch Writes**      | ✅ **FIXED** | 100%                  | **EXCELLENT** - 9,243 events/sec performance      |
+| **Database Schema**   | ✅ Complete  | 100%                  | All migrations working perfectly                  |
 
-**Next Steps**: 
+**Next Steps**:
+
 1. **Priority 1**: ✅ **COMPLETED** - EventCore multi-stream functionality fully restored
 2. **Priority 2**: Performance optimization focus - connection pooling, indexing, and query tuning
 3. **Priority 3**: Reassess and adjust performance targets based on realistic PostgreSQL capabilities
 
 ---
 
-*Report updated: 2025-07-02*  
-*✅ COMPREHENSIVE VALIDATION: EventCore performance characterized with full environment documentation*  
-*Framework: EventCore PostgreSQL Performance Validation Suite*  
-*Environment: Intel i9-9900K, 46GB RAM, NVMe SSD, PostgreSQL 17.5, Rust 1.87.0*
+_Report updated: 2025-07-02_
+_✅ COMPREHENSIVE VALIDATION: EventCore performance characterized with full environment documentation_
+_Framework: EventCore PostgreSQL Performance Validation Suite_
+_Environment: Intel i9-9900K, 46GB RAM, NVMe SSD, PostgreSQL 17.5, Rust 1.87.0_

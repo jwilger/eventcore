@@ -44,25 +44,27 @@ eventcore-macros (no dependencies)
 ### Crate Categories
 
 #### Published Libraries
+
 - **`eventcore`**: Core library (foundational)
 - **`eventcore-macros`**: Procedural macros (foundational)
 - **`eventcore-memory`**: In-memory adapter (optional)
 - **`eventcore-postgres`**: PostgreSQL adapter (optional)
 
 #### Unpublished Crates
+
 - **`eventcore-examples`**: Example code and tutorials
 - **`eventcore-benchmarks`**: Performance benchmarks and profiling
 
 ### Publishing Matrix
 
-| Crate | Published | Purpose | Dependencies |
-|-------|-----------|---------|--------------|
-| `eventcore-macros` | ✅ | Procedural macros | None |
-| `eventcore` | ✅ | Core library | `eventcore-macros` |
-| `eventcore-memory` | ✅ | Testing adapter | `eventcore` |
-| `eventcore-postgres` | ✅ | Production adapter | `eventcore` |
-| `eventcore-examples` | ❌ | Documentation | All above |
-| `eventcore-benchmarks` | ❌ | Performance tools | All above |
+| Crate                  | Published | Purpose            | Dependencies       |
+| ---------------------- | --------- | ------------------ | ------------------ |
+| `eventcore-macros`     | ✅        | Procedural macros  | None               |
+| `eventcore`            | ✅        | Core library       | `eventcore-macros` |
+| `eventcore-memory`     | ✅        | Testing adapter    | `eventcore`        |
+| `eventcore-postgres`   | ✅        | Production adapter | `eventcore`        |
+| `eventcore-examples`   | ❌        | Documentation      | All above          |
+| `eventcore-benchmarks` | ❌        | Performance tools  | All above          |
 
 ## Publishing Order
 
@@ -118,7 +120,7 @@ for crate in "${CRATES[@]}"; do
         cargo publish -p "$crate" --dry-run
     else
         cargo publish -p "$crate"
-        
+
         # Wait for crate to be available
         echo "Waiting for $crate to be available on crates.io..."
         while ! cargo search "$crate" --limit 1 | grep -q "$crate"; do
@@ -186,7 +188,7 @@ version.workspace = true
 [dependencies]
 eventcore-macros = { version = "=1.0.0", path = "../eventcore-macros" }
 
-# eventcore-postgres/Cargo.toml  
+# eventcore-postgres/Cargo.toml
 [dependencies]
 eventcore = { version = "=1.0.0", path = "../eventcore" }
 ```
@@ -203,12 +205,12 @@ sqlx = "~0.8.6"     # Patch updates only
 
 ### Version Constraints Strategy
 
-| Dependency Type | Constraint | Reasoning |
-|----------------|------------|-----------|
-| Workspace internal | `=1.0.0` | Exact version for perfect compatibility |
-| Major external | `^1.45` | Compatible minor/patch updates |
-| Stable external | `~1.0.219` | Patch updates only |
-| Unstable external | `=0.8.6` | Exact version for pre-1.0 crates |
+| Dependency Type    | Constraint | Reasoning                               |
+| ------------------ | ---------- | --------------------------------------- |
+| Workspace internal | `=1.0.0`   | Exact version for perfect compatibility |
+| Major external     | `^1.45`    | Compatible minor/patch updates          |
+| Stable external    | `~1.0.219` | Patch updates only                      |
+| Unstable external  | `=0.8.6`   | Exact version for pre-1.0 crates        |
 
 ## Release Process
 
@@ -244,12 +246,15 @@ Follow [semantic versioning rules](VERSIONING.md):
 ## [1.0.0] - 2024-01-15
 
 ### Added
+
 - New feature descriptions
 
-### Changed  
+### Changed
+
 - Breaking change descriptions
 
 ### Fixed
+
 - Bug fix descriptions
 ```
 
@@ -343,7 +348,7 @@ git merge hotfix/v1.0.1
 name: Release
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 
 jobs:
   quality-gates:
@@ -351,16 +356,16 @@ jobs:
     steps:
       - name: Test
         run: cargo nextest run --workspace
-      
+
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
-        
+
       - name: Format
         run: cargo fmt --check
-        
+
       - name: Security Audit
         run: cargo audit
-        
+
       - name: Documentation
         run: cargo doc --workspace --no-deps
 
@@ -434,7 +439,7 @@ ENTRYPOINT ["eventcore-migrate"]
 #### Package Managers (Future)
 
 - **Homebrew**: For CLI tools
-- **APT/YUM**: For Linux distributions  
+- **APT/YUM**: For Linux distributions
 - **Chocolatey**: For Windows
 
 ## Documentation Publishing
@@ -460,7 +465,7 @@ name: Documentation
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    tags: ["v*"]
 
 jobs:
   docs:
@@ -470,7 +475,7 @@ jobs:
         run: |
           cargo doc --workspace --no-deps
           echo '<meta http-equiv="refresh" content="0; url=eventcore">' > target/doc/index.html
-          
+
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
@@ -538,18 +543,18 @@ gh issue create --title "Security Advisory: v1.0.0" \
 ### Release Metrics
 
 - **Download statistics**: Track adoption rates
-- **Issue reports**: Monitor post-release issues  
+- **Issue reports**: Monitor post-release issues
 - **Performance**: Monitor regression reports
 - **Documentation**: Track doc.rs page views
 
 ### Success Criteria
 
-| Metric | Target | Measurement |
-|--------|--------|-------------|
-| Publish success rate | 100% | Automated publishing |
-| Time to publish | < 30 minutes | End-to-end automation |
-| Documentation coverage | 95% | Missing docs warnings |
-| Zero critical post-release issues | 0 | Issue tracking |
+| Metric                            | Target       | Measurement           |
+| --------------------------------- | ------------ | --------------------- |
+| Publish success rate              | 100%         | Automated publishing  |
+| Time to publish                   | < 30 minutes | End-to-end automation |
+| Documentation coverage            | 95%          | Missing docs warnings |
+| Zero critical post-release issues | 0            | Issue tracking        |
 
 ---
 

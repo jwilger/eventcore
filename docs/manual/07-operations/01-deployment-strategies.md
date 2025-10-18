@@ -78,7 +78,7 @@ HEALTH_CHECK_INTERVAL=30s
 ### Docker Compose for Development
 
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   eventcore-app:
@@ -124,11 +124,11 @@ services:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--web.enable-lifecycle'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
     networks:
       - eventcore
 
@@ -190,59 +190,59 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: eventcore-app
-        image: eventcore:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 8080
-          name: http
-        - containerPort: 9090
-          name: metrics
-        env:
-        - name: DATABASE_URL
-          valueFrom:
-            secretKeyRef:
-              name: eventcore-secrets
-              key: database-url
-        - name: JWT_SECRET_KEY
-          valueFrom:
-            secretKeyRef:
-              name: eventcore-secrets
-              key: jwt-secret
-        envFrom:
-        - configMapRef:
-            name: eventcore-config
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "250m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 3
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 3
-        volumeMounts:
-        - name: config
-          mountPath: /etc/eventcore
-          readOnly: true
+        - name: eventcore-app
+          image: eventcore:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 9090
+              name: metrics
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: eventcore-secrets
+                  key: database-url
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: eventcore-secrets
+                  key: jwt-secret
+          envFrom:
+            - configMapRef:
+                name: eventcore-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: config
+              mountPath: /etc/eventcore
+              readOnly: true
       volumes:
-      - name: config
-        configMap:
-          name: eventcore-config
+        - name: config
+          configMap:
+            name: eventcore-config
 ---
 apiVersion: v1
 kind: Service
@@ -255,14 +255,14 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-  - port: 80
-    targetPort: 8080
-    protocol: TCP
-    name: http
-  - port: 9090
-    targetPort: 9090
-    protocol: TCP
-    name: metrics
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+      name: http
+    - port: 9090
+      targetPort: 9090
+      protocol: TCP
+      name: metrics
   selector:
     app: eventcore
     component: application
@@ -304,7 +304,7 @@ metadata:
 spec:
   instances: 3
   primaryUpdateStrategy: unsupervised
-  
+
   postgresql:
     parameters:
       max_connections: "200"
@@ -316,21 +316,21 @@ spec:
       default_statistics_target: "100"
       random_page_cost: "1.1"
       effective_io_concurrency: "200"
-    
+
   bootstrap:
     initdb:
       database: eventcore
       owner: eventcore
       secret:
         name: postgres-credentials
-  
+
   storage:
     size: 100Gi
     storageClass: fast-ssd
-  
+
   monitoring:
     enabled: true
-  
+
   backup:
     target: prefer-standby
     retentionPolicy: "30d"
@@ -370,20 +370,20 @@ metadata:
     nginx.ingress.kubernetes.io/rate-limit-window: "1m"
 spec:
   tls:
-  - hosts:
-    - api.eventcore.example.com
-    secretName: eventcore-tls
+    - hosts:
+        - api.eventcore.example.com
+      secretName: eventcore-tls
   rules:
-  - host: api.eventcore.example.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: eventcore-service
-            port:
-              number: 80
+    - host: api.eventcore.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: eventcore-service
+                port:
+                  number: 80
 ```
 
 ## Blue-Green Deployment
@@ -415,9 +415,9 @@ spec:
         environment: blue
     spec:
       containers:
-      - name: eventcore-app
-        image: eventcore:v1.0.0
-        # ... container spec
+        - name: eventcore-app
+          image: eventcore:v1.0.0
+          # ... container spec
 ---
 # Green environment (new version)
 apiVersion: apps/v1
@@ -441,9 +441,9 @@ spec:
         environment: green
     spec:
       containers:
-      - name: eventcore-app
-        image: eventcore:v1.1.0
-        # ... container spec
+        - name: eventcore-app
+          image: eventcore:v1.1.0
+          # ... container spec
 ---
 # Service that can switch between environments
 apiVersion: v1
@@ -454,10 +454,10 @@ metadata:
 spec:
   selector:
     app: eventcore
-    environment: blue  # Switch to 'green' when deploying
+    environment: blue # Switch to 'green' when deploying
   ports:
-  - port: 80
-    targetPort: 8080
+    - port: 80
+      targetPort: 8080
 ```
 
 ### Deployment Script
@@ -537,25 +537,25 @@ metadata:
   namespace: eventcore
 spec:
   hosts:
-  - api.eventcore.example.com
+    - api.eventcore.example.com
   http:
-  - match:
-    - headers:
-        canary:
-          exact: "true"
-    route:
-    - destination:
-        host: eventcore-service
-        subset: canary
-  - route:
-    - destination:
-        host: eventcore-service
-        subset: stable
-      weight: 95
-    - destination:
-        host: eventcore-service
-        subset: canary
-      weight: 5
+    - match:
+        - headers:
+            canary:
+              exact: "true"
+      route:
+        - destination:
+            host: eventcore-service
+            subset: canary
+    - route:
+        - destination:
+            host: eventcore-service
+            subset: stable
+          weight: 95
+        - destination:
+            host: eventcore-service
+            subset: canary
+          weight: 5
 ---
 apiVersion: networking.istio.io/v1beta1
 kind: DestinationRule
@@ -565,12 +565,12 @@ metadata:
 spec:
   host: eventcore-service
   subsets:
-  - name: stable
-    labels:
-      version: stable
-  - name: canary
-    labels:
-      version: canary
+    - name: stable
+      labels:
+        version: stable
+    - name: canary
+      labels:
+        version: canary
 ```
 
 ### Automated Canary with Flagger
@@ -596,27 +596,27 @@ spec:
     maxWeight: 50
     stepWeight: 10
     metrics:
-    - name: request-success-rate
-      thresholdRange:
-        min: 99
-      interval: 1m
-    - name: request-duration
-      thresholdRange:
-        max: 500
-      interval: 30s
+      - name: request-success-rate
+        thresholdRange:
+          min: 99
+        interval: 1m
+      - name: request-duration
+        thresholdRange:
+          max: 500
+        interval: 30s
     webhooks:
-    - name: smoke-test
-      type: pre-rollout
-      url: http://flagger-loadtester.test/
-      timeout: 15s
-      metadata:
-        type: bash
-        cmd: "curl -sd 'test' http://eventcore-canary/health"
-    - name: load-test
-      url: http://flagger-loadtester.test/
-      timeout: 5s
-      metadata:
-        cmd: "hey -z 1m -q 10 -c 2 http://eventcore-canary/"
+      - name: smoke-test
+        type: pre-rollout
+        url: http://flagger-loadtester.test/
+        timeout: 15s
+        metadata:
+          type: bash
+          cmd: "curl -sd 'test' http://eventcore-canary/health"
+      - name: load-test
+        url: http://flagger-loadtester.test/
+        timeout: 5s
+        metadata:
+          cmd: "hey -z 1m -q 10 -c 2 http://eventcore-canary/"
 ```
 
 ## Database Migrations
@@ -637,31 +637,31 @@ impl MigrationManager {
         if !Postgres::database_exists(database_url).await? {
             Postgres::create_database(database_url).await?;
         }
-        
+
         let pool = PgPool::connect(database_url).await?;
-        
+
         Ok(Self {
             pool,
             migration_path,
         })
     }
-    
+
     pub async fn run_migrations(&self) -> Result<(), sqlx::Error> {
         sqlx::migrate::Migrator::new(std::path::Path::new(&self.migration_path))
             .await?
             .run(&self.pool)
             .await?;
-        
+
         Ok(())
     }
-    
+
     pub async fn check_migration_status(&self) -> Result<MigrationStatus, sqlx::Error> {
         let migrator = sqlx::migrate::Migrator::new(std::path::Path::new(&self.migration_path))
             .await?;
-        
+
         let applied = migrator.get_applied_migrations(&self.pool).await?;
         let available = migrator.iter().count();
-        
+
         Ok(MigrationStatus {
             applied: applied.len(),
             available,
@@ -701,7 +701,7 @@ CREATE TABLE events (
     payload JSONB NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}',
     occurred_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    
+
     CONSTRAINT events_stream_version_unique UNIQUE (stream_id, version)
 );
 
@@ -813,7 +813,7 @@ pub struct FeatureFlags {
 impl AppConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
         let environment = std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
-        
+
         let config = Config::builder()
             // Start with default configuration
             .add_source(File::with_name("config/default"))
@@ -824,7 +824,7 @@ impl AppConfig {
             // Override with environment variables
             .add_source(Environment::with_prefix("EVENTCORE").separator("_"))
             .build()?;
-        
+
         config.try_deserialize()
     }
 }
@@ -910,12 +910,12 @@ impl HealthService {
     pub async fn health_check(&self) -> JsonResponse<Value> {
         let mut overall_healthy = true;
         let mut checks = Vec::new();
-        
+
         // Check event store
         let event_store_status = self.check_event_store().await;
         let event_store_healthy = matches!(event_store_status, HealthStatus::Healthy);
         overall_healthy &= event_store_healthy;
-        
+
         checks.push(json!({
             "name": "event_store",
             "status": if event_store_healthy { "healthy" } else { "unhealthy" },
@@ -924,14 +924,14 @@ impl HealthService {
                 _ => None,
             }
         }));
-        
+
         // Check dependencies
         for dependency in &self.dependencies {
             let name = dependency.name().await;
             let status = dependency.check().await;
             let healthy = matches!(status, HealthStatus::Healthy);
             overall_healthy &= healthy;
-            
+
             checks.push(json!({
                 "name": name,
                 "status": if healthy { "healthy" } else { "unhealthy" },
@@ -941,24 +941,24 @@ impl HealthService {
                 }
             }));
         }
-        
+
         let response = json!({
             "status": if overall_healthy { "healthy" } else { "unhealthy" },
             "checks": checks,
             "timestamp": chrono::Utc::now().to_rfc3339(),
             "version": env!("CARGO_PKG_VERSION")
         });
-        
+
         JsonResponse(response)
     }
-    
+
     pub async fn readiness_check(&self) -> JsonResponse<Value> {
         // Readiness is stricter - all components must be ready
         let event_store_ready = self.check_event_store_ready().await;
         let migrations_ready = self.check_migrations_ready().await;
-        
+
         let ready = event_store_ready && migrations_ready;
-        
+
         let response = json!({
             "status": if ready { "ready" } else { "not_ready" },
             "checks": {
@@ -967,22 +967,22 @@ impl HealthService {
             },
             "timestamp": chrono::Utc::now().to_rfc3339()
         });
-        
+
         JsonResponse(response)
     }
-    
+
     async fn check_event_store(&self) -> HealthStatus {
         match self.event_store.health_check().await {
             Ok(_) => HealthStatus::Healthy,
             Err(e) => HealthStatus::Unhealthy(format!("Event store error: {}", e)),
         }
     }
-    
+
     async fn check_event_store_ready(&self) -> bool {
         // More stringent check for readiness
         self.event_store.ping().await.is_ok()
     }
-    
+
     async fn check_migrations_ready(&self) -> bool {
         // Check if all migrations are applied
         match self.event_store.migration_status().await {
@@ -1016,45 +1016,45 @@ pub async fn liveness_handler() -> JsonResponse<Value> {
 # Detailed health check configuration
 spec:
   containers:
-  - name: eventcore-app
-    # Liveness probe - restart container if this fails
-    livenessProbe:
-      httpGet:
-        path: /liveness
-        port: 8080
-        httpHeaders:
-        - name: Accept
-          value: application/json
-      initialDelaySeconds: 30
-      periodSeconds: 30
-      timeoutSeconds: 5
-      failureThreshold: 3
-      successThreshold: 1
-    
-    # Readiness probe - remove from service if this fails
-    readinessProbe:
-      httpGet:
-        path: /readiness
-        port: 8080
-        httpHeaders:
-        - name: Accept
-          value: application/json
-      initialDelaySeconds: 5
-      periodSeconds: 10
-      timeoutSeconds: 3
-      failureThreshold: 3
-      successThreshold: 1
-    
-    # Startup probe - give extra time during startup
-    startupProbe:
-      httpGet:
-        path: /health
-        port: 8080
-      initialDelaySeconds: 10
-      periodSeconds: 5
-      timeoutSeconds: 3
-      failureThreshold: 30
-      successThreshold: 1
+    - name: eventcore-app
+      # Liveness probe - restart container if this fails
+      livenessProbe:
+        httpGet:
+          path: /liveness
+          port: 8080
+          httpHeaders:
+            - name: Accept
+              value: application/json
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        timeoutSeconds: 5
+        failureThreshold: 3
+        successThreshold: 1
+
+      # Readiness probe - remove from service if this fails
+      readinessProbe:
+        httpGet:
+          path: /readiness
+          port: 8080
+          httpHeaders:
+            - name: Accept
+              value: application/json
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+        successThreshold: 1
+
+      # Startup probe - give extra time during startup
+      startupProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 30
+        successThreshold: 1
 ```
 
 ## Best Practices
@@ -1079,6 +1079,7 @@ EventCore deployment strategies:
 - ✅ **Configuration management** - Environment-specific config
 
 Key patterns:
+
 1. Use containers for consistent, portable deployments
 2. Implement blue-green or canary deployments for zero downtime
 3. Plan database migrations for backward compatibility

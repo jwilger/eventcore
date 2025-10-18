@@ -19,6 +19,7 @@ struct BankAccount {
 ```
 
 This leads to:
+
 - **Complex workflows** for operations spanning aggregates
 - **Eventual consistency** where immediate consistency is needed
 - **Race conditions** between related operations
@@ -33,10 +34,10 @@ EventCore allows atomic operations across multiple streams:
 struct TransferMoney {
     #[stream]
     from_account: StreamId,   // Read and write this stream
-    
+
     #[stream]
     to_account: StreamId,     // Read and write this stream too
-    
+
     amount: Money,
 }
 
@@ -54,13 +55,13 @@ Commands declare all streams they need:
 struct ProcessOrder {
     #[stream]
     order: StreamId,
-    
+
     #[stream]
     inventory: StreamId,
-    
+
     #[stream]
     customer: StreamId,
-    
+
     #[stream]
     payment: StreamId,
 }
@@ -113,10 +114,10 @@ async fn handle(
     require!(state.inventory.has_stock(&self.items), "Insufficient stock");
     require!(state.customer.can_purchase(), "Customer not authorized");
     require!(state.payment.has_funds(self.total), "Insufficient funds");
-    
+
     // Generate events for multiple streams
     Ok(vec![
-        StreamWrite::new(&read_streams, self.order.clone(), 
+        StreamWrite::new(&read_streams, self.order.clone(),
             OrderEvent::Confirmed { /* ... */ })?,
         StreamWrite::new(&read_streams, self.inventory.clone(),
             InventoryEvent::Reserved { /* ... */ })?,
@@ -169,6 +170,7 @@ EventCore prevents concurrent modifications:
 ### Automatic Retry
 
 On version conflicts, EventCore:
+
 1. Re-reads all streams
 2. Rebuilds state with new events
 3. Re-executes command logic
@@ -179,7 +181,7 @@ On version conflicts, EventCore:
 loop {
     let (state, versions) = read_and_build_state().await?;
     let events = command.handle(state).await?;
-    
+
     match write_with_version_check(events, versions).await {
         Ok(_) => return Ok(()),
         Err(VersionConflict) => continue, // Retry
@@ -204,10 +206,10 @@ async fn handle(
         .iter()
         .map(|item| StreamId::from(format!("product-{}", item.product_id)))
         .collect();
-    
+
     // Request these additional streams
     stream_resolver.add_streams(product_streams);
-    
+
     // EventCore will re-execute with all streams
     Ok(vec![])
 }
@@ -222,13 +224,13 @@ async fn handle(
 struct CheckoutCart {
     #[stream]
     cart: StreamId,
-    
+
     #[stream]
     customer: StreamId,
-    
+
     #[stream]
     payment_method: StreamId,
-    
+
     // Product streams discovered dynamically
 }
 
@@ -243,9 +245,9 @@ async fn handle(
         .keys()
         .map(|id| StreamId::from(format!("product-{}", id)))
         .collect();
-    
+
     stream_resolver.add_streams(product_streams);
-    
+
     // Validate everything atomically
     for (product_id, quantity) in &state.cart.items {
         let product_state = &state.products[product_id];
@@ -254,29 +256,29 @@ async fn handle(
             "Insufficient stock for product {}", product_id
         );
     }
-    
+
     // Generate events for all affected streams
     let mut events = vec![
         // Convert cart to order
         StreamWrite::new(&read_streams, self.cart.clone(),
             CartEvent::CheckedOut { order_id })?,
-            
+
         // Create order
         StreamWrite::new(&read_streams, order_stream,
             OrderEvent::Created { /* ... */ })?,
-            
+
         // Charge payment
         StreamWrite::new(&read_streams, self.payment_method.clone(),
             PaymentEvent::Charged { amount: state.cart.total })?,
     ];
-    
+
     // Reserve inventory from each product
     for (product_id, quantity) in &state.cart.items {
         let product_stream = StreamId::from(format!("product-{}", product_id));
         events.push(StreamWrite::new(&read_streams, product_stream,
             ProductEvent::StockReserved { quantity: *quantity })?);
     }
-    
+
     Ok(events)
 }
 ```
@@ -288,13 +290,13 @@ async fn handle(
 struct RecordTransaction {
     #[stream]
     ledger: StreamId,
-    
+
     #[stream]
     account_a: StreamId,
-    
+
     #[stream]
     account_b: StreamId,
-    
+
     entry: LedgerEntry,
 }
 
@@ -309,24 +311,24 @@ async fn handle(
         self.entry.debits == self.entry.credits,
         "Debits must equal credits"
     );
-    
+
     // Validate account states
     require!(
         state.account_a.is_active && state.account_b.is_active,
         "Both accounts must be active"
     );
-    
+
     // Record atomically in all streams
     Ok(vec![
         StreamWrite::new(&read_streams, self.ledger.clone(),
             LedgerEvent::EntryRecorded { entry: self.entry.clone() })?,
-            
+
         StreamWrite::new(&read_streams, self.account_a.clone(),
-            AccountEvent::Debited { 
+            AccountEvent::Debited {
                 amount: self.entry.debit_amount,
                 reference: self.entry.id,
             })?,
-            
+
         StreamWrite::new(&read_streams, self.account_b.clone(),
             AccountEvent::Credited {
                 amount: self.entry.credit_amount,
@@ -343,12 +345,12 @@ async fn handle(
 struct CompleteWorkflowStep {
     #[stream]
     workflow: StreamId,
-    
+
     #[stream]
     current_step: StreamId,
-    
+
     // Next step stream discovered dynamically
-    
+
     step_result: StepResult,
 }
 
@@ -366,13 +368,13 @@ async fn handle(
         (StepType::Processing, StepResult::Error) => state.workflow.error_step,
         _ => None,
     };
-    
+
     // Add next step stream if needed
     if let Some(next_id) = next_step_id {
         let next_stream = StreamId::from(format!("step-{}", next_id));
         stream_resolver.add_streams(vec![next_stream.clone()]);
     }
-    
+
     // Atomic update across workflow and steps
     let mut events = vec![
         StreamWrite::new(&read_streams, self.workflow.clone(),
@@ -380,13 +382,13 @@ async fn handle(
                 step_id: state.current_step.id,
                 result: self.step_result.clone(),
             })?,
-            
+
         StreamWrite::new(&read_streams, self.current_step.clone(),
             StepEvent::Completed {
                 result: self.step_result.clone(),
             })?,
     ];
-    
+
     // Activate next step
     if let Some(next_id) = next_step_id {
         let next_stream = StreamId::from(format!("step-{}", next_id));
@@ -396,7 +398,7 @@ async fn handle(
                 activation_time: Utc::now(),
             })?);
     }
-    
+
     Ok(events)
 }
 ```
@@ -410,7 +412,7 @@ Reading more streams has costs:
 ```rust
 // Benchmark results (example):
 // 1 stream:    5ms   average latency
-// 5 streams:   12ms  average latency  
+// 5 streams:   12ms  average latency
 // 10 streams:  25ms  average latency
 // 50 streams:  150ms average latency
 
@@ -420,17 +422,19 @@ Reading more streams has costs:
 ### Optimization Strategies
 
 1. **Stream Partitioning**
+
 ```rust
 // Instead of one hot stream
 let stream = StreamId::from_static("orders");
 
 // Partition by customer segment
-let stream = StreamId::from(format!("orders-{}", 
+let stream = StreamId::from(format!("orders-{}",
     customer_id.hash() % 16
 ));
 ```
 
 2. **Lazy Stream Loading**
+
 ```rust
 async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
     // Only load detail streams if needed
@@ -438,12 +442,13 @@ async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Sel
         let detail_streams = compute_detail_streams(&state);
         stream_resolver.add_streams(detail_streams);
     }
-    
+
     // Continue with basic validation...
 }
 ```
 
 3. **Read Filtering**
+
 ```rust
 // EventCore may support filtered reads (future feature)
 let options = ReadOptions::default()
@@ -460,24 +465,24 @@ let options = ReadOptions::default()
 async fn test_multi_stream_atomicity() {
     let store = InMemoryEventStore::<BankEvent>::new();
     let executor = CommandExecutor::new(store.clone());
-    
+
     // Setup initial state
     create_account(&executor, "account-1", 1000).await;
     create_account(&executor, "account-2", 500).await;
-    
+
     // Execute transfer
     let transfer = TransferMoney {
         from_account: StreamId::from_static("account-1"),
         to_account: StreamId::from_static("account-2"),
         amount: 300,
     };
-    
+
     executor.execute(&transfer).await.unwrap();
-    
+
     // Verify both accounts updated atomically
     let account1 = get_balance(&store, "account-1").await;
     let account2 = get_balance(&store, "account-2").await;
-    
+
     assert_eq!(account1, 700);  // 1000 - 300
     assert_eq!(account2, 800);  // 500 + 300
     assert_eq!(account1 + account2, 1500); // Total preserved
@@ -491,43 +496,43 @@ async fn test_multi_stream_atomicity() {
 async fn test_concurrent_transfers() {
     let store = InMemoryEventStore::<BankEvent>::new();
     let executor = CommandExecutor::new(store);
-    
+
     // Setup accounts
     create_account(&executor, "A", 1000).await;
     create_account(&executor, "B", 1000).await;
     create_account(&executor, "C", 1000).await;
-    
+
     // Concurrent transfers forming a cycle
     let transfer_ab = TransferMoney {
         from_account: StreamId::from_static("A"),
         to_account: StreamId::from_static("B"),
         amount: 100,
     };
-    
+
     let transfer_bc = TransferMoney {
         from_account: StreamId::from_static("B"),
         to_account: StreamId::from_static("C"),
         amount: 100,
     };
-    
+
     let transfer_ca = TransferMoney {
         from_account: StreamId::from_static("C"),
         to_account: StreamId::from_static("A"),
         amount: 100,
     };
-    
+
     // Execute concurrently
     let (r1, r2, r3) = tokio::join!(
         executor.execute(&transfer_ab),
         executor.execute(&transfer_bc),
         executor.execute(&transfer_ca),
     );
-    
+
     // All should succeed (with retries)
     assert!(r1.is_ok());
     assert!(r2.is_ok());
     assert!(r3.is_ok());
-    
+
     // Total balance preserved
     let total = get_balance(&store, "A").await +
                 get_balance(&store, "B").await +
@@ -547,10 +552,10 @@ Some streams are read but not written:
 struct ValidateTransaction {
     #[stream]
     transaction: StreamId,
-    
+
     #[stream]
     rules_engine: StreamId,  // Read-only for validation rules
-    
+
     #[stream]
     fraud_history: StreamId, // Read-only for risk assessment
 }
@@ -559,7 +564,7 @@ async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Sel
     // Use read-only streams for validation
     let risk_score = calculate_risk(&state.fraud_history);
     let applicable_rules = state.rules_engine.rules_for(&self.transaction);
-    
+
     // Only write to transaction stream
     Ok(vec![
         StreamWrite::new(&read_streams, self.transaction.clone(),
@@ -575,22 +580,22 @@ Write to streams based on business logic:
 ```rust
 async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
     let mut events = vec![];
-    
+
     // Always update the main stream
     events.push(StreamWrite::new(&read_streams, self.order.clone(),
         OrderEvent::Processed { /* ... */ })?);
-    
+
     // Conditionally update other streams
     if state.customer.is_vip {
         events.push(StreamWrite::new(&read_streams, self.customer.clone(),
             CustomerEvent::VipPointsEarned { points: calculate_points() })?);
     }
-    
+
     if state.requires_fraud_check() {
         events.push(StreamWrite::new(&read_streams, fraud_stream,
             FraudEvent::CheckRequested { /* ... */ })?);
     }
-    
+
     Ok(events)
 }
 ```
@@ -606,6 +611,7 @@ Multi-stream atomicity in EventCore provides:
 - ✅ **Type safety** - Compile-time guarantees about stream access
 
 Best practices:
+
 1. Declare minimal required streams upfront
 2. Use dynamic discovery for conditional streams
 3. Design for retry-ability (idempotent operations)

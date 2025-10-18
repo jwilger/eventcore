@@ -31,6 +31,7 @@ impl PostgresConfig {
 ```
 
 **Example:**
+
 ```rust
 let config = PostgresConfig::new("postgresql://localhost/eventcore".to_string())
     .with_pool_config(PoolConfig {
@@ -55,19 +56,19 @@ Database connection pool configuration.
 pub struct PoolConfig {
     /// Maximum number of connections in the pool
     pub max_connections: u32,
-    
+
     /// Minimum number of connections to maintain
     pub min_connections: u32,
-    
+
     /// Timeout for establishing new connections
     pub connect_timeout: Duration,
-    
+
     /// Maximum time a connection can be idle before being closed
     pub idle_timeout: Option<Duration>,
-    
+
     /// Maximum lifetime of a connection
     pub max_lifetime: Option<Duration>,
-    
+
     /// Test connections before use
     pub test_before_acquire: bool,
 }
@@ -87,6 +88,7 @@ impl Default for PoolConfig {
 ```
 
 **Tuning Guidelines:**
+
 - **max_connections**: 2-4x CPU cores for CPU-bound workloads, higher for I/O-bound
 - **min_connections**: 10-20% of max_connections
 - **connect_timeout**: 5-10 seconds for local databases, 15-30 seconds for remote
@@ -102,13 +104,13 @@ Database migration configuration.
 pub struct MigrationConfig {
     /// Automatically run migrations on startup
     pub auto_migrate: bool,
-    
+
     /// Timeout for migration operations
     pub migration_timeout: Duration,
-    
+
     /// Lock timeout for migration coordination
     pub lock_timeout: Duration,
-    
+
     /// Migration table name
     pub migration_table: String,
 }
@@ -161,19 +163,19 @@ Configuration for command retry behavior.
 pub struct RetryConfig {
     /// Maximum number of retry attempts
     pub max_attempts: u32,
-    
+
     /// Initial delay before first retry
     pub initial_delay: Duration,
-    
+
     /// Maximum delay between retries
     pub max_delay: Duration,
-    
+
     /// Multiplier for exponential backoff
     pub backoff_multiplier: f64,
-    
+
     /// Which types of errors to retry
     pub retry_policy: RetryPolicy,
-    
+
     /// Add jitter to prevent thundering herd
     pub jitter: bool,
 }
@@ -185,7 +187,7 @@ impl RetryConfig {
             ..Default::default()
         }
     }
-    
+
     pub fn aggressive() -> Self {
         Self {
             max_attempts: 10,
@@ -196,7 +198,7 @@ impl RetryConfig {
             jitter: true,
         }
     }
-    
+
     pub fn conservative() -> Self {
         Self {
             max_attempts: 3,
@@ -226,19 +228,20 @@ impl Default for RetryConfig {
 pub enum RetryPolicy {
     /// Never retry
     None,
-    
+
     /// Only retry concurrency conflicts
     ConcurrencyConflictsOnly,
-    
+
     /// Only retry transient errors (connection issues, timeouts)
     TransientErrorsOnly,
-    
+
     /// Retry all retryable errors
     All,
 }
 ```
 
 **Retry Policy Guidelines:**
+
 - **ConcurrencyConflictsOnly**: Use for high-conflict scenarios where immediate retry is beneficial
 - **TransientErrorsOnly**: Use for stable systems where business logic errors shouldn't be retried
 - **All**: Use for development or systems where any failure might be recoverable
@@ -252,13 +255,13 @@ Configuration for command timeouts.
 pub struct TimeoutConfig {
     /// Default timeout for command execution
     pub default_timeout: Duration,
-    
+
     /// Timeout for reading streams
     pub read_timeout: Duration,
-    
+
     /// Timeout for writing events
     pub write_timeout: Duration,
-    
+
     /// Timeout for stream discovery
     pub discovery_timeout: Duration,
 }
@@ -284,16 +287,16 @@ Configuration for concurrent command execution.
 pub struct ConcurrencyConfig {
     /// Maximum number of concurrent commands
     pub max_concurrent_commands: usize,
-    
+
     /// Maximum iterations for stream discovery
     pub max_discovery_iterations: usize,
-    
+
     /// Enable command batching
     pub enable_batching: bool,
-    
+
     /// Maximum batch size for event writes
     pub max_batch_size: usize,
-    
+
     /// Batch timeout
     pub batch_timeout: Duration,
 }
@@ -312,6 +315,7 @@ impl Default for ConcurrencyConfig {
 ```
 
 **Concurrency Tuning:**
+
 - **max_concurrent_commands**: Balance between throughput and resource usage
 - **max_discovery_iterations**: Higher values allow more complex stream patterns but increase latency
 - **max_batch_size**: Larger batches improve throughput but increase memory usage and latency
@@ -322,7 +326,7 @@ impl Default for ConcurrencyConfig {
 
 Configuration for projection management.
 
-```rust
+````rust
 #[derive(Debug, Clone)]
 pub struct ProjectionConfig {
     pub checkpoint_config: CheckpointConfig,
@@ -339,13 +343,13 @@ Configuration for projection checkpointing.
 pub struct CheckpointConfig {
     /// How often to save checkpoints
     pub checkpoint_interval: Duration,
-    
+
     /// Number of events to process before checkpointing
     pub events_per_checkpoint: usize,
-    
+
     /// Store for checkpoint persistence
     pub checkpoint_store: CheckpointStoreConfig,
-    
+
     /// Enable checkpoint compression
     pub compress_checkpoints: bool,
 }
@@ -365,17 +369,17 @@ impl Default for CheckpointConfig {
 pub enum CheckpointStoreConfig {
     /// Store checkpoints in the main database
     Database,
-    
+
     /// Store checkpoints in Redis
     Redis { connection_string: String },
-    
+
     /// Store checkpoints in memory (testing only)
     InMemory,
-    
+
     /// Custom checkpoint store
     Custom { store_type: String, config: HashMap<String, String> },
 }
-```
+````
 
 #### ProcessingConfig
 
@@ -386,19 +390,19 @@ Configuration for event processing.
 pub struct ProcessingConfig {
     /// Number of events to process in each batch
     pub batch_size: usize,
-    
+
     /// Timeout for processing a single event
     pub event_timeout: Duration,
-    
+
     /// Timeout for processing a batch
     pub batch_timeout: Duration,
-    
+
     /// Number of parallel processors
     pub parallelism: usize,
-    
+
     /// Buffer size for event queues
     pub buffer_size: usize,
-    
+
     /// Error handling strategy
     pub error_handling: ErrorHandlingStrategy,
 }
@@ -420,13 +424,13 @@ impl Default for ProcessingConfig {
 pub enum ErrorHandlingStrategy {
     /// Skip failed events and log errors
     SkipAndLog,
-    
+
     /// Stop processing on first error
     FailFast,
-    
+
     /// Retry failed events with backoff
     Retry { max_attempts: u32, backoff: Duration },
-    
+
     /// Send failed events to dead letter queue
     DeadLetter { queue_config: DeadLetterConfig },
 }
@@ -443,19 +447,19 @@ Configuration for metrics collection.
 pub struct MetricsConfig {
     /// Enable metrics collection
     pub enabled: bool,
-    
+
     /// Metrics export format
     pub export_format: MetricsFormat,
-    
+
     /// Export interval
     pub export_interval: Duration,
-    
+
     /// Histogram buckets for latency metrics
     pub latency_buckets: Vec<f64>,
-    
+
     /// Labels to add to all metrics
     pub default_labels: HashMap<String, String>,
-    
+
     /// Metrics to collect
     pub collectors: Vec<MetricsCollector>,
 }
@@ -507,16 +511,16 @@ Configuration for distributed tracing.
 pub struct TracingConfig {
     /// Enable tracing
     pub enabled: bool,
-    
+
     /// Tracing exporter configuration
     pub exporter: TracingExporter,
-    
+
     /// Sampling configuration
     pub sampling: SamplingConfig,
-    
+
     /// Resource attributes
     pub resource_attributes: HashMap<String, String>,
-    
+
     /// Span attributes to add to all spans
     pub default_span_attributes: HashMap<String, String>,
 }
@@ -548,10 +552,10 @@ pub enum TracingExporter {
 pub struct SamplingConfig {
     /// Sampling rate (0.0 to 1.0)
     pub sample_rate: f64,
-    
+
     /// Always sample errors
     pub always_sample_errors: bool,
-    
+
     /// Sampling strategy
     pub strategy: SamplingStrategy,
 }
@@ -570,13 +574,13 @@ impl Default for SamplingConfig {
 pub enum SamplingStrategy {
     /// Always sample
     Always,
-    
+
     /// Never sample
     Never,
-    
+
     /// Probabilistic sampling
     Probabilistic,
-    
+
     /// Rate limiting sampling
     RateLimit { max_per_second: u32 },
 }
@@ -591,22 +595,22 @@ Configuration for structured logging.
 pub struct LoggingConfig {
     /// Log level
     pub level: LogLevel,
-    
+
     /// Log format
     pub format: LogFormat,
-    
+
     /// Output destination
     pub output: LogOutput,
-    
+
     /// Include timestamps
     pub include_timestamps: bool,
-    
+
     /// Include source code locations
     pub include_locations: bool,
-    
+
     /// Correlation ID header name
     pub correlation_id_header: String,
-    
+
     /// Fields to include in all log entries
     pub default_fields: HashMap<String, String>,
 }
@@ -665,7 +669,7 @@ pub struct RotationConfig {
 
 Configuration for security features.
 
-```rust
+````rust
 #[derive(Debug, Clone)]
 pub struct SecurityConfig {
     pub tls_config: Option<TlsConfig>,
@@ -682,19 +686,19 @@ Configuration for TLS encryption.
 pub struct TlsConfig {
     /// Path to certificate file
     pub cert_file: String,
-    
+
     /// Path to private key file
     pub key_file: String,
-    
+
     /// Path to CA certificate file (for client verification)
     pub ca_file: Option<String>,
-    
+
     /// Require client certificates
     pub require_client_cert: bool,
-    
+
     /// Minimum TLS version
     pub min_version: TlsVersion,
-    
+
     /// Allowed cipher suites
     pub cipher_suites: Vec<String>,
 }
@@ -704,7 +708,7 @@ pub enum TlsVersion {
     V1_2,
     V1_3,
 }
-```
+````
 
 #### AuthConfig
 
@@ -715,10 +719,10 @@ Configuration for authentication.
 pub struct AuthConfig {
     /// Authentication provider
     pub provider: AuthProvider,
-    
+
     /// Token validation settings
     pub token_validation: TokenValidationConfig,
-    
+
     /// Session configuration
     pub session_config: SessionConfig,
 }
@@ -726,13 +730,13 @@ pub struct AuthConfig {
 #[derive(Debug, Clone)]
 pub enum AuthProvider {
     /// JWT-based authentication
-    Jwt { 
+    Jwt {
         secret_key: String,
         algorithm: JwtAlgorithm,
         issuer: Option<String>,
         audience: Option<String>,
     },
-    
+
     /// OAuth2 authentication
     OAuth2 {
         client_id: String,
@@ -741,13 +745,13 @@ pub enum AuthProvider {
         token_url: String,
         scopes: Vec<String>,
     },
-    
+
     /// API key authentication
     ApiKey {
         header_name: String,
         query_param: Option<String>,
     },
-    
+
     /// Custom authentication
     Custom { provider_type: String, config: HashMap<String, String> },
 }
@@ -775,13 +779,13 @@ Configuration for data encryption.
 pub struct EncryptionConfig {
     /// Enable encryption at rest
     pub encrypt_at_rest: bool,
-    
+
     /// Encryption algorithm
     pub algorithm: EncryptionAlgorithm,
-    
+
     /// Key management configuration
     pub key_management: KeyManagementConfig,
-    
+
     /// Fields to encrypt
     pub encrypted_fields: Vec<String>,
 }
@@ -797,13 +801,13 @@ pub enum EncryptionAlgorithm {
 pub enum KeyManagementConfig {
     /// Environment variable
     Environment { key_var: String },
-    
+
     /// AWS KMS
     AwsKms { key_id: String, region: String },
-    
+
     /// HashiCorp Vault
     Vault { endpoint: String, token: String, key_path: String },
-    
+
     /// File-based key storage
     File { key_file: String },
 }
@@ -814,6 +818,7 @@ pub enum KeyManagementConfig {
 EventCore supports configuration via environment variables with the `EVENTCORE_` prefix:
 
 ### Core Settings
+
 ```bash
 # Database configuration
 EVENTCORE_DATABASE_URL=postgresql://localhost/eventcore
@@ -848,6 +853,7 @@ EVENTCORE_ENCRYPT_AT_REST=true
 ```
 
 ### Logging Configuration
+
 ```bash
 EVENTCORE_LOG_LEVEL=info
 EVENTCORE_LOG_FORMAT=json
@@ -857,6 +863,7 @@ EVENTCORE_LOG_INCLUDE_LOCATIONS=false
 ```
 
 ### Development Settings
+
 ```bash
 # Development mode settings
 EVENTCORE_DEV_MODE=true
@@ -864,7 +871,7 @@ EVENTCORE_DEV_AUTO_MIGRATE=true
 EVENTCORE_DEV_RESET_DB=false
 EVENTCORE_DEV_SEED_DATA=true
 
-# Testing settings  
+# Testing settings
 EVENTCORE_TEST_DATABASE_URL=postgresql://localhost/eventcore_test
 EVENTCORE_TEST_PARALLEL=true
 EVENTCORE_TEST_RESET_BETWEEN_TESTS=true

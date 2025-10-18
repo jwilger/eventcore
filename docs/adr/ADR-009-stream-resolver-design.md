@@ -43,6 +43,7 @@ trait StreamResolver {
 ```
 
 **Characteristics:**
+
 - **Optional**: Commands without dynamic needs don't implement it
 - **State-Based**: Receives reconstructed state from static streams to inform discovery
 - **Fallible**: Returns Result allowing discovery logic to fail with descriptive errors
@@ -64,6 +65,7 @@ Dynamic discovery complements, never replaces, static declarations:
 When streams are discovered, executor restarts from read phase (ADR-008) with incremental reading optimization:
 
 **Initial Execution Phase:**
+
 - Phase 1: Extract static stream IDs from command
 - Phase 2: Read static streams from version 0, capture versions
 - Phase 3: Reconstruct state from static streams only
@@ -72,6 +74,7 @@ When streams are discovered, executor restarts from read phase (ADR-008) with in
 - **If no streams discovered**: Continue to Phase 4 (business logic)
 
 **Re-Execution Phase (after discovery):**
+
 - Phase 2 (repeated with incremental reading):
   - **Already-read streams**: Read from (last captured version + 1) onward, append to state
   - **Newly-discovered streams**: Read from version 0, capture versions
@@ -84,6 +87,7 @@ When streams are discovered, executor restarts from read phase (ADR-008) with in
 - Phase 5: Atomically write events with version checking for ALL streams (static + all discovered)
 
 **Incremental Reading Rationale:**
+
 - Events are immutable - already-read events remain valid and unchanged
 - Reading from last position avoids re-reading large event histories
 - Newly-discovered streams start from beginning (no prior context)
@@ -106,16 +110,19 @@ Dynamic discovery addresses specific patterns:
 
 **Use Case 1 - Conditional Stream Dependencies:**
 Payment processing where payment method determines related streams:
+
 - Static stream: order stream
 - Discovery: examine order, find payment method, discover account/wallet streams
 
 **Use Case 2 - Many-to-Many Relationships:**
 Order fulfillment requiring inventory streams for ordered items:
+
 - Static stream: order stream
 - Discovery: examine order items, discover inventory stream per SKU
 
 **Use Case 3 - Multi-Tenant Stream Partitioning:**
 Operations requiring tenant-specific streams based on context:
+
 - Static stream: operation stream
 - Discovery: determine tenant from operation context, discover tenant partition streams
 

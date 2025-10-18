@@ -60,14 +60,14 @@ impl CommandLogic for TransferMoney {
         _: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         require!(state.balance(&input.from_account) >= input.amount, "Insufficient funds");
-        
+
         let mut events = vec![];
         emit!(events, &read_streams, input.from_account, BankingEvent::MoneyTransferred {
             from: input.from_account.to_string(),
             to: input.to_account.to_string(),
             amount: input.amount,
         });
-        
+
         Ok(events)
     }
 }
@@ -87,6 +87,7 @@ let result = executor.execute(&command, command).await?;
 ## Key Features
 
 ### Type-Safe Stream Access
+
 The `#[derive(Command)]` macro automatically generates boilerplate from `#[stream]` fields:
 
 ```rust
@@ -106,16 +107,17 @@ struct TransferMoney {
 ```
 
 ### Dynamic Stream Discovery
+
 Discover additional streams during execution:
 
 ```rust
 async fn handle(...) -> CommandResult<Vec<StreamWrite<...>>> {
     require!(state.is_valid(), "Invalid state");
-    
+
     if state.requires_approval() {
         stream_resolver.add_streams(vec![approval_stream()]);
     }
-    
+
     let mut events = vec![];
     emit!(events, &read_streams, input.account, AccountEvent::Updated { ... });
     Ok(events)
@@ -130,7 +132,7 @@ Optimistic locking prevents conflicts automatically. Just execute your commands 
 
 ```
 eventcore/              # Core library - traits and types
-eventcore-postgres/     # PostgreSQL adapter  
+eventcore-postgres/     # PostgreSQL adapter
 eventcore-memory/       # In-memory adapter for testing
 eventcore-examples/     # Complete examples
 ```
@@ -183,7 +185,7 @@ Based on current testing with PostgreSQL backend:
 - **Batch event writes**: 9,000+ events/sec (excellent bulk throughput)
 - **Latency**: P95 ~14ms (database-backed operations)
 
-*Note: Performance optimized for correctness and multi-stream atomicity. See [Performance Report](docs/development-archive/benchmarks/performance-report.md) for detailed benchmarks and system specifications.*
+_Note: Performance optimized for correctness and multi-stream atomicity. See [Performance Report](docs/development-archive/benchmarks/performance-report.md) for detailed benchmarks and system specifications._
 
 ## Contributing
 

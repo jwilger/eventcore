@@ -22,56 +22,56 @@ lazy_static! {
         "eventcore_commands_total",
         "Total number of commands executed"
     ).unwrap();
-    
+
     static ref COMMAND_DURATION: Histogram = register_histogram!(
         "eventcore_command_duration_seconds",
         "Command execution duration in seconds"
     ).unwrap();
-    
+
     static ref COMMAND_ERRORS: Counter = register_counter!(
-        "eventcore_command_errors_total", 
+        "eventcore_command_errors_total",
         "Total number of command execution errors"
     ).unwrap();
-    
+
     // Event store metrics
     static ref EVENTS_WRITTEN: Counter = register_counter!(
         "eventcore_events_written_total",
         "Total number of events written to the store"
     ).unwrap();
-    
+
     static ref EVENT_STORE_LATENCY: Histogram = register_histogram!(
         "eventcore_event_store_latency_seconds",
         "Event store operation latency in seconds"
     ).unwrap();
-    
+
     // Stream metrics
     static ref ACTIVE_STREAMS: IntGauge = register_int_gauge!(
         "eventcore_active_streams",
         "Number of active event streams"
     ).unwrap();
-    
+
     static ref STREAM_VERSIONS: Gauge = register_gauge!(
         "eventcore_stream_versions",
         "Current version of event streams"
     ).unwrap();
-    
+
     // Projection metrics
     static ref PROJECTION_EVENTS_PROCESSED: Counter = register_counter!(
         "eventcore_projection_events_processed_total",
         "Total events processed by projections"
     ).unwrap();
-    
+
     static ref PROJECTION_LAG: Gauge = register_gauge!(
         "eventcore_projection_lag_seconds",
         "Projection lag behind latest events in seconds"
     ).unwrap();
-    
+
     // System metrics
     static ref MEMORY_USAGE: Gauge = register_gauge!(
         "eventcore_memory_usage_bytes",
         "Memory usage in bytes"
     ).unwrap();
-    
+
     static ref CONNECTION_POOL_SIZE: IntGauge = register_int_gauge!(
         "eventcore_connection_pool_size",
         "Database connection pool size"
@@ -89,49 +89,49 @@ impl MetricsService {
             start_time: std::time::Instant::now(),
         }
     }
-    
+
     pub fn record_command_executed(&self, command_type: &str, duration: std::time::Duration, success: bool) {
         COMMANDS_TOTAL.with_label_values(&[command_type]).inc();
         COMMAND_DURATION.with_label_values(&[command_type]).observe(duration.as_secs_f64());
-        
+
         if !success {
             COMMAND_ERRORS.with_label_values(&[command_type]).inc();
         }
     }
-    
+
     pub fn record_events_written(&self, stream_id: &str, count: usize) {
         EVENTS_WRITTEN.with_label_values(&[stream_id]).inc_by(count as f64);
     }
-    
+
     pub fn record_event_store_operation(&self, operation: &str, duration: std::time::Duration) {
         EVENT_STORE_LATENCY.with_label_values(&[operation]).observe(duration.as_secs_f64());
     }
-    
+
     pub fn update_active_streams(&self, count: i64) {
         ACTIVE_STREAMS.set(count);
     }
-    
+
     pub fn update_stream_version(&self, stream_id: &str, version: f64) {
         STREAM_VERSIONS.with_label_values(&[stream_id]).set(version);
     }
-    
+
     pub fn record_projection_event(&self, projection_name: &str, lag_seconds: f64) {
         PROJECTION_EVENTS_PROCESSED.with_label_values(&[projection_name]).inc();
         PROJECTION_LAG.with_label_values(&[projection_name]).set(lag_seconds);
     }
-    
+
     pub fn update_memory_usage(&self, bytes: f64) {
         MEMORY_USAGE.set(bytes);
     }
-    
+
     pub fn update_connection_pool_size(&self, size: i64) {
         CONNECTION_POOL_SIZE.set(size);
     }
-    
+
     pub async fn export_metrics(&self) -> Result<Response<String>, StatusCode> {
         let encoder = TextEncoder::new();
         let metric_families = prometheus::gather();
-        
+
         match encoder.encode_to_string(&metric_families) {
             Ok(output) => {
                 let response = Response::builder()
@@ -167,19 +167,19 @@ lazy_static! {
         "eventcore_user_registrations_total",
         "Total number of user registrations"
     ).unwrap();
-    
+
     static ref ORDER_VALUE: Histogram = register_histogram!(
         "eventcore_order_value_dollars",
         "Order value in dollars",
         vec![10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0]
     ).unwrap();
-    
+
     static ref API_REQUESTS: CounterVec = register_counter_vec!(
         "eventcore_api_requests_total",
         "Total API requests",
         &["method", "endpoint", "status"]
     ).unwrap();
-    
+
     static ref REQUEST_DURATION: HistogramVec = register_histogram_vec!(
         "eventcore_request_duration_seconds",
         "Request duration in seconds",
@@ -193,16 +193,16 @@ impl BusinessMetrics {
     pub fn record_user_registration() {
         USER_REGISTRATIONS.inc();
     }
-    
+
     pub fn record_order_placed(value_dollars: f64) {
         ORDER_VALUE.observe(value_dollars);
     }
-    
+
     pub fn record_api_request(method: &str, endpoint: &str, status: u16, duration: std::time::Duration) {
         API_REQUESTS
             .with_label_values(&[method, endpoint, &status.to_string()])
             .inc();
-        
+
         REQUEST_DURATION
             .with_label_values(&[method, endpoint])
             .observe(duration.as_secs_f64());
@@ -234,20 +234,20 @@ impl CommandExecutor for InstrumentedCommandExecutor {
     async fn execute<C: Command>(&self, command: &C) -> CommandResult<ExecutionResult> {
         let start = Instant::now();
         let command_type = std::any::type_name::<C>();
-        
+
         let result = self.inner.execute(command).await;
         let duration = start.elapsed();
         let success = result.is_ok();
-        
+
         self.metrics.record_command_executed(command_type, duration, success);
-        
+
         if let Ok(ref execution_result) = result {
             self.metrics.record_events_written(
                 &execution_result.affected_streams[0].to_string(),
                 execution_result.events_written.len()
             );
         }
-        
+
         result
     }
 }
@@ -264,16 +264,16 @@ impl EventStore for InstrumentedEventStore {
         let start = Instant::now();
         let result = self.inner.write_events(events).await;
         let duration = start.elapsed();
-        
+
         self.metrics.record_event_store_operation("write", duration);
         result
     }
-    
+
     async fn read_stream(&self, stream_id: &StreamId, options: ReadOptions) -> EventStoreResult<StreamEvents> {
         let start = Instant::now();
         let result = self.inner.read_stream(stream_id, options).await;
         let duration = start.elapsed();
-        
+
         self.metrics.record_event_store_operation("read", duration);
         result
     }
@@ -297,7 +297,7 @@ use serde_json::json;
 pub fn init_logging(log_level: &str, log_format: &str) -> Result<(), Box<dyn std::error::Error>> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(log_level));
-    
+
     let fmt_layer = match log_format {
         "json" => {
             fmt::layer()
@@ -317,12 +317,12 @@ pub fn init_logging(log_level: &str, log_format: &str) -> Result<(), Box<dyn std
                 .boxed()
         }
     };
-    
+
     tracing_subscriber::registry()
         .with(env_filter)
         .with(fmt_layer)
         .init();
-    
+
     Ok(())
 }
 
@@ -333,9 +333,9 @@ pub async fn execute_command_with_logging<C: Command>(
     executor: &CommandExecutor,
 ) -> CommandResult<ExecutionResult> {
     debug!("Starting command execution");
-    
+
     let result = executor.execute(command).await;
-    
+
     match &result {
         Ok(execution_result) => {
             info!(
@@ -351,7 +351,7 @@ pub async fn execute_command_with_logging<C: Command>(
             );
         }
     }
-    
+
     result
 }
 
@@ -362,13 +362,13 @@ pub async fn write_events_with_logging(
     event_store: &dyn EventStore,
 ) -> EventStoreResult<WriteResult> {
     debug!("Writing events to store");
-    
+
     let stream_ids: Vec<_> = events.iter()
         .map(|e| e.stream_id.to_string())
         .collect();
-    
+
     let result = event_store.write_events(events).await;
-    
+
     match &result {
         Ok(write_result) => {
             info!(
@@ -385,7 +385,7 @@ pub async fn write_events_with_logging(
             );
         }
     }
-    
+
     result
 }
 ```
@@ -412,14 +412,14 @@ data:
       time_key time
       time_format %Y-%m-%dT%H:%M:%S.%NZ
     </source>
-    
+
     <filter eventcore.**>
       @type parser
       key_name log
       format json
       reserve_data true
     </filter>
-    
+
     <match eventcore.**>
       @type elasticsearch
       host elasticsearch.logging.svc.cluster.local
@@ -429,7 +429,7 @@ data:
       include_timestamp true
       logstash_format true
       logstash_prefix eventcore
-      
+
       <buffer>
         @type file
         path /var/log/fluentd-buffers/eventcore
@@ -477,19 +477,19 @@ pub fn init_tracing(service_name: &str, otlp_endpoint: &str) -> Result<(), Trace
                 .with_resource(Resource::new(vec![
                     KeyValue::new("service.name", service_name.to_string()),
                     KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-                    KeyValue::new("deployment.environment", 
+                    KeyValue::new("deployment.environment",
                         std::env::var("ENVIRONMENT").unwrap_or_else(|_| "unknown".to_string())
                     ),
                 ]))
         )
         .install_batch(opentelemetry_sdk::runtime::Tokio)?;
-    
+
     let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-    
+
     tracing_subscriber::registry()
         .with(telemetry_layer)
         .init();
-    
+
     Ok(())
 }
 
@@ -501,9 +501,9 @@ pub async fn execute_command_traced<C: Command>(
 ) -> CommandResult<ExecutionResult> {
     let span = tracing::Span::current();
     span.record("command.type", std::any::type_name::<C>());
-    
+
     let result = executor.execute(command).await;
-    
+
     match &result {
         Ok(execution_result) => {
             span.record("command.success", true);
@@ -516,7 +516,7 @@ pub async fn execute_command_traced<C: Command>(
             span.record("error.type", std::any::type_name_of_val(error));
         }
     }
-    
+
     result
 }
 
@@ -537,7 +537,7 @@ pub async fn trace_propagation_middleware(
     let parent_context = global::get_text_map_propagator(|propagator| {
         propagator.extract(&HeaderMapCarrier::new(headers))
     });
-    
+
     // Create new span with parent context
     let span = tracing::info_span!(
         "http_request",
@@ -545,13 +545,13 @@ pub async fn trace_propagation_middleware(
         uri = %request.uri(),
         version = ?request.version(),
     );
-    
+
     // Set parent context
     span.set_parent(parent_context);
-    
+
     // Execute request within span
     let response = span.in_scope(|| next.run(request)).await;
-    
+
     response
 }
 
@@ -569,7 +569,7 @@ impl<'a> opentelemetry::propagation::Extractor for HeaderMapCarrier<'a> {
     fn get(&self, key: &str) -> Option<&str> {
         self.headers.get(key)?.to_str().ok()
     }
-    
+
     fn keys(&self) -> Vec<&str> {
         self.headers.keys().map(|k| k.as_str()).collect()
     }
@@ -583,79 +583,79 @@ impl<'a> opentelemetry::propagation::Extractor for HeaderMapCarrier<'a> {
 ```yaml
 # prometheus-alerts.yaml
 groups:
-- name: eventcore.rules
-  rules:
-  # High error rate
-  - alert: HighCommandErrorRate
-    expr: |
-      (
-        rate(eventcore_command_errors_total[5m]) /
-        rate(eventcore_commands_total[5m])
-      ) > 0.05
-    for: 2m
-    labels:
-      severity: warning
-      service: eventcore
-    annotations:
-      summary: "High command error rate detected"
-      description: "Command error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
-  
-  # High latency
-  - alert: HighCommandLatency
-    expr: |
-      histogram_quantile(0.95, rate(eventcore_command_duration_seconds_bucket[5m])) > 1.0
-    for: 3m
-    labels:
-      severity: warning
-      service: eventcore
-    annotations:
-      summary: "High command latency detected"
-      description: "95th percentile command latency is {{ $value }}s"
-  
-  # Event store issues
-  - alert: EventStoreDown
-    expr: up{job="eventcore"} == 0
-    for: 1m
-    labels:
-      severity: critical
-      service: eventcore
-    annotations:
-      summary: "EventCore service is down"
-      description: "EventCore service has been down for more than 1 minute"
-  
-  # Projection lag
-  - alert: ProjectionLag
-    expr: eventcore_projection_lag_seconds > 300
-    for: 5m
-    labels:
-      severity: warning
-      service: eventcore
-    annotations:
-      summary: "Projection lag is high"
-      description: "Projection {{ $labels.projection_name }} is {{ $value }}s behind"
-  
-  # Memory usage
-  - alert: HighMemoryUsage
-    expr: |
-      (eventcore_memory_usage_bytes / (1024 * 1024 * 1024)) > 1.0
-    for: 5m
-    labels:
-      severity: warning
-      service: eventcore
-    annotations:
-      summary: "High memory usage"
-      description: "Memory usage is {{ $value | humanize }}GB"
-  
-  # Database connection pool
-  - alert: DatabaseConnectionPoolExhausted
-    expr: eventcore_connection_pool_size / eventcore_connection_pool_max_size > 0.9
-    for: 2m
-    labels:
-      severity: critical
-      service: eventcore
-    annotations:
-      summary: "Database connection pool nearly exhausted"
-      description: "Connection pool utilization is {{ $value | humanizePercentage }}"
+  - name: eventcore.rules
+    rules:
+      # High error rate
+      - alert: HighCommandErrorRate
+        expr: |
+          (
+            rate(eventcore_command_errors_total[5m]) /
+            rate(eventcore_commands_total[5m])
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          service: eventcore
+        annotations:
+          summary: "High command error rate detected"
+          description: "Command error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      # High latency
+      - alert: HighCommandLatency
+        expr: |
+          histogram_quantile(0.95, rate(eventcore_command_duration_seconds_bucket[5m])) > 1.0
+        for: 3m
+        labels:
+          severity: warning
+          service: eventcore
+        annotations:
+          summary: "High command latency detected"
+          description: "95th percentile command latency is {{ $value }}s"
+
+      # Event store issues
+      - alert: EventStoreDown
+        expr: up{job="eventcore"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: eventcore
+        annotations:
+          summary: "EventCore service is down"
+          description: "EventCore service has been down for more than 1 minute"
+
+      # Projection lag
+      - alert: ProjectionLag
+        expr: eventcore_projection_lag_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          service: eventcore
+        annotations:
+          summary: "Projection lag is high"
+          description: "Projection {{ $labels.projection_name }} is {{ $value }}s behind"
+
+      # Memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          (eventcore_memory_usage_bytes / (1024 * 1024 * 1024)) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+          service: eventcore
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value | humanize }}GB"
+
+      # Database connection pool
+      - alert: DatabaseConnectionPoolExhausted
+        expr: eventcore_connection_pool_size / eventcore_connection_pool_max_size > 0.9
+        for: 2m
+        labels:
+          severity: critical
+          service: eventcore
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+          description: "Connection pool utilization is {{ $value | humanizePercentage }}"
 ```
 
 ### Alert Manager Configuration
@@ -663,48 +663,48 @@ groups:
 ```yaml
 # alertmanager.yaml
 global:
-  smtp_smarthost: 'smtp.example.com:587'
-  smtp_from: 'alerts@eventcore.com'
+  smtp_smarthost: "smtp.example.com:587"
+  smtp_from: "alerts@eventcore.com"
 
 route:
-  group_by: ['alertname', 'service']
+  group_by: ["alertname", "service"]
   group_wait: 10s
   group_interval: 10s
   repeat_interval: 1h
-  receiver: 'web.hook'
+  receiver: "web.hook"
   routes:
-  - match:
-      severity: critical
-    receiver: 'critical-alerts'
-  - match:
-      severity: warning
-    receiver: 'warning-alerts'
+    - match:
+        severity: critical
+      receiver: "critical-alerts"
+    - match:
+        severity: warning
+      receiver: "warning-alerts"
 
 receivers:
-- name: 'web.hook'
-  webhook_configs:
-  - url: 'http://slack-webhook/webhook'
+  - name: "web.hook"
+    webhook_configs:
+      - url: "http://slack-webhook/webhook"
 
-- name: 'critical-alerts'
-  email_configs:
-  - to: 'oncall@eventcore.com'
-    subject: 'CRITICAL: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
-    body: |
-      {{ range .Alerts }}
-      Alert: {{ .Annotations.summary }}
-      Description: {{ .Annotations.description }}
-      Labels: {{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}
-      {{ end }}
-  slack_configs:
-  - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
-    channel: '#critical-alerts'
-    title: 'Critical Alert: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+  - name: "critical-alerts"
+    email_configs:
+      - to: "oncall@eventcore.com"
+        subject: "CRITICAL: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}"
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Labels: {{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}
+          {{ end }}
+    slack_configs:
+      - api_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+        channel: "#critical-alerts"
+        title: "Critical Alert: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}"
 
-- name: 'warning-alerts'
-  slack_configs:
-  - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
-    channel: '#warnings'
-    title: 'Warning: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+  - name: "warning-alerts"
+    slack_configs:
+      - api_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+        channel: "#warnings"
+        title: "Warning: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}"
 ```
 
 ## Grafana Dashboards
@@ -829,7 +829,7 @@ impl PerformanceMonitor {
             max_snapshots,
         }
     }
-    
+
     pub async fn capture_snapshot(&self) -> PerformanceSnapshot {
         let snapshot = PerformanceSnapshot {
             timestamp: chrono::Utc::now(),
@@ -842,31 +842,31 @@ impl PerformanceMonitor {
             active_streams: self.get_active_stream_count().await,
             memory_usage_mb: self.get_memory_usage_mb().await,
         };
-        
+
         let mut snapshots = self.snapshots.write().await;
         snapshots.push(snapshot.clone());
-        
+
         // Keep only the most recent snapshots
         if snapshots.len() > self.max_snapshots {
             snapshots.remove(0);
         }
-        
+
         snapshot
     }
-    
+
     pub async fn get_trend_analysis(&self, minutes: u64) -> TrendAnalysis {
         let snapshots = self.snapshots.read().await;
         let cutoff = chrono::Utc::now() - chrono::Duration::minutes(minutes as i64);
-        
+
         let recent_snapshots: Vec<_> = snapshots
             .iter()
             .filter(|s| s.timestamp > cutoff)
             .collect();
-        
+
         if recent_snapshots.is_empty() {
             return TrendAnalysis::default();
         }
-        
+
         TrendAnalysis {
             throughput_trend: self.calculate_trend(&recent_snapshots, |s| s.commands_per_second),
             latency_trend: self.calculate_trend(&recent_snapshots, |s| s.avg_latency_ms),
@@ -874,48 +874,48 @@ impl PerformanceMonitor {
             memory_trend: self.calculate_trend(&recent_snapshots, |s| s.memory_usage_mb),
         }
     }
-    
+
     async fn calculate_command_rate(&self) -> f64 {
         // Get rate from Prometheus metrics
         // Implementation depends on your metrics backend
         0.0
     }
-    
+
     async fn calculate_event_rate(&self) -> f64 {
         // Get rate from Prometheus metrics
         0.0
     }
-    
+
     async fn calculate_avg_latency(&self) -> f64 {
         // Get average latency from metrics
         0.0
     }
-    
+
     async fn calculate_p95_latency(&self) -> f64 {
         // Get p95 latency from metrics
         0.0
     }
-    
+
     async fn calculate_p99_latency(&self) -> f64 {
         // Get p99 latency from metrics
         0.0
     }
-    
+
     async fn calculate_error_rate(&self) -> f64 {
         // Calculate error rate from metrics
         0.0
     }
-    
+
     async fn get_active_stream_count(&self) -> i64 {
         // Get active stream count from metrics
         0
     }
-    
+
     async fn get_memory_usage_mb(&self) -> f64 {
         // Get memory usage from system metrics
         0.0
     }
-    
+
     fn calculate_trend<F>(&self, snapshots: &[&PerformanceSnapshot], extractor: F) -> Trend
     where
         F: Fn(&PerformanceSnapshot) -> f64,
@@ -923,16 +923,16 @@ impl PerformanceMonitor {
         if snapshots.len() < 2 {
             return Trend::Stable;
         }
-        
+
         let values: Vec<f64> = snapshots.iter().map(|s| extractor(s)).collect();
         let first_half = &values[0..values.len()/2];
         let second_half = &values[values.len()/2..];
-        
+
         let first_avg = first_half.iter().sum::<f64>() / first_half.len() as f64;
         let second_avg = second_half.iter().sum::<f64>() / second_half.len() as f64;
-        
+
         let change_percent = (second_avg - first_avg) / first_avg * 100.0;
-        
+
         match change_percent {
             x if x > 10.0 => Trend::Increasing,
             x if x < -10.0 => Trend::Decreasing,
@@ -990,6 +990,7 @@ EventCore monitoring and metrics:
 - ✅ **Performance monitoring** - Real-time performance tracking
 
 Key components:
+
 1. Export detailed Prometheus metrics for all operations
 2. Implement structured logging with correlation IDs
 3. Use distributed tracing for multi-service visibility

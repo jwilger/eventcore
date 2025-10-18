@@ -19,11 +19,11 @@ Let's dissect a command to understand each part:
 #[derive(Command, Clone)]         // 1. Derive macro generates boilerplate
 struct TransferMoney {
     #[stream]                     // 2. Declares this field is a stream
-    from_account: StreamId,       
-    
-    #[stream] 
+    from_account: StreamId,
+
+    #[stream]
     to_account: StreamId,
-    
+
     amount: Money,                // 3. Regular fields for command data
     reference: String,
 }
@@ -41,7 +41,7 @@ pub struct TransferMoneyStreamSet;
 // 2. Implementation of CommandStreams trait
 impl CommandStreams for TransferMoney {
     type StreamSet = TransferMoneyStreamSet;
-    
+
     fn read_streams(&self) -> Vec<StreamId> {
         vec![
             self.from_account.clone(),
@@ -66,7 +66,7 @@ Handles infrastructure concerns:
 pub trait CommandStreams: Send + Sync + Clone {
     /// Phantom type for compile-time stream access control
     type StreamSet: Send + Sync;
-    
+
     /// Returns the streams this command needs to read
     fn read_streams(&self) -> Vec<StreamId>;
 }
@@ -81,13 +81,13 @@ Contains your domain logic:
 pub trait CommandLogic: CommandStreams {
     /// State type that will be reconstructed from events
     type State: Default + Send + Sync;
-    
+
     /// Event type this command produces
     type Event: Send + Sync;
-    
+
     /// Apply an event to update state (event sourcing fold)
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>);
-    
+
     /// Business logic that validates and produces events
     async fn handle(
         &self,
@@ -117,13 +117,13 @@ struct UpdateProfile {
 struct ProcessOrder {
     #[stream]
     order_id: StreamId,
-    
+
     #[stream]
     customer_id: StreamId,
-    
+
     #[stream]
     inventory_id: StreamId,
-    
+
     #[stream]
     payment_id: StreamId,
 }
@@ -156,7 +156,7 @@ async fn handle(
         stream_resolver.add_streams(vec![approver_stream]);
         // EventCore will re-execute with the additional stream
     }
-    
+
     // Continue with logic...
 }
 ```
@@ -179,14 +179,14 @@ async fn handle(
         self.from_account.clone(),
         BankEvent::MoneyWithdrawn { amount: self.amount }
     )?;
-    
+
     // ❌ This won't compile - random_stream wasn't declared
     let invalid = StreamWrite::new(
         &read_streams,
         StreamId::from_static("random-stream"),
         SomeEvent {}
     )?; // Compile error!
-    
+
     Ok(vec![withdraw_event])
 }
 ```
@@ -232,17 +232,17 @@ async fn handle(
         state.balance,
         self.amount
     );
-    
+
     require!(
         self.amount > 0,
         "Transfer amount must be positive"
     );
-    
+
     require!(
         self.from_account != self.to_account,
         "Cannot transfer to same account"
     );
-    
+
     // Generate events after validation passes
     Ok(vec![/* events */])
 }
@@ -254,7 +254,7 @@ async fn handle(
 impl TransferMoney {
     fn validate_transfer_limits(&self, state: &AccountState) -> CommandResult<()> {
         const DAILY_LIMIT: u64 = 10_000;
-        
+
         let daily_total = state.transfers_today + self.amount;
         require!(
             daily_total <= DAILY_LIMIT,
@@ -262,7 +262,7 @@ impl TransferMoney {
             daily_total,
             DAILY_LIMIT
         );
-        
+
         Ok(())
     }
 }
@@ -277,7 +277,7 @@ impl TransferMoney {
 struct ComplexCommand {
     #[stream(name = "primary")]
     main_stream: StreamId,
-    
+
     #[stream(name = "secondary", optional = true)]
     optional_stream: Option<StreamId>,
 }
@@ -289,11 +289,11 @@ struct ComplexCommand {
 impl ComplexCommand {
     fn compute_streams(&self) -> Vec<StreamId> {
         let mut streams = vec![self.main_stream.clone()];
-        
+
         if let Some(ref optional) = self.optional_stream {
             streams.push(optional.clone());
         }
-        
+
         streams
     }
 }
@@ -308,7 +308,7 @@ Commands can be composed for complex operations:
 struct CompleteOrderWorkflow {
     #[stream]
     order_id: StreamId,
-    
+
     // Sub-commands to execute
     payment: ProcessPayment,
     fulfillment: FulfillOrder,
@@ -366,7 +366,7 @@ async fn handle(
     if self.requires_history_check() {
         state.load_history().await?;
     }
-    
+
     // Continue...
 }
 ```
@@ -384,7 +384,7 @@ fn test_command_stream_declaration() {
         amount: 100,
         reference: "test".to_string(),
     };
-    
+
     let streams = cmd.read_streams();
     assert_eq!(streams.len(), 2);
     assert!(streams.contains(&StreamId::from_static("account-1")));
@@ -399,14 +399,14 @@ fn test_command_stream_declaration() {
 fn test_apply_events() {
     let cmd = TransferMoney { /* ... */ };
     let mut state = AccountState::default();
-    
+
     let event = create_test_event(BankEvent::AccountOpened {
         balance: 1000,
         owner: "alice".to_string(),
     });
-    
+
     cmd.apply(&mut state, &event);
-    
+
     assert_eq!(state.balance, 1000);
     assert!(state.exists);
 }
@@ -425,7 +425,7 @@ async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Sel
         // Already processed - return success with no new events
         return Ok(vec![]);
     }
-    
+
     // Process normally...
 }
 ```
@@ -440,13 +440,13 @@ Handle command evolution:
 struct TransferMoneyV2 {
     #[stream]
     from_account: StreamId,
-    
+
     #[stream]
     to_account: StreamId,
-    
+
     amount: Money,
     reference: String,
-    
+
     // New in V2
     category: TransferCategory,
 }
@@ -463,6 +463,7 @@ The EventCore command system provides:
 - ✅ **Extensibility** through the two-trait design
 
 Key takeaways:
+
 1. Use `#[derive(Command)]` to eliminate boilerplate
 2. Declare streams with `#[stream]` attributes
 3. Implement business logic in `CommandLogic`

@@ -53,17 +53,17 @@ async fn assign_task(
     // 1. Parse and validate input
     let task_stream = StreamId::try_new(format!("task-{}", task_id))
         .map_err(|e| ApiError::validation("Invalid task ID"))?;
-        
+
     let assignee_stream = StreamId::try_new(format!("user-{}", request.assignee_id))
         .map_err(|e| ApiError::validation("Invalid assignee ID"))?;
-    
+
     // 2. Create command
     let command = AssignTask {
         task_id: task_stream,
         assignee_id: assignee_stream,
         assigned_by: user.id.clone(),
     };
-    
+
     // 3. Execute with context
     let result = state.executor
         .execute_with_context(
@@ -74,7 +74,7 @@ async fn assign_task(
         )
         .await
         .map_err(ApiError::from_command_error)?;
-    
+
     // 4. Format response
     Ok(Json(AssignTaskResponse {
         message: "Task assigned successfully".to_string(),
@@ -129,7 +129,7 @@ where
             .and_then(|auth| auth.to_str().ok())
             .and_then(|auth| auth.strip_prefix("Bearer "))
             .ok_or_else(|| ApiError::unauthorized("Missing authentication token"))?;
-        
+
         // Decode and validate token
         let token_data = decode::<Claims>(
             token,
@@ -137,7 +137,7 @@ where
             &Validation::default(),
         )
         .map_err(|_| ApiError::unauthorized("Invalid authentication token"))?;
-        
+
         Ok(AuthenticatedUser {
             id: UserId::try_new(token_data.claims.sub)?,
             roles: token_data.claims.roles,
@@ -153,11 +153,11 @@ impl AuthenticatedUser {
     fn has_role(&self, role: &str) -> bool {
         self.roles.contains(&role.to_string())
     }
-    
+
     fn can_manage_tasks(&self) -> bool {
         self.has_role("admin") || self.has_role("manager")
     }
-    
+
     fn can_assign_tasks(&self) -> bool {
         self.has_role("admin") || self.has_role("manager") || self.has_role("lead")
     }
@@ -172,14 +172,14 @@ async fn delete_task(
     if !user.can_manage_tasks() {
         return Err(ApiError::forbidden("Insufficient permissions to delete tasks"));
     }
-    
+
     let command = DeleteTask {
         task_id: StreamId::try_new(format!("task-{}", task_id))?,
         deleted_by: user.id,
     };
-    
+
     state.executor.execute(&command).await?;
-    
+
     Ok(StatusCode::NO_CONTENT)
 }
 ```
@@ -195,16 +195,16 @@ use validator::{Validate, ValidationError};
 struct CreateProjectRequest {
     #[validate(length(min = 3, max = 100))]
     name: String,
-    
+
     #[validate(length(max = 1000))]
     description: Option<String>,
-    
+
     #[validate(email)]
     owner_email: String,
-    
+
     #[validate(range(min = 1, max = 365))]
     duration_days: u32,
-    
+
     #[validate(custom = "validate_start_date")]
     start_date: Option<DateTime<Utc>>,
 }
@@ -224,7 +224,7 @@ async fn create_project(
     // Validate request
     request.validate()
         .map_err(|e| ApiError::validation_errors(e))?;
-    
+
     // Create command with validated data
     let command = CreateProject {
         project_id: StreamId::from(format!("project-{}", ProjectId::new())),
@@ -237,7 +237,7 @@ async fn create_project(
         start_date: request.start_date.unwrap_or_else(Utc::now),
         created_by: user.id,
     };
-    
+
     // Execute and return response
     // ...
 }
@@ -248,27 +248,27 @@ async fn create_project(
 ```rust
 mod validators {
     use super::*;
-    
+
     pub fn validate_business_hours(time: &NaiveTime) -> Result<(), ValidationError> {
         const BUSINESS_START: NaiveTime = NaiveTime::from_hms_opt(9, 0, 0).unwrap();
         const BUSINESS_END: NaiveTime = NaiveTime::from_hms_opt(17, 0, 0).unwrap();
-        
+
         if *time < BUSINESS_START || *time > BUSINESS_END {
             return Err(ValidationError::new("Outside business hours"));
         }
         Ok(())
     }
-    
+
     pub fn validate_future_date(date: &NaiveDate) -> Result<(), ValidationError> {
         if *date <= Local::now().naive_local().date() {
             return Err(ValidationError::new("Date must be in the future"));
         }
         Ok(())
     }
-    
+
     pub fn validate_currency_code(code: &str) -> Result<(), ValidationError> {
         const VALID_CURRENCIES: &[&str] = &["USD", "EUR", "GBP", "JPY"];
-        
+
         if !VALID_CURRENCIES.contains(&code) {
             return Err(ValidationError::new("Invalid currency code"));
         }
@@ -341,22 +341,22 @@ where
             .unwrap();
     }
     drop(cache);
-    
+
     // Execute handler
     let response = handler().await;
-    
+
     // Cache successful responses
     if response.status().is_success() {
         let (parts, body) = response.into_parts();
         let body_bytes = hyper::body::to_bytes(body).await.unwrap().to_vec();
-        
+
         let mut cache = store.cache.write().await;
         cache.insert(key.0, CachedResponse {
             status: parts.status,
             body: body_bytes.clone(),
             created_at: Utc::now(),
         });
-        
+
         Response::from_parts(parts, Body::from(body_bytes))
     } else {
         response
@@ -371,19 +371,19 @@ where
 struct TransferMoney {
     #[stream]
     from_account: StreamId,
-    
+
     #[stream]
     to_account: StreamId,
-    
+
     amount: Money,
-    
+
     // Idempotency key embedded in command
     transfer_id: TransferId,
 }
 
 impl CommandLogic for TransferMoney {
     // ... other implementations
-    
+
     async fn handle(
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
@@ -395,7 +395,7 @@ impl CommandLogic for TransferMoney {
             // Already processed - return success with no new events
             return Ok(vec![]);
         }
-        
+
         // Process transfer...
         Ok(vec![
             StreamWrite::new(
@@ -475,12 +475,12 @@ impl ApiError {
             ),
             // ... other error types
         };
-        
+
         let response = ErrorResponse {
             error: error_details,
             request_id,
         };
-        
+
         (status, Json(response)).into_response()
     }
 }
@@ -522,7 +522,7 @@ async fn batch_create_tasks(
     let mut results = Vec::new();
     let mut successful = 0;
     let mut failed = 0;
-    
+
     for request in batch.operations {
         match create_single_task(&state, &user, request).await {
             Ok(response) => {
@@ -531,17 +531,17 @@ async fn batch_create_tasks(
             }
             Err(error) => {
                 failed += 1;
-                results.push(BatchResult::Error { 
-                    error: error.to_error_details() 
+                results.push(BatchResult::Error {
+                    error: error.to_error_details()
                 });
-                
+
                 if batch.stop_on_error {
                     break;
                 }
             }
         }
     }
-    
+
     Ok(Json(BatchResponse {
         results,
         successful,
@@ -569,10 +569,10 @@ async fn import_large_dataset(
 ) -> Result<Json<AsyncCommandResponse>, ApiError> {
     // Validate request
     request.validate()?;
-    
+
     // Create tracking ID
     let tracking_id = TrackingId::new();
-    
+
     // Queue command for async processing
     let command = ImportDataset {
         dataset_id: StreamId::from(format!("dataset-{}", DatasetId::new())),
@@ -581,13 +581,13 @@ async fn import_large_dataset(
         initiated_by: user.id,
         tracking_id: tracking_id.clone(),
     };
-    
+
     // Submit to background queue
     state.command_queue
         .submit(command)
         .await
         .map_err(|_| ApiError::service_unavailable("Import service temporarily unavailable"))?;
-    
+
     // Return tracking information
     Ok(Json(AsyncCommandResponse {
         tracking_id: tracking_id.to_string(),
@@ -605,7 +605,7 @@ async fn get_import_status(
         .get_status(&TrackingId::try_new(tracking_id)?)
         .await?
         .ok_or_else(|| ApiError::not_found("Import"))?;
-    
+
     Ok(Json(status))
 }
 ```
@@ -617,58 +617,58 @@ async fn get_import_status(
 mod tests {
     use super::*;
     use eventcore::testing::prelude::*;
-    
+
     #[tokio::test]
     async fn test_assign_task_authorization() {
         let state = create_test_state().await;
-        
+
         // User without permission
         let user = AuthenticatedUser {
             id: UserId::try_new("user@example.com").unwrap(),
             roles: vec!["member".to_string()],
         };
-        
+
         let request = AssignTaskRequest {
             assignee_id: "assignee@example.com".to_string(),
         };
-        
+
         let result = assign_task(
             State(state),
             Path("task-123".to_string()),
             user,
             Json(request),
         ).await;
-        
+
         assert!(matches!(
             result,
             Err(ApiError::Forbidden { .. })
         ));
     }
-    
+
     #[tokio::test]
     async fn test_idempotent_transfer() {
         let state = create_test_state().await;
         let transfer_id = TransferId::new();
-        
+
         let request = TransferMoneyRequest {
             from_account: "account-1".to_string(),
             to_account: "account-2".to_string(),
             amount: 100.0,
             transfer_id: transfer_id.to_string(),
         };
-        
+
         // First call
         let response1 = transfer_money(
             State(state.clone()),
             Json(request.clone()),
         ).await.unwrap();
-        
+
         // Second call with same transfer_id
         let response2 = transfer_money(
             State(state),
             Json(request),
         ).await.unwrap();
-        
+
         // Should return same response
         assert_eq!(response1.0.transfer_id, response2.0.transfer_id);
         assert_eq!(response1.0.status, response2.0.status);
@@ -688,12 +688,12 @@ lazy_static! {
         "api_commands_total",
         "Total number of commands processed"
     ).unwrap();
-    
+
     static ref COMMAND_DURATION: Histogram = register_histogram!(
         "api_command_duration_seconds",
         "Command processing duration"
     ).unwrap();
-    
+
     static ref COMMAND_ERRORS: IntCounter = register_int_counter!(
         "api_command_errors_total",
         "Total number of command errors"
@@ -710,15 +710,15 @@ where
 {
     COMMAND_COUNTER.inc();
     let timer = COMMAND_DURATION.start_timer();
-    
+
     let result = handler().await;
-    
+
     timer.observe_duration();
-    
+
     if result.is_err() {
         COMMAND_ERRORS.inc();
     }
-    
+
     // Log with structured data
     match &result {
         Ok(_) => {
@@ -736,7 +736,7 @@ where
             );
         }
     }
-    
+
     result
 }
 ```
@@ -764,6 +764,7 @@ Command handlers in EventCore APIs:
 - ✅ **Monitored** - Track performance and errors
 
 Key patterns:
+
 1. Parse and validate input
 2. Check authentication and authorization
 3. Create strongly-typed commands

@@ -5,6 +5,7 @@ Long-running processes, also known as sagas or process managers, coordinate comp
 ## What Are Long-Running Processes?
 
 Long-running processes are stateful workflows that:
+
 - React to events
 - Execute commands
 - Maintain state across time
@@ -12,6 +13,7 @@ Long-running processes are stateful workflows that:
 - May run for days, weeks, or months
 
 Examples include:
+
 - Order fulfillment workflows
 - User onboarding sequences
 - Financial transaction processing
@@ -28,10 +30,10 @@ use eventcore::process::{ProcessManager, ProcessState, ProcessResult};
 struct OrderFulfillmentProcess {
     #[stream]
     process_id: StreamId,
-    
+
     #[stream]
     order_id: StreamId,
-    
+
     current_step: FulfillmentStep,
     timeout_at: Option<DateTime<Utc>>,
 }
@@ -62,7 +64,7 @@ struct OrderFulfillmentState {
 impl CommandLogic for OrderFulfillmentProcess {
     type State = OrderFulfillmentState;
     type Event = ProcessEvent;
-    
+
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         match &event.payload {
             ProcessEvent::Started { order_id, timeout_at } => {
@@ -91,7 +93,7 @@ impl CommandLogic for OrderFulfillmentProcess {
             }
         }
     }
-    
+
     async fn handle(
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
@@ -112,7 +114,7 @@ impl CommandLogic for OrderFulfillmentProcess {
                 ]);
             }
         }
-        
+
         // Execute current step
         match state.current_step {
             FulfillmentStep::PaymentPending => {
@@ -161,7 +163,7 @@ impl OrderFulfillmentProcess {
             ])
         }
     }
-    
+
     async fn handle_inventory_step(
         &self,
         read_streams: &ReadStreams<OrderFulfillmentProcessStreamSet>,
@@ -189,7 +191,7 @@ impl OrderFulfillmentProcess {
             ])
         }
     }
-    
+
     // Similar implementations for other steps...
 }
 ```
@@ -239,7 +241,7 @@ impl EventHandler<SystemEvent> for OrderFulfillmentProcess {
 struct AdvanceOrderProcess {
     #[stream]
     process_id: StreamId,
-    
+
     trigger: ProcessTrigger,
 }
 
@@ -262,10 +264,10 @@ For distributed transactions, implement the saga pattern:
 struct Bookingsaga {
     #[stream]
     saga_id: StreamId,
-    
+
     #[stream]
     reservation_id: StreamId,
-    
+
     steps: Vec<SagaStep>,
     current_step: usize,
     compensation_mode: bool,
@@ -290,7 +292,7 @@ enum StepStatus {
 impl CommandLogic for BookingSaga {
     type State = SagaState;
     type Event = SagaEvent;
-    
+
     async fn handle(
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
@@ -321,9 +323,9 @@ impl BookingSaga {
                 )?
             ]);
         }
-        
+
         let current_step = &state.steps[state.current_step];
-        
+
         match current_step.status {
             StepStatus::Pending => {
                 // Execute current step
@@ -365,7 +367,7 @@ impl BookingSaga {
             StepStatus::Compensated => unreachable!("Cannot be compensated in forward mode"),
         }
     }
-    
+
     async fn handle_compensation(
         &self,
         read_streams: &ReadStreams<BookingSagaStreamSet>,
@@ -375,7 +377,7 @@ impl BookingSaga {
         let compensation_step = state.steps
             .iter()
             .rposition(|step| step.status == StepStatus::Completed);
-        
+
         match compensation_step {
             Some(index) => {
                 Ok(vec![
@@ -435,7 +437,7 @@ fn create_travel_booking_saga(
             status: StepStatus::Pending,
         },
     ];
-    
+
     BookingSaga {
         saga_id: StreamId::from(format!("booking-saga-{}", SagaId::new())),
         reservation_id: StreamId::from(format!("reservation-{}", ReservationId::new())),
@@ -470,7 +472,7 @@ impl ProcessTimeout {
     fn should_retry(&self) -> bool {
         self.current_retries < self.max_retries
     }
-    
+
     fn next_retry_delay(&self) -> Duration {
         match &self.retry_policy {
             RetryPolicy::FixedDelay { delay } => *delay,
@@ -483,7 +485,7 @@ impl ProcessTimeout {
             }
         }
     }
-    
+
     fn next_timeout(&self) -> DateTime<Utc> {
         Utc::now() + self.next_retry_delay()
     }
@@ -497,7 +499,7 @@ trait ProcessTimeoutScheduler {
         process_id: StreamId,
         timeout_at: DateTime<Utc>,
     ) -> Result<(), TimeoutError>;
-    
+
     async fn cancel_timeout(
         &self,
         process_id: StreamId,
@@ -512,33 +514,33 @@ struct InMemoryTimeoutScheduler {
 impl InMemoryTimeoutScheduler {
     async fn run_timeout_checker(&self) {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
-        
+
         loop {
             interval.tick().await;
             self.check_timeouts().await;
         }
     }
-    
+
     async fn check_timeouts(&self) {
         let now = Utc::now();
         let mut timeouts = self.timeouts.write().await;
-        
+
         // Find expired timeouts
         let expired: Vec<_> = timeouts
             .range(..=now)
             .flat_map(|(_, process_ids)| process_ids.clone())
             .collect();
-        
+
         // Remove expired timeouts
         timeouts.retain(|&timeout_time, _| timeout_time > now);
-        
+
         // Trigger timeout commands
         for process_id in expired {
             let timeout_command = ProcessTimeoutCommand {
                 process_id,
                 timed_out_at: now,
             };
-            
+
             if let Err(e) = self.executor.execute(&timeout_command).await {
                 tracing::error!("Failed to execute timeout command: {}", e);
             }
@@ -550,14 +552,14 @@ impl InMemoryTimeoutScheduler {
 struct ProcessTimeoutCommand {
     #[stream]
     process_id: StreamId,
-    
+
     timed_out_at: DateTime<Utc>,
 }
 
 impl CommandLogic for ProcessTimeoutCommand {
     type State = ProcessState;
     type Event = ProcessEvent;
-    
+
     async fn handle(
         &self,
         read_streams: ReadStreams<Self::StreamSet>,
@@ -568,10 +570,10 @@ impl CommandLogic for ProcessTimeoutCommand {
         let should_retry = state.timeout.as_ref()
             .map(|t| t.should_retry())
             .unwrap_or(false);
-        
+
         if should_retry {
             let next_timeout = state.timeout.as_ref().unwrap().next_timeout();
-            
+
             Ok(vec![
                 StreamWrite::new(
                     &read_streams,
@@ -609,22 +611,22 @@ lazy_static! {
         "eventcore_processes_started_total",
         "Total number of processes started"
     ).unwrap();
-    
+
     static ref PROCESS_COMPLETED: Counter = register_counter!(
         "eventcore_processes_completed_total",
         "Total number of processes completed"
     ).unwrap();
-    
+
     static ref PROCESS_FAILED: Counter = register_counter!(
         "eventcore_processes_failed_total",
         "Total number of processes failed"
     ).unwrap();
-    
+
     static ref PROCESS_DURATION: Histogram = register_histogram!(
         "eventcore_process_duration_seconds",
         "Process execution duration"
     ).unwrap();
-    
+
     static ref ACTIVE_PROCESSES: Gauge = register_gauge!(
         "eventcore_active_processes",
         "Number of currently active processes"
@@ -648,47 +650,47 @@ struct ProcessCounts {
 impl ProcessMetrics {
     fn record_process_started(&mut self, process_type: &str, process_id: StreamId) {
         PROCESS_STARTED.with_label_values(&[process_type]).inc();
-        
+
         self.process_counts
             .entry(process_type.to_string())
             .or_default()
             .started += 1;
-        
+
         self.active_processes.insert(process_id);
         ACTIVE_PROCESSES.set(self.active_processes.len() as f64);
     }
-    
+
     fn record_process_completed(
-        &mut self, 
-        process_type: &str, 
-        process_id: StreamId, 
+        &mut self,
+        process_type: &str,
+        process_id: StreamId,
         duration: Duration
     ) {
         PROCESS_COMPLETED.with_label_values(&[process_type]).inc();
         PROCESS_DURATION.observe(duration.as_secs_f64());
-        
+
         let counts = self.process_counts
             .entry(process_type.to_string())
             .or_default();
         counts.completed += 1;
-        
+
         // Update average duration
         let total_completed = counts.completed;
-        counts.average_duration = (counts.average_duration * (total_completed - 1) as u32 + duration) 
+        counts.average_duration = (counts.average_duration * (total_completed - 1) as u32 + duration)
             / total_completed as u32;
-        
+
         self.active_processes.remove(&process_id);
         ACTIVE_PROCESSES.set(self.active_processes.len() as f64);
     }
-    
+
     fn record_process_failed(&mut self, process_type: &str, process_id: StreamId) {
         PROCESS_FAILED.with_label_values(&[process_type]).inc();
-        
+
         self.process_counts
             .entry(process_type.to_string())
             .or_default()
             .failed += 1;
-        
+
         self.active_processes.remove(&process_id);
         ACTIVE_PROCESSES.set(self.active_processes.len() as f64);
     }
@@ -712,7 +714,7 @@ struct HealthThresholds {
 impl ProcessHealthCheck {
     async fn check_process_health(&self, metrics: &ProcessMetrics) -> HealthStatus {
         let mut issues = Vec::new();
-        
+
         for (process_type, counts) in &metrics.process_counts {
             // Check failure rate
             let total = counts.started;
@@ -720,36 +722,36 @@ impl ProcessHealthCheck {
                 let failure_rate = counts.failed as f64 / total as f64;
                 if failure_rate > self.warning_thresholds.failure_rate {
                     issues.push(format!(
-                        "High failure rate for {}: {:.1}%", 
-                        process_type, 
+                        "High failure rate for {}: {:.1}%",
+                        process_type,
                         failure_rate * 100.0
                     ));
                 }
             }
-            
+
             // Check average duration
             if counts.average_duration > self.warning_thresholds.average_duration {
                 issues.push(format!(
-                    "Slow processes for {}: {:?}", 
-                    process_type, 
+                    "Slow processes for {}: {:?}",
+                    process_type,
                     counts.average_duration
                 ));
             }
         }
-        
+
         // Check for stuck processes
         let stuck_count = self.count_stuck_processes(&metrics.active_processes).await;
         if stuck_count > 0 {
             issues.push(format!("{} processes appear stuck", stuck_count));
         }
-        
+
         if issues.is_empty() {
             HealthStatus::Healthy
         } else {
             HealthStatus::Warning { issues }
         }
     }
-    
+
     async fn count_stuck_processes(&self, active_processes: &HashSet<StreamId>) -> usize {
         // This would query the event store to check process ages
         // Implementation depends on your monitoring setup
@@ -774,76 +776,76 @@ Test processes thoroughly:
 mod process_tests {
     use super::*;
     use eventcore::testing::prelude::*;
-    
+
     #[tokio::test]
     async fn test_order_fulfillment_happy_path() {
         let store = InMemoryEventStore::new();
         let executor = CommandExecutor::new(store);
-        
+
         let order_id = OrderId::new();
         let process = OrderFulfillmentProcess::start(order_id).unwrap();
-        
+
         // Start process
         executor.execute(&process).await.unwrap();
-        
+
         // Simulate payment confirmation
         let payment_event = PaymentConfirmed {
             order_id,
             amount: Money::from_cents(1000),
         };
-        
+
         // Process should advance
         let advance_command = AdvanceOrderProcess {
             process_id: process.process_id,
             trigger: ProcessTrigger::PaymentConfirmed,
         };
         executor.execute(&advance_command).await.unwrap();
-        
+
         // Continue with inventory, shipping, etc.
         // Verify process reaches completion
     }
-    
+
     #[tokio::test]
     async fn test_process_timeout_and_retry() {
         let store = InMemoryEventStore::new();
         let executor = CommandExecutor::new(store);
         let scheduler = InMemoryTimeoutScheduler::new(executor.clone());
-        
+
         let order_id = OrderId::new();
         let mut process = OrderFulfillmentProcess::start(order_id).unwrap();
         process.timeout_at = Some(Utc::now() + Duration::from_secs(1));
-        
+
         // Start process
         executor.execute(&process).await.unwrap();
-        
+
         // Wait for timeout
         tokio::time::sleep(Duration::from_secs(2)).await;
-        
+
         // Verify timeout was triggered
         // Check retry logic works
     }
-    
+
     #[tokio::test]
     async fn test_saga_compensation() {
         let store = InMemoryEventStore::new();
         let executor = CommandExecutor::new(store);
-        
+
         // Create booking saga
         let saga = create_travel_booking_saga(
             create_hotel_booking(),
             create_flight_booking(),
             create_car_booking(),
         );
-        
+
         // Start saga
         executor.execute(&saga).await.unwrap();
-        
+
         // Simulate hotel booking success
         simulate_step_success(&executor, &saga.saga_id, 0).await;
-        
+
         // Simulate flight booking failure
         simulate_step_failure(&executor, &saga.saga_id, 1, "No availability").await;
-        
+
         // Verify compensation started
         // Check hotel booking was cancelled
     }
@@ -872,6 +874,7 @@ Long-running processes in EventCore:
 - ✅ **Testable** - Comprehensive testing support
 
 Key patterns:
+
 1. Use process managers for complex workflows
 2. Implement saga pattern for distributed transactions
 3. Handle timeouts and retries robustly

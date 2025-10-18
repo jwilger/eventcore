@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 // ============================================================================
-// Domain Types  
+// Domain Types
 // ============================================================================
 
 pub mod types {
@@ -49,7 +49,7 @@ pub mod types {
 
     #[nutype(
         sanitize(trim),
-        validate(not_empty, len_char_max = 50), 
+        validate(not_empty, len_char_max = 50),
         derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Serialize, Deserialize)
     )]
     pub struct WarehouseId(String);
@@ -385,7 +385,7 @@ impl Command for ReserveStockCommand {
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         let requested_quantity: u32 = input.quantity.into();
-        
+
         // Check if sufficient stock is available
         if state.available_quantity < requested_quantity {
             return Err(CommandError::BusinessRuleViolation(format!(
@@ -444,7 +444,7 @@ impl Command for TransferStockCommand {
 
     fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
         let stream_id = event.stream_id.as_ref();
-        
+
         // Determine which warehouse this event affects
         if stream_id.contains(&format!("-{}-", self.from_warehouse.as_ref())) {
             // Event for source warehouse
@@ -483,7 +483,7 @@ impl Command for TransferStockCommand {
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         let transfer_quantity: u32 = input.quantity.into();
-        
+
         // Validate source warehouse has sufficient stock
         if state.from_stock.into() < transfer_quantity {
             return Err(CommandError::BusinessRuleViolation(format!(
@@ -496,7 +496,7 @@ impl Command for TransferStockCommand {
         }
 
         let now = chrono::Utc::now();
-        
+
         // Create transfer event that affects both warehouses
         let event = StreamWrite::new(
             &read_streams,
@@ -541,7 +541,7 @@ impl TransferStockCommand {
     fn from_warehouse(&self) -> &types::WarehouseId {
         &self.from_warehouse
     }
-    
+
     fn to_warehouse(&self) -> &types::WarehouseId {
         &self.to_warehouse
     }
@@ -563,12 +563,12 @@ impl Command for CreatePurchaseOrderCommand {
 
     fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
         let mut streams = vec![input.supplier_id.stream_id()];
-        
+
         // Initially read supplier stream, products will be discovered dynamically
         for item in &input.items {
             streams.push(item.product_id.product_stream_id());
         }
-        
+
         streams
     }
 
@@ -712,7 +712,7 @@ async fn create_product(
         unit_cost,
         supplier_id,
     };
-    
+
     executor.execute(&command, command, ExecutionOptions::default()).await?;
     Ok(())
 }
@@ -800,7 +800,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 1: Set up products and suppliers
     println!("🏭 Setting up products and suppliers...");
-    
+
     let supplier_id = types::SupplierId::try_new("acme-supplies".to_string()).unwrap();
     let product_id = types::ProductId::try_new("widget-001".to_string()).unwrap();
     let warehouse_main = types::WarehouseId::try_new("warehouse-main".to_string()).unwrap();
@@ -819,7 +819,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 2: Create purchase order with dynamic discovery
     println!("\n📋 Creating purchase order...");
-    
+
     let po_items = vec![PurchaseOrderItem {
         product_id: product_id.clone(),
         quantity: types::Quantity::try_new(100).unwrap(),
@@ -835,9 +835,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let po_result = executor.execute(&create_po_command, create_po_command, ExecutionOptions::default()).await?;
     println!("✅ Purchase order created - {} events written", po_result.events_written.len());
 
-    // Step 3: Simulate receiving inventory 
+    // Step 3: Simulate receiving inventory
     println!("\n📥 Receiving inventory...");
-    
+
     let receive_command = ReceiveStockCommand {
         product_id: product_id.clone(),
         warehouse_id: warehouse_main.clone(),
@@ -850,7 +850,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 4: Reserve stock for customer order
     println!("\n🔒 Reserving stock for customer...");
-    
+
     let reserve_command = ReserveStockCommand {
         product_id: product_id.clone(),
         warehouse_id: warehouse_main.clone(),
@@ -864,7 +864,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 5: Transfer stock between warehouses (atomic multi-location)
     println!("\n🚛 Transferring stock between warehouses...");
-    
+
     let transfer_command = TransferStockCommand {
         product_id: product_id.clone(),
         from_warehouse: warehouse_main.clone(),
@@ -880,7 +880,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 6: Attempt to over-reserve (should fail)
     println!("\n❌ Attempting to over-reserve stock (should fail)...");
-    
+
     let over_reserve_command = ReserveStockCommand {
         product_id: product_id.clone(),
         warehouse_id: warehouse_main.clone(),
@@ -1045,7 +1045,7 @@ mod tests {
 
         let result = executor.execute(&transfer_command, transfer_command, ExecutionOptions::default()).await;
         assert!(result.is_ok());
-        
+
         // Should write events to both warehouse streams
         let events_written = result.unwrap().events_written.len();
         assert_eq!(events_written, 2);

@@ -3,9 +3,9 @@
 EventCore's immutable audit trail helps with compliance, but you must implement specific controls.
 
 > **📋 Comprehensive Compliance Checklist**
-> 
+>
 > For a detailed compliance checklist covering OWASP, NIST, SOC2, PCI DSS, GDPR, and HIPAA requirements, see our [COMPLIANCE_CHECKLIST.md](https://github.com/jwilger/eventcore/blob/main/COMPLIANCE_CHECKLIST.md).
-> 
+>
 > This checklist provides actionable items for achieving compliance with major security frameworks and regulations.
 
 ## GDPR Compliance
@@ -39,21 +39,21 @@ impl GdprCompliantEventStore {
         if let Some(key_id) = self.user_keys.remove(&user_id) {
             self.key_vault.delete_key(key_id).await?;
         }
-        
+
         // 2. Store erasure event for audit
         let erasure_event = UserDataErased {
             user_id: user_id.clone(),
             erased_at: Timestamp::now(),
             reason: "GDPR Article 17 Request".to_string(),
         };
-        
+
         self.event_store
             .append_events(
                 &StreamId::from_user(&user_id),
                 vec![Event::from(erasure_event)],
             )
             .await?;
-        
+
         // 3. Events remain but PII is now unreadable
         Ok(())
     }
@@ -90,7 +90,7 @@ impl EventStore {
         // Collect all events related to user
         let streams = self.find_user_streams(user_id).await?;
         let mut events = Vec::new();
-        
+
         for stream_id in streams {
             let stream_events = self.read_stream(&stream_id).await?;
             events.extend(
@@ -100,7 +100,7 @@ impl EventStore {
                     .map(|e| e.decrypt_for_export())
             );
         }
-        
+
         Ok(events)
     }
 }
@@ -152,7 +152,7 @@ impl PciAuditLogger {
             ip_address: user.ip_address.clone(),
             success: true,
         };
-        
+
         self.logger.log(entry).await
     }
 }
@@ -195,11 +195,11 @@ impl HipaaCompliantStore {
             &event.patient_id(),
             "WRITE",
         ).await?;
-        
+
         // Encrypt and store
         let encrypted = self.encryption.encrypt_event(event)?;
         self.event_store.append(encrypted).await?;
-        
+
         Ok(())
     }
 }
@@ -220,7 +220,7 @@ impl HipaaRole {
     fn can_access_phi(&self) -> bool {
         matches!(self, HipaaRole::Doctor | HipaaRole::Nurse)
     }
-    
+
     fn can_access_billing(&self) -> bool {
         matches!(self, HipaaRole::Admin | HipaaRole::Billing)
     }
@@ -248,12 +248,12 @@ impl SoxCompliantExecutor {
             let approver = self.approvals
                 .get_approver(&requester)
                 .await?;
-                
+
             self.approvals
                 .request_approval(&command, &approver)
                 .await?;
         }
-        
+
         // Execute with full audit trail
         let result = self.executor
             .execute_with_metadata(
@@ -265,7 +265,7 @@ impl SoxCompliantExecutor {
                 },
             )
             .await?;
-            
+
         Ok(result)
     }
 }
@@ -322,7 +322,7 @@ impl RetentionManager {
     async fn apply_retention(&self, event_store: &EventStore) -> Result<(), Error> {
         for policy in &self.policies {
             let cutoff = Timestamp::now() - Duration::days(policy.retention_days);
-            
+
             match policy.action {
                 RetentionAction::Delete => {
                     // For GDPR compliance

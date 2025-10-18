@@ -56,12 +56,14 @@ Macro generates a unique phantom type representing the set of declared streams:
 **3. Trait Separation: Generated vs Developer-Provided**
 
 Macro generates `CommandStreams` trait implementation (infrastructure):
+
 - Extracts stream IDs from command fields
 - Manages phantom type for compile-time tracking
 - Handles interaction with EventStore trait
 - Pure boilerplate - no business logic
 
 Developers implement `CommandLogic` trait manually (business logic):
+
 - `apply(state, event)` - reconstructs state from events
 - `handle(state, context)` - validates business rules and produces events
 - Contains only domain-specific logic
@@ -97,6 +99,7 @@ Macro-generated code supports `StreamResolver` trait for adding streams dynamica
 **6. Generated Code Characteristics**
 
 Macro produces readable code:
+
 - Clear function names and structure
 - Includes generated code comments
 - Follows Rust naming conventions
@@ -106,6 +109,7 @@ Macro produces readable code:
 **7. Distribution as Separate Crate**
 
 `#[derive(Command)]` lives in `eventcore-macros` crate:
+
 - Follows Rust ecosystem patterns (syn, quote, proc-macro2)
 - Independent compilation from core library
 - Generated code references core eventcore types
@@ -147,6 +151,7 @@ Mixing infrastructure and business logic in a single trait creates problems:
 - Trait evolution affects both concerns simultaneously
 
 Separation provides:
+
 - Clear boundary between macro-generated (infrastructure) and developer-written (business logic)
 - Developers only implement domain-specific methods
 - Each trait evolves independently
@@ -155,12 +160,14 @@ Separation provides:
 **Why Macro Generation vs Hand-Written Boilerplate:**
 
 Hand-writing CommandStreams implementations requires:
+
 - 20-50 lines of boilerplate per command
 - Understanding of phantom types and type-level programming
 - Potential for errors (typos in stream extraction, incorrect phantom types)
 - Maintenance burden when adding/removing streams
 
 Macro generation:
+
 - Eliminates boilerplate entirely
 - Developers declare streams once via `#[stream]`
 - Generated code is correct by construction
