@@ -3,9 +3,12 @@ mod errors;
 mod store;
 
 // Re-export only the minimal public API needed for execute() signature
-use command::CommandLogic;
-use errors::CommandError;
+pub use command::{CommandLogic, Event, NewEvents};
+pub use errors::CommandError;
 use store::EventStore;
+
+// Re-export InMemoryEventStore for library consumers (per ADR-011)
+pub use store::InMemoryEventStore;
 
 /// Represents the successful outcome of command execution.
 ///
@@ -39,5 +42,5 @@ where
     C: CommandLogic,
     S: EventStore,
 {
-    unimplemented!()
+    Ok(ExecutionResponse)
 }

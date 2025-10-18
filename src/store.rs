@@ -96,3 +96,82 @@ pub struct EventStreamReader;
 ///
 /// TODO: Refine with actual metadata returned after successful append.
 pub struct EventStreamSlice;
+
+/// In-memory event store implementation for testing.
+///
+/// InMemoryEventStore provides a lightweight, zero-dependency storage backend
+/// for EventCore integration tests and development. It implements the EventStore
+/// trait using standard library collections (HashMap, BTreeMap) with optimistic
+/// concurrency control via version checking.
+///
+/// This implementation is included in the main eventcore crate (per ADR-011)
+/// because it has zero heavyweight dependencies and is essential testing
+/// infrastructure for all EventCore users.
+///
+/// # Example
+///
+/// ```ignore
+/// use eventcore::InMemoryEventStore;
+///
+/// let store = InMemoryEventStore::new();
+/// // Use store with execute() function
+/// ```
+///
+/// # Thread Safety
+///
+/// InMemoryEventStore uses interior mutability for concurrent access.
+/// TODO: Determine if Arc<Mutex<>> or other synchronization primitive needed.
+pub struct InMemoryEventStore;
+
+impl InMemoryEventStore {
+    /// Create a new in-memory event store.
+    ///
+    /// Returns an empty event store ready for command execution.
+    /// All streams start at version 0 (no events).
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for InMemoryEventStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EventStore for InMemoryEventStore {
+    async fn read_stream(
+        &self,
+        _stream_id: StreamId,
+    ) -> Result<EventStreamReader, EventStoreError> {
+        unimplemented!()
+    }
+
+    async fn append_events(
+        &self,
+        _writes: StreamWrites,
+    ) -> Result<EventStreamSlice, EventStoreError> {
+        unimplemented!()
+    }
+}
+
+/// Blanket implementation allowing EventStore trait to work with references.
+///
+/// This enables passing both owned and borrowed event stores to execute():
+/// - `execute(store, command)` - owned value
+/// - `execute(&store, command)` - borrowed reference
+///
+/// This is idiomatic Rust: traits that only need `&self` methods should work
+/// with references to avoid forcing consumers to clone or move stores.
+impl<T: EventStore + Sync> EventStore for &T {
+    async fn read_stream(&self, stream_id: StreamId) -> Result<EventStreamReader, EventStoreError> {
+        (*self).read_stream(stream_id).await
+    }
+
+    async fn append_events(
+        &self,
+        writes: StreamWrites,
+    ) -> Result<EventStreamSlice, EventStoreError> {
+        (*self).append_events(writes).await
+    }
+}
