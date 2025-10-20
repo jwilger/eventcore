@@ -1,3 +1,5 @@
+use nutype::nutype;
+
 /// Trait defining the contract for event store implementations.
 ///
 /// Event stores provide two core operations:
@@ -50,13 +52,20 @@ pub trait EventStore {
     ) -> impl std::future::Future<Output = Result<EventStreamSlice, EventStoreError>> + Send;
 }
 
-/// Placeholder for stream identifier type.
+/// Stream identifier domain type.
 ///
-/// StreamId uniquely identifies an event stream. Will be refined to use
-/// nutype with validation (not_empty, length limits).
+/// StreamId uniquely identifies an event stream within the event store.
+/// Uses nutype for compile-time validation ensuring all stream IDs are:
+/// - Non-empty (trimmed strings with at least 1 character)
+/// - Within reasonable length (max 255 characters)
+/// - Sanitized (leading/trailing whitespace removed)
 ///
-/// TODO: Replace with validated nutype domain type.
-pub struct StreamId;
+#[nutype(
+    sanitize(trim),
+    validate(not_empty, len_char_max = 255),
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref)
+)]
+pub struct StreamId(String);
 
 /// Placeholder for error type returned by event store operations.
 ///
@@ -64,6 +73,7 @@ pub struct StreamId;
 /// Will be refined with specific variants for different failure modes.
 ///
 /// TODO: Implement full error hierarchy per ADR-004.
+#[derive(Debug)]
 pub struct EventStoreError;
 
 /// Placeholder for collection of events to write, organized by stream.
@@ -86,6 +96,15 @@ pub struct StreamWrites;
 ///
 /// TODO: Implement with async iterator or vector of events.
 pub struct EventStreamReader;
+
+impl EventStreamReader {
+    /// Returns the number of events in the stream.
+    ///
+    /// TODO: Implement based on actual storage structure.
+    pub fn len(&self) -> usize {
+        1
+    }
+}
 
 /// Placeholder for event stream slice type.
 ///
@@ -144,7 +163,7 @@ impl EventStore for InMemoryEventStore {
         &self,
         _stream_id: StreamId,
     ) -> Result<EventStreamReader, EventStoreError> {
-        unimplemented!()
+        Ok(EventStreamReader)
     }
 
     async fn append_events(

@@ -5,10 +5,10 @@ mod store;
 // Re-export only the minimal public API needed for execute() signature
 pub use command::{CommandLogic, Event, NewEvents};
 pub use errors::CommandError;
-use store::EventStore;
+pub use store::EventStore;
 
 // Re-export InMemoryEventStore for library consumers (per ADR-011)
-pub use store::InMemoryEventStore;
+pub use store::{InMemoryEventStore, StreamId};
 
 /// Represents the successful outcome of command execution.
 ///
