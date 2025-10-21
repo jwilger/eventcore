@@ -1,0 +1,53 @@
+layout {
+    default_tab_template {
+        pane split_direction="vertical" {
+            // Leftmost pane - NO BORDER (neovim)
+            pane command="nvim" size="70%" borderless=true
+
+            // Right pane - with border (claude)
+            pane command="claude" focus=true size="30%" {
+                args "--append-system-prompt" "\"$(cat ~/.claude/system-prompt.md)\""
+            }
+        }
+        pane size=1 borderless=true {
+            plugin location="file:///nix/store/xf3i4bhvn8as0n4vrljjrd9dcj07qqng-zjstatus-0.21.1/zjstatus.wasm" {
+                // Main status bar configuration
+                format_left   "{mode} #[fg=#B4BEFE,bg=#1E1E2E,bold]  {session} #[fg=#313244,bg=#1E1E2E]  {tabs}"
+                format_center ""
+                format_right  "{datetime}"
+
+                // Mode colors - Catppuccin Mocha theme with icons
+                mode_normal          "#[bg=#89B4FA,fg=#1E1E2E,bold]  "
+                mode_locked          "#[bg=#F9E2AF,fg=#1E1E2E,bold]  "
+                mode_resize          "#[bg=#F38BA8,fg=#1E1E2E,bold]  "
+                mode_pane            "#[bg=#A6E3A1,fg=#1E1E2E,bold]  "
+                mode_tab             "#[bg=#CBA6F7,fg=#1E1E2E,bold]  "
+                mode_scroll          "#[bg=#94E2D5,fg=#1E1E2E,bold]  "
+                mode_enter_search    "#[bg=#F5C2E7,fg=#1E1E2E,bold]  "
+                mode_search          "#[bg=#F5C2E7,fg=#1E1E2E,bold]  "
+                mode_rename_tab      "#[bg=#FAB387,fg=#1E1E2E,bold]  "
+                mode_rename_pane     "#[bg=#FAB387,fg=#1E1E2E,bold]  "
+                mode_session         "#[bg=#74C7EC,fg=#1E1E2E,bold]  "
+                mode_move            "#[bg=#F2CDCD,fg=#1E1E2E,bold]  "
+                mode_prompt          "#[bg=#CDD6F4,fg=#1E1E2E,bold]  "
+                mode_tmux            "#[bg=#F38BA8,fg=#1E1E2E,bold]  "
+
+                // Tab styles - Powerline-inspired with rounded edges
+                tab_normal              "#[fg=#313244,bg=#1E1E2E]#[fg=#6C7086,bg=#313244] {index} #[fg=#585B70]#[fg=#9399B2] {name} #[fg=#313244,bg=#1E1E2E]"
+                tab_active              "#[fg=#45475A,bg=#1E1E2E,bold]#[fg=#89B4FA,bg=#45475A] {index} #[fg=#CDD6F4]#[fg=#F5E8E4,bold] {name} #[fg=#45475A,bg=#1E1E2E,bold]"
+                tab_fullscreen_indicator       " "
+                tab_sync_indicator              " "
+                tab_floating_indicator          " "
+
+                // DateTime configuration
+                datetime          "#[fg=#313244,bg=#1E1E2E]#[fg=#9399B2,bg=#313244]  {format} #[fg=#313244,bg=#1E1E2E]"
+                datetime_format   "%a %d %b  %H:%M"
+                datetime_timezone "America/Los_Angeles"
+
+                // Other settings
+                hide_frame_for_single_pane "true"
+                border_enabled "false"
+            }
+        }
+    }
+}
