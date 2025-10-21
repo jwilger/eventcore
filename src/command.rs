@@ -11,8 +11,9 @@ use crate::errors::CommandError;
 ///
 /// # Type Parameters
 ///
+/// * `EventPayload` - The consumer's event payload type (e.g., MoneyDeposited, AccountOpened)
 /// * `State` - The state type reconstructed from events via `apply()`
-pub trait CommandLogic {
+pub trait CommandLogic<EventPayload> {
     /// The state type accumulated from event history.
     ///
     /// This type represents the reconstructed state needed to validate
@@ -34,7 +35,7 @@ pub trait CommandLogic {
     /// # Returns
     ///
     /// The updated state after applying the event
-    fn apply(&self, state: Self::State, event: Event) -> Self::State;
+    fn apply(&self, state: Self::State, event: Event<EventPayload>) -> Self::State;
 
     /// Execute business logic and produce events.
     ///
@@ -52,31 +53,50 @@ pub trait CommandLogic {
     ///
     /// # Returns
     ///
-    /// * `Ok(NewEvents)` if business rules pass and events produced
+    /// * `Ok(NewEvents<EventPayload>)` if business rules pass and events produced
     /// * `Err(CommandError)` if business rules violated
-    fn handle(&self, state: Self::State) -> Result<NewEvents, CommandError>;
+    fn handle(&self, state: Self::State) -> Result<NewEvents<EventPayload>, CommandError>;
 }
 
-/// Placeholder for collection of new events produced by a command.
+/// Collection of new events produced by a command.
 ///
 /// This type represents the output of `CommandLogic::handle()` - the
 /// events that should be persisted as a result of command execution.
 ///
-/// The exact structure will be refined when we understand actual needs:
-/// - Just a collection of events?
-/// - Events organized by target stream?
-/// - Additional metadata for conflict detection?
+/// # Type Parameters
 ///
-/// For now, this stub defers the decision until requirements are clear.
-///
-/// TODO: Refine based on actual event emission and multi-stream needs.
-pub struct NewEvents;
+/// * `T` - The consumer's event payload type (e.g., MoneyDeposited, AccountOpened)
+pub struct NewEvents<T> {
+    _phantom: std::marker::PhantomData<T>,
+}
 
-/// Placeholder for event type.
+impl<T> Default for NewEvents<T> {
+    fn default() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Event wrapper for consumer event payloads.
 ///
 /// Events represent immutable facts that have occurred in the system.
-/// The exact structure will be refined in future increments based on
-/// ADR-005 (Event Metadata Structure).
+/// The generic type parameter T is the consumer's event payload type
+/// (e.g., MoneyDeposited, AccountOpened, etc.). EventCore is generic
+/// over the consumer's event types.
 ///
-/// TODO: Full implementation with type, data, and metadata.
-pub struct Event;
+/// The exact structure will be refined in future increments based on
+/// ADR-005 (Event Metadata Structure) to include metadata like:
+/// - EventId (UUIDv7)
+/// - Timestamp
+/// - CorrelationId
+/// - CausationId
+///
+/// For now, this is a minimal struct with just the payload field.
+///
+/// TODO: Add metadata fields per ADR-005.
+#[derive(Clone)]
+pub struct Event<T> {
+    /// The consumer's event payload.
+    pub payload: T,
+}
