@@ -28,8 +28,8 @@ pub enum CommandError {
     /// This error wraps failures from the event store backend (network errors,
     /// constraint violations, etc.). The error classification determines
     /// whether retry is appropriate.
-    #[error("event store error")]
-    EventStoreError,
+    #[error("event store error: {0}")]
+    EventStoreError(#[from] crate::store::EventStoreError),
 
     /// Invalid command state detected during execution.
     ///

@@ -70,13 +70,14 @@ pub trait EventStore {
 )]
 pub struct StreamId(String);
 
-/// Placeholder for error type returned by event store operations.
+/// Error type returned by event store operations.
 ///
 /// EventStoreError represents failures during read or append operations.
 /// Will be refined with specific variants for different failure modes.
 ///
 /// TODO: Implement full error hierarchy per ADR-004.
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
+#[error("event store operation failed")]
 pub struct EventStoreError;
 
 /// Placeholder for collection of events to write, organized by stream.
@@ -126,6 +127,13 @@ impl StreamWrites {
 impl Default for StreamWrites {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<E: crate::Event> FromIterator<E> for StreamWrites {
+    fn from_iter<I: IntoIterator<Item = E>>(iter: I) -> Self {
+        iter.into_iter()
+            .fold(Self::new(), |writes, event| writes.append(event))
     }
 }
 

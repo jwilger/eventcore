@@ -46,17 +46,9 @@ where
     let state = C::State::default();
     let new_events = command.handle(state)?;
 
-    // Convert NewEvents to StreamWrites
-    let mut writes = StreamWrites::new();
-    for event in Vec::from(new_events) {
-        writes = writes.append(event);
-    }
-
-    // Store events atomically
-    store
-        .append_events(writes)
-        .await
-        .map_err(|_| CommandError::EventStoreError)?;
+    // Convert NewEvents to StreamWrites and store atomically
+    let writes: StreamWrites = Vec::from(new_events).into_iter().collect();
+    store.append_events(writes).await?;
 
     Ok(ExecutionResponse)
 }
