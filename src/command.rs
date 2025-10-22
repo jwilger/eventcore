@@ -1,19 +1,46 @@
 use crate::errors::CommandError;
 
+/// Event trait for domain-first event sourcing.
+///
+/// Per ADR-012, domain types implement this trait to become events. The trait provides
+/// the minimal infrastructure contract: events must know their stream identity
+/// (aggregate ID) and support necessary operations for storage and async handling.
+///
+/// # Trait Bounds
+///
+/// * `Clone` - Required for state reconstruction (apply method may need events multiple times)
+/// * `Send` - Required for async storage backends and cross-thread event handling
+/// * `'static` - Required for type erasure in storage and async trait boundaries
+pub trait Event: Clone + Send + 'static {
+    /// Returns the stream this event belongs to.
+    ///
+    /// The stream ID represents the aggregate identity in Domain-Driven Design.
+    /// Each domain event knows which aggregate instance it belongs to.
+    fn stream_id(&self) -> &crate::StreamId;
+}
+
 /// Trait defining the business logic of a command.
 ///
 /// Commands encapsulate business operations that read from event streams,
 /// reconstruct state, validate business rules, and produce events.
 ///
 /// This trait focuses solely on domain logic. Infrastructure concerns
-/// (stream management, event persistence) are handled by the executor and
-/// the `CommandStreams`.
+/// (stream management, event persistence) are handled by the executor.
 ///
-/// # Type Parameters
+/// Per ADR-012, commands use an associated type for their event type rather than
+/// a generic parameter, providing better type inference and cleaner APIs.
 ///
-/// * `EventPayload` - The consumer's event payload type (e.g., MoneyDeposited, AccountOpened)
+/// # Associated Types
+///
+/// * `Event` - The domain event type implementing the Event trait
 /// * `State` - The state type reconstructed from events via `apply()`
-pub trait CommandLogic<EventPayload> {
+pub trait CommandLogic {
+    /// The domain event type this command produces.
+    ///
+    /// Must implement the Event trait to provide stream identity and
+    /// required infrastructure capabilities.
+    type Event: Event;
+
     /// The state type accumulated from event history.
     ///
     /// This type represents the reconstructed state needed to validate
@@ -30,12 +57,12 @@ pub trait CommandLogic<EventPayload> {
     /// # Parameters
     ///
     /// * `state` - The accumulated state so far
-    /// * `event` - The next event to apply
+    /// * `event` - The next event to apply (borrowed reference)
     ///
     /// # Returns
     ///
     /// The updated state after applying the event
-    fn apply(&self, state: Self::State, event: Event<EventPayload>) -> Self::State;
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State;
 
     /// Execute business logic and produce events.
     ///
@@ -43,19 +70,15 @@ pub trait CommandLogic<EventPayload> {
     /// and returns events to be persisted. It's a pure function that
     /// makes domain decisions without performing I/O or side effects.
     ///
-    /// This is the core domain logic: given current state, what events
-    /// should occur? The executor handles infrastructure concerns
-    /// (persistence, atomicity, concurrency control) separately.
-    ///
     /// # Parameters
     ///
     /// * `state` - The reconstructed state from all events
     ///
     /// # Returns
     ///
-    /// * `Ok(NewEvents<EventPayload>)` if business rules pass and events produced
+    /// * `Ok(NewEvents<Self::Event>)` if business rules pass and events produced
     /// * `Err(CommandError)` if business rules violated
-    fn handle(&self, state: Self::State) -> Result<NewEvents<EventPayload>, CommandError>;
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError>;
 }
 
 /// Collection of new events produced by a command.
@@ -63,40 +86,25 @@ pub trait CommandLogic<EventPayload> {
 /// This type represents the output of `CommandLogic::handle()` - the
 /// events that should be persisted as a result of command execution.
 ///
-/// # Type Parameters
-///
-/// * `T` - The consumer's event payload type (e.g., MoneyDeposited, AccountOpened)
-pub struct NewEvents<T> {
-    _phantom: std::marker::PhantomData<T>,
+/// Per ADR-012, this works with domain event types that implement the Event trait.
+pub struct NewEvents<E: Event> {
+    events: Vec<E>,
 }
 
-impl<T> Default for NewEvents<T> {
-    fn default() -> Self {
-        Self {
-            _phantom: std::marker::PhantomData,
-        }
+impl<E: Event> From<Vec<E>> for NewEvents<E> {
+    fn from(events: Vec<E>) -> Self {
+        Self { events }
     }
 }
 
-/// Event wrapper for consumer event payloads.
-///
-/// Events represent immutable facts that have occurred in the system.
-/// The generic type parameter T is the consumer's event payload type
-/// (e.g., MoneyDeposited, AccountOpened, etc.). EventCore is generic
-/// over the consumer's event types.
-///
-/// The exact structure will be refined in future increments based on
-/// ADR-005 (Event Metadata Structure) to include metadata like:
-/// - EventId (UUIDv7)
-/// - Timestamp
-/// - CorrelationId
-/// - CausationId
-///
-/// For now, this is a minimal struct with just the payload field.
-///
-/// TODO: Add metadata fields per ADR-005.
-#[derive(Clone)]
-pub struct Event<T> {
-    /// The consumer's event payload.
-    pub payload: T,
+impl<E: Event> From<NewEvents<E>> for Vec<E> {
+    fn from(new_events: NewEvents<E>) -> Self {
+        new_events.events
+    }
+}
+
+impl<E: Event> Default for NewEvents<E> {
+    fn default() -> Self {
+        Self { events: Vec::new() }
+    }
 }

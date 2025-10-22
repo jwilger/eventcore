@@ -26,7 +26,6 @@ pub struct ExecutionResponse;
 ///
 /// # Type Parameters
 ///
-/// * `EventPayload` - The consumer's event payload type (e.g., MoneyDeposited, AccountOpened)
 /// * `C` - A command implementing [`CommandLogic`] that defines the business operation
 /// * `S` - An event store implementing [`EventStore`] for persistence
 ///
@@ -38,26 +37,22 @@ pub struct ExecutionResponse;
 /// - Business rule validation fails (via command's `handle()`)
 /// - Event persistence fails
 /// - Optimistic concurrency conflicts occur
-pub async fn execute<EventPayload, C, S>(
-    store: S,
-    command: C,
-) -> Result<ExecutionResponse, CommandError>
+pub async fn execute<C, S>(store: S, command: C) -> Result<ExecutionResponse, CommandError>
 where
-    C: CommandLogic<EventPayload>,
+    C: CommandLogic,
     S: EventStore,
-    EventPayload: Default + Clone + Send + 'static,
 {
     // Call command.handle() with default state
     let state = C::State::default();
-    let _new_events = command.handle(state)?;
+    let new_events = command.handle(state)?;
 
-    // Hard-coded event storage to make test progress
-    let stream_id =
-        StreamId::try_new("account-123".to_string()).expect("hard-coded stream id should be valid");
-    let event = Event {
-        payload: EventPayload::default(),
-    };
-    let writes = StreamWrites::new().append(stream_id, event);
+    // Convert NewEvents to StreamWrites
+    let mut writes = StreamWrites::new();
+    for event in Vec::from(new_events) {
+        writes = writes.append(event);
+    }
+
+    // Store events atomically
     store
         .append_events(writes)
         .await
@@ -73,8 +68,16 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     /// Test-specific event type for unit testing.
-    #[derive(Debug, Clone, Default, PartialEq, Eq)]
-    struct TestEvent;
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestEvent {
+        stream_id: StreamId,
+    }
+
+    impl Event for TestEvent {
+        fn stream_id(&self) -> &StreamId {
+            &self.stream_id
+        }
+    }
 
     /// Mock command that tracks whether handle() was called.
     ///
@@ -84,14 +87,15 @@ mod tests {
         handle_called: Arc<AtomicBool>,
     }
 
-    impl CommandLogic<TestEvent> for MockCommand {
+    impl CommandLogic for MockCommand {
+        type Event = TestEvent;
         type State = ();
 
-        fn apply(&self, state: Self::State, _event: Event<TestEvent>) -> Self::State {
+        fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
             state
         }
 
-        fn handle(&self, _state: Self::State) -> Result<NewEvents<TestEvent>, CommandError> {
+        fn handle(&self, _state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
             self.handle_called.store(true, Ordering::SeqCst);
             Ok(NewEvents::default())
         }

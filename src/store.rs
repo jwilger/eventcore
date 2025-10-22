@@ -30,10 +30,10 @@ pub trait EventStore {
     ///
     /// * `Ok(EventStreamReader<T>)` - Handle for reading events from the stream
     /// * `Err(EventStoreError)` - If stream cannot be read
-    fn read_stream<T: 'static + Clone>(
+    fn read_stream<E: crate::Event>(
         &self,
         stream_id: StreamId,
-    ) -> impl std::future::Future<Output = Result<EventStreamReader<T>, EventStoreError>> + Send;
+    ) -> impl std::future::Future<Output = Result<EventStreamReader<E>, EventStoreError>> + Send;
 
     /// Atomically append events to streams with optimistic concurrency control.
     ///
@@ -105,19 +105,19 @@ impl StreamWrites {
     /// This method consumes self and returns a new StreamWrites with the event added.
     /// Follows immutable builder pattern for type-safe construction.
     ///
+    /// The stream ID is extracted from the event itself via the Event trait's
+    /// stream_id() method. This ensures type safety: events know their own
+    /// aggregate identity and cannot be appended to the wrong stream.
+    ///
     /// # Parameters
     ///
-    /// * `stream_id` - The stream to append the event to
-    /// * `event` - The event to append
+    /// * `event` - The event to append (must implement Event trait)
     ///
     /// # Returns
     ///
     /// New StreamWrites instance with the event added
-    pub fn append<T: 'static + Send>(
-        mut self,
-        stream_id: StreamId,
-        event: crate::Event<T>,
-    ) -> Self {
+    pub fn append<E: crate::Event>(mut self, event: E) -> Self {
+        let stream_id = event.stream_id().clone();
         self.events.push((stream_id, Box::new(event)));
         self
     }
@@ -136,11 +136,11 @@ impl Default for StreamWrites {
 /// Will be refined with actual event iteration and filtering capabilities.
 ///
 /// TODO: Implement with async iterator or vector of events.
-pub struct EventStreamReader<T> {
-    events: Vec<crate::Event<T>>,
+pub struct EventStreamReader<E: crate::Event> {
+    events: Vec<E>,
 }
 
-impl<T> EventStreamReader<T> {
+impl<E: crate::Event> EventStreamReader<E> {
     /// Returns the number of events in the stream.
     ///
     /// TODO: Implement based on actual storage structure.
@@ -155,15 +155,12 @@ impl<T> EventStreamReader<T> {
     ///
     /// # Returns
     ///
-    /// * `Some(Event<T>)` - The first event in the stream
+    /// * `Some(&E)` - Reference to the first event in the stream
     /// * `None` - If the stream is empty
     ///
     /// TODO: Implement based on actual storage structure.
-    pub fn first(&self) -> Option<crate::Event<T>>
-    where
-        T: Clone,
-    {
-        self.events.first().cloned()
+    pub fn first(&self) -> Option<&E> {
+        self.events.first()
     }
 }
 
@@ -225,17 +222,17 @@ impl Default for InMemoryEventStore {
 }
 
 impl EventStore for InMemoryEventStore {
-    async fn read_stream<T: 'static + Clone>(
+    async fn read_stream<E: crate::Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<EventStreamReader<T>, EventStoreError> {
+    ) -> Result<EventStreamReader<E>, EventStoreError> {
         let streams = self.streams.lock().unwrap();
         let events = streams
             .get(&stream_id)
             .map(|boxed_events| {
                 boxed_events
                     .iter()
-                    .filter_map(|boxed| boxed.downcast_ref::<crate::Event<T>>())
+                    .filter_map(|boxed| boxed.downcast_ref::<E>())
                     .cloned()
                     .collect()
             })
@@ -267,7 +264,7 @@ impl EventStore for InMemoryEventStore {
 /// This is idiomatic Rust: traits that only need `&self` methods should work
 /// with references to avoid forcing consumers to clone or move stores.
 impl<T: EventStore + Sync> EventStore for &T {
-    async fn read_stream<E: 'static + Clone>(
+    async fn read_stream<E: crate::Event>(
         &self,
         stream_id: StreamId,
     ) -> Result<EventStreamReader<E>, EventStoreError> {
@@ -285,12 +282,18 @@ impl<T: EventStore + Sync> EventStore for &T {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Event;
 
-    /// Test-specific event payload type for unit testing storage operations.
+    /// Test-specific domain event type for unit testing storage operations.
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct TestEvent {
+        stream_id: StreamId,
         data: String,
+    }
+
+    impl crate::Event for TestEvent {
+        fn stream_id(&self) -> &StreamId {
+            &self.stream_id
+        }
     }
 
     /// Unit test: Verify InMemoryEventStore can append and retrieve a single event
@@ -311,15 +314,14 @@ mod tests {
         // And: A stream ID
         let stream_id = StreamId::try_new("test-stream-123".to_string()).expect("valid stream id");
 
-        // And: An event to store
-        let event = Event {
-            payload: TestEvent {
-                data: "test event data".to_string(),
-            },
+        // And: A domain event to store
+        let event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "test event data".to_string(),
         };
 
         // And: A collection of writes containing the event
-        let writes = StreamWrites::new().append(stream_id.clone(), event.clone());
+        let writes = StreamWrites::new().append(event.clone());
 
         // When: We append the event to the store
         store
@@ -338,7 +340,7 @@ mod tests {
 
         // Then: The event data matches what we stored
         assert_eq!(
-            first_event.payload.data, "test event data",
+            first_event.data, "test event data",
             "Event data should match what was stored"
         );
     }

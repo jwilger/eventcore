@@ -180,26 +180,3 @@ Current benchmarks (PostgreSQL backend):
 - P95 latency: ~14ms
 
 Optimized for correctness and multi-stream atomicity over raw throughput.
-
-## Development Workflow
-
-EventCore follows an infrastructure/library development workflow adapted for building reusable components:
-
-**Phases:**
-
-1. **Technical Requirements Analysis** - Define WHAT the library must provide and WHY (focus on developer consumer needs)
-2. ~~Event Modeling~~ - **Skipped** (application-level concern, not applicable to libraries)
-3. **Architectural Decision Records (ADRs)** - Document key architectural decisions with rationale
-4. **Architecture Synthesis** - Synthesize ADRs into cohesive system design
-5. ~~Design System~~ - **Skipped** (UI/UX concern, not applicable to libraries)
-6. **Technical Increment Planning** - Plan incremental development of library features (not user stories)
-7. **Increment-by-Increment Implementation** - Build library functionality using TDD, one small usable piece at a time
-8. **Acceptance Validation** - Verify requirements met and documentation complete
-
-**Key Differences from Application Development:**
-
-- No event modeling (we're building the event sourcing infrastructure, not modeling business events)
-- No UX/design system phases (library has API surface, not user interface)
-- Planning focuses on incremental library features, not user stories
-- Each increment should provide usable functionality for library consumers (developers)
-- Acceptance criteria focus on API ergonomics, type safety, and integration testing
