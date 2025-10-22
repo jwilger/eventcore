@@ -1,8 +1,8 @@
 # EventCore Architecture
 
-**Document Version:** 1.1
-**Date:** 2025-10-17
-**Phase:** 4 - Architecture Synthesis (Updated for ADR-011)
+**Document Version:** 1.2
+**Date:** 2025-10-21
+**Phase:** 4 - Architecture Synthesis (Updated for ADR-012)
 
 ## Overview
 
@@ -76,14 +76,16 @@ graph TB
     App[Application Code]
     ExecFn[execute() function]
     Cmd[Command System]
+    Events[Event System]
     Store[Event Store Abstraction]
     Backend[Storage Backend]
 
     App -->|"execute(command, store)"| ExecFn
     ExecFn -->|"extract streams"| Cmd
-    ExecFn -->|"read/append events"| Store
+    ExecFn -->|"read/append domain events"| Events
+    Events -->|"via trait bounds"| Store
     Store -->|"ACID transactions"| Backend
-    Cmd -->|"apply/handle"| App
+    Cmd -->|"apply/handle domain events"| App
 
     subgraph "Type System"
         Types[Validated Domain Types]
@@ -94,10 +96,12 @@ graph TB
     ExecFn -.->|"uses"| Types
     ExecFn -.->|"produces"| Errors
     Store -.->|"preserves"| Meta
+    Events -.->|"domain types implement"| Types
 
     style ExecFn fill:#e1f5ff
     style Store fill:#e1ffe1
     style Cmd fill:#ffe1e1
+    style Events fill:#fff3cd
 ```
 
 ### 1. Event Store Abstraction (ADR-002)
@@ -123,7 +127,95 @@ graph TB
 
 **Why This Design:** Pushes atomicity complexity into battle-tested storage layers where it belongs, keeping library code simple while enabling backend flexibility.
 
-### 2. Command System (ADR-006)
+### 2. Event System (ADR-012)
+
+**Purpose:** Domain-first event representation where domain types ARE events, not wrapped in infrastructure.
+
+**Event Trait Design:**
+
+EventCore uses a trait-based approach where domain types implement the Event trait directly:
+
+```rust
+trait Event: Clone + Send + 'static {
+    fn stream_id(&self) -> &StreamId;
+}
+```
+
+**Domain Types as Events:**
+
+Instead of wrapping domain types in infrastructure containers, domain types ARE events:
+
+```rust
+// Domain event type
+struct MoneyDeposited {
+    account_id: StreamId,  // Aggregate identity (domain concept)
+    amount: u64,
+}
+
+// Implement Event trait
+impl Event for MoneyDeposited {
+    fn stream_id(&self) -> &StreamId {
+        &self.account_id
+    }
+}
+```
+
+**Why Domain-First Design:**
+
+- **Domain in Foreground:** Developers work directly with domain types (MoneyDeposited, AccountCredited), not infrastructure wrappers (Event<T>)
+- **StreamId as Domain Identity:** Aggregate identity (StreamId) lives naturally in domain type where it belongs per DDD principles
+- **Clearer Ubiquitous Language:** Code reads as business language without infrastructure noise
+- **Better API Ergonomics:** `append(money_deposited)` instead of `append(Event { payload: money_deposited })`
+
+**Trait Bounds Rationale:**
+
+- **Clone:** Required for state reconstruction - events consumed multiple times during `apply()`
+- **Send:** Required for async storage backends and cross-thread event handling
+- **'static:** Required for type erasure in storage and async trait boundaries - events must own their data
+
+**Trade-off Accepted:** Events cannot contain borrowed references, must own all data. This aligns with event sourcing best practice: events are immutable permanent records and should be self-contained.
+
+**Integration with Command System:**
+
+Commands work directly with domain event types through generic trait bounds:
+
+```rust
+impl CommandLogic for TransferMoney {
+    type Event = AccountEvent;  // Domain event type
+
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        // Apply domain event directly
+    }
+
+    fn handle(&self, state: Self::State, ctx: Context) -> Result<()> {
+        emit!(ctx, MoneyDeposited {
+            account_id: self.from_account,
+            amount: self.amount
+        });
+        Ok(())
+    }
+}
+```
+
+**Storage Integration:**
+
+Event stores work with trait bounds, not concrete types:
+
+```rust
+// Generic method accepting any type implementing Event
+fn append<E: Event>(&self, event: E) -> Result<()> {
+    let stream_id = event.stream_id();  // Extract via trait method
+    // Store using type erasure...
+}
+```
+
+**Metadata Handling:**
+
+Event metadata (timestamps, correlation IDs, etc.) remains an infrastructure concern handled separately from domain types. See ADR-005 for metadata structure. The Event trait provides domain identity (stream_id); infrastructure manages audit trail, causation, and temporal ordering.
+
+**Why This Design:** Aligns with Domain-Driven Design by making domain types first-class citizens. Infrastructure (Event trait) provides capabilities without obscuring the domain model. Maintains type safety through generic trait bounds while eliminating wrapper ceremony.
+
+### 3. Command System (ADR-006)
 
 **Purpose:** Declarative command definition with compile-time stream access control.
 
@@ -144,9 +236,10 @@ graph TB
 
 **CommandLogic Trait (Developer-Implemented):**
 
-- `apply(state, event)`: Reconstruct state from event history
-- `handle(state, context)`: Validate business rules and produce events
-- Domain-specific logic only
+- `type Event`: Associated type specifying domain event type (must implement Event trait)
+- `apply(state, &event)`: Reconstruct state from domain event history
+- `handle(state, context)`: Validate business rules and emit domain events
+- Domain-specific logic only - works directly with domain event types
 
 **StreamResolver Trait (Optional, ADR-009):**
 
@@ -241,13 +334,20 @@ sequenceDiagram
 
 **Why This Design:** Centralizes infrastructure concerns (retry, orchestration) in the execute function, keeping command implementations focused on business logic. Automatic retry provides correctness guarantees without developer intervention. Free function API maximizes composability and minimizes learning curve.
 
-### 4. Type System (ADR-003)
+### 4. Type System (ADR-003, ADR-012)
 
 **Purpose:** Enforce domain constraints and prevent illegal states at compile time.
 
 **Patterns:**
 
-**Validated Domain Types:**
+**Domain Event Types (ADR-012):**
+
+- Domain types implement `Event` trait directly - no infrastructure wrappers
+- StreamId is part of domain type (aggregate identity)
+- Trait bounds (`Clone + Send + 'static`) ensure storage compatibility
+- Type system enforces domain types ARE events, not wrapped in Event<T>
+
+**Validated Domain Types (ADR-003):**
 
 - `StreamId`, `EventId`, `CorrelationId`, `CausationId` - all validated newtypes using `nutype`
 - Construction returns Result with descriptive validation errors
@@ -265,7 +365,7 @@ sequenceDiagram
 - No unwrap/expect in library code
 - Error paths explicit in signatures
 
-**Why This Design:** Leverages Rust's type system to catch entire classes of errors at compile time, reducing runtime failures and improving reliability.
+**Why This Design:** Leverages Rust's type system to catch entire classes of errors at compile time. Domain-first event design (ADR-012) keeps business types in foreground, infrastructure in background, reducing runtime failures and improving developer clarity.
 
 ### 5. Error Handling (ADR-004)
 
@@ -363,11 +463,15 @@ struct TransferMoney {
 
 impl CommandLogic for TransferMoney {
     type State = (Account, Account);
-    type Event = AccountEvent;
+    type Event = AccountEvent;  // Domain event type implementing Event trait
 
     fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
-        // Reconstruct state from events
-        // (Details omitted - focus on architecture)
+        // Reconstruct state from domain events
+        match event {
+            AccountEvent::Debited { amount: amount } => state.0.balance -= amount,
+            AccountEvent::Credited{ amount: amount } => state.1.balance += amount,
+            // ... other events
+        }
         state
     }
 
@@ -377,9 +481,15 @@ impl CommandLogic for TransferMoney {
         // Business logic with validation
         require!(from.balance >= self.amount, "Insufficient funds");
 
-        // Type-safe event emission to declared streams
-        emit!(ctx, self.from_account, AccountDebited { amount: self.amount });
-        emit!(ctx, self.to_account, AccountCredited { amount: self.amount });
+        // Emit domain events directly (infrastructure extracts stream_id via Event trait)
+        emit!(ctx, AccountEvent::Debited {
+            account_id: self.from_account,
+            amount: self.amount
+        });
+        emit!(ctx, AccountEvent::Credited {
+            account_id: self.to_account,
+            amount: self.amount
+        });
 
         Ok(())
     }
@@ -922,6 +1032,7 @@ This architecture synthesizes the following accepted ADRs:
 - **ADR-009:** Stream Resolver Design for Dynamic Discovery
 - **ADR-010:** Free Function API Design Philosophy
 - **ADR-011:** In-Memory Event Store Crate Location
+- **ADR-012:** Event Trait for Domain-First Design
 
 Refer to individual ADRs for detailed rationale, alternatives considered, and specific implementation guidance.
 
