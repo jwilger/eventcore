@@ -1,5 +1,5 @@
 //! Command Execution Optimization Example
-//! 
+//!
 //! This example demonstrates the use of EventCore's command execution optimization layer
 //! to improve performance through intelligent caching and configuration validation.
 
@@ -40,7 +40,7 @@ struct AccountState {
 }
 
 /// Command to deposit money into an account.
-/// 
+///
 /// This command is idempotent - depositing the same amount multiple times
 /// will only result in one deposit, making it perfect for demonstrating
 /// the optimization layer's caching capabilities.
@@ -106,10 +106,10 @@ impl CommandLogic for DepositMoney {
         // For this example, we'll use the idempotency key to check if this
         // exact deposit has already been processed (in a real system, you'd
         // store this information in the event or use a proper idempotency store)
-        
+
         // For simplicity, we'll always allow the deposit in this example
         // In a real system, you would check against previously processed idempotency keys
-        
+
         Ok(vec![StreamWrite::new(
             &read_streams,
             self.account_id.clone(),
@@ -191,10 +191,10 @@ async fn run_performance_comparison() -> Result<(), Box<dyn std::error::Error>> 
 
     // Create event store
     let event_store = InMemoryEventStore::new();
-    
+
     // Create standard executor
     let standard_executor = CommandExecutor::new(event_store.clone());
-    
+
     // Create optimized executor with high-performance configuration
     let optimization_config = ValidatedOptimizationConfig::high_performance()?;
     let optimized_executor = OptimizationLayer::new(
@@ -219,7 +219,7 @@ async fn run_performance_comparison() -> Result<(), Box<dyn std::error::Error>> 
         owner: "Alice".to_string(),
         initial_balance: 1000,
     };
-    
+
     let deposit_command = DepositMoney {
         account_id: account_id.clone(),
         amount: 100,
@@ -235,21 +235,21 @@ async fn run_performance_comparison() -> Result<(), Box<dyn std::error::Error>> 
     println!("\n--- Standard Executor Performance ---");
     let start = Instant::now();
     let mut standard_results = Vec::new();
-    
+
     for i in 0..10 {
         let deposit = DepositMoney {
             account_id: account_id.clone(),
             amount: 100 + i, // Different amounts to avoid exact caching
             idempotency_key: format!("deposit-standard-{:03}", i),
         };
-        
+
         let result = standard_executor.execute(deposit, legacy_options.clone()).await;
         standard_results.push(result.is_ok());
     }
-    
+
     let standard_duration = start.elapsed();
     let standard_success_count = standard_results.iter().filter(|&&success| success).count();
-    
+
     println!("Executed {} commands", standard_results.len());
     println!("Success rate: {}/{}", standard_success_count, standard_results.len());
     println!("Total time: {:?}", standard_duration);
@@ -259,21 +259,21 @@ async fn run_performance_comparison() -> Result<(), Box<dyn std::error::Error>> 
     println!("\n--- Optimized Executor Performance ---");
     let start = Instant::now();
     let mut optimized_results = Vec::new();
-    
+
     for i in 0..10 {
         let deposit = DepositMoney {
             account_id: account_id.clone(),
             amount: 200 + i, // Different amounts
             idempotency_key: format!("deposit-optimized-{:03}", i),
         };
-        
+
         let result = optimized_executor.execute_optimized(deposit, legacy_options.clone()).await;
         optimized_results.push(result.is_ok());
     }
-    
+
     let optimized_duration = start.elapsed();
     let optimized_success_count = optimized_results.iter().filter(|&&success| success).count();
-    
+
     println!("Executed {} commands", optimized_results.len());
     println!("Success rate: {}/{}", optimized_success_count, optimized_results.len());
     println!("Total time: {:?}", optimized_duration);
@@ -289,15 +289,15 @@ async fn run_performance_comparison() -> Result<(), Box<dyn std::error::Error>> 
 
     println!("Executing identical command 5 times with optimization...");
     let start = Instant::now();
-    
+
     for i in 0..5 {
         let result = optimized_executor.execute_optimized(
-            identical_deposit.clone(), 
+            identical_deposit.clone(),
             legacy_options.clone()
         ).await;
         println!("Execution {}: {:?}", i + 1, result.is_ok());
     }
-    
+
     let idempotent_duration = start.elapsed();
     println!("Total time for 5 identical executions: {:?}", idempotent_duration);
     println!("Average time per execution: {:?}", idempotent_duration / 5);
@@ -305,19 +305,19 @@ async fn run_performance_comparison() -> Result<(), Box<dyn std::error::Error>> 
     // Show cache statistics
     println!("\n--- Cache Statistics ---");
     let cache_stats = optimized_executor.get_cache_stats();
-    println!("Command cache: {}/{} entries ({:.1}% utilized)", 
-             cache_stats.command_cache_size, 
+    println!("Command cache: {}/{} entries ({:.1}% utilized)",
+             cache_stats.command_cache_size,
              cache_stats.command_cache_max,
              cache_stats.command_cache_utilization());
-    println!("Stream version cache: {}/{} entries ({:.1}% utilized)", 
-             cache_stats.stream_version_cache_size, 
+    println!("Stream version cache: {}/{} entries ({:.1}% utilized)",
+             cache_stats.stream_version_cache_size,
              cache_stats.stream_version_cache_max,
              cache_stats.stream_version_cache_utilization());
 
     // Performance comparison
     println!("\n--- Performance Summary ---");
     if optimized_duration < standard_duration {
-        let improvement = ((standard_duration.as_nanos() as f64 - optimized_duration.as_nanos() as f64) 
+        let improvement = ((standard_duration.as_nanos() as f64 - optimized_duration.as_nanos() as f64)
                           / standard_duration.as_nanos() as f64) * 100.0;
         println!("✅ Optimized executor was {:.1}% faster", improvement);
     } else {
@@ -325,26 +325,26 @@ async fn run_performance_comparison() -> Result<(), Box<dyn std::error::Error>> 
     }
 
     println!("\n--- Configuration Examples ---");
-    
+
     // Show different configuration presets
     let memory_efficient = ValidatedOptimizationConfig::memory_efficient()?;
-    println!("Memory-efficient config: {} max commands, {} max stream versions", 
+    println!("Memory-efficient config: {} max commands, {} max stream versions",
              memory_efficient.max_cached_commands.into(),
              memory_efficient.max_cached_stream_versions.into());
-    
+
     let high_performance = ValidatedOptimizationConfig::high_performance()?;
-    println!("High-performance config: {} max commands, {} max stream versions", 
+    println!("High-performance config: {} max commands, {} max stream versions",
              high_performance.max_cached_commands.into(),
              high_performance.max_cached_stream_versions.into());
 
     // Show retry configuration examples
     let conservative_retry = ValidatedRetryConfig::conservative()?;
     let aggressive_retry = ValidatedRetryConfig::aggressive()?;
-    
-    println!("Conservative retry: {} attempts, {}ms base delay", 
+
+    println!("Conservative retry: {} attempts, {}ms base delay",
              conservative_retry.max_attempts.into(),
              conservative_retry.base_delay.into());
-    println!("Aggressive retry: {} attempts, {}ms base delay", 
+    println!("Aggressive retry: {} attempts, {}ms base delay",
              aggressive_retry.max_attempts.into(),
              aggressive_retry.base_delay.into());
 
@@ -354,9 +354,9 @@ async fn run_performance_comparison() -> Result<(), Box<dyn std::error::Error>> 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
-    
+
     run_performance_comparison().await?;
-    
+
     println!("\n=== Demo Complete ===");
     println!("The optimization layer provides:");
     println!("✅ Type-safe configuration validation");
@@ -364,6 +364,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ Stream version caching");
     println!("✅ Configurable performance profiles");
     println!("✅ Zero-configuration defaults");
-    
+
     Ok(())
 }

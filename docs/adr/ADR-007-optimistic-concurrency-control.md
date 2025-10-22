@@ -30,6 +30,7 @@ EventCore will implement optimistic concurrency control using stream version num
 **1. Version-Based Conflict Detection**
 
 Every stream maintains a monotonically increasing version number:
+
 - Version starts at 0 (empty stream)
 - Each event appended increments version by 1 (version 1, 2, 3, ...)
 - Stream version stored in event metadata per ADR-005
@@ -40,18 +41,21 @@ Every stream maintains a monotonically increasing version number:
 Commands follow a three-phase execution:
 
 **Phase 1 - Read with Version Capture:**
+
 - Command reads events from declared streams
 - For each stream, capture current version number
 - Version represents state upon which command logic will operate
 - Empty streams have version 0
 
 **Phase 2 - Compute:**
+
 - Reconstruct state by applying events (CommandLogic::apply)
 - Execute business logic and generate events (CommandLogic::handle)
 - Events prepared but not yet committed
 - No locks held during this phase
 
 **Phase 3 - Write with Version Verification:**
+
 - Attempt atomic append with expected version numbers
 - Backend verifies EVERY stream version matches expected version
 - If any version mismatch: ConcurrencyError (retriable)
@@ -61,6 +65,7 @@ Commands follow a three-phase execution:
 **3. Multi-Stream Version Checking**
 
 For commands writing to multiple streams:
+
 - Expected version captured for EACH stream during read phase
 - Write operation includes expected versions for ALL streams
 - Backend verifies ALL version expectations atomically
@@ -70,6 +75,7 @@ For commands writing to multiple streams:
 **4. ConcurrencyError Classification**
 
 Version conflicts produce ConcurrencyError per ADR-004:
+
 - Marked as Retriable (automatic retry appropriate)
 - Includes diagnostic context: which streams conflicted, expected vs actual versions
 - Enables command executor to implement automatic retry with backoff
@@ -78,6 +84,7 @@ Version conflicts produce ConcurrencyError per ADR-004:
 **5. Atomic Version Checking**
 
 Version verification happens within storage backend transaction:
+
 - PostgreSQL: CHECK constraints and SELECT FOR UPDATE in transaction
 - In-memory: Mutex-protected version comparison and increment
 - Version check and event append form single atomic operation
@@ -87,6 +94,7 @@ Version verification happens within storage backend transaction:
 **6. Monotonic Version Guarantees**
 
 Stream versions provide ordering invariants:
+
 - Versions always increase (never decrease or skip)
 - Version N implies events 1 through N exist
 - Empty stream is version 0
@@ -99,6 +107,7 @@ Stream versions provide ordering invariants:
 **Why Optimistic Over Pessimistic Locking:**
 
 Pessimistic locking (acquiring locks before reading) would:
+
 - Serialize all access to popular streams (e.g., account balances)
 - Multi-stream commands would hold multiple locks simultaneously (deadlock risk)
 - Long-running computations block other commands
@@ -106,6 +115,7 @@ Pessimistic locking (acquiring locks before reading) would:
 - Poor user experience (waiting for locks instead of fast failure and retry)
 
 Optimistic concurrency:
+
 - Allows concurrent reads without blocking
 - Only serializes at commit time (minimal contention window)
 - Failed attempts retry with fresh state
@@ -115,6 +125,7 @@ Optimistic concurrency:
 **Why Version Numbers Over Timestamps:**
 
 Timestamps are unsuitable for concurrency control:
+
 - Clock skew in distributed systems causes ambiguity
 - Microsecond precision insufficient under high concurrency
 - No deterministic ordering guarantee
@@ -122,6 +133,7 @@ Timestamps are unsuitable for concurrency control:
 - Comparison semantics unclear (equal timestamps?)
 
 Version numbers provide:
+
 - Deterministic, unambiguous ordering
 - Explicit "expected next version" semantics
 - No clock synchronization required
@@ -131,12 +143,14 @@ Version numbers provide:
 **Why Multi-Stream Version Checking:**
 
 Single-stream version checking with multi-stream writes would allow:
+
 - Command A reads streams X and Y at versions 5 and 10
 - Command B writes to stream Y, advancing to version 11
 - Command A writes to both, checking only X (version 5 matches)
 - Command A's write to Y based on stale state (version 10) but not detected
 
 Multi-stream version checking ensures:
+
 - All streams validated against captured state
 - Impossible to commit based on partially stale state
 - Maintains ADR-001's atomicity guarantees
@@ -145,11 +159,13 @@ Multi-stream version checking ensures:
 **Why Atomic Version Verification:**
 
 Separating version check from event write creates race condition:
+
 1. Command checks versions (all match)
 2. Another command commits between check and write
 3. Command writes based on stale state
 
 Atomic verification within transaction:
+
 - Version check and event append in single atomic operation
 - No race window between check and commit
 - Leverages database ACID guarantees per ADR-001
@@ -158,12 +174,14 @@ Atomic verification within transaction:
 **Why ConcurrencyError as Retriable:**
 
 Version conflicts are transient failures:
+
 - Conflict indicates another command committed first
 - Re-reading streams and re-executing produces valid result
 - Business logic unchanged (inputs still valid)
 - Automatic retry transparent to developers
 
 Marking as Retriable per ADR-004:
+
 - Enables automatic retry logic in command executor
 - Distinguishes from permanent failures (validation, business rules)
 - Provides clear semantics for error handling
@@ -177,6 +195,7 @@ Marking as Retriable per ADR-004:
 - **Eventual Success Not Guaranteed**: Under extreme contention, commands may exceed retry limit
 
 These trade-offs are acceptable because:
+
 - Conflicts rare in well-designed systems (proper stream partitioning)
 - Retry latency acceptable for business operations (vs. blocking on locks)
 - Alternative (pessimistic locking) has worse throughput characteristics

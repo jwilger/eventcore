@@ -27,6 +27,7 @@ This part shows how to expose your EventCore application through HTTP APIs. We'l
 ## Framework Examples
 
 This part includes examples for:
+
 - **Axum** - Modern, ergonomic web framework
 - **Actix Web** - High-performance actor-based framework
 - **Rocket** - Type-safe, developer-friendly framework

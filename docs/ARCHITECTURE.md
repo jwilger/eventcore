@@ -1,8 +1,8 @@
 # EventCore Architecture
 
-**Document Version:** 1.0
-**Date:** 2025-10-13
-**Phase:** 4 - Architecture Synthesis
+**Document Version:** 1.2
+**Date:** 2025-10-21
+**Phase:** 4 - Architecture Synthesis (Updated for ADR-012)
 
 ## Overview
 
@@ -14,7 +14,7 @@ EventCore is a type-safe event sourcing library for Rust that implements **multi
 
 ## Architectural Principles
 
-EventCore's architecture is guided by four foundational principles that inform all design decisions:
+EventCore's architecture is guided by five foundational principles that inform all design decisions:
 
 ### 1. Type-Driven Development
 
@@ -45,7 +45,17 @@ EventCore is library infrastructure, not business framework:
 - Async runtime agnostic (Tokio, async-std)
 - Minimal opinionated dependencies
 
-### 4. Developer Ergonomics
+### 4. Free Function API Design
+
+Public API consists primarily of free functions, not methods on structs (ADR-010):
+
+- **Minimal API Surface**: Types remain private until compiler requires public exposure
+- **Composability**: Free functions enable function composition, partial application, easier testing
+- **Explicit Dependencies**: All inputs visible in signatures - no hidden state
+- **Compiler-Driven Evolution**: Types made public only when compiler or tests force it
+- **Clear Data Flow**: Parameter passing makes ownership and data dependencies explicit
+
+### 5. Developer Ergonomics
 
 Minimize boilerplate while maximizing type safety (ADR-006):
 
@@ -64,16 +74,18 @@ EventCore's architecture comprises six major components that work together to pr
 ```mermaid
 graph TB
     App[Application Code]
-    Executor[Command Executor]
+    ExecFn[execute() function]
     Cmd[Command System]
+    Events[Event System]
     Store[Event Store Abstraction]
     Backend[Storage Backend]
 
-    App -->|"execute(command)"| Executor
-    Executor -->|"extract streams"| Cmd
-    Executor -->|"read/append events"| Store
+    App -->|"execute(command, store)"| ExecFn
+    ExecFn -->|"extract streams"| Cmd
+    ExecFn -->|"read/append domain events"| Events
+    Events -->|"via trait bounds"| Store
     Store -->|"ACID transactions"| Backend
-    Cmd -->|"apply/handle"| App
+    Cmd -->|"apply/handle domain events"| App
 
     subgraph "Type System"
         Types[Validated Domain Types]
@@ -81,13 +93,15 @@ graph TB
         Meta[Event Metadata]
     end
 
-    Executor -.->|"uses"| Types
-    Executor -.->|"produces"| Errors
+    ExecFn -.->|"uses"| Types
+    ExecFn -.->|"produces"| Errors
     Store -.->|"preserves"| Meta
+    Events -.->|"domain types implement"| Types
 
-    style Executor fill:#e1f5ff
+    style ExecFn fill:#e1f5ff
     style Store fill:#e1ffe1
     style Cmd fill:#ffe1e1
+    style Events fill:#fff3cd
 ```
 
 ### 1. Event Store Abstraction (ADR-002)
@@ -95,102 +109,222 @@ graph TB
 **Purpose:** Pluggable storage abstraction supporting atomic multi-stream operations.
 
 **Core Operations:**
+
 - **Read**: Query events from one or more streams
 - **Atomic Append**: Write events to multiple streams atomically with version checking
 
 **Key Characteristics:**
+
 - Atomicity mechanisms internal to backend implementations (PostgreSQL ACID, in-memory locks)
 - Version-based optimistic concurrency control (ADR-007)
 - Metadata preservation for audit and tracing (ADR-005)
 - Separate EventSubscription trait for projection building
 
 **Storage Backend Examples:**
-- `eventcore-postgres`: Production backend using PostgreSQL ACID transactions
-- `eventcore-memory`: In-memory backend for testing with optional chaos injection
+
+- `eventcore-postgres`: Production backend using PostgreSQL ACID transactions (separate crate)
+- `InMemoryEventStore`: In-memory backend for testing with optional chaos injection (included in main `eventcore` crate)
 
 **Why This Design:** Pushes atomicity complexity into battle-tested storage layers where it belongs, keeping library code simple while enabling backend flexibility.
 
-### 2. Command System (ADR-006)
+### 2. Event System (ADR-012)
+
+**Purpose:** Domain-first event representation where domain types ARE events, not wrapped in infrastructure.
+
+**Event Trait Design:**
+
+EventCore uses a trait-based approach where domain types implement the Event trait directly:
+
+```rust
+trait Event: Clone + Send + 'static {
+    fn stream_id(&self) -> &StreamId;
+}
+```
+
+**Domain Types as Events:**
+
+Instead of wrapping domain types in infrastructure containers, domain types ARE events:
+
+```rust
+// Domain event type
+struct MoneyDeposited {
+    account_id: StreamId,  // Aggregate identity (domain concept)
+    amount: u64,
+}
+
+// Implement Event trait
+impl Event for MoneyDeposited {
+    fn stream_id(&self) -> &StreamId {
+        &self.account_id
+    }
+}
+```
+
+**Why Domain-First Design:**
+
+- **Domain in Foreground:** Developers work directly with domain types (MoneyDeposited, AccountCredited), not infrastructure wrappers (Event<T>)
+- **StreamId as Domain Identity:** Aggregate identity (StreamId) lives naturally in domain type where it belongs per DDD principles
+- **Clearer Ubiquitous Language:** Code reads as business language without infrastructure noise
+- **Better API Ergonomics:** `append(money_deposited)` instead of `append(Event { payload: money_deposited })`
+
+**Trait Bounds Rationale:**
+
+- **Clone:** Required for state reconstruction - events consumed multiple times during `apply()`
+- **Send:** Required for async storage backends and cross-thread event handling
+- **'static:** Required for type erasure in storage and async trait boundaries - events must own their data
+
+**Trade-off Accepted:** Events cannot contain borrowed references, must own all data. This aligns with event sourcing best practice: events are immutable permanent records and should be self-contained.
+
+**Integration with Command System:**
+
+Commands work directly with domain event types through generic trait bounds:
+
+```rust
+impl CommandLogic for TransferMoney {
+    type Event = AccountEvent;  // Domain event type
+
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        // Apply domain event directly
+    }
+
+    fn handle(&self, state: Self::State, ctx: Context) -> Result<()> {
+        emit!(ctx, MoneyDeposited {
+            account_id: self.from_account,
+            amount: self.amount
+        });
+        Ok(())
+    }
+}
+```
+
+**Storage Integration:**
+
+Event stores work with trait bounds, not concrete types:
+
+```rust
+// Generic method accepting any type implementing Event
+fn append<E: Event>(&self, event: E) -> Result<()> {
+    let stream_id = event.stream_id();  // Extract via trait method
+    // Store using type erasure...
+}
+```
+
+**Metadata Handling:**
+
+Event metadata (timestamps, correlation IDs, etc.) remains an infrastructure concern handled separately from domain types. See ADR-005 for metadata structure. The Event trait provides domain identity (stream_id); infrastructure manages audit trail, causation, and temporal ordering.
+
+**Why This Design:** Aligns with Domain-Driven Design by making domain types first-class citizens. Infrastructure (Event trait) provides capabilities without obscuring the domain model. Maintains type safety through generic trait bounds while eliminating wrapper ceremony.
+
+### 3. Command System (ADR-006)
 
 **Purpose:** Declarative command definition with compile-time stream access control.
 
 **Components:**
 
 **Command Macro (`#[derive(Command)]`):**
+
 - Generates infrastructure boilerplate from `#[stream]` field attributes
 - Creates phantom types for compile-time stream tracking
 - Implements CommandStreams trait (infrastructure)
 - Enables `emit!` macro for type-safe event emission
 
 **CommandStreams Trait (Macro-Generated):**
+
 - Extracts stream IDs from command fields
 - Manages phantom types for compile-time access control
 - Pure infrastructure - no business logic
 
 **CommandLogic Trait (Developer-Implemented):**
-- `apply(state, event)`: Reconstruct state from event history
-- `handle(state, context)`: Validate business rules and produce events
-- Domain-specific logic only
+
+- `type Event`: Associated type specifying domain event type (must implement Event trait)
+- `apply(state, &event)`: Reconstruct state from domain event history
+- `handle(state, context)`: Validate business rules and emit domain events
+- Domain-specific logic only - works directly with domain event types
 
 **StreamResolver Trait (Optional, ADR-009):**
+
 - `resolve_additional_streams(state)`: Discover streams at runtime based on state
 - Enables state-dependent stream requirements (payment processing, order fulfillment)
 - Integrates with static declarations for hybrid static/dynamic stream sets
 
 **Why This Design:** Clear separation between infrastructure (generated) and business logic (hand-written) minimizes boilerplate while maintaining compile-time safety. Optional dynamic discovery provides flexibility without compromising common-case simplicity.
 
-### 3. Command Executor (ADR-008)
+### 3. Command Execution (ADR-008, ADR-010)
 
-**Purpose:** Orchestrates command execution with automatic retry on version conflicts.
+**Purpose:** Orchestrate command execution with automatic retry on version conflicts via free function API.
+
+**API Design (ADR-010):**
+
+EventCore provides command execution through a free function, not a struct method:
+
+```rust
+// Public API: free function with explicit dependencies
+pub async fn execute<C, S>(
+    command: C,
+    store: &S,
+) -> Result<ExecutionResponse, CommandError>
+where
+    C: CommandLogic + CommandStreams,
+    S: EventStore,
+```
+
+**Why Free Functions:**
+
+- **Explicit Dependencies**: Store passed as parameter, making data flow clear
+- **Composability**: Function can be wrapped, partially applied, composed with combinators
+- **Minimal API Surface**: No CommandExecutor struct to learn or manage
+- **Testability**: Mock dependencies passed explicitly, no struct lifecycle concerns
+- **Compiler-Driven Types**: Supporting types made public only when compiler requires it
 
 **Execution Flow:**
 
 ```mermaid
 sequenceDiagram
     participant App as Application
-    participant Exec as Command Executor
+    participant ExecFn as execute() function
     participant Cmd as Command (Logic)
     participant Store as Event Store
 
-    App->>Exec: execute(command)
+    App->>ExecFn: execute(command, store)
 
-    Note over Exec: Phase 1: Stream Resolution
-    Exec->>Cmd: extract static streams
+    Note over ExecFn: Phase 1: Stream Resolution
+    ExecFn->>Cmd: extract static streams
     opt Dynamic Discovery
-        Exec->>Store: read static streams
-        Exec->>Cmd: apply(events) → state
-        Exec->>Cmd: resolve_additional_streams(state)
+        ExecFn->>Store: read static streams
+        ExecFn->>Cmd: apply(events) → state
+        ExecFn->>Cmd: resolve_additional_streams(state)
     end
 
-    Note over Exec: Phase 2: Read & Capture Versions
-    Exec->>Store: read(all_streams)
-    Store-->>Exec: events + versions
+    Note over ExecFn: Phase 2: Read & Capture Versions
+    ExecFn->>Store: read(all_streams)
+    Store-->>ExecFn: events + versions
 
-    Note over Exec: Phase 3: State Reconstruction
-    Exec->>Cmd: apply(events) for all streams
-    Cmd-->>Exec: reconstructed state
+    Note over ExecFn: Phase 3: State Reconstruction
+    ExecFn->>Cmd: apply(events) for all streams
+    Cmd-->>ExecFn: reconstructed state
 
-    Note over Exec: Phase 4: Business Logic
-    Exec->>Cmd: handle(state, context)
-    Cmd-->>Exec: events to emit
+    Note over ExecFn: Phase 4: Business Logic
+    ExecFn->>Cmd: handle(state, context)
+    Cmd-->>ExecFn: events to emit
 
-    Note over Exec: Phase 5: Atomic Write
-    Exec->>Store: append(events, expected_versions)
+    Note over ExecFn: Phase 5: Atomic Write
+    ExecFn->>Store: append(events, expected_versions)
 
     alt Version Conflict
-        Store-->>Exec: ConcurrencyError
-        Note over Exec: Automatic Retry with Backoff
-        Exec->>Exec: Return to Phase 2 with fresh read
+        Store-->>ExecFn: ConcurrencyError
+        Note over ExecFn: Automatic Retry with Backoff
+        ExecFn->>ExecFn: Return to Phase 2 with fresh read
     else Success
-        Store-->>Exec: Success
-        Exec-->>App: Command completed
+        Store-->>ExecFn: Success
+        ExecFn-->>App: Command completed
     else Permanent Error
-        Store-->>Exec: ValidationError/BusinessRuleViolation
-        Exec-->>App: Fail immediately (no retry)
+        Store-->>ExecFn: ValidationError/BusinessRuleViolation
+        ExecFn-->>App: Fail immediately (no retry)
     end
 ```
 
 **Retry Logic:**
+
 - Automatic retry on ConcurrencyError (version conflicts)
 - Exponential backoff reduces contention (10ms, 20ms, 40ms, ...)
 - Configurable max attempts and backoff strategy
@@ -198,30 +332,40 @@ sequenceDiagram
 - Metadata (correlation/causation) preserved across retries
 - Permanent errors fail immediately without retry
 
-**Why This Design:** Centralizes infrastructure concerns (retry, orchestration) in the executor, keeping command implementations focused on business logic. Automatic retry provides correctness guarantees without developer intervention.
+**Why This Design:** Centralizes infrastructure concerns (retry, orchestration) in the execute function, keeping command implementations focused on business logic. Automatic retry provides correctness guarantees without developer intervention. Free function API maximizes composability and minimizes learning curve.
 
-### 4. Type System (ADR-003)
+### 4. Type System (ADR-003, ADR-012)
 
 **Purpose:** Enforce domain constraints and prevent illegal states at compile time.
 
 **Patterns:**
 
-**Validated Domain Types:**
+**Domain Event Types (ADR-012):**
+
+- Domain types implement `Event` trait directly - no infrastructure wrappers
+- StreamId is part of domain type (aggregate identity)
+- Trait bounds (`Clone + Send + 'static`) ensure storage compatibility
+- Type system enforces domain types ARE events, not wrapped in Event<T>
+
+**Validated Domain Types (ADR-003):**
+
 - `StreamId`, `EventId`, `CorrelationId`, `CausationId` - all validated newtypes using `nutype`
 - Construction returns Result with descriptive validation errors
 - Types guarantee validity after construction (parse, don't validate)
 
 **Phantom Types:**
+
 - Compile-time stream access control in commands
 - `StreamWrite<StreamSet, Event>` prevents writing to undeclared streams
 - Zero runtime cost (erased by compiler)
 
 **Total Functions:**
+
 - All public APIs return Result types
 - No unwrap/expect in library code
 - Error paths explicit in signatures
 
-**Why This Design:** Leverages Rust's type system to catch entire classes of errors at compile time, reducing runtime failures and improving reliability.
+**Why This Design:** Leverages Rust's type system to catch entire classes of errors at compile time. Domain-first event design (ADR-012) keeps business types in foreground, infrastructure in background, reducing runtime failures and improving developer clarity.
 
 ### 5. Error Handling (ADR-004)
 
@@ -257,10 +401,12 @@ graph TD
 ```
 
 **Error Classification:**
+
 - **Retriable Errors**: ConcurrencyError, network timeouts → automatic retry
 - **Permanent Errors**: ValidationError, BusinessRuleViolation → immediate failure
 
 **Error Context:**
+
 - Correlation ID: Links related operations across command executions
 - Causation Chain: Tracks causal relationships between commands and events
 - Operation Context: Stream IDs, command type, diagnostic information
@@ -273,22 +419,24 @@ graph TD
 
 **Standard Metadata Fields:**
 
-| Field | Type | Purpose |
-|-------|------|---------|
-| Event ID | UUIDv7 | Globally unique, time-ordered identifier |
-| Stream ID | StreamId | Stream this event belongs to |
-| Stream Version | u64 | Position within stream (monotonic) |
-| Timestamp | DateTime | Commit time (not command initiation) |
+| Field          | Type          | Purpose                                    |
+| -------------- | ------------- | ------------------------------------------ |
+| Event ID       | UUIDv7        | Globally unique, time-ordered identifier   |
+| Stream ID      | StreamId      | Stream this event belongs to               |
+| Stream Version | u64           | Position within stream (monotonic)         |
+| Timestamp      | DateTime      | Commit time (not command initiation)       |
 | Correlation ID | CorrelationId | Groups events from same business operation |
-| Causation ID | CausationId | Identifies immediate cause (command/event) |
+| Causation ID   | CausationId   | Identifies immediate cause (command/event) |
 
 **Custom Metadata:**
+
 - Generic type parameter `M: Serialize + DeserializeOwned`
 - Applications define domain-specific metadata structures
 - Type-safe extension point maintaining ADR-003 principles
 - Examples: actor attribution, tenant IDs, compliance data
 
 **Immutability Guarantee:**
+
 - Once committed, metadata never changes
 - Storage backends enforce integrity (constraints, append-only)
 - Audit trail integrity for compliance
@@ -315,11 +463,15 @@ struct TransferMoney {
 
 impl CommandLogic for TransferMoney {
     type State = (Account, Account);
-    type Event = AccountEvent;
+    type Event = AccountEvent;  // Domain event type implementing Event trait
 
     fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
-        // Reconstruct state from events
-        // (Details omitted - focus on architecture)
+        // Reconstruct state from domain events
+        match event {
+            AccountEvent::Debited { amount: amount } => state.0.balance -= amount,
+            AccountEvent::Credited{ amount: amount } => state.1.balance += amount,
+            // ... other events
+        }
         state
     }
 
@@ -329,16 +481,27 @@ impl CommandLogic for TransferMoney {
         // Business logic with validation
         require!(from.balance >= self.amount, "Insufficient funds");
 
-        // Type-safe event emission to declared streams
-        emit!(ctx, self.from_account, AccountDebited { amount: self.amount });
-        emit!(ctx, self.to_account, AccountCredited { amount: self.amount });
+        // Emit domain events directly (infrastructure extracts stream_id via Event trait)
+        emit!(ctx, AccountEvent::Debited {
+            account_id: self.from_account,
+            amount: self.amount
+        });
+        emit!(ctx, AccountEvent::Credited {
+            account_id: self.to_account,
+            amount: self.amount
+        });
 
         Ok(())
     }
 }
 ```
 
-**2. Execution Flow (Infrastructure):**
+**2. Execution Flow (Infrastructure via execute() function):**
+
+```rust
+// Application invokes free function with command and store
+let response = execute(transfer_command, &event_store).await?;
+```
 
 - **Phase 1 - Stream Resolution:** Extract `from_account` and `to_account` stream IDs
 - **Phase 2 - Read with Version Capture:** Read both streams, capture versions (e.g., version 42, 17)
@@ -351,8 +514,9 @@ impl CommandLogic for TransferMoney {
 **3. Automatic Retry on Conflict:**
 
 If concurrent command committed to `from_account` between read and write:
+
 - ConcurrencyError returned by EventStore
-- Executor applies exponential backoff (10ms first retry)
+- execute() function applies exponential backoff (10ms first retry)
 - Return to Phase 2: re-read both streams with fresh versions
 - Re-execute business logic with updated state
 - Retry atomic write with new version expectations
@@ -417,7 +581,7 @@ Optimistic concurrency control workflow:
 
 **3. Automatic Retry:**
 
-- Executor classifies ConcurrencyError as Retriable
+- execute() function classifies ConcurrencyError as Retriable
 - Apply exponential backoff delay (10ms)
 - Return to read phase with fresh read
 - Command A re-reads account stream at version 12
@@ -434,7 +598,7 @@ Optimistic concurrency control workflow:
 Multi-stream atomicity permeates the entire architecture:
 
 - **Event Store:** Leverages storage-native transactions (PostgreSQL ACID) for atomic multi-stream appends
-- **Command Executor:** Coordinates reads and writes ensuring all streams participate in version checking
+- **execute() function:** Coordinates reads and writes ensuring all streams participate in version checking
 - **Dynamic Discovery:** Discovered streams fully integrated into atomic write operation
 - **Retry Logic:** Failed attempts retry entire flow, maintaining atomicity invariants
 
@@ -456,7 +620,7 @@ Type-driven development enforced across all components:
 
 Correlation and causation provide distributed tracing throughout execution:
 
-- **Command Invocation:** Executor generates/receives correlation ID for operation
+- **Command Invocation:** execute() function generates/receives correlation ID for operation
 - **Event Emission:** Events carry correlation and causation IDs from context
 - **Retry Preservation:** Same correlation ID across all retry attempts
 - **Event Storage:** Metadata persisted atomically with events
@@ -469,27 +633,30 @@ Correlation and causation provide distributed tracing throughout execution:
 Errors flow through layers with context accumulation:
 
 - **Command Logic:** BusinessRuleViolation with rule context
-- **Executor:** Adds command type, stream IDs, retry attempt count
+- **execute() function:** Adds command type, stream IDs, retry attempt count
 - **Event Store:** Maps backend errors to EventCore types, preserves backend details in error chain
 - **Application:** Receives fully-contextualized error for logging, monitoring, user feedback
 
-**Classification Enforcement:** Executor respects Retriable/Permanent distinction - only ConcurrencyError triggers retry.
+**Classification Enforcement:** execute() function respects Retriable/Permanent distinction - only ConcurrencyError triggers retry.
 
 ## Quality Attributes
 
 ### Correctness Guarantees
 
 **Multi-Stream Atomicity:**
+
 - All events written or none - no partial updates
 - Achieved via storage-native transactions (PostgreSQL ACID)
 - Extends to dynamically discovered streams
 
 **Optimistic Concurrency Control:**
+
 - Version conflicts detected 100% of the time
 - Atomic version checking prevents time-of-check-to-time-of-use races
 - No lost updates possible
 
 **Type Safety:**
+
 - Illegal states unrepresentable at compile time
 - Validated domain types prevent invalid data
 - Total functions ensure explicit error handling
@@ -501,28 +668,33 @@ Errors flow through layers with context accumulation:
 EventCore's architecture prioritizes correctness over raw throughput, with performance goals that reflect real-world business operation requirements:
 
 **Target Latency (Under Normal Load):**
+
 - Single-stream commands: <50ms P95 (typical user operation response time requirement)
 - Multi-stream commands: <100ms P95 (reflects additional coordination overhead)
 - Batch operations: Sub-second for 1000+ events (bulk processing efficiency)
 
 **Throughput Expectations:**
+
 - Low contention scenarios: Hundreds of commands/second per instance (typical business workload)
 - Moderate contention: Automatic retry maintains throughput with increased latency
 - High contention: Stream partitioning and application design required for scale
 
 **Scalability Characteristics:**
+
 - Horizontal scaling via read replicas for read-heavy projections
 - Vertical scaling for write throughput (limited by storage backend transaction capacity)
 - Stream-level parallelism (different streams = concurrent execution)
 - Command-level parallelism (optimistic concurrency allows concurrent attempts)
 
 **Design Trade-offs:**
+
 - Correctness guaranteed even under extreme contention (no shortcuts)
 - Multi-stream atomicity maintained at all scales (no degradation)
 - Performance optimization within correctness constraints (caching, batching, read replicas)
 - Exponential backoff reduces contention on retry (prioritizes success over immediate completion)
 
 **Contention Management:**
+
 - Exponential backoff with jitter prevents thundering herd
 - Hot stream detection enables targeted optimization (partitioning, caching)
 - Configurable retry policies adapt to application-specific contention patterns
@@ -531,17 +703,20 @@ EventCore's architecture prioritizes correctness over raw throughput, with perfo
 ### Developer Experience
 
 **Minimal Boilerplate:**
+
 - `#[derive(Command)]` eliminates infrastructure code
 - Developers write only `apply()` and `handle()` methods
 - Automatic retry - zero manual retry logic
 - Typical command: <50 lines of code
 
 **Compile-Time Safety:**
+
 - Invalid stream access caught by compiler
 - Type errors provide clear guidance
 - `emit!` macro ensures type-safe event emission
 
 **Clear Error Messages:**
+
 - Structured errors with actionable context
 - Version conflicts identify which streams conflicted
 - Business rule violations explain which rule failed
@@ -549,21 +724,25 @@ EventCore's architecture prioritizes correctness over raw throughput, with perfo
 ### Extensibility
 
 **Storage Backends:**
+
 - EventStore trait enables custom backends
 - PostgreSQL and in-memory implementations provided
 - Community backends possible (SQLite, EventStoreDB, etc.)
 
 **Custom Metadata:**
+
 - Generic type parameter for application-specific metadata
 - Type-safe extension without framework assumptions
 - Supports domain-specific audit, compliance, analytics
 
 **Retry Policies:**
+
 - Configurable max attempts, backoff strategy
 - Custom policies for specific command types
 - Circuit breakers for sustained contention
 
 **Dynamic Discovery:**
+
 - StreamResolver trait for runtime stream determination
 - Supports complex state-dependent workflows
 - Optional - simple commands remain simple
@@ -582,7 +761,7 @@ graph TB
     end
 
     subgraph "EventCore Library"
-        Executor[Command Executor]
+        ExecFn[execute() function]
         Store[EventStore Trait]
     end
 
@@ -596,9 +775,9 @@ graph TB
         ProjStore[(Projection Store)]
     end
 
-    WebAPI --> Executor
-    BgWorker --> Executor
-    Executor --> Store
+    WebAPI --> ExecFn
+    BgWorker --> ExecFn
+    ExecFn --> Store
     Store --> PG
 
     PG -.->|Event Subscription| Proj1
@@ -606,14 +785,15 @@ graph TB
     Proj1 --> ProjStore
     Proj2 --> ProjStore
 
-    style Executor fill:#e1f5ff
+    style ExecFn fill:#e1f5ff
     style Store fill:#e1ffe1
     style PG fill:#d4edda
 ```
 
 **Components:**
-- **Web API:** Commands received from HTTP requests, executed via executor
-- **Background Workers:** Long-running processes executing scheduled commands
+
+- **Web API:** Commands received from HTTP requests, executed via execute() function
+- **Background Workers:** Long-running processes executing scheduled commands via execute() function
 - **PostgreSQL:** Production event store with ACID transactions
 - **Projections:** Read models built from event subscriptions, stored separately
 
@@ -626,7 +806,7 @@ graph TB
     end
 
     subgraph "EventCore Library"
-        Executor[Command Executor]
+        ExecFn[execute() function]
         Store[EventStore Trait]
     end
 
@@ -634,29 +814,35 @@ graph TB
         Memory[In-Memory Store<br/>+ Chaos Injection]
     end
 
-    Tests --> Executor
-    Executor --> Store
+    Tests --> ExecFn
+    ExecFn --> Store
     Store --> Memory
 
     style Memory fill:#fff3cd
 ```
 
 **Characteristics:**
-- In-memory backend for fast tests without external dependencies
-- Chaos injection for testing failure scenarios
+
+- `InMemoryEventStore` included in main `eventcore` crate (ADR-011)
+- Zero external dependencies - uses only `std::collections`
+- Fast tests without Docker or PostgreSQL setup
+- Optional chaos injection for testing failure scenarios
 - Same EventStore trait - tests verify real behavior
 
 ### Infrastructure Requirements
 
 **Production (PostgreSQL):**
+
 - PostgreSQL 15+ for ACID transaction support
 - Connection pooling for concurrent command execution
 - Indexes on stream_id, event_id, timestamp for query performance
 - Separate projection storage (application choice)
 
 **Development:**
-- In-memory backend sufficient for most testing
-- Docker Compose for local PostgreSQL if needed
+
+- `InMemoryEventStore` from main crate sufficient for most testing
+- Single dependency (`cargo add eventcore`) provides complete working system
+- Docker Compose for local PostgreSQL if needed for integration tests
 - Nix development environment with all tools
 
 ## Design Constraints
@@ -664,16 +850,19 @@ graph TB
 ### What's Required
 
 **Storage Backends Must Provide:**
+
 - Atomic multi-stream append operations
 - Version-based optimistic concurrency control
 - Metadata preservation (standard + custom)
 - Event ordering guarantees
 
 **Commands Must Implement:**
+
 - CommandLogic trait (apply, handle)
 - Valid stream declarations (static via `#[stream]` or dynamic via StreamResolver)
 
 **Applications Must Handle:**
+
 - Correlation/causation ID generation or propagation
 - Custom metadata definition (if needed)
 - Retry policy configuration for deployment environment
@@ -681,11 +870,13 @@ graph TB
 ### What's Optional
 
 **Not Required:**
+
 - Dynamic stream discovery (StreamResolver) - only when genuinely state-dependent
 - Custom metadata - standard fields sufficient for many use cases
 - Event subscriptions - only if building projections
 
 **Configurable:**
+
 - Retry policy (max attempts, backoff strategy)
 - Event store backend (PostgreSQL, in-memory, custom)
 - Async runtime (Tokio, async-std)
@@ -694,6 +885,7 @@ graph TB
 ### Extension Points
 
 **Well-Defined Extension Boundaries:**
+
 - **EventStore Trait:** Implement custom storage backends
 - **Custom Metadata Type:** Define application-specific metadata structures
 - **StreamResolver Trait:** Implement dynamic stream discovery
@@ -705,6 +897,7 @@ graph TB
 ### Storage Backend Integration
 
 **Trait Contract:**
+
 ```rust
 // Conceptual - shows WHAT, not HOW
 trait EventStore {
@@ -715,28 +908,33 @@ trait EventStore {
 ```
 
 **Implementation Requirements:**
+
 - Atomic append across multiple streams
 - Version checking within transaction boundary
 - Metadata preservation
 - Error classification (retriable vs permanent)
 
 **Provided Implementations:**
-- `eventcore-postgres`: Production backend (separate crate)
-- `eventcore-memory`: Testing backend (separate crate)
+
+- `eventcore-postgres`: Production backend with ACID transactions (separate crate for heavyweight dependencies)
+- `InMemoryEventStore`: Testing backend (included in main `eventcore` crate per ADR-011)
 
 ### Macro Crate Integration
 
 **Procedural Macro Distribution:**
+
 - `eventcore-macros` crate with `proc-macro = true`
 - Generated code references core eventcore types
 - Versioned in lockstep with core library
 
 **Generated Artifacts:**
+
 - CommandStreams trait implementation
 - Phantom types for stream access control
 - Integration with emit! macro
 
 **Developer View:**
+
 ```rust
 #[derive(Command)]  // From eventcore-macros
 struct MyCommand {
@@ -748,28 +946,31 @@ struct MyCommand {
 ### Application Integration Patterns
 
 **Web Framework Integration (Axum example):**
+
 ```rust
-// Handler receives command, uses executor
+// Handler receives command, invokes execute() function
 async fn transfer_handler(
-    State(executor): State<CommandExecutor>,
+    State(store): State<Arc<PostgresEventStore>>,
     Json(cmd): Json<TransferMoney>
 ) -> Result<Json<Success>> {
-    executor.execute(cmd).await?;
+    execute(cmd, store.as_ref()).await?;
     Ok(Json(Success))
 }
 ```
 
 **Background Job Processing:**
+
 ```rust
-// Worker executes scheduled commands
-async fn process_scheduled_commands(executor: &CommandExecutor) {
+// Worker executes scheduled commands via free function
+async fn process_scheduled_commands(store: &impl EventStore) {
     for cmd in fetch_scheduled_commands() {
-        executor.execute(cmd).await?;
+        execute(cmd, store).await?;
     }
 }
 ```
 
 **Observability Integration:**
+
 - Correlation IDs integrate with OpenTelemetry spans
 - Error context supports structured logging
 - Metrics track retry rates, conflict patterns
@@ -780,17 +981,20 @@ async fn process_scheduled_commands(executor: &CommandExecutor) {
 ### Potential Enhancements
 
 **Performance Optimizations:**
+
 - Snapshot support for long-lived streams
 - Read-through caching for hot streams
 - Batch command execution
 - Adaptive retry policies based on observed conflict rates
 
 **Enhanced Discovery:**
+
 - Discovery hints for executor optimization
 - Static analysis tools for anti-pattern detection
 - Lazy stream loading (defer reading until needed)
 
 **Observability:**
+
 - Circuit breakers for sustained high conflict rates
 - Monitoring dashboards for contention analysis
 - Performance profiling integration
@@ -798,12 +1002,14 @@ async fn process_scheduled_commands(executor: &CommandExecutor) {
 ### Architectural Stability
 
 **Core Commitments:**
+
 - Multi-stream atomicity remains foundational guarantee
 - Type-driven development patterns continue throughout
 - Automatic retry on version conflicts non-negotiable
 - EventStore trait remains primary abstraction boundary
 
 **Evolution Strategy:**
+
 - Additive changes preferred (new traits, optional features)
 - Breaking changes require major version bump
 - Backward compatibility via feature flags where possible
@@ -824,6 +1030,9 @@ This architecture synthesizes the following accepted ADRs:
 - **ADR-007:** Optimistic Concurrency Control Strategy
 - **ADR-008:** Command Executor and Retry Logic
 - **ADR-009:** Stream Resolver Design for Dynamic Discovery
+- **ADR-010:** Free Function API Design Philosophy
+- **ADR-011:** In-Memory Event Store Crate Location
+- **ADR-012:** Event Trait for Domain-First Design
 
 Refer to individual ADRs for detailed rationale, alternatives considered, and specific implementation guidance.
 

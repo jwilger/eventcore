@@ -43,6 +43,7 @@
           shellHook = ''
             CARGO_MCP_VERSION="0.2.0"
             CARGO_NEXTEST_VERSION="0.9.105"
+            CARGO_AUDIT_VERSION="0.21.0"
 
             # Setup local cargo bin directory
             export CARGO_INSTALL_ROOT="$PWD/.cargo-bin"
@@ -62,6 +63,15 @@
               echo "Installing cargo-nextest $CARGO_NEXTEST_VERSION to $CARGO_INSTALL_ROOT..."
               cargo install cargo-nextest --version "$CARGO_NEXTEST_VERSION" --root "$CARGO_INSTALL_ROOT"
             fi
+
+            # Check cargo-audit version
+            if ! command -v cargo-audit >/dev/null 2>&1 || [ "$(cargo-audit --version 2>/dev/null | awk '{print $2}')" != "$CARGO_AUDIT_VERSION" ]; then
+              echo "Installing cargo-audit $CARGO_AUDIT_VERSION to $CARGO_INSTALL_ROOT..."
+              cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --root "$CARGO_INSTALL_ROOT"
+            fi
+
+            # Use project-local advisory database
+            alias cargo-audit='cargo audit --db "$PWD/.cargo-advisory-db"'
           '';
         };
       }

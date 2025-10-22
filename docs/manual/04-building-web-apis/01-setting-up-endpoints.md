@@ -9,6 +9,7 @@ HTTP Request → Web Framework → Command/Query → EventCore → Response
 ```
 
 Your web layer should be thin, focusing on:
+
 1. **Request parsing** - Convert HTTP to domain types
 2. **Authentication** - Verify caller identity
 3. **Authorization** - Check permissions
@@ -58,15 +59,15 @@ async fn main() {
     let event_store = PostgresEventStore::new(
         "postgresql://localhost/eventcore"
     ).await.unwrap();
-    
+
     let executor = CommandExecutor::new(event_store);
     let projections = Arc::new(RwLock::new(ProjectionManager::new()));
-    
+
     let state = AppState {
         executor,
         projections,
     };
-    
+
     // Build routes
     let app = Router::new()
         .route("/api/v1/tasks", post(create_task))
@@ -76,12 +77,12 @@ async fn main() {
         .route("/api/v1/users/:id/tasks", get(get_user_tasks))
         .route("/health", get(health_check))
         .with_state(state);
-    
+
     // Start server
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
         .unwrap();
-        
+
     axum::serve(listener, app).await.unwrap();
 }
 ```
@@ -110,7 +111,7 @@ async fn create_task(
         .map_err(|e| ApiError::validation(e))?;
     let description = TaskDescription::try_new(request.description)
         .map_err(|e| ApiError::validation(e))?;
-    
+
     // Create command
     let task_id = TaskId::new();
     let command = CreateTask {
@@ -118,13 +119,13 @@ async fn create_task(
         title,
         description,
     };
-    
+
     // Execute command
     state.executor
         .execute(&command)
         .await
         .map_err(|e| ApiError::from_command_error(e))?;
-    
+
     // Return response
     Ok(Json(CreateTaskResponse {
         task_id: task_id.to_string(),
@@ -151,7 +152,7 @@ impl ApiError {
             details: None,
         }
     }
-    
+
     fn from_command_error(error: CommandError) -> Self {
         match error {
             CommandError::ValidationFailed(msg) => Self {
@@ -191,7 +192,7 @@ impl IntoResponse for ApiError {
                 "details": self.details,
             }
         });
-        
+
         (self.status, Json(body)).into_response()
     }
 }
@@ -225,11 +226,11 @@ async fn main() -> std::io::Result<()> {
     let event_store = PostgresEventStore::new(
         "postgresql://localhost/eventcore"
     ).await.unwrap();
-    
+
     let app_data = web::Data::new(AppData {
         executor: CommandExecutor::new(event_store),
     });
-    
+
     HttpServer::new(move || {
         App::new()
             .app_data(app_data.clone())
@@ -290,7 +291,7 @@ async fn create_task(
 #[rocket::launch]
 fn rocket() -> _ {
     let event_store = /* initialize */;
-    
+
     rocket::build()
         .manage(AppState {
             executor: CommandExecutor::new(event_store),
@@ -322,7 +323,7 @@ struct TransferMoneyRequest {
 // Convert to command
 impl TryFrom<TransferMoneyRequest> for TransferMoney {
     type Error = ValidationError;
-    
+
     fn try_from(req: TransferMoneyRequest) -> Result<Self, Self::Error> {
         Ok(TransferMoney {
             from_account: StreamId::try_new(req.from_account)?,
@@ -374,17 +375,17 @@ async fn request_id_middleware(
     next: Next,
 ) -> impl IntoResponse {
     let request_id = Uuid::new_v4().to_string();
-    
+
     // Add to request extensions
     request.extensions_mut().insert(RequestId(request_id.clone()));
-    
+
     // Add to response headers
     let mut response = next.run(request).await;
     response.headers_mut().insert(
         "X-Request-ID",
         request_id.parse().unwrap(),
     );
-    
+
     response
 }
 
@@ -408,9 +409,9 @@ async fn timing_middleware(
     let start = Instant::now();
     let path = request.uri().path().to_owned();
     let method = request.method().clone();
-    
+
     let response = next.run(request).await;
-    
+
     let duration = start.elapsed();
     tracing::info!(
         method = %method,
@@ -419,7 +420,7 @@ async fn timing_middleware(
         status = %response.status(),
         "Request completed"
     );
-    
+
     response
 }
 ```
@@ -435,12 +436,12 @@ use serde::Deserialize;
 struct Config {
     #[serde(default = "default_port")]
     port: u16,
-    
+
     #[serde(default = "default_host")]
     host: String,
-    
+
     database_url: String,
-    
+
     #[serde(default = "default_max_connections")]
     max_connections: u32,
 }
@@ -452,15 +453,15 @@ fn default_max_connections() -> u32 { 20 }
 impl Config {
     fn from_env() -> Result<Self, config::ConfigError> {
         let mut cfg = config::Config::default();
-        
+
         // Load from environment
         cfg.merge(config::Environment::default())?;
-        
+
         // Load from file if exists
         if std::path::Path::new("config.toml").exists() {
             cfg.merge(config::File::with_name("config"))?;
         }
-        
+
         cfg.try_into()
     }
 }
@@ -488,19 +489,19 @@ enum HealthStatus {
 
 async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
     let mut checks = HashMap::new();
-    
+
     // Check event store
     match state.executor.event_store().health_check().await {
         Ok(_) => checks.insert("event_store".to_string(), CheckResult::healthy()),
         Err(e) => checks.insert("event_store".to_string(), CheckResult::unhealthy(e)),
     };
-    
+
     // Check projections
     let projections = state.projections.read().await;
     for (name, health) in projections.health_status() {
         checks.insert(format!("projection_{}", name), health);
     }
-    
+
     // Overall status
     let status = if checks.values().all(|c| c.is_healthy()) {
         HealthStatus::Healthy
@@ -509,7 +510,7 @@ async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
     } else {
         HealthStatus::Degraded
     };
-    
+
     Json(HealthResponse {
         status,
         version: env!("CARGO_PKG_VERSION"),
@@ -568,11 +569,11 @@ mod tests {
     use super::*;
     use axum::http::StatusCode;
     use tower::ServiceExt;
-    
+
     #[tokio::test]
     async fn test_create_task_success() {
         let app = create_test_app().await;
-        
+
         let response = app
             .oneshot(
                 Request::builder()
@@ -587,23 +588,23 @@ mod tests {
             )
             .await
             .unwrap();
-        
+
         assert_eq!(response.status(), StatusCode::CREATED);
-        
+
         let body: CreateTaskResponse = serde_json::from_slice(
             &hyper::body::to_bytes(response.into_body()).await.unwrap()
         ).unwrap();
-        
+
         assert!(!body.task_id.is_empty());
     }
-    
+
     async fn create_test_app() -> Router {
         let event_store = InMemoryEventStore::new();
         let state = AppState {
             executor: CommandExecutor::new(event_store),
             projections: Arc::new(RwLock::new(ProjectionManager::new())),
         };
-        
+
         Router::new()
             .route("/api/v1/tasks", post(create_task))
             .with_state(state)
@@ -632,6 +633,7 @@ Setting up HTTP endpoints for EventCore:
 - ✅ **Testable** - Easy to test endpoints in isolation
 
 Key patterns:
+
 1. Parse and validate requests early
 2. Convert to domain commands
 3. Execute with EventCore

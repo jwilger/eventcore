@@ -51,6 +51,7 @@ important notes.
 ```
 
 Example:
+
 ```
 Add snapshot support for long-running streams
 
@@ -70,24 +71,30 @@ While not required, we encourage contributors to sign their commits with GPG for
 #### Setting up GPG Signing
 
 1. **Generate a GPG key** (if you don't have one):
+
    ```bash
    gpg --full-generate-key
    ```
+
    - Choose RSA and RSA (default)
    - Key size: 4096 bits
    - Expiration: Your preference (1-2 years recommended)
    - Use your GitHub email address
 
 2. **List your GPG keys**:
+
    ```bash
    gpg --list-secret-keys --keyid-format=long
    ```
+
    Look for a line like `sec rsa4096/3AA5C34371567BD2`
 
 3. **Export your public key**:
+
    ```bash
    gpg --armor --export 3AA5C34371567BD2
    ```
+
    Copy the output including `-----BEGIN PGP PUBLIC KEY BLOCK-----` and `-----END PGP PUBLIC KEY BLOCK-----`
 
 4. **Add the key to GitHub**:
@@ -96,6 +103,7 @@ While not required, we encourage contributors to sign their commits with GPG for
    - Paste your public key
 
 5. **Configure Git to sign commits**:
+
    ```bash
    git config --global user.signingkey 3AA5C34371567BD2
    git config --global commit.gpgsign true
@@ -110,11 +118,13 @@ While not required, we encourage contributors to sign their commits with GPG for
 #### Verifying Signed Commits
 
 To verify signatures on existing commits:
+
 ```bash
 git log --show-signature
 ```
 
 To verify a specific commit:
+
 ```bash
 git verify-commit <commit-hash>
 ```
@@ -166,6 +176,7 @@ cargo test --test '*' --workspace
 ### PR Title Format
 
 Use clear, descriptive titles:
+
 - ✅ "Add snapshot support for event streams"
 - ✅ "Fix race condition in concurrent command execution"
 - ❌ "Fix bug"
@@ -174,6 +185,7 @@ Use clear, descriptive titles:
 ## Security
 
 Please review our [Security Policy](SECURITY.md) for guidelines on:
+
 - Reporting vulnerabilities
 - Security best practices for contributions
 - Dependency management
@@ -209,6 +221,7 @@ EventCore follows strict type-driven development principles:
 4. **Total functions** - handle all cases explicitly
 
 Example:
+
 ```rust
 // Good: Domain type with validation
 #[nutype(
@@ -237,6 +250,7 @@ pub fn process_stream(stream_id: StreamId) { ... }
 ### User Documentation
 
 When adding new features:
+
 1. Update relevant sections in `/docs`
 2. Add examples to `/eventcore-examples` if applicable
 3. Update API documentation
@@ -250,6 +264,7 @@ When adding new features:
 ## Recognition
 
 Contributors will be recognized in:
+
 - The project README
 - Release notes
 - Special thanks in documentation

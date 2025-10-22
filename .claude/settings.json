@@ -1,4 +1,5 @@
 {
+  "outputStyle": "marvin",
   "permissions": {
     "allow": [
       "SlashCommand(/sdlc-app:adr-template)",
@@ -8,6 +9,5 @@
       "Read(//home/jwilger/.claude/processes/**)"
     ]
   },
-  "outputStyle": "marvin",
   "spinnerTipsEnabled": false
 }

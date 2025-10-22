@@ -120,7 +120,7 @@ async fn setup_evolution_system() -> Arc<RwLock<EnhancedSchemaRegistry>> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                
+
                 let display_name = if first_name.is_empty() && last_name.is_empty() {
                     "Unknown User".to_string()
                 } else if last_name.is_empty() {
@@ -130,7 +130,7 @@ async fn setup_evolution_system() -> Arc<RwLock<EnhancedSchemaRegistry>> {
                 } else {
                     format!("{} {}", first_name, last_name)
                 };
-                
+
                 map.insert("display_name".to_string(), json!(display_name));
             }
             Ok(value)
@@ -164,7 +164,7 @@ async fn setup_evolution_system() -> Arc<RwLock<EnhancedSchemaRegistry>> {
 /// Demonstrates migrating from V1 to current version
 async fn demonstrate_v1_migration(evolution: &EnhancedJsonSchemaEvolution) -> Result<(), EventStoreError> {
     println!("=== Migrating V1 Event ===");
-    
+
     // Original V1 event data
     let v1_event = UserRegisteredV1 {
         user_id: "user-123".to_string(),
@@ -196,7 +196,7 @@ async fn demonstrate_v1_migration(evolution: &EnhancedJsonSchemaEvolution) -> Re
 /// Demonstrates migrating from V2 to current version
 async fn demonstrate_v2_migration(evolution: &EnhancedJsonSchemaEvolution) -> Result<(), EventStoreError> {
     println!("\n=== Migrating V2 Event ===");
-    
+
     // V2 event data
     let v2_event = UserRegisteredV2 {
         user_id: "user-456".to_string(),
@@ -351,7 +351,7 @@ async fn demonstrate_performance(evolution: &EnhancedJsonSchemaEvolution) -> Res
 
     println!("First migration (cold cache): {:?}", first_duration);
     println!("Second migration (warm cache): {:?}", second_duration);
-    
+
     if second_duration < first_duration {
         println!("✅ Cache is working - second migration was faster");
     }

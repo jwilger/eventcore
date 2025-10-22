@@ -46,6 +46,7 @@ EventCore events will carry structured, immutable metadata with the following fi
 **4. Type Safety Integration**
 
 All metadata fields follow ADR-003 patterns:
+
 - Validated domain types (EventId, StreamId, CorrelationId, etc.) instead of primitives
 - Construction returns Result types for validation errors
 - Types implement standard traits (Debug, Clone, Serialize, Deserialize)
@@ -54,6 +55,7 @@ All metadata fields follow ADR-003 patterns:
 **5. Immutability Guarantee**
 
 Once an event is committed to the event store:
+
 - All metadata fields are immutable and cannot be modified
 - Storage backends ensure metadata integrity (constraints, checksums, append-only storage)
 - Any metadata changes require new events, not modifications
@@ -63,6 +65,7 @@ Once an event is committed to the event store:
 **Why UUIDv7 for Event ID:**
 
 Global event ordering is essential for:
+
 - Projection building across multiple streams requires deterministic ordering
 - Debugging requires understanding temporal relationships between events
 - Event replay and testing benefit from reproducible ordering
@@ -83,6 +86,7 @@ Without these IDs, tracing multi-stream operations becomes guesswork.
 **Why Timestamp at Commit Time:**
 
 Timestamp represents when the event became part of the permanent record:
+
 - Enables time-based queries and projections
 - Supports event retention policies
 - Aids debugging by showing when state changes occurred
@@ -93,6 +97,7 @@ Command initiation time can be included in custom metadata if needed for domain 
 **Why Generic Type for Custom Metadata:**
 
 EventCore is an infrastructure library serving diverse domains with varying metadata needs. Applications require different business-specific metadata based on their domains:
+
 - Audit information (e.g., actor IDs, IP addresses, user agents)
 - Business context (e.g., invoice IDs, transaction amounts, tenant IDs)
 - Compliance data (e.g., data classification, retention periods)
@@ -110,6 +115,7 @@ EventCore provides the infrastructure mechanism (generic metadata storage and re
 **Why Immutability:**
 
 Events are facts, not mutable records:
+
 - Audit integrity requires tamper-evidence
 - Event replay depends on events never changing
 - Debugging requires stable event history
@@ -125,6 +131,7 @@ Metadata modification would undermine event sourcing fundamentals and create aud
 - **Generic Complexity**: Applications must define and manage their own metadata types
 
 These trade-offs are acceptable because:
+
 - Metadata overhead is negligible compared to value of auditability and traceability
 - Storage is cheap; losing audit trail or debugging capability is expensive
 - Complex queries are opt-in (applications index what they need)

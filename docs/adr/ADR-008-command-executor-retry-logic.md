@@ -45,25 +45,30 @@ The CommandExecutor handles all infrastructure concerns:
 Complete execution follows a structured multi-phase pattern:
 
 **Phase 1 - Stream Resolution:**
+
 - Extract stream IDs from command using CommandStreams trait
 - Support both static streams (from #[stream] fields) and dynamic streams (via StreamResolver)
 - Build complete set of streams to read
 
 **Phase 2 - Read with Version Capture:**
+
 - Read events from all identified streams via EventStore::read
 - Capture current version for each stream (optimistic concurrency baseline)
 - Empty streams have version 0
 
 **Phase 3 - State Reconstruction:**
+
 - Fold events through CommandLogic::apply to build current state
 - State represents command's view of the world at captured versions
 
 **Phase 4 - Business Logic Execution:**
+
 - Invoke CommandLogic::handle with reconstructed state
 - Business logic validates rules and produces events
 - Events prepared but not yet committed
 
 **Phase 5 - Atomic Write with Version Check:**
+
 - Attempt EventStore::append with expected versions
 - Backend verifies ALL stream versions match expectations atomically
 - Success: events committed, execution complete
@@ -75,11 +80,13 @@ Complete execution follows a structured multi-phase pattern:
 On ConcurrencyError from optimistic concurrency conflict:
 
 **Retry Decision:**
+
 - Check current retry attempt count against configured maximum
 - If under limit: initiate retry with backoff
 - If at limit: fail with descriptive error indicating max retries exceeded
 
 **Exponential Backoff:**
+
 - First retry: short delay (e.g., 10ms)
 - Subsequent retries: exponentially increasing delay (e.g., 20ms, 40ms, 80ms)
 - Configurable base delay and multiplier
@@ -87,6 +94,7 @@ On ConcurrencyError from optimistic concurrency conflict:
 - Optional jitter to prevent thundering herd
 
 **Retry Execution:**
+
 - Return to Phase 2 (read with fresh version capture)
 - Re-read ALL streams to get fresh state (never retry with stale data)
 - Re-execute business logic with fresh state
@@ -107,11 +115,13 @@ Correlation and causation IDs remain stable:
 Executor distinguishes error categories per ADR-004:
 
 **Retriable Errors (Automatic Retry):**
+
 - ConcurrencyError: Version conflict, expected under concurrent load
 - Network timeouts (if storage backend indicates retriable)
 - Retry with backoff until success or max attempts
 
 **Permanent Errors (Immediate Failure):**
+
 - ValidationError: Invalid command data
 - CommandError::BusinessRuleViolation: Business logic rejection
 - EventStoreError::Permanent: Non-retriable storage failures

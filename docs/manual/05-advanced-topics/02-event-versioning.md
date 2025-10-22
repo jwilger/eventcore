@@ -22,15 +22,15 @@ impl EventSchemaVersion {
     const fn new(major: u32, minor: u32, patch: u32) -> Self {
         Self { major, minor, patch }
     }
-    
+
     // Breaking changes
     const V1_0_0: Self = Self::new(1, 0, 0);
     const V2_0_0: Self = Self::new(2, 0, 0);
-    
+
     // Backward compatible additions
     const V1_1_0: Self = Self::new(1, 1, 0);
     const V1_2_0: Self = Self::new(1, 2, 0);
-    
+
     // Bug fixes/clarifications
     const V1_0_1: Self = Self::new(1, 0, 1);
 }
@@ -38,7 +38,7 @@ impl EventSchemaVersion {
 trait VersionedEvent {
     const EVENT_TYPE: &'static str;
     const VERSION: EventSchemaVersion;
-    
+
     fn is_compatible_with(version: &EventSchemaVersion) -> bool;
 }
 ```
@@ -53,10 +53,10 @@ Simpler approach with incremental versions:
 enum UserEvent {
     #[serde(rename = "1")]
     V1(UserEventV1),
-    
+
     #[serde(rename = "2")]
     V2(UserEventV2),
-    
+
     #[serde(rename = "3")]
     V3(UserEventV3),
 }
@@ -101,24 +101,24 @@ struct EventSerializer {
 impl EventSerializer {
     fn new() -> Self {
         let mut registry = TypeRegistry::new();
-        
+
         // Register all versions
         registry.register_versioned::<UserEventV1>("UserEvent", 1);
         registry.register_versioned::<UserEventV2>("UserEvent", 2);
         registry.register_versioned::<UserEventV3>("UserEvent", 3);
-        
+
         Self {
             format: SerializationFormat::Json,
             registry,
         }
     }
-    
+
     fn serialize_event<T>(&self, event: &T) -> Result<VersionedPayload, SerializationError>
     where
         T: Serialize + VersionedEvent,
     {
         let data = self.format.serialize(event)?;
-        
+
         Ok(VersionedPayload {
             event_type: T::EVENT_TYPE.to_string(),
             version: T::VERSION.to_string(),
@@ -126,7 +126,7 @@ impl EventSerializer {
             data,
         })
     }
-    
+
     fn deserialize_event<T>(&self, payload: &VersionedPayload) -> Result<T, SerializationError>
     where
         T: DeserializeOwned + VersionedEvent,
@@ -139,7 +139,7 @@ impl EventSerializer {
                 found: payload_version,
             });
         }
-        
+
         self.format.deserialize(&payload.data)
     }
 }
@@ -170,27 +170,27 @@ impl UserEventMigrationChain {
             Box::new(V1ToV2Migration),
             Box::new(V2ToV3Migration),
         ];
-        
+
         Self { migrations }
     }
-    
+
     fn migrate_to_latest(&self, event: UserEvent, from_version: u32) -> Result<UserEvent, MigrationError> {
         let mut current_event = event;
         let mut current_version = from_version;
-        
+
         // Apply migrations in sequence
         while current_version < UserEvent::LATEST_VERSION {
             let migration = self.migrations
                 .get((current_version - 1) as usize)
-                .ok_or(MigrationError::NoMigrationPath { 
-                    from: current_version, 
-                    to: UserEvent::LATEST_VERSION 
+                .ok_or(MigrationError::NoMigrationPath {
+                    from: current_version,
+                    to: UserEvent::LATEST_VERSION
                 })?;
-            
+
             current_event = migration.migrate(current_event)?;
             current_version += 1;
         }
-        
+
         Ok(current_event)
     }
 }
@@ -204,13 +204,13 @@ impl Migration<UserEvent, UserEvent> for V1ToV2Migration {
                 // Convert V1 to V2
                 let user_id = UserId::try_from(v1.user_id)
                     .map_err(|e| MigrationError::ConversionFailed(e.to_string()))?;
-                
+
                 let email = Email::try_from(v1.email)
                     .map_err(|e| MigrationError::ConversionFailed(e.to_string()))?;
-                
+
                 // Extract names from username
                 let (first_name, last_name) = split_username(&v1.username);
-                
+
                 Ok(UserEvent::V2(UserEventV2 {
                     user_id,
                     email,
@@ -242,7 +242,7 @@ Integrate versioning with the event store:
 impl EventStore for VersionedEventStore {
     type Event = VersionedEvent;
     type Error = EventStoreError;
-    
+
     async fn write_events(
         &self,
         events: Vec<EventToWrite<Self::Event>>,
@@ -259,17 +259,17 @@ impl EventStore for VersionedEventStore {
                 })
             })
             .collect();
-        
+
         self.inner.write_events(versioned_events?).await
     }
-    
+
     async fn read_stream(
         &self,
         stream_id: &StreamId,
         options: ReadOptions,
     ) -> Result<StreamEvents<Self::Event>, Self::Error> {
         let raw_events = self.inner.read_stream(stream_id, options).await?;
-        
+
         let events: Result<Vec<_>, _> = raw_events
             .events
             .into_iter()
@@ -285,7 +285,7 @@ impl EventStore for VersionedEventStore {
                 })
             })
             .collect();
-        
+
         Ok(StreamEvents {
             stream_id: raw_events.stream_id,
             version: raw_events.version,
@@ -304,7 +304,7 @@ Projections that handle multiple event versions:
 impl Projection for UserProjection {
     type Event = VersionedEvent;
     type Error = ProjectionError;
-    
+
     async fn apply(&mut self, event: &StoredEvent<Self::Event>) -> Result<(), Self::Error> {
         match &event.payload {
             VersionedEvent::User(user_event) => {
@@ -318,8 +318,8 @@ impl Projection for UserProjection {
 
 impl UserProjection {
     async fn apply_user_event(
-        &mut self, 
-        event: &UserEvent, 
+        &mut self,
+        event: &UserEvent,
         occurred_at: DateTime<Utc>
     ) -> Result<(), ProjectionError> {
         match event {
@@ -396,20 +396,20 @@ struct UserEventCompatibility;
 impl VersionCompatibility for UserEventCompatibility {
     fn check_compatibility(reader_version: &str, event_version: &str) -> CompatibilityLevel {
         use CompatibilityLevel::*;
-        
+
         match (reader_version, event_version) {
             // Same version - fully compatible
             (r, e) if r == e => FullyCompatible,
-            
+
             // Reader newer than event - usually compatible
             ("2", "1") | ("3", "1") | ("3", "2") => FullyCompatible,
-            
+
             // Reader older than event - may need migration
             ("1", "2") | ("1", "3") | ("2", "3") => RequiresMigration,
-            
+
             // Special compatibility rules
             ("1.1", "1.0") => FullyCompatible, // Minor versions compatible
-            
+
             _ => Incompatible,
         }
     }
@@ -424,7 +424,7 @@ where
     T: DeserializeOwned + VersionCompatibility,
 {
     let compatibility = T::check_compatibility(reader_version, &payload.version);
-    
+
     match compatibility {
         CompatibilityLevel::FullyCompatible => {
             // Direct deserialization
@@ -477,10 +477,10 @@ impl VersionedEventArchiver {
     async fn archive_old_versions(&self, stream_id: &StreamId) -> Result<ArchiveResult, ArchiveError> {
         let events = self.read_all_events(stream_id).await?;
         let mut archive_stats = ArchiveResult::default();
-        
+
         for event in events {
             let age_days = (Utc::now() - event.occurred_at).num_days() as u32;
-            
+
             match event.payload.version() {
                 v if v < (CURRENT_VERSION - self.retention_policy.keep_latest_versions) => {
                     if age_days > self.retention_policy.delete_after_years * 365 {
@@ -503,7 +503,7 @@ impl VersionedEventArchiver {
                 }
             }
         }
-        
+
         Ok(archive_stats)
     }
 }
@@ -529,12 +529,12 @@ lazy_static! {
         "eventcore_event_versions_total",
         "Total events by version"
     ).unwrap();
-    
+
     static ref MIGRATION_DURATION: Histogram = register_histogram!(
         "eventcore_migration_duration_seconds",
         "Time spent migrating events"
     ).unwrap();
-    
+
     static ref ACTIVE_VERSIONS: IntGauge = register_int_gauge!(
         "eventcore_active_event_versions",
         "Number of active event versions"
@@ -559,37 +559,37 @@ impl VersionMetrics {
         *self.version_counts
             .entry(format!("{}:{}", event_type, version))
             .or_insert(0) += 1;
-        
+
         EVENT_VERSION_COUNTER
             .with_label_values(&[event_type, version])
             .inc();
     }
-    
+
     fn record_migration(&mut self, from: &str, to: &str, duration: Duration, success: bool) {
         let key = (from.to_string(), to.to_string());
         let stats = self.migration_stats.entry(key).or_default();
-        
+
         stats.total_migrations += 1;
         if success {
             stats.successful_migrations += 1;
         } else {
             stats.failed_migrations += 1;
         }
-        
+
         // Update average duration
         let total_time = stats.average_duration * (stats.total_migrations - 1) as u32 + duration;
         stats.average_duration = total_time / stats.total_migrations as u32;
-        
+
         MIGRATION_DURATION.observe(duration.as_secs_f64());
     }
-    
+
     fn update_active_versions(&self) {
         let active_count = self.version_counts
             .keys()
             .map(|key| key.split(':').nth(1).unwrap_or("unknown"))
             .collect::<HashSet<_>>()
             .len();
-        
+
         ACTIVE_VERSIONS.set(active_count as i64);
     }
 }
@@ -604,7 +604,7 @@ Comprehensive testing for versioned events:
 mod version_tests {
     use super::*;
     use proptest::prelude::*;
-    
+
     #[test]
     fn test_version_serialization_roundtrip() {
         let v3_event = UserEventV3 {
@@ -618,19 +618,19 @@ mod version_tests {
             },
             preferences: UserPreferences::default(),
         };
-        
+
         let serializer = EventSerializer::new();
-        
+
         // Serialize
         let payload = serializer.serialize_event(&v3_event).unwrap();
         assert_eq!(payload.version, "3");
-        
+
         // Deserialize
         let deserialized: UserEventV3 = serializer.deserialize_event(&payload).unwrap();
         assert_eq!(v3_event.user_id, deserialized.user_id);
         assert_eq!(v3_event.email, deserialized.email);
     }
-    
+
     #[test]
     fn test_migration_chain() {
         let v1_event = UserEvent::V1(UserEventV1 {
@@ -638,10 +638,10 @@ mod version_tests {
             email: "test@example.com".to_string(),
             username: "test_user".to_string(),
         });
-        
+
         let migration_chain = UserEventMigrationChain::new();
         let v3_event = migration_chain.migrate_to_latest(v1_event, 1).unwrap();
-        
+
         match v3_event {
             UserEvent::V3(v3) => {
                 assert_eq!(v3.email.to_string(), "test@example.com");
@@ -651,7 +651,7 @@ mod version_tests {
             _ => panic!("Expected V3 event after migration"),
         }
     }
-    
+
     proptest! {
         #[test]
         fn version_compatibility_is_transitive(
@@ -662,7 +662,7 @@ mod version_tests {
             let versions = [v1, v2, v3];
             versions.sort();
             let [min_v, mid_v, max_v] = versions;
-            
+
             // If min compatible with mid, and mid compatible with max,
             // then migration chain should work
             if UserEventCompatibility::check_compatibility(
@@ -676,7 +676,7 @@ mod version_tests {
             }
         }
     }
-    
+
     fn can_migrate_between_versions(from: u32, to: u32) -> bool {
         // Implementation depends on your migration chain
         to >= from && (to - from) <= MAX_MIGRATION_DISTANCE
@@ -706,6 +706,7 @@ Event versioning in EventCore:
 - ✅ **Testing support** - Comprehensive test patterns
 
 Key patterns:
+
 1. Use semantic or linear versioning consistently
 2. Define clear compatibility rules
 3. Implement migration chains for complex changes
