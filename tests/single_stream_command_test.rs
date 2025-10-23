@@ -57,34 +57,6 @@ impl CommandLogic for Deposit {
 /// This test exercises a complete single-stream command execution from the
 /// library consumer (application developer) perspective. It tests the BankAccount
 /// domain example with a Deposit command.
-///
-/// Expected scenario: Developer executes Deposit(account_id: "account-123", amount: 100)
-/// and command succeeds.
-#[tokio::test]
-async fn test_deposit_command_succeeds() {
-    // Given: Developer creates in-memory event store
-    let store = InMemoryEventStore::new();
-
-    // And: Developer creates a Deposit command with account and amount
-    let account_id = StreamId::try_new(Uuid::now_v7().to_string()).expect("valid stream id");
-    let amount = DepositAmount::try_new(100).expect("valid amount");
-    let command = Deposit { account_id, amount };
-
-    // When: Developer executes the command
-    let result = execute(&store, command).await;
-
-    // Then: Command succeeds
-    assert!(result.is_ok(), "Deposit command should succeed");
-}
-
-/// Integration test for I-001: Verify actual event data is retrievable
-///
-/// This test verifies that we can access and validate the actual event data
-/// stored by a command. This is essential for event sourcing: events must
-/// contain the data needed to reconstruct state.
-///
-/// Expected scenario: After executing a Deposit command, developer can read
-/// the stored event and access its data (event type, payload, metadata).
 #[tokio::test]
 async fn test_deposit_command_event_data_is_retrievable() {
     // Given: Developer creates in-memory event store
