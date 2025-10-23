@@ -58,7 +58,7 @@ impl CommandLogic for Deposit {
 /// library consumer (application developer) perspective. It tests the BankAccount
 /// domain example with a Deposit command.
 #[tokio::test]
-async fn test_deposit_command_event_data_is_retrievable() {
+async fn main_success() {
     // Given: Developer creates in-memory event store
     let store = InMemoryEventStore::new();
 
