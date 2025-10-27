@@ -1,4 +1,5 @@
 use crate::errors::CommandError;
+use crate::store::StreamId;
 
 /// Event trait for domain-first event sourcing.
 ///
@@ -47,6 +48,17 @@ pub trait CommandLogic {
     /// business rules and produce events. It's rebuilt from scratch for
     /// each command execution by applying events via `apply()`.
     type State: Default;
+
+    /// Returns the stream ID for single-stream commands.
+    ///
+    /// For I-001, all commands operate on exactly one stream. This method
+    /// identifies which stream to read for state reconstruction.
+    ///
+    /// # Note
+    ///
+    /// This method is specific to I-001 (single-stream commands).
+    /// Multi-stream support (I-004) will replace this with a different mechanism.
+    fn stream_id(&self) -> &StreamId;
 
     /// Reconstruct state by applying a single event.
     ///

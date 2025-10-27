@@ -170,6 +170,14 @@ impl<E: crate::Event> EventStreamReader<E> {
     pub fn first(&self) -> Option<&E> {
         self.events.first()
     }
+
+    /// Returns an iterator over the events for state reconstruction.
+    ///
+    /// Events are returned in stream version order (oldest to newest).
+    /// This is used by the executor to fold events into state via `CommandLogic::apply()`.
+    pub fn iter(&self) -> impl Iterator<Item = &E> {
+        self.events.iter()
+    }
 }
 
 /// Placeholder for event stream slice type.

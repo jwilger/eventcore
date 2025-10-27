@@ -1,11 +1,11 @@
 use eventcore::{
-    CommandLogic, Event, EventStore, InMemoryEventStore, NewEvents, StreamId, execute,
+    CommandError, CommandLogic, Event, EventStore, InMemoryEventStore, NewEvents, StreamId, execute,
 };
 use nutype::nutype;
 use uuid::Uuid;
 
-#[nutype(validate(greater = 0), derive(Debug, Clone, PartialEq, Eq))]
-struct DepositAmount(u16);
+#[nutype(validate(greater = 0), derive(Debug, Clone, Copy, PartialEq, Eq))]
+struct MoneyAmount(u16);
 
 /// Test-specific domain events enum for BankAccount aggregate.
 ///
@@ -14,27 +14,55 @@ struct DepositAmount(u16);
 enum TestDomainEvents {
     MoneyDeposited {
         account_id: StreamId, // Aggregate identity - each event knows its stream
-        amount: DepositAmount,
+        amount: MoneyAmount,
+    },
+    MoneyWithdrawn {
+        account_id: StreamId,
+        amount: MoneyAmount,
     },
 }
 
 impl Event for TestDomainEvents {
     fn stream_id(&self) -> &StreamId {
         match self {
-            TestDomainEvents::MoneyDeposited { account_id, .. } => account_id,
+            TestDomainEvents::MoneyDeposited { account_id, .. }
+            | TestDomainEvents::MoneyWithdrawn { account_id, .. } => account_id,
         }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct AccountBalance {
+    cents: u16,
+}
+
+impl AccountBalance {
+    fn apply_event(mut self, event: &TestDomainEvents) -> Self {
+        match event {
+            TestDomainEvents::MoneyDeposited { amount, .. } => {
+                self.cents = self.cents.saturating_add(amount.into_inner());
+            }
+            TestDomainEvents::MoneyWithdrawn { amount, .. } => {
+                self.cents = self.cents.saturating_sub(amount.into_inner());
+            }
+        }
+        self
     }
 }
 
 /// Deposit command for testing single-stream command execution.
 struct Deposit {
     account_id: StreamId,
-    amount: DepositAmount,
+    amount: MoneyAmount,
 }
 
 impl CommandLogic for Deposit {
     type Event = TestDomainEvents;
     type State = ();
+
+    fn stream_id(&self) -> &StreamId {
+        &self.account_id
+    }
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state
@@ -44,10 +72,51 @@ impl CommandLogic for Deposit {
         &self,
         _state: Self::State,
     ) -> Result<NewEvents<Self::Event>, eventcore::CommandError> {
-        let event = TestDomainEvents::MoneyDeposited {
+        Ok(vec![TestDomainEvents::MoneyDeposited {
             account_id: self.account_id.clone(),
-            amount: self.amount.clone(),
+            amount: self.amount,
+        }]
+        .into())
+    }
+}
+
+/// Withdraw command validates state before emitting events.
+struct Withdraw {
+    account_id: StreamId,
+    amount: MoneyAmount,
+}
+
+impl CommandLogic for Withdraw {
+    type Event = TestDomainEvents;
+    type State = AccountBalance;
+
+    fn stream_id(&self) -> &StreamId {
+        &self.account_id
+    }
+
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        state.apply_event(event)
+    }
+
+    fn handle(
+        &self,
+        state: Self::State,
+    ) -> Result<NewEvents<Self::Event>, eventcore::CommandError> {
+        let requested = self.amount.into_inner();
+        if state.cents < requested {
+            return Err(CommandError::BusinessRuleViolation(format!(
+                "insufficient funds for account {}: balance={}, attempted_withdrawal={}",
+                self.account_id.as_ref(),
+                state.cents,
+                requested
+            )));
+        }
+
+        let event = TestDomainEvents::MoneyWithdrawn {
+            account_id: self.account_id.clone(),
+            amount: self.amount,
         };
+
         Ok(vec![event].into())
     }
 }
@@ -66,10 +135,10 @@ async fn main_success() {
     let account_id = StreamId::try_new(Uuid::now_v7().to_string()).expect("valid stream id");
 
     // And: Developer creates a Deposit command
-    let amount = DepositAmount::try_new(100).expect("valid amount");
+    let amount = MoneyAmount::try_new(100).expect("valid amount");
     let command = Deposit {
         account_id: account_id.clone(),
-        amount: amount.clone(),
+        amount,
     };
 
     // When: Developer executes the command
@@ -98,5 +167,64 @@ async fn main_success() {
             );
             assert_eq!(event_amount, &amount, "Event should have correct amount");
         }
+        TestDomainEvents::MoneyWithdrawn { .. } => {
+            panic!("deposit scenario should not produce withdrawal events");
+        }
     }
+}
+
+/// Scenario 2: Developer handles business rule violations with proper errors.
+#[tokio::test]
+async fn insufficient_funds_returns_business_rule_violation() {
+    // Given: Developer creates in-memory event store and account id
+    let store = InMemoryEventStore::new();
+    let account_id = StreamId::try_new(Uuid::now_v7().to_string()).expect("valid stream id");
+
+    // And: Developer records an initial deposit of 50 to establish balance
+    let initial_amount = MoneyAmount::try_new(50).expect("valid amount");
+    let seed_deposit = Deposit {
+        account_id: account_id.clone(),
+        amount: initial_amount,
+    };
+    execute(&store, seed_deposit)
+        .await
+        .expect("initial deposit to succeed");
+
+    // And: Developer prepares a withdraw command that exceeds current balance
+    let withdrawal_amount = MoneyAmount::try_new(100).expect("valid amount");
+    let withdraw = Withdraw {
+        account_id: account_id.clone(),
+        amount: withdrawal_amount,
+    };
+
+    // When: Developer executes the withdraw command
+    let error = match execute(&store, withdraw).await {
+        Ok(_) => panic!("expected business rule violation but command succeeded"),
+        Err(error) => error,
+    };
+
+    // Then: CommandError::BusinessRuleViolation is returned with actionable context
+    let message = match error {
+        CommandError::BusinessRuleViolation(message) => message,
+        _ => panic!("expected business rule violation error"),
+    };
+    assert!(
+        message.contains(account_id.as_ref()),
+        "error should include account id"
+    );
+    assert!(
+        message.contains("balance=50"),
+        "error should include current balance"
+    );
+    assert!(
+        message.contains("attempted_withdrawal=100"),
+        "error should include attempted withdrawal amount"
+    );
+
+    // And: No additional events were appended (only the original deposit remains)
+    let events = store
+        .read_stream::<TestDomainEvents>(account_id)
+        .await
+        .expect("reading stream to succeed");
+    assert_eq!(events.len(), 1, "failure should not append new events");
 }
