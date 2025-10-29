@@ -75,7 +75,7 @@ pub struct StreamId(String);
 ///
 /// StreamVersion represents the version (event count) of an event stream.
 /// Versions start at 0 (empty stream) and increment with each event.
-#[nutype(derive(Clone, Copy, PartialEq))]
+#[nutype(derive(Debug, Clone, Copy, PartialEq))]
 pub struct StreamVersion(usize);
 
 impl StreamVersion {
@@ -190,6 +190,27 @@ impl<E: crate::Event> EventStreamReader<E> {
     }
 
     /// Returns true if the stream contains no events.
+    ///
+    /// # Usage
+    ///
+    /// This method is typically used to check whether a stream is new (has no events)
+    /// before executing a command. For example, you may want to ensure that a creation
+    /// command is only applied to an empty stream:
+    ///
+    /// ```ignore
+    /// use eventcore::store::EventStreamReader;
+    ///
+    /// async fn example<E: Clone>(reader: EventStreamReader<E>) {
+    ///     if reader.is_empty() {
+    ///         // Stream is new, safe to apply creation command
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// * `true` if the stream contains no events
+    /// * `false` if the stream contains one or more events
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
