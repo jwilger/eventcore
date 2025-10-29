@@ -29,7 +29,7 @@ pub enum CommandError {
     /// constraint violations, etc.). The error classification determines
     /// whether retry is appropriate.
     #[error("event store error: {0}")]
-    EventStoreError(#[from] crate::store::EventStoreError),
+    EventStoreError(crate::store::EventStoreError),
 
     /// Invalid command state detected during execution.
     ///

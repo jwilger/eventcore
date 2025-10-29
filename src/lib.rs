@@ -8,7 +8,11 @@ pub use errors::CommandError;
 pub use store::EventStore;
 
 // Re-export InMemoryEventStore for library consumers (per ADR-011)
-pub use store::{InMemoryEventStore, StreamId, StreamWrites};
+// Re-export EventStore trait helper types for trait implementations (per ADR-010 compiler-driven evolution)
+pub use store::{
+    EventStoreError, EventStreamReader, EventStreamSlice, InMemoryEventStore, StreamId,
+    StreamVersion, StreamWrites,
+};
 
 /// Represents the successful outcome of command execution.
 ///
@@ -16,6 +20,7 @@ pub use store::{InMemoryEventStore, StreamId, StreamWrites};
 /// state reconstruction, business rule validation, and atomic event persistence.
 /// The specific data included in this response is yet to be determined based
 /// on actual usage requirements.
+#[derive(Debug)]
 pub struct ExecutionResponse;
 
 /// Execute a command against the event store.
@@ -49,7 +54,10 @@ where
         .await
         .map_err(|_| CommandError::BusinessRuleViolation("failed to read stream".into()))?;
 
-    // QUESTION: should we add a `fold` method to the reader? Is there a trait that already has
+    // Capture the stream version (number of events) for optimistic concurrency control
+    let expected_version = store::StreamVersion::new(reader.len());
+
+    // TODO: should we add a `fold` method to the reader? Is there a trait that already has
     // that method signature?
     //
     // Reconstruct state by folding events via apply()
@@ -60,9 +68,27 @@ where
     // Call handle() with reconstructed state
     let new_events = command.handle(state)?;
 
-    // Convert NewEvents to StreamWrites and store atomically
-    let writes: StreamWrites = Vec::from(new_events).into_iter().collect();
-    store.append_events(writes).await?;
+    // Convert NewEvents to StreamWrites with version information and store atomically
+    let writes: StreamWrites = Vec::from(new_events)
+        .into_iter()
+        .fold(StreamWrites::new(), |writes, event| {
+            writes.append(event, expected_version)
+        });
+
+    // Convert EventStoreError variants to appropriate CommandError types.
+    //
+    // thiserror's #[from] only implements the From trait, which has signature
+    // `fn from(e: T) -> Self` - it cannot pattern match on enum variants.
+    // Every EventStoreError would become CommandError::EventStoreError(e).
+    //
+    // We need variant-specific routing:
+    //   - VersionConflict → ConcurrencyError (different CommandError variant!)
+    //   - Other errors → EventStoreError(e)
+    //
+    // Manual map_err with match is the idiomatic solution for this.
+    store.append_events(writes).await.map_err(|e| match e {
+        EventStoreError::VersionConflict => CommandError::ConcurrencyError,
+    })?;
 
     Ok(ExecutionResponse)
 }
@@ -208,7 +234,7 @@ mod tests {
             stream_id: stream_id.clone(),
             value: 50,
         };
-        let writes: StreamWrites = vec![seed_event].into_iter().collect();
+        let writes = StreamWrites::new().append(seed_event, StreamVersion::new(0));
         store
             .append_events(writes)
             .await
