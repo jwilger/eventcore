@@ -3,6 +3,13 @@
 [![CI](https://github.com/jwilger/eventcore/workflows/CI/badge.svg)](https://github.com/jwilger/eventcore/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+> **⚠️ EXPERIMENTAL - NOT READY FOR USE**
+>
+> This project is in early development. APIs are unstable and subject to breaking changes.
+> The library is not yet published to crates.io, and referenced packages/examples may be incomplete or non-existent.
+>
+> **Do not use this in production or depend on it for any real projects.**
+
 A type-safe event sourcing library implementing **multi-stream event sourcing** with dynamic consistency boundaries - commands that can atomically read from and write to multiple event streams.
 
 ## Why EventCore?
@@ -16,8 +23,10 @@ Traditional event sourcing forces you into rigid aggregate boundaries. EventCore
 
 ## Quick Start
 
+> **Note:** The following is a design vision, not current reality. Packages are not yet published.
+
 ```toml
-# Cargo.toml
+# Cargo.toml (EXAMPLE - not yet available on crates.io)
 [dependencies]
 eventcore = "0.1"
 eventcore-postgres = "0.1"  # or your preferred adapter
