@@ -1,8 +1,8 @@
 # EventCore Architecture
 
-**Document Version:** 1.2
-**Date:** 2025-10-21
-**Phase:** 4 - Architecture Synthesis (Updated for ADR-012)
+**Document Version:** 1.3
+**Date:** 2025-10-29
+**Phase:** 4 - Architecture Synthesis (Updated for ADR-013)
 
 ## Overview
 
@@ -104,7 +104,7 @@ graph TB
     style Events fill:#fff3cd
 ```
 
-### 1. Event Store Abstraction (ADR-002)
+### 1. Event Store Abstraction (ADR-002, ADR-013)
 
 **Purpose:** Pluggable storage abstraction supporting atomic multi-stream operations.
 
@@ -119,13 +119,27 @@ graph TB
 - Version-based optimistic concurrency control (ADR-007)
 - Metadata preservation for audit and tracing (ADR-005)
 - Separate EventSubscription trait for projection building
+- Contract test suite verifies semantic behavior (ADR-013)
 
 **Storage Backend Examples:**
 
 - `eventcore-postgres`: Production backend using PostgreSQL ACID transactions (separate crate)
 - `InMemoryEventStore`: In-memory backend for testing with optional chaos injection (included in main `eventcore` crate)
 
-**Why This Design:** Pushes atomicity complexity into battle-tested storage layers where it belongs, keeping library code simple while enabling backend flexibility.
+**Contract Testing (ADR-013):**
+
+EventCore provides a reusable contract test suite (`eventcore::testing::event_store_contract_tests`) that verifies EventStore implementations handle critical semantic behaviors correctly:
+
+- Version conflict detection under concurrent writes
+- Multi-stream atomic semantics
+- Correct error variant classification
+- Metadata preservation
+
+All EventStore implementations (in-tree and external) MUST run and pass the contract test suite. This approach follows Rust ecosystem patterns (similar to Iterator, Clone traits) where semantic contracts are documented and verified through integration tests rather than type-system enforcement.
+
+**Why Contract Tests Over Type Enforcement:** Version checking is runtime behavior (semantic contract), not structural constraint. Type-state patterns cannot eliminate trust boundaries for runtime behavior. Integration tests verify actual behavior under realistic concurrent scenarios, providing stronger guarantees than compile-time structural checks. This maintains API simplicity while ensuring correctness.
+
+**Why This Design:** Pushes atomicity complexity into battle-tested storage layers where it belongs, keeping library code simple while enabling backend flexibility. Contract tests provide verification mechanism with zero API complexity cost.
 
 ### 2. Event System (ADR-012)
 
@@ -654,12 +668,20 @@ Errors flow through layers with context accumulation:
 - Version conflicts detected 100% of the time
 - Atomic version checking prevents time-of-check-to-time-of-use races
 - No lost updates possible
+- Contract test suite verifies version checking behavior (ADR-013)
 
 **Type Safety:**
 
 - Illegal states unrepresentable at compile time
 - Validated domain types prevent invalid data
 - Total functions ensure explicit error handling
+
+**Contract Verification (ADR-013):**
+
+- EventStore implementations verified through reusable contract test suite
+- Tests cover version conflict detection, multi-stream atomics, error classification
+- Runtime behavior verification complements compile-time type safety
+- Pattern follows Rust ecosystem conventions (Iterator, Clone semantic contracts)
 
 ### Performance Characteristics
 
@@ -723,11 +745,14 @@ EventCore's architecture prioritizes correctness over raw throughput, with perfo
 
 ### Extensibility
 
-**Storage Backends:**
+**Storage Backends (ADR-013):**
 
 - EventStore trait enables custom backends
 - PostgreSQL and in-memory implementations provided
 - Community backends possible (SQLite, EventStoreDB, etc.)
+- Contract test suite provides verification for custom implementations
+- Backend implementors integrate `eventcore::testing::event_store_contract_tests` into test suites
+- Contract tests ensure correct version checking, atomicity, and error handling
 
 **Custom Metadata:**
 
@@ -886,7 +911,10 @@ graph TB
 
 **Well-Defined Extension Boundaries:**
 
-- **EventStore Trait:** Implement custom storage backends
+- **EventStore Trait (ADR-013):** Implement custom storage backends
+  - Contract test suite (`eventcore::testing::event_store_contract_tests`) verifies implementations
+  - All custom backends MUST pass contract tests for version checking, atomicity, error handling
+  - Tests imported into backend's test suite, ensuring compliance with semantic contracts
 - **Custom Metadata Type:** Define application-specific metadata structures
 - **StreamResolver Trait:** Implement dynamic stream discovery
 - **Retry Policies:** Configure or customize retry behavior
@@ -914,10 +942,42 @@ trait EventStore {
 - Metadata preservation
 - Error classification (retriable vs permanent)
 
+**Contract Test Integration (ADR-013):**
+
+All EventStore implementations must integrate and pass the contract test suite:
+
+```rust
+// In backend's test suite
+#[cfg(test)]
+mod contract_tests {
+    use eventcore::testing::event_store_contract_tests;
+    use my_backend::MyEventStore;
+
+    #[tokio::test]
+    async fn verify_version_conflict_detection() {
+        let store = MyEventStore::new();
+        event_store_contract_tests::test_version_conflicts(&store).await;
+    }
+
+    // Additional contract tests...
+}
+```
+
+Contract tests verify:
+
+- Version conflict detection under concurrent writes
+- Multi-stream atomic semantics
+- Correct EventStoreError variant classification
+- Metadata preservation across writes
+
+**Why Contract Tests:** EventStore trait defines semantic contracts (runtime behavior) that cannot be enforced at compile time. Contract tests verify actual behavior under realistic concurrent scenarios, providing stronger correctness guarantees than type-system enforcement while maintaining API simplicity.
+
 **Provided Implementations:**
 
 - `eventcore-postgres`: Production backend with ACID transactions (separate crate for heavyweight dependencies)
 - `InMemoryEventStore`: Testing backend (included in main `eventcore` crate per ADR-011)
+
+Both implementations pass the complete contract test suite.
 
 ### Macro Crate Integration
 
@@ -1033,6 +1093,7 @@ This architecture synthesizes the following accepted ADRs:
 - **ADR-010:** Free Function API Design Philosophy
 - **ADR-011:** In-Memory Event Store Crate Location
 - **ADR-012:** Event Trait for Domain-First Design
+- **ADR-013:** EventStore Contract Testing Approach
 
 Refer to individual ADRs for detailed rationale, alternatives considered, and specific implementation guidance.
 
