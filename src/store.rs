@@ -1,3 +1,4 @@
+use crate::Event;
 use nutype::nutype;
 
 /// Trait defining the contract for event store implementations.
@@ -76,6 +77,24 @@ pub struct StreamId(String);
 /// Versions start at 0 (empty stream) and increment with each event.
 #[nutype(derive(Clone, Copy, PartialEq))]
 pub struct StreamVersion(usize);
+
+impl StreamVersion {
+    /// Increment the version by 1.
+    ///
+    /// Returns a new StreamVersion with the incremented value.
+    /// This is used when appending events to advance the stream version.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let v0 = StreamVersion::new(0);
+    /// let v1 = v0.increment();
+    /// assert_eq!(v1, StreamVersion::new(1));
+    /// ```
+    pub fn increment(self) -> Self {
+        Self::new(self.into_inner() + 1)
+    }
+}
 
 /// Error type returned by event store operations.
 ///
@@ -199,6 +218,15 @@ impl<E: crate::Event> EventStreamReader<E> {
     }
 }
 
+impl<E: Event> IntoIterator for EventStreamReader<E> {
+    type Item = E;
+    type IntoIter = std::vec::IntoIter<E>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.events.into_iter()
+    }
+}
+
 /// Placeholder for event stream slice type.
 ///
 /// `EventStreamSlice` is a consecutive set of `StoredEvent` that represents a fixed number of
@@ -301,7 +329,7 @@ impl EventStore for InMemoryEventStore {
                 .entry(stream_id)
                 .or_insert_with(|| (Vec::new(), StreamVersion::new(0)));
             events.push(event);
-            *version = StreamVersion::new(version.into_inner() + 1);
+            *version = version.increment();
         }
 
         Ok(EventStreamSlice)

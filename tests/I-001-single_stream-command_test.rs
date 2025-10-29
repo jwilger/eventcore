@@ -5,6 +5,15 @@ use eventcore::{
 use nutype::nutype;
 use uuid::Uuid;
 
+// Test helper functions
+fn test_account_id() -> StreamId {
+    StreamId::try_new(Uuid::now_v7().to_string()).expect("valid stream id")
+}
+
+fn test_amount(cents: u16) -> MoneyAmount {
+    MoneyAmount::try_new(cents).expect("valid amount")
+}
+
 #[nutype(validate(greater = 0), derive(Debug, Clone, Copy, PartialEq, Eq))]
 struct MoneyAmount(u16);
 
@@ -122,6 +131,48 @@ impl CommandLogic for Withdraw {
     }
 }
 
+/// Test infrastructure: Wrapper for deterministic concurrency testing.
+///
+/// ControlledEventStore wraps InMemoryEventStore and uses synchronization
+/// primitives to create deterministic interleavings of concurrent commands.
+/// This allows testing version conflicts without relying on race conditions.
+///
+/// Used by Scenario 3 to test optimistic concurrency control.
+struct ControlledEventStore {
+    inner: InMemoryEventStore,
+    read_barrier: std::sync::Arc<tokio::sync::Barrier>,
+    write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+}
+
+impl ControlledEventStore {
+    fn new() -> Self {
+        Self {
+            inner: InMemoryEventStore::new(),
+            read_barrier: std::sync::Arc::new(tokio::sync::Barrier::new(2)),
+            write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+}
+
+impl EventStore for ControlledEventStore {
+    async fn read_stream<E: Event>(
+        &self,
+        stream_id: StreamId,
+    ) -> Result<EventStreamReader<E>, EventStoreError> {
+        let result = self.inner.read_stream(stream_id).await;
+        self.read_barrier.wait().await;
+        result
+    }
+
+    async fn append_events(
+        &self,
+        writes: StreamWrites,
+    ) -> Result<EventStreamSlice, EventStoreError> {
+        let _guard = self.write_lock.lock().await;
+        self.inner.append_events(writes).await
+    }
+}
+
 /// Integration test for I-001: Single-Stream Command End-to-End
 ///
 /// This test exercises a complete single-stream command execution from the
@@ -133,10 +184,10 @@ async fn main_success() {
     let store = InMemoryEventStore::new();
 
     // And: Developer creates a stream ID for a bank account
-    let account_id = StreamId::try_new(Uuid::now_v7().to_string()).expect("valid stream id");
+    let account_id = test_account_id();
 
     // And: Developer creates a Deposit command
-    let amount = MoneyAmount::try_new(100).expect("valid amount");
+    let amount = test_amount(100);
     let command = Deposit {
         account_id: account_id.clone(),
         amount,
@@ -179,10 +230,10 @@ async fn main_success() {
 async fn insufficient_funds_returns_business_rule_violation() {
     // Given: Developer creates in-memory event store and account id
     let store = InMemoryEventStore::new();
-    let account_id = StreamId::try_new(Uuid::now_v7().to_string()).expect("valid stream id");
+    let account_id = test_account_id();
 
     // And: Developer records an initial deposit of 50 to establish balance
-    let initial_amount = MoneyAmount::try_new(50).expect("valid amount");
+    let initial_amount = test_amount(50);
     let seed_deposit = Deposit {
         account_id: account_id.clone(),
         amount: initial_amount,
@@ -192,7 +243,7 @@ async fn insufficient_funds_returns_business_rule_violation() {
         .expect("initial deposit to succeed");
 
     // And: Developer prepares a withdraw command that exceeds current balance
-    let withdrawal_amount = MoneyAmount::try_new(100).expect("valid amount");
+    let withdrawal_amount = test_amount(100);
     let withdraw = Withdraw {
         account_id: account_id.clone(),
         amount: withdrawal_amount,
@@ -240,61 +291,15 @@ async fn insufficient_funds_returns_business_rule_violation() {
 #[tokio::test]
 async fn concurrent_deposits_detect_version_conflict() {
     use std::sync::Arc;
-    use tokio::sync::{Barrier, Mutex};
-
-    // Test infrastructure: ControlledEventStore wrapper for deterministic concurrency testing
-    struct ControlledEventStore {
-        inner: InMemoryEventStore,
-        // Barrier ensures both commands read at version 0 before either writes
-        read_barrier: Arc<Barrier>,
-        // Mutex controls which command writes first
-        write_lock: Arc<Mutex<()>>,
-    }
-
-    impl ControlledEventStore {
-        fn new() -> Self {
-            Self {
-                inner: InMemoryEventStore::new(),
-                read_barrier: Arc::new(Barrier::new(2)), // 2 commands must sync
-                write_lock: Arc::new(Mutex::new(())),
-            }
-        }
-    }
-
-    impl EventStore for ControlledEventStore {
-        async fn read_stream<E: Event>(
-            &self,
-            stream_id: StreamId,
-        ) -> Result<EventStreamReader<E>, EventStoreError> {
-            // Delegate read to inner store
-            let result = self.inner.read_stream(stream_id).await;
-
-            // Synchronization point: both commands read before either writes
-            self.read_barrier.wait().await;
-
-            result
-        }
-
-        async fn append_events(
-            &self,
-            writes: StreamWrites,
-        ) -> Result<EventStreamSlice, EventStoreError> {
-            // Acquire write lock to ensure sequential writes
-            let _guard = self.write_lock.lock().await;
-
-            // Delegate append to inner store (which will check versions)
-            self.inner.append_events(writes).await
-        }
-    }
 
     // Given: Developer creates controlled event store for deterministic concurrency
     let store = Arc::new(ControlledEventStore::new());
 
     // And: Developer creates a stream ID for a bank account
-    let account_id = StreamId::try_new(Uuid::now_v7().to_string()).expect("valid stream id");
+    let account_id = test_account_id();
 
     // And: Developer prepares two concurrent deposit commands on same account
-    let amount = MoneyAmount::try_new(100).expect("valid amount");
+    let amount = test_amount(100);
     let command1 = Deposit {
         account_id: account_id.clone(),
         amount,

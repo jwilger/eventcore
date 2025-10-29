@@ -52,18 +52,15 @@ where
     let reader = store
         .read_stream::<C::Event>(stream_id)
         .await
-        .map_err(|_| CommandError::BusinessRuleViolation("failed to read stream".into()))?;
+        .map_err(CommandError::EventStoreError)?;
 
     // Capture the stream version (number of events) for optimistic concurrency control
     let expected_version = store::StreamVersion::new(reader.len());
 
-    // TODO: should we add a `fold` method to the reader? Is there a trait that already has
-    // that method signature?
-    //
     // Reconstruct state by folding events via apply()
     let state = reader
-        .iter()
-        .fold(C::State::default(), |acc, event| command.apply(acc, event));
+        .into_iter()
+        .fold(C::State::default(), |acc, event| command.apply(acc, &event));
 
     // Call handle() with reconstructed state
     let new_events = command.handle(state)?;
@@ -213,6 +210,55 @@ mod tests {
             *self.captured_state.lock().unwrap() = Some(state);
             Ok(NewEvents::default())
         }
+    }
+
+    /// Unit test: Verify read_stream() failures propagate as EventStoreError.
+    ///
+    /// This test ensures that when the event store's read_stream() operation
+    /// fails (e.g., network error, database unavailable), the error is correctly
+    /// classified as CommandError::EventStoreError rather than being incorrectly
+    /// mapped to CommandError::BusinessRuleViolation.
+    ///
+    /// Storage failures are infrastructure concerns, not domain rule violations.
+    #[tokio::test]
+    async fn test_read_stream_failure_propagates_as_event_store_error() {
+        // Given: A mock event store that fails on read_stream()
+        struct FailingEventStore;
+
+        impl EventStore for FailingEventStore {
+            async fn read_stream<E: crate::Event>(
+                &self,
+                _stream_id: StreamId,
+            ) -> Result<EventStreamReader<E>, EventStoreError> {
+                Err(EventStoreError::VersionConflict)
+            }
+
+            async fn append_events(
+                &self,
+                _writes: StreamWrites,
+            ) -> Result<EventStreamSlice, EventStoreError> {
+                unimplemented!("Not needed for this test")
+            }
+        }
+
+        let store = FailingEventStore;
+
+        // And: A simple test command
+        let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
+        let command = MockCommand {
+            stream_id,
+            handle_called: Arc::new(AtomicBool::new(false)),
+        };
+
+        // When: Developer executes the command with a failing store
+        let result = execute(&store, command).await;
+
+        // Then: Execution fails with EventStoreError, not BusinessRuleViolation
+        assert!(
+            matches!(result, Err(CommandError::EventStoreError(_))),
+            "read_stream() failure should propagate as CommandError::EventStoreError, got: {:?}",
+            result
+        );
     }
 
     /// Unit test: Verify execute() reconstructs state from existing events.
