@@ -14,5 +14,5 @@ thiserror = "2.0.17"
 uuid = { version = "1.18.1", features = ["serde", "v1", "v7"] }
 
 [dev-dependencies]
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "sync"] }
 uuid = { version = "1.18.1", features = ["v7"] }
