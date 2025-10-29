@@ -8,7 +8,11 @@ pub use errors::CommandError;
 pub use store::EventStore;
 
 // Re-export InMemoryEventStore for library consumers (per ADR-011)
-pub use store::{InMemoryEventStore, StreamId, StreamWrites};
+// Re-export EventStore trait helper types for trait implementations (per ADR-010 compiler-driven evolution)
+pub use store::{
+    EventStoreError, EventStreamReader, EventStreamSlice, InMemoryEventStore, StreamId,
+    StreamVersion, StreamWrites,
+};
 
 /// Represents the successful outcome of command execution.
 ///
@@ -16,6 +20,7 @@ pub use store::{InMemoryEventStore, StreamId, StreamWrites};
 /// state reconstruction, business rule validation, and atomic event persistence.
 /// The specific data included in this response is yet to be determined based
 /// on actual usage requirements.
+#[derive(Debug)]
 pub struct ExecutionResponse;
 
 /// Execute a command against the event store.
@@ -42,13 +47,45 @@ where
     C: CommandLogic,
     S: EventStore,
 {
-    // Call command.handle() with default state
-    let state = C::State::default();
+    // Read existing events from the command's stream
+    let stream_id = command.stream_id().clone();
+    let reader = store
+        .read_stream::<C::Event>(stream_id)
+        .await
+        .map_err(CommandError::EventStoreError)?;
+
+    // Capture the stream version (number of events) for optimistic concurrency control
+    let expected_version = store::StreamVersion::new(reader.len());
+
+    // Reconstruct state by folding events via apply()
+    let state = reader
+        .into_iter()
+        .fold(C::State::default(), |acc, event| command.apply(acc, &event));
+
+    // Call handle() with reconstructed state
     let new_events = command.handle(state)?;
 
-    // Convert NewEvents to StreamWrites and store atomically
-    let writes: StreamWrites = Vec::from(new_events).into_iter().collect();
-    store.append_events(writes).await?;
+    // Convert NewEvents to StreamWrites with version information and store atomically
+    let writes: StreamWrites = Vec::from(new_events)
+        .into_iter()
+        .fold(StreamWrites::new(), |writes, event| {
+            writes.append(event, expected_version)
+        });
+
+    // Convert EventStoreError variants to appropriate CommandError types.
+    //
+    // thiserror's #[from] only implements the From trait, which has signature
+    // `fn from(e: T) -> Self` - it cannot pattern match on enum variants.
+    // Every EventStoreError would become CommandError::EventStoreError(e).
+    //
+    // We need variant-specific routing:
+    //   - VersionConflict → ConcurrencyError (different CommandError variant!)
+    //   - Other errors → EventStoreError(e)
+    //
+    // Manual map_err with match is the idiomatic solution for this.
+    store.append_events(writes).await.map_err(|e| match e {
+        EventStoreError::VersionConflict => CommandError::ConcurrencyError,
+    })?;
 
     Ok(ExecutionResponse)
 }
@@ -76,12 +113,17 @@ mod tests {
     /// This command uses an Arc<AtomicBool> to verify that execute()
     /// actually invokes the command's handle() method.
     struct MockCommand {
+        stream_id: StreamId,
         handle_called: Arc<AtomicBool>,
     }
 
     impl CommandLogic for MockCommand {
         type Event = TestEvent;
         type State = ();
+
+        fn stream_id(&self) -> &StreamId {
+            &self.stream_id
+        }
 
         fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
             state
@@ -105,8 +147,10 @@ mod tests {
         let store = InMemoryEventStore::new();
 
         // And: A mock command that tracks handle() calls
+        let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
         let handle_called = Arc::new(AtomicBool::new(false));
         let command = MockCommand {
+            stream_id,
             handle_called: Arc::clone(&handle_called),
         };
 
@@ -120,6 +164,145 @@ mod tests {
         assert!(
             handle_called.load(Ordering::SeqCst),
             "execute() must call command.handle()"
+        );
+    }
+
+    /// Test event type with a value field for state reconstruction testing.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestEventWithValue {
+        stream_id: StreamId,
+        value: i32,
+    }
+
+    impl Event for TestEventWithValue {
+        fn stream_id(&self) -> &StreamId {
+            &self.stream_id
+        }
+    }
+
+    /// Test state that accumulates values from events.
+    #[derive(Default, Clone, Debug, PartialEq)]
+    struct TestState {
+        value: i32,
+    }
+
+    /// Mock command that captures the state passed to handle() for inspection.
+    struct StateCapturingCommand {
+        stream_id: StreamId,
+        captured_state: Arc<std::sync::Mutex<Option<TestState>>>,
+    }
+
+    impl CommandLogic for StateCapturingCommand {
+        type Event = TestEventWithValue;
+        type State = TestState;
+
+        fn stream_id(&self) -> &StreamId {
+            &self.stream_id
+        }
+
+        fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+            state.value += event.value;
+            state
+        }
+
+        fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+            // Capture the state that was passed to handle()
+            *self.captured_state.lock().unwrap() = Some(state);
+            Ok(NewEvents::default())
+        }
+    }
+
+    /// Unit test: Verify read_stream() failures propagate as EventStoreError.
+    ///
+    /// This test ensures that when the event store's read_stream() operation
+    /// fails (e.g., network error, database unavailable), the error is correctly
+    /// classified as CommandError::EventStoreError rather than being incorrectly
+    /// mapped to CommandError::BusinessRuleViolation.
+    ///
+    /// Storage failures are infrastructure concerns, not domain rule violations.
+    #[tokio::test]
+    async fn test_read_stream_failure_propagates_as_event_store_error() {
+        // Given: A mock event store that fails on read_stream()
+        struct FailingEventStore;
+
+        impl EventStore for FailingEventStore {
+            async fn read_stream<E: crate::Event>(
+                &self,
+                _stream_id: StreamId,
+            ) -> Result<EventStreamReader<E>, EventStoreError> {
+                Err(EventStoreError::VersionConflict)
+            }
+
+            async fn append_events(
+                &self,
+                _writes: StreamWrites,
+            ) -> Result<EventStreamSlice, EventStoreError> {
+                unimplemented!("Not needed for this test")
+            }
+        }
+
+        let store = FailingEventStore;
+
+        // And: A simple test command
+        let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
+        let command = MockCommand {
+            stream_id,
+            handle_called: Arc::new(AtomicBool::new(false)),
+        };
+
+        // When: Developer executes the command with a failing store
+        let result = execute(&store, command).await;
+
+        // Then: Execution fails with EventStoreError, not BusinessRuleViolation
+        assert!(
+            matches!(result, Err(CommandError::EventStoreError(_))),
+            "read_stream() failure should propagate as CommandError::EventStoreError, got: {:?}",
+            result
+        );
+    }
+
+    /// Unit test: Verify execute() reconstructs state from existing events.
+    ///
+    /// This test ensures that execute() reads existing events from the stream,
+    /// applies them via command.apply() to build the current state, and passes
+    /// that reconstructed state to command.handle().
+    ///
+    /// This is critical for commands that make decisions based on prior state
+    /// (e.g., Withdraw checking balance from previous Deposit events).
+    #[tokio::test]
+    async fn test_execute_reconstructs_state_from_existing_events() {
+        // Given: An event store with a pre-existing event in a stream
+        let store = InMemoryEventStore::new();
+        let stream_id = StreamId::try_new("account-123").expect("valid stream id");
+
+        // And: Seed the stream with an initial event (value = 50)
+        let seed_event = TestEventWithValue {
+            stream_id: stream_id.clone(),
+            value: 50,
+        };
+        let writes = StreamWrites::new().append(seed_event, StreamVersion::new(0));
+        store
+            .append_events(writes)
+            .await
+            .expect("seed event to be stored");
+
+        // And: A command that captures what state was passed to handle()
+        let captured_state = Arc::new(std::sync::Mutex::new(None));
+        let command = StateCapturingCommand {
+            stream_id: stream_id.clone(),
+            captured_state: captured_state.clone(),
+        };
+
+        // When: Developer executes the command
+        execute(&store, command)
+            .await
+            .expect("command execution to succeed");
+
+        // Then: handle() received reconstructed state (not default state)
+        let final_state = captured_state.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            final_state.value, 50,
+            "execute() must reconstruct state from existing events before calling handle()"
         );
     }
 }

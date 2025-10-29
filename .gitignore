@@ -37,6 +37,9 @@
 .envrc
 .direnv/
 
+# Zellij layout files
+.zellij.kdl
+
 # Local cargo tools installed by nix flake
 .cargo-bin/
 

@@ -1,3 +1,4 @@
+use crate::Event;
 use nutype::nutype;
 
 /// Trait defining the contract for event store implementations.
@@ -70,6 +71,31 @@ pub trait EventStore {
 )]
 pub struct StreamId(String);
 
+/// Stream version domain type.
+///
+/// StreamVersion represents the version (event count) of an event stream.
+/// Versions start at 0 (empty stream) and increment with each event.
+#[nutype(derive(Clone, Copy, PartialEq))]
+pub struct StreamVersion(usize);
+
+impl StreamVersion {
+    /// Increment the version by 1.
+    ///
+    /// Returns a new StreamVersion with the incremented value.
+    /// This is used when appending events to advance the stream version.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let v0 = StreamVersion::new(0);
+    /// let v1 = v0.increment();
+    /// assert_eq!(v1, StreamVersion::new(1));
+    /// ```
+    pub fn increment(self) -> Self {
+        Self::new(self.into_inner() + 1)
+    }
+}
+
 /// Error type returned by event store operations.
 ///
 /// EventStoreError represents failures during read or append operations.
@@ -77,8 +103,15 @@ pub struct StreamId(String);
 ///
 /// TODO: Implement full error hierarchy per ADR-004.
 #[derive(thiserror::Error, Debug)]
-#[error("event store operation failed")]
-pub struct EventStoreError;
+pub enum EventStoreError {
+    /// Version conflict during optimistic concurrency control.
+    ///
+    /// Returned when append_events detects that the expected version
+    /// does not match the current stream version, indicating a concurrent
+    /// modification occurred between read and write.
+    #[error("version conflict detected")]
+    VersionConflict,
+}
 
 /// Placeholder for collection of events to write, organized by stream.
 ///
@@ -91,6 +124,7 @@ pub struct EventStoreError;
 /// TODO: Refine based on multi-stream atomicity requirements.
 pub struct StreamWrites {
     events: Vec<(StreamId, Box<dyn std::any::Any + Send>)>,
+    expected_versions: std::collections::HashMap<StreamId, StreamVersion>,
 }
 
 impl StreamWrites {
@@ -98,7 +132,10 @@ impl StreamWrites {
     ///
     /// Returns an empty StreamWrites ready to have events appended via builder pattern.
     pub fn new() -> Self {
-        Self { events: Vec::new() }
+        Self {
+            events: Vec::new(),
+            expected_versions: std::collections::HashMap::new(),
+        }
     }
 
     /// Append an event to a stream using builder pattern.
@@ -113,12 +150,15 @@ impl StreamWrites {
     /// # Parameters
     ///
     /// * `event` - The event to append (must implement Event trait)
+    /// * `expected_version` - The version this write expects the stream to be at
     ///
     /// # Returns
     ///
     /// New StreamWrites instance with the event added
-    pub fn append<E: crate::Event>(mut self, event: E) -> Self {
+    pub fn append<E: crate::Event>(mut self, event: E, expected_version: StreamVersion) -> Self {
         let stream_id = event.stream_id().clone();
+        self.expected_versions
+            .insert(stream_id.clone(), expected_version);
         self.events.push((stream_id, Box::new(event)));
         self
     }
@@ -127,13 +167,6 @@ impl StreamWrites {
 impl Default for StreamWrites {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl<E: crate::Event> FromIterator<E> for StreamWrites {
-    fn from_iter<I: IntoIterator<Item = E>>(iter: I) -> Self {
-        iter.into_iter()
-            .fold(Self::new(), |writes, event| writes.append(event))
     }
 }
 
@@ -156,6 +189,11 @@ impl<E: crate::Event> EventStreamReader<E> {
         self.events.len()
     }
 
+    /// Returns true if the stream contains no events.
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
     /// Returns the first event in the stream, if any.
     ///
     /// This is a convenience method for accessing the first event when
@@ -169,6 +207,23 @@ impl<E: crate::Event> EventStreamReader<E> {
     /// TODO: Implement based on actual storage structure.
     pub fn first(&self) -> Option<&E> {
         self.events.first()
+    }
+
+    /// Returns an iterator over the events for state reconstruction.
+    ///
+    /// Events are returned in stream version order (oldest to newest).
+    /// This is used by the executor to fold events into state via `CommandLogic::apply()`.
+    pub fn iter(&self) -> impl Iterator<Item = &E> {
+        self.events.iter()
+    }
+}
+
+impl<E: Event> IntoIterator for EventStreamReader<E> {
+    type Item = E;
+    type IntoIter = std::vec::IntoIter<E>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.events.into_iter()
     }
 }
 
@@ -206,9 +261,10 @@ pub struct EventStreamSlice;
 ///
 /// InMemoryEventStore uses interior mutability for concurrent access.
 /// TODO: Determine if Arc<Mutex<>> or other synchronization primitive needed.
+type StreamData = (Vec<Box<dyn std::any::Any + Send>>, StreamVersion);
+
 pub struct InMemoryEventStore {
-    streams:
-        std::sync::Mutex<std::collections::HashMap<StreamId, Vec<Box<dyn std::any::Any + Send>>>>,
+    streams: std::sync::Mutex<std::collections::HashMap<StreamId, StreamData>>,
 }
 
 impl InMemoryEventStore {
@@ -237,7 +293,7 @@ impl EventStore for InMemoryEventStore {
         let streams = self.streams.lock().unwrap();
         let events = streams
             .get(&stream_id)
-            .map(|boxed_events| {
+            .map(|(boxed_events, _version)| {
                 boxed_events
                     .iter()
                     .filter_map(|boxed| boxed.downcast_ref::<E>())
@@ -255,8 +311,25 @@ impl EventStore for InMemoryEventStore {
     ) -> Result<EventStreamSlice, EventStoreError> {
         let mut streams = self.streams.lock().unwrap();
 
+        // Check all version constraints before writing any events
+        for (stream_id, expected_version) in &writes.expected_versions {
+            let current_version = streams
+                .get(stream_id)
+                .map(|(_events, version)| *version)
+                .unwrap_or_else(|| StreamVersion::new(0));
+
+            if current_version != *expected_version {
+                return Err(EventStoreError::VersionConflict);
+            }
+        }
+
+        // All versions match - proceed with writes
         for (stream_id, event) in writes.events {
-            streams.entry(stream_id).or_default().push(event);
+            let (events, version) = streams
+                .entry(stream_id)
+                .or_insert_with(|| (Vec::new(), StreamVersion::new(0)));
+            events.push(event);
+            *version = version.increment();
         }
 
         Ok(EventStreamSlice)
@@ -328,8 +401,8 @@ mod tests {
             data: "test event data".to_string(),
         };
 
-        // And: A collection of writes containing the event
-        let writes = StreamWrites::new().append(event.clone());
+        // And: A collection of writes containing the event (expected version 0 for empty stream)
+        let writes = StreamWrites::new().append(event.clone(), StreamVersion::new(0));
 
         // When: We append the event to the store
         store
