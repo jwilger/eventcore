@@ -94,6 +94,12 @@ where
         match result {
             Ok(_) => return Ok(ExecutionResponse),
             Err(CommandError::ConcurrencyError(_)) if attempt < MAX_ATTEMPTS - 1 => {
+                tracing::warn!(
+                    "Retrying after concurrency conflict (attempt {} of {})",
+                    attempt + 1,
+                    MAX_ATTEMPTS
+                );
+
                 // Calculate exponential backoff with jitter
                 let base_delay = BASE_DELAY_MS * 2_u64.pow(attempt);
                 let jitter = 1.0 + (rand::random::<f64>() - 0.5) * 0.4; // ±20%
@@ -338,6 +344,7 @@ mod tests {
     /// This is critical for multi-user scenarios where concurrent commands may
     /// conflict temporarily but can succeed on retry with updated state.
     #[tokio::test]
+    #[tracing_test::traced_test]
     async fn test_execute_retries_automatically_on_version_conflict() {
         // Given: An event store that injects exactly one version conflict
         use tokio::sync::Mutex;
@@ -392,6 +399,42 @@ mod tests {
             "execute() should retry automatically and succeed, but got: {:?}",
             result
         );
+
+        // And: Retry attempt should be logged for observability
+        // From I-002 Scenario 2: "log shows 'Retry attempt 1/5 for stream...'"
+        // Use tracing-test crate to capture and verify logs
+        assert!(
+            logs_contain("Retrying"),
+            "logs should contain retry message"
+        );
+
+        // Verify log message contains attempt number and total
+        logs_assert(|lines: &[&str]| {
+            let retry_logs: Vec<_> = lines
+                .iter()
+                .filter(|line| line.contains("Retrying"))
+                .collect();
+
+            if retry_logs.len() != 1 {
+                return Err(format!(
+                    "Expected exactly one retry log entry, but found {}",
+                    retry_logs.len()
+                ));
+            }
+
+            let log_msg = retry_logs[0];
+            if !log_msg.contains("attempt 1") {
+                return Err(format!("Log should contain 'attempt 1', got: {}", log_msg));
+            }
+            if !log_msg.contains("5") {
+                return Err(format!(
+                    "Log should contain max attempts '5', got: {}",
+                    log_msg
+                ));
+            }
+
+            Ok(())
+        });
     }
 
     /// Integration test: Verify execute() returns error after exhausting retries.
