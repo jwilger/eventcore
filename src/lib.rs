@@ -88,7 +88,7 @@ where
         //
         // Manual map_err with match is the idiomatic solution for this.
         let result = store.append_events(writes).await.map_err(|e| match e {
-            EventStoreError::VersionConflict => CommandError::ConcurrencyError(0),
+            EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt + 1),
         });
 
         match result {
@@ -101,7 +101,10 @@ where
                 );
 
                 // Calculate exponential backoff with jitter
-                let base_delay = BASE_DELAY_MS * 2_u64.pow(attempt);
+                let base_delay = 2_u64
+                    .checked_pow(attempt)
+                    .and_then(|exp| BASE_DELAY_MS.checked_mul(exp))
+                    .unwrap_or(u64::MAX);
                 let jitter = 1.0 + (rand::random::<f64>() - 0.5) * 0.4; // ±20%
                 let delay_ms = (base_delay as f64 * jitter) as u64;
 
