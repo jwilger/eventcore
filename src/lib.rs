@@ -47,47 +47,78 @@ where
     C: CommandLogic,
     S: EventStore,
 {
-    // Read existing events from the command's stream
-    let stream_id = command.stream_id().clone();
-    let reader = store
-        .read_stream::<C::Event>(stream_id)
-        .await
-        .map_err(CommandError::EventStoreError)?;
+    const MAX_ATTEMPTS: u32 = 5;
+    const BASE_DELAY_MS: u64 = 10;
 
-    // Capture the stream version (number of events) for optimistic concurrency control
-    let expected_version = store::StreamVersion::new(reader.len());
+    for attempt in 0..MAX_ATTEMPTS {
+        // Read existing events from the command's stream
+        let stream_id = command.stream_id().clone();
+        let reader = store
+            .read_stream::<C::Event>(stream_id)
+            .await
+            .map_err(CommandError::EventStoreError)?;
 
-    // Reconstruct state by folding events via apply()
-    let state = reader
-        .into_iter()
-        .fold(C::State::default(), |acc, event| command.apply(acc, &event));
+        // Capture the stream version (number of events) for optimistic concurrency control
+        let expected_version = store::StreamVersion::new(reader.len());
 
-    // Call handle() with reconstructed state
-    let new_events = command.handle(state)?;
+        // Reconstruct state by folding events via apply()
+        let state = reader
+            .into_iter()
+            .fold(C::State::default(), |acc, event| command.apply(acc, &event));
 
-    // Convert NewEvents to StreamWrites with version information and store atomically
-    let writes: StreamWrites = Vec::from(new_events)
-        .into_iter()
-        .fold(StreamWrites::new(), |writes, event| {
-            writes.append(event, expected_version)
+        // Call handle() with reconstructed state
+        let new_events = command.handle(state)?;
+
+        // Convert NewEvents to StreamWrites with version information and store atomically
+        let writes: StreamWrites = Vec::from(new_events)
+            .into_iter()
+            .fold(StreamWrites::new(), |writes, event| {
+                writes.append(event, expected_version)
+            });
+
+        // Convert EventStoreError variants to appropriate CommandError types.
+        //
+        // thiserror's #[from] only implements the From trait, which has signature
+        // `fn from(e: T) -> Self` - it cannot pattern match on enum variants.
+        // Every EventStoreError would become CommandError::EventStoreError(e).
+        //
+        // We need variant-specific routing:
+        //   - VersionConflict → ConcurrencyError (different CommandError variant!)
+        //   - Other errors → EventStoreError(e)
+        //
+        // Manual map_err with match is the idiomatic solution for this.
+        let result = store.append_events(writes).await.map_err(|e| match e {
+            EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt + 1),
         });
 
-    // Convert EventStoreError variants to appropriate CommandError types.
-    //
-    // thiserror's #[from] only implements the From trait, which has signature
-    // `fn from(e: T) -> Self` - it cannot pattern match on enum variants.
-    // Every EventStoreError would become CommandError::EventStoreError(e).
-    //
-    // We need variant-specific routing:
-    //   - VersionConflict → ConcurrencyError (different CommandError variant!)
-    //   - Other errors → EventStoreError(e)
-    //
-    // Manual map_err with match is the idiomatic solution for this.
-    store.append_events(writes).await.map_err(|e| match e {
-        EventStoreError::VersionConflict => CommandError::ConcurrencyError,
-    })?;
+        match result {
+            Ok(_) => return Ok(ExecutionResponse),
+            Err(CommandError::ConcurrencyError(_)) if attempt < MAX_ATTEMPTS - 1 => {
+                tracing::warn!(
+                    "Retrying after concurrency conflict (attempt {} of {})",
+                    attempt + 1,
+                    MAX_ATTEMPTS
+                );
 
-    Ok(ExecutionResponse)
+                // Calculate exponential backoff with jitter
+                let base_delay = 2_u64
+                    .checked_pow(attempt)
+                    .and_then(|exp| BASE_DELAY_MS.checked_mul(exp))
+                    .unwrap_or(u64::MAX);
+                let jitter = 1.0 + (rand::random::<f64>() - 0.5) * 0.4; // ±20%
+                let delay_ms = (base_delay as f64 * jitter) as u64;
+
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                continue; // Retry
+            }
+            Err(CommandError::ConcurrencyError(_)) => {
+                return Err(CommandError::ConcurrencyError(MAX_ATTEMPTS));
+            }
+            Err(e) => return Err(e), // Other permanent errors
+        }
+    }
+
+    unreachable!("loop always returns before MAX_ATTEMPTS")
 }
 
 #[cfg(test)]
@@ -304,5 +335,174 @@ mod tests {
             final_state.value, 50,
             "execute() must reconstruct state from existing events before calling handle()"
         );
+    }
+
+    /// Integration test: Verify execute() automatically retries on version conflict.
+    ///
+    /// This test ensures that when a command encounters a version conflict
+    /// (ConcurrencyError), execute() automatically retries the command and
+    /// succeeds transparently. The developer should never see the ConcurrencyError
+    /// for transient conflicts that can be resolved by retry.
+    ///
+    /// This is critical for multi-user scenarios where concurrent commands may
+    /// conflict temporarily but can succeed on retry with updated state.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_execute_retries_automatically_on_version_conflict() {
+        // Given: An event store that injects exactly one version conflict
+        use tokio::sync::Mutex;
+
+        struct ConflictOnceStore {
+            inner: InMemoryEventStore,
+            conflict_injected: Arc<Mutex<bool>>,
+        }
+
+        impl EventStore for ConflictOnceStore {
+            async fn read_stream<E: crate::Event>(
+                &self,
+                stream_id: StreamId,
+            ) -> Result<EventStreamReader<E>, EventStoreError> {
+                self.inner.read_stream(stream_id).await
+            }
+
+            async fn append_events(
+                &self,
+                writes: StreamWrites,
+            ) -> Result<EventStreamSlice, EventStoreError> {
+                let mut injected = self.conflict_injected.lock().await;
+                if !*injected {
+                    // First call: inject conflict
+                    *injected = true;
+                    Err(EventStoreError::VersionConflict)
+                } else {
+                    // Subsequent calls: succeed normally
+                    self.inner.append_events(writes).await
+                }
+            }
+        }
+
+        let store = ConflictOnceStore {
+            inner: InMemoryEventStore::new(),
+            conflict_injected: Arc::new(Mutex::new(false)),
+        };
+
+        // And: A simple test command
+        let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
+        let command = MockCommand {
+            stream_id,
+            handle_called: Arc::new(AtomicBool::new(false)),
+        };
+
+        // When: Developer executes the command
+        let result = execute(&store, command).await;
+
+        // Then: Command succeeds automatically (retry transparent to developer)
+        assert!(
+            result.is_ok(),
+            "execute() should retry automatically and succeed, but got: {:?}",
+            result
+        );
+
+        // And: Retry attempt should be logged for observability
+        // From I-002 Scenario 2: "log shows 'Retry attempt 1/5 for stream...'"
+        // Use tracing-test crate to capture and verify logs
+        assert!(
+            logs_contain("Retrying"),
+            "logs should contain retry message"
+        );
+
+        // Verify log message contains attempt number and total
+        logs_assert(|lines: &[&str]| {
+            let retry_logs: Vec<_> = lines
+                .iter()
+                .filter(|line| line.contains("Retrying"))
+                .collect();
+
+            if retry_logs.len() != 1 {
+                return Err(format!(
+                    "Expected exactly one retry log entry, but found {}",
+                    retry_logs.len()
+                ));
+            }
+
+            let log_msg = retry_logs[0];
+            if !log_msg.contains("attempt 1") {
+                return Err(format!("Log should contain 'attempt 1', got: {}", log_msg));
+            }
+            if !log_msg.contains("5") {
+                return Err(format!(
+                    "Log should contain max attempts '5', got: {}",
+                    log_msg
+                ));
+            }
+
+            Ok(())
+        });
+    }
+
+    /// Integration test: Verify execute() returns error after exhausting retries.
+    ///
+    /// This test ensures that when a command encounters persistent version conflicts
+    /// (more conflicts than max retry attempts), execute() exhausts all retries and
+    /// returns a ConcurrencyError to the developer. This is the failure case where
+    /// automatic retry cannot resolve the conflict.
+    ///
+    /// The developer should receive a clear ConcurrencyError indicating that retries
+    /// were attempted but all failed.
+    #[tokio::test]
+    async fn test_execute_returns_error_after_exhausting_retries() {
+        // Given: An event store that ALWAYS fails with version conflicts
+        struct AlwaysConflictStore {
+            inner: InMemoryEventStore,
+        }
+
+        impl EventStore for AlwaysConflictStore {
+            async fn read_stream<E: crate::Event>(
+                &self,
+                stream_id: StreamId,
+            ) -> Result<EventStreamReader<E>, EventStoreError> {
+                // Delegate to inner store for reading (returns empty stream)
+                self.inner.read_stream(stream_id).await
+            }
+
+            async fn append_events(
+                &self,
+                _writes: StreamWrites,
+            ) -> Result<EventStreamSlice, EventStoreError> {
+                // ALWAYS return VersionConflict - simulates persistent conflicts
+                Err(EventStoreError::VersionConflict)
+            }
+        }
+
+        let store = AlwaysConflictStore {
+            inner: InMemoryEventStore::new(),
+        };
+
+        // And: A simple test command
+        let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
+        let command = MockCommand {
+            stream_id,
+            handle_called: Arc::new(AtomicBool::new(false)),
+        };
+
+        // When: Developer executes the command
+        let result = execute(&store, command).await;
+
+        // Then: ConcurrencyError is returned (retries exhausted)
+        assert!(
+            matches!(result, Err(CommandError::ConcurrencyError(_))),
+            "should return ConcurrencyError after exhausting retries, but got: {:?}",
+            result
+        );
+
+        // And: Error message contains retry context
+        let error = result.unwrap_err();
+        if let CommandError::ConcurrencyError(_) = &error {
+            let error_msg = error.to_string();
+            assert_eq!(
+                error_msg, "concurrency conflict after 5 retry attempts",
+                "error message should clearly explain that retries were exhausted"
+            );
+        }
     }
 }
