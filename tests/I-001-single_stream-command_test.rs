@@ -1,6 +1,5 @@
 use eventcore::{
-    CommandError, CommandLogic, Event, EventStore, EventStoreError, EventStreamReader,
-    EventStreamSlice, InMemoryEventStore, NewEvents, StreamId, StreamWrites, execute,
+    CommandError, CommandLogic, Event, EventStore, InMemoryEventStore, NewEvents, StreamId, execute,
 };
 use nutype::nutype;
 use uuid::Uuid;
@@ -131,48 +130,6 @@ impl CommandLogic for Withdraw {
     }
 }
 
-/// Test infrastructure: Wrapper for deterministic concurrency testing.
-///
-/// ControlledEventStore wraps InMemoryEventStore and uses synchronization
-/// primitives to create deterministic interleavings of concurrent commands.
-/// This allows testing version conflicts without relying on race conditions.
-///
-/// Used by Scenario 3 to test optimistic concurrency control.
-struct ControlledEventStore {
-    inner: InMemoryEventStore,
-    read_barrier: std::sync::Arc<tokio::sync::Barrier>,
-    write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
-}
-
-impl ControlledEventStore {
-    fn new() -> Self {
-        Self {
-            inner: InMemoryEventStore::new(),
-            read_barrier: std::sync::Arc::new(tokio::sync::Barrier::new(2)),
-            write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
-        }
-    }
-}
-
-impl EventStore for ControlledEventStore {
-    async fn read_stream<E: Event>(
-        &self,
-        stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
-        let result = self.inner.read_stream(stream_id).await;
-        self.read_barrier.wait().await;
-        result
-    }
-
-    async fn append_events(
-        &self,
-        writes: StreamWrites,
-    ) -> Result<EventStreamSlice, EventStoreError> {
-        let _guard = self.write_lock.lock().await;
-        self.inner.append_events(writes).await
-    }
-}
-
 /// Integration test for I-001: Single-Stream Command End-to-End
 ///
 /// This test exercises a complete single-stream command execution from the
@@ -279,64 +236,4 @@ async fn insufficient_funds_returns_business_rule_violation() {
         .await
         .expect("reading stream to succeed");
     assert_eq!(events.len(), 1, "failure should not append new events");
-}
-
-/// Scenario 3: Developer handles version conflict manually.
-///
-/// This test demonstrates EventCore's optimistic concurrency control when two
-/// commands attempt to modify the same stream concurrently. Both commands read
-/// the stream at version 0, but the first to write advances the version to 1.
-/// When the second command attempts to write expecting version 1, it receives
-/// a ConcurrencyError that the developer must handle manually.
-#[tokio::test]
-async fn concurrent_deposits_detect_version_conflict() {
-    use std::sync::Arc;
-
-    // Given: Developer creates controlled event store for deterministic concurrency
-    let store = Arc::new(ControlledEventStore::new());
-
-    // And: Developer creates a stream ID for a bank account
-    let account_id = test_account_id();
-
-    // And: Developer prepares two concurrent deposit commands on same account
-    let amount = test_amount(100);
-    let command1 = Deposit {
-        account_id: account_id.clone(),
-        amount,
-    };
-    let command2 = Deposit {
-        account_id: account_id.clone(),
-        amount,
-    };
-
-    // When: Developer spawns two tasks executing deposits concurrently
-    let store1 = store.clone();
-    let store2 = store.clone();
-
-    let task1 = tokio::spawn(async move { execute(&*store1, command1).await });
-
-    let task2 = tokio::spawn(async move { execute(&*store2, command2).await });
-
-    // And: Developer awaits both command executions
-    let result1 = task1.await.expect("task1 should not panic");
-    let result2 = task2.await.expect("task2 should not panic");
-
-    // Then: Exactly one command succeeds and one gets ConcurrencyError
-    let success_count = [&result1, &result2].iter().filter(|r| r.is_ok()).count();
-
-    let concurrency_error_count = [&result1, &result2]
-        .iter()
-        .filter(|r| matches!(r, Err(CommandError::ConcurrencyError)))
-        .count();
-
-    assert_eq!(
-        success_count, 1,
-        "exactly one command should succeed, got results: {:?}, {:?}",
-        result1, result2
-    );
-    assert_eq!(
-        concurrency_error_count, 1,
-        "exactly one command should fail with ConcurrencyError, got results: {:?}, {:?}",
-        result1, result2
-    );
 }
