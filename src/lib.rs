@@ -88,12 +88,12 @@ where
         //
         // Manual map_err with match is the idiomatic solution for this.
         let result = store.append_events(writes).await.map_err(|e| match e {
-            EventStoreError::VersionConflict => CommandError::ConcurrencyError,
+            EventStoreError::VersionConflict => CommandError::ConcurrencyError(0),
         });
 
         match result {
             Ok(_) => return Ok(ExecutionResponse),
-            Err(CommandError::ConcurrencyError) if attempt < MAX_ATTEMPTS - 1 => {
+            Err(CommandError::ConcurrencyError(_)) if attempt < MAX_ATTEMPTS - 1 => {
                 // Calculate exponential backoff with jitter
                 let base_delay = BASE_DELAY_MS * 2_u64.pow(attempt);
                 let jitter = 1.0 + (rand::random::<f64>() - 0.5) * 0.4; // ±20%
@@ -102,7 +102,10 @@ where
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 continue; // Retry
             }
-            Err(e) => return Err(e), // Permanent error or retries exhausted
+            Err(CommandError::ConcurrencyError(_)) => {
+                return Err(CommandError::ConcurrencyError(MAX_ATTEMPTS));
+            }
+            Err(e) => return Err(e), // Other permanent errors
         }
     }
 
@@ -441,9 +444,19 @@ mod tests {
 
         // Then: ConcurrencyError is returned (retries exhausted)
         assert!(
-            matches!(result, Err(CommandError::ConcurrencyError)),
+            matches!(result, Err(CommandError::ConcurrencyError(_))),
             "should return ConcurrencyError after exhausting retries, but got: {:?}",
             result
         );
+
+        // And: Error message contains retry context
+        let error = result.unwrap_err();
+        if let CommandError::ConcurrencyError(_) = &error {
+            let error_msg = error.to_string();
+            assert_eq!(
+                error_msg, "concurrency conflict after 5 retry attempts",
+                "error message should clearly explain that retries were exhausted"
+            );
+        }
     }
 }

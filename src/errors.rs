@@ -20,8 +20,8 @@ pub enum CommandError {
     /// This error indicates another command modified the stream(s) between
     /// this command's read and write phases. The executor will automatically
     /// retry with fresh state.
-    #[error("concurrency conflict")]
-    ConcurrencyError,
+    #[error("concurrency conflict after {0} retry attempts")]
+    ConcurrencyError(u32),
 
     /// Storage backend failure during event store operations.
     ///
