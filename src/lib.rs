@@ -390,4 +390,60 @@ mod tests {
             result
         );
     }
+
+    /// Integration test: Verify execute() returns error after exhausting retries.
+    ///
+    /// This test ensures that when a command encounters persistent version conflicts
+    /// (more conflicts than max retry attempts), execute() exhausts all retries and
+    /// returns a ConcurrencyError to the developer. This is the failure case where
+    /// automatic retry cannot resolve the conflict.
+    ///
+    /// The developer should receive a clear ConcurrencyError indicating that retries
+    /// were attempted but all failed.
+    #[tokio::test]
+    async fn test_execute_returns_error_after_exhausting_retries() {
+        // Given: An event store that ALWAYS fails with version conflicts
+        struct AlwaysConflictStore {
+            inner: InMemoryEventStore,
+        }
+
+        impl EventStore for AlwaysConflictStore {
+            async fn read_stream<E: crate::Event>(
+                &self,
+                stream_id: StreamId,
+            ) -> Result<EventStreamReader<E>, EventStoreError> {
+                // Delegate to inner store for reading (returns empty stream)
+                self.inner.read_stream(stream_id).await
+            }
+
+            async fn append_events(
+                &self,
+                _writes: StreamWrites,
+            ) -> Result<EventStreamSlice, EventStoreError> {
+                // ALWAYS return VersionConflict - simulates persistent conflicts
+                Err(EventStoreError::VersionConflict)
+            }
+        }
+
+        let store = AlwaysConflictStore {
+            inner: InMemoryEventStore::new(),
+        };
+
+        // And: A simple test command
+        let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
+        let command = MockCommand {
+            stream_id,
+            handle_called: Arc::new(AtomicBool::new(false)),
+        };
+
+        // When: Developer executes the command
+        let result = execute(&store, command).await;
+
+        // Then: ConcurrencyError is returned (retries exhausted)
+        assert!(
+            matches!(result, Err(CommandError::ConcurrencyError)),
+            "should return ConcurrencyError after exhausting retries, but got: {:?}",
+            result
+        );
+    }
 }
