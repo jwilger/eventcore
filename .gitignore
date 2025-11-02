@@ -74,3 +74,6 @@ website/src/logo.png
 # Claude Code local settings
 .claude/settings.local.json
 .cargo-advisory-db..lock
+
+# Beads daemon lock file
+.beads/daemon.lock
