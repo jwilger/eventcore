@@ -23,6 +23,40 @@ pub use store::{
 #[derive(Debug)]
 pub struct ExecutionResponse;
 
+/// Defines the delay strategy between retry attempts.
+///
+/// Different backoff strategies are useful for different scenarios:
+/// - Fixed: Predictable timing for rate-limited APIs
+/// - Exponential: Reduces load during high-traffic periods
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackoffStrategy {
+    /// Fixed delay between all retry attempts.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use eventcore::BackoffStrategy;
+    /// let strategy = BackoffStrategy::Fixed { delay_ms: 50 };
+    /// ```
+    Fixed {
+        /// Delay in milliseconds between each retry attempt
+        delay_ms: u64,
+    },
+
+    /// Exponential backoff with base delay multiplied by 2^attempt.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use eventcore::BackoffStrategy;
+    /// let strategy = BackoffStrategy::Exponential { base_ms: 10 };
+    /// ```
+    Exponential {
+        /// Base delay in milliseconds (multiplied by 2^attempt)
+        base_ms: u64,
+    },
+}
+
 /// Configuration for automatic retry behavior on concurrency conflicts.
 ///
 /// RetryPolicy allows library consumers to customize how execute() handles
@@ -32,13 +66,19 @@ pub struct ExecutionResponse;
 /// # Examples
 ///
 /// ```rust
-/// # use eventcore::RetryPolicy;
+/// # use eventcore::{RetryPolicy, BackoffStrategy};
 /// // Custom retry policy with 3 attempts instead of default 5
 /// let policy = RetryPolicy::new().max_attempts(3);
+///
+/// // Custom retry policy with fixed backoff
+/// let policy = RetryPolicy::new()
+///     .max_attempts(3)
+///     .backoff_strategy(BackoffStrategy::Fixed { delay_ms: 50 });
 /// ```
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
     max_attempts: u32,
+    backoff_strategy: BackoffStrategy,
 }
 
 impl RetryPolicy {
@@ -46,11 +86,13 @@ impl RetryPolicy {
     ///
     /// Default configuration matches I-002 hardcoded values:
     /// - max_attempts: 5
-    /// - base_delay_ms: 10ms
-    /// - exponential backoff: 2^attempt
-    /// - jitter: ±20%
+    /// - backoff_strategy: Exponential with 10ms base
+    /// - jitter: ±20% (applied during execution)
     pub fn new() -> Self {
-        Self { max_attempts: 5 }
+        Self {
+            max_attempts: 5,
+            backoff_strategy: BackoffStrategy::Exponential { base_ms: 10 },
+        }
     }
 
     /// Configure the maximum number of retry attempts.
@@ -65,6 +107,22 @@ impl RetryPolicy {
     /// ```
     pub fn max_attempts(mut self, attempts: u32) -> Self {
         self.max_attempts = attempts;
+        self
+    }
+
+    /// Configure the backoff strategy for retry delays.
+    ///
+    /// Returns self for method chaining.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use eventcore::{RetryPolicy, BackoffStrategy};
+    /// let policy = RetryPolicy::new()
+    ///     .backoff_strategy(BackoffStrategy::Fixed { delay_ms: 50 });
+    /// ```
+    pub fn backoff_strategy(mut self, strategy: BackoffStrategy) -> Self {
+        self.backoff_strategy = strategy;
         self
     }
 }
@@ -109,8 +167,6 @@ where
     C: CommandLogic,
     S: EventStore,
 {
-    const BASE_DELAY_MS: u64 = 10;
-
     for attempt in 0..policy.max_attempts {
         // Read existing events from the command's stream
         let stream_id = command.stream_id().clone();
@@ -161,13 +217,18 @@ where
                     policy.max_attempts
                 );
 
-                // Calculate exponential backoff with jitter
-                let base_delay = 2_u64
-                    .checked_pow(attempt)
-                    .and_then(|exp| BASE_DELAY_MS.checked_mul(exp))
-                    .unwrap_or(u64::MAX);
-                let jitter = 1.0 + (rand::random::<f64>() - 0.5) * 0.4; // ±20%
-                let delay_ms = (base_delay as f64 * jitter) as u64;
+                // Calculate backoff delay based on strategy
+                let delay_ms = match &policy.backoff_strategy {
+                    BackoffStrategy::Fixed { delay_ms } => *delay_ms,
+                    BackoffStrategy::Exponential { base_ms } => {
+                        let base_delay = 2_u64
+                            .checked_pow(attempt)
+                            .and_then(|exp| base_ms.checked_mul(exp))
+                            .unwrap_or(u64::MAX);
+                        let jitter = 1.0 + (rand::random::<f64>() - 0.5) * 0.4; // ±20%
+                        (base_delay as f64 * jitter) as u64
+                    }
+                };
 
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 continue; // Retry
@@ -621,6 +682,93 @@ mod tests {
             matches!(result, Err(CommandError::ConcurrencyError(2))),
             "should fail after exactly 2 attempts as configured in policy, but got: {:?}",
             result
+        );
+    }
+
+    /// Test helper: Event store that conflicts N times before succeeding.
+    ///
+    /// This is a generalized version of ConflictOnceStore that allows testing
+    /// different retry scenarios by controlling exactly how many conflicts occur.
+    struct ConflictNTimesStore {
+        inner: InMemoryEventStore,
+        conflict_count: Arc<tokio::sync::Mutex<u32>>,
+        conflicts_to_inject: u32,
+    }
+
+    impl ConflictNTimesStore {
+        fn new(conflicts_to_inject: u32) -> Self {
+            Self {
+                inner: InMemoryEventStore::new(),
+                conflict_count: Arc::new(tokio::sync::Mutex::new(0)),
+                conflicts_to_inject,
+            }
+        }
+    }
+
+    impl EventStore for ConflictNTimesStore {
+        async fn read_stream<E: crate::Event>(
+            &self,
+            stream_id: StreamId,
+        ) -> Result<EventStreamReader<E>, EventStoreError> {
+            self.inner.read_stream(stream_id).await
+        }
+
+        async fn append_events(
+            &self,
+            writes: StreamWrites,
+        ) -> Result<EventStreamSlice, EventStoreError> {
+            let mut count = self.conflict_count.lock().await;
+            if *count < self.conflicts_to_inject {
+                // Inject conflict
+                *count += 1;
+                Err(EventStoreError::VersionConflict)
+            } else {
+                // Succeed normally
+                self.inner.append_events(writes).await
+            }
+        }
+    }
+
+    /// Integration test: Verify execute() uses fixed backoff delay (no exponential growth).
+    ///
+    /// This test ensures that library consumers can configure a fixed delay between
+    /// retry attempts instead of the default exponential backoff. When a developer
+    /// specifies BackoffStrategy::Fixed with a 50ms delay, each retry should wait
+    /// exactly 50ms (not 10ms, 20ms, 40ms, etc. from exponential backoff).
+    ///
+    /// This is critical for scenarios where predictable retry timing is more important
+    /// than exponential backoff (e.g., rate-limited APIs with known retry windows).
+    #[tokio::test]
+    async fn test_execute_with_fixed_backoff_strategy() {
+        // Given: A retry policy with fixed 50ms backoff (not exponential)
+        let policy = RetryPolicy::new()
+            .max_attempts(3)
+            .backoff_strategy(BackoffStrategy::Fixed { delay_ms: 50 });
+
+        // And: An event store that conflicts twice then succeeds
+        let store = ConflictNTimesStore::new(2);
+
+        // And: A simple test command
+        let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
+        let command = MockCommand {
+            stream_id,
+            handle_called: Arc::new(AtomicBool::new(false)),
+        };
+
+        // When: Developer executes with fixed backoff policy
+        let start = std::time::Instant::now();
+        let result = execute(&store, command, policy).await;
+        let elapsed = start.elapsed();
+
+        // Then: Command succeeds after 2 retries
+        assert!(result.is_ok(), "command should succeed after 2 retries");
+
+        // And: Total delay is ~100ms (2 retries × 50ms fixed)
+        // Allow ±30ms tolerance for test timing variance
+        assert!(
+            elapsed.as_millis() >= 70 && elapsed.as_millis() <= 130,
+            "expected ~100ms for 2 retries with 50ms fixed backoff, got {}ms",
+            elapsed.as_millis()
         );
     }
 }
