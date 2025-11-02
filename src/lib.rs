@@ -23,7 +23,59 @@ pub use store::{
 #[derive(Debug)]
 pub struct ExecutionResponse;
 
-/// Execute a command against the event store.
+/// Configuration for automatic retry behavior on concurrency conflicts.
+///
+/// RetryPolicy allows library consumers to customize how execute() handles
+/// version conflicts during command execution. Uses method chaining for
+/// ergonomic configuration.
+///
+/// # Examples
+///
+/// ```rust
+/// # use eventcore::RetryPolicy;
+/// // Custom retry policy with 3 attempts instead of default 5
+/// let policy = RetryPolicy::new().max_attempts(3);
+/// ```
+#[derive(Debug, Clone)]
+pub struct RetryPolicy {
+    max_attempts: u32,
+}
+
+impl RetryPolicy {
+    /// Create a new RetryPolicy with default values.
+    ///
+    /// Default configuration matches I-002 hardcoded values:
+    /// - max_attempts: 5
+    /// - base_delay_ms: 10ms
+    /// - exponential backoff: 2^attempt
+    /// - jitter: ±20%
+    pub fn new() -> Self {
+        Self { max_attempts: 5 }
+    }
+
+    /// Configure the maximum number of retry attempts.
+    ///
+    /// Returns self for method chaining.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use eventcore::RetryPolicy;
+    /// let policy = RetryPolicy::new().max_attempts(2);
+    /// ```
+    pub fn max_attempts(mut self, attempts: u32) -> Self {
+        self.max_attempts = attempts;
+        self
+    }
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Execute a command against the event store with a custom retry policy.
 ///
 /// This is the primary entry point for EventCore. It orchestrates the complete
 /// command execution workflow: loading state from multiple streams, validating
@@ -34,6 +86,12 @@ pub struct ExecutionResponse;
 /// * `C` - A command implementing [`CommandLogic`] that defines the business operation
 /// * `S` - An event store implementing [`EventStore`] for persistence
 ///
+/// # Parameters
+///
+/// * `store` - The event store for reading/writing events
+/// * `command` - The command to execute
+/// * `policy` - Retry policy configuration (max attempts, backoff strategy, etc.)
+///
 /// # Errors
 ///
 /// Returns [`CommandError`] if:
@@ -41,16 +99,19 @@ pub struct ExecutionResponse;
 /// - Event loading fails
 /// - Business rule validation fails (via command's `handle()`)
 /// - Event persistence fails
-/// - Optimistic concurrency conflicts occur
-pub async fn execute<C, S>(store: S, command: C) -> Result<ExecutionResponse, CommandError>
+/// - Optimistic concurrency conflicts occur after exhausting retries
+pub async fn execute<C, S>(
+    store: S,
+    command: C,
+    policy: RetryPolicy,
+) -> Result<ExecutionResponse, CommandError>
 where
     C: CommandLogic,
     S: EventStore,
 {
-    const MAX_ATTEMPTS: u32 = 5;
     const BASE_DELAY_MS: u64 = 10;
 
-    for attempt in 0..MAX_ATTEMPTS {
+    for attempt in 0..policy.max_attempts {
         // Read existing events from the command's stream
         let stream_id = command.stream_id().clone();
         let reader = store
@@ -93,11 +154,11 @@ where
 
         match result {
             Ok(_) => return Ok(ExecutionResponse),
-            Err(CommandError::ConcurrencyError(_)) if attempt < MAX_ATTEMPTS - 1 => {
+            Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_attempts - 1 => {
                 tracing::warn!(
                     "Retrying after concurrency conflict (attempt {} of {})",
                     attempt + 1,
-                    MAX_ATTEMPTS
+                    policy.max_attempts
                 );
 
                 // Calculate exponential backoff with jitter
@@ -112,13 +173,13 @@ where
                 continue; // Retry
             }
             Err(CommandError::ConcurrencyError(_)) => {
-                return Err(CommandError::ConcurrencyError(MAX_ATTEMPTS));
+                return Err(CommandError::ConcurrencyError(policy.max_attempts));
             }
             Err(e) => return Err(e), // Other permanent errors
         }
     }
 
-    unreachable!("loop always returns before MAX_ATTEMPTS")
+    unreachable!("loop always returns before max_attempts")
 }
 
 #[cfg(test)]
@@ -186,7 +247,7 @@ mod tests {
         };
 
         // When: Developer executes the command
-        let result = execute(&store, command).await;
+        let result = execute(&store, command, RetryPolicy::new()).await;
 
         // Then: Command execution succeeds
         assert!(result.is_ok(), "execute() should succeed");
@@ -282,7 +343,7 @@ mod tests {
         };
 
         // When: Developer executes the command with a failing store
-        let result = execute(&store, command).await;
+        let result = execute(&store, command, RetryPolicy::new()).await;
 
         // Then: Execution fails with EventStoreError, not BusinessRuleViolation
         assert!(
@@ -325,7 +386,7 @@ mod tests {
         };
 
         // When: Developer executes the command
-        execute(&store, command)
+        execute(&store, command, RetryPolicy::new())
             .await
             .expect("command execution to succeed");
 
@@ -394,7 +455,7 @@ mod tests {
         };
 
         // When: Developer executes the command
-        let result = execute(&store, command).await;
+        let result = execute(&store, command, RetryPolicy::new()).await;
 
         // Then: Command succeeds automatically (retry transparent to developer)
         assert!(
@@ -486,7 +547,7 @@ mod tests {
         };
 
         // When: Developer executes the command
-        let result = execute(&store, command).await;
+        let result = execute(&store, command, RetryPolicy::new()).await;
 
         // Then: ConcurrencyError is returned (retries exhausted)
         assert!(
@@ -504,5 +565,62 @@ mod tests {
                 "error message should clearly explain that retries were exhausted"
             );
         }
+    }
+
+    /// Integration test: Verify execute() respects custom retry policy max_attempts.
+    ///
+    /// This test ensures that library consumers can configure the maximum number
+    /// of retry attempts via a RetryPolicy parameter to execute(). The test verifies
+    /// that when a developer specifies max_attempts=2 (not the default 5), execute()
+    /// respects this configuration and fails after exactly 2 attempts.
+    ///
+    /// This is the simplest test for I-003 (Configurable Retry Policies) - testing
+    /// the most basic configuration parameter from the library consumer's perspective.
+    #[tokio::test]
+    async fn test_execute_with_custom_retry_policy() {
+        // Given: An event store that ALWAYS conflicts (reuse from I-002 test)
+        struct AlwaysConflictStore {
+            inner: InMemoryEventStore,
+        }
+
+        impl EventStore for AlwaysConflictStore {
+            async fn read_stream<E: crate::Event>(
+                &self,
+                stream_id: StreamId,
+            ) -> Result<EventStreamReader<E>, EventStoreError> {
+                self.inner.read_stream(stream_id).await
+            }
+
+            async fn append_events(
+                &self,
+                _writes: StreamWrites,
+            ) -> Result<EventStreamSlice, EventStoreError> {
+                Err(EventStoreError::VersionConflict)
+            }
+        }
+
+        let store = AlwaysConflictStore {
+            inner: InMemoryEventStore::new(),
+        };
+
+        // And: A retry policy with max 2 attempts (not default 5)
+        let policy = RetryPolicy::new().max_attempts(2);
+
+        // And: A simple test command
+        let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
+        let command = MockCommand {
+            stream_id,
+            handle_called: Arc::new(AtomicBool::new(false)),
+        };
+
+        // When: Developer executes with custom policy
+        let result = execute(&store, command, policy).await;
+
+        // Then: Fails after exactly 2 attempts (not 5)
+        assert!(
+            matches!(result, Err(CommandError::ConcurrencyError(2))),
+            "should fail after exactly 2 attempts as configured in policy, but got: {:?}",
+            result
+        );
     }
 }
