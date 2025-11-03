@@ -67,17 +67,17 @@ pub enum BackoffStrategy {
 ///
 /// ```rust
 /// # use eventcore::{RetryPolicy, BackoffStrategy};
-/// // Custom retry policy with 3 attempts instead of default 5
-/// let policy = RetryPolicy::new().max_attempts(3);
+/// // Custom retry policy with 2 retries (3 total attempts) instead of default 4 retries
+/// let policy = RetryPolicy::new().max_retries(2);
 ///
 /// // Custom retry policy with fixed backoff
 /// let policy = RetryPolicy::new()
-///     .max_attempts(3)
+///     .max_retries(2)
 ///     .backoff_strategy(BackoffStrategy::Fixed { delay_ms: 50 });
 /// ```
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
-    max_attempts: u32,
+    max_retries: u32,
     backoff_strategy: BackoffStrategy,
 }
 
@@ -85,12 +85,12 @@ impl RetryPolicy {
     /// Create a new RetryPolicy with default values.
     ///
     /// Default configuration matches I-002 hardcoded values:
-    /// - max_attempts: 5
+    /// - max_retries: 4 (5 total attempts including initial)
     /// - backoff_strategy: Exponential with 10ms base
     /// - jitter: ±20% (applied during execution)
     pub fn new() -> Self {
         Self {
-            max_attempts: 5,
+            max_retries: 4,
             backoff_strategy: BackoffStrategy::Exponential { base_ms: 10 },
         }
     }
@@ -103,10 +103,10 @@ impl RetryPolicy {
     ///
     /// ```rust
     /// # use eventcore::RetryPolicy;
-    /// let policy = RetryPolicy::new().max_attempts(2);
+    /// let policy = RetryPolicy::new().max_retries(2);
     /// ```
-    pub fn max_attempts(mut self, attempts: u32) -> Self {
-        self.max_attempts = attempts;
+    pub fn max_retries(mut self, retries: u32) -> Self {
+        self.max_retries = retries;
         self
     }
 
@@ -167,7 +167,7 @@ where
     C: CommandLogic,
     S: EventStore,
 {
-    for attempt in 0..policy.max_attempts {
+    for attempt in 0..=policy.max_retries {
         // Read existing events from the command's stream
         let stream_id = command.stream_id().clone();
         let reader = store
@@ -205,16 +205,16 @@ where
         //
         // Manual map_err with match is the idiomatic solution for this.
         let result = store.append_events(writes).await.map_err(|e| match e {
-            EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt + 1),
+            EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt),
         });
 
         match result {
             Ok(_) => return Ok(ExecutionResponse),
-            Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_attempts - 1 => {
+            Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries => {
                 tracing::warn!(
-                    "Retrying after concurrency conflict (attempt {} of {})",
-                    attempt + 1,
-                    policy.max_attempts
+                    "Retrying after concurrency conflict (retry {} of {})",
+                    attempt,
+                    policy.max_retries
                 );
 
                 // Calculate backoff delay based on strategy
@@ -234,13 +234,13 @@ where
                 continue; // Retry
             }
             Err(CommandError::ConcurrencyError(_)) => {
-                return Err(CommandError::ConcurrencyError(policy.max_attempts));
+                return Err(CommandError::ConcurrencyError(policy.max_retries));
             }
             Err(e) => return Err(e), // Other permanent errors
         }
     }
 
-    unreachable!("loop always returns before max_attempts")
+    unreachable!("loop always returns before max_retries")
 }
 
 #[cfg(test)]
@@ -533,7 +533,7 @@ mod tests {
             "logs should contain retry message"
         );
 
-        // Verify log message contains attempt number and total
+        // Verify log message contains retry number and total
         logs_assert(|lines: &[&str]| {
             let retry_logs: Vec<_> = lines
                 .iter()
@@ -548,12 +548,12 @@ mod tests {
             }
 
             let log_msg = retry_logs[0];
-            if !log_msg.contains("attempt 1") {
-                return Err(format!("Log should contain 'attempt 1', got: {}", log_msg));
+            if !log_msg.contains("retry 0") {
+                return Err(format!("Log should contain 'retry 0', got: {}", log_msg));
             }
-            if !log_msg.contains("5") {
+            if !log_msg.contains("4") {
                 return Err(format!(
-                    "Log should contain max attempts '5', got: {}",
+                    "Log should contain max retries '4', got: {}",
                     log_msg
                 ));
             }
@@ -574,31 +574,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_returns_error_after_exhausting_retries() {
         // Given: An event store that ALWAYS fails with version conflicts
-        struct AlwaysConflictStore {
-            inner: InMemoryEventStore,
-        }
-
-        impl EventStore for AlwaysConflictStore {
-            async fn read_stream<E: crate::Event>(
-                &self,
-                stream_id: StreamId,
-            ) -> Result<EventStreamReader<E>, EventStoreError> {
-                // Delegate to inner store for reading (returns empty stream)
-                self.inner.read_stream(stream_id).await
-            }
-
-            async fn append_events(
-                &self,
-                _writes: StreamWrites,
-            ) -> Result<EventStreamSlice, EventStoreError> {
-                // ALWAYS return VersionConflict - simulates persistent conflicts
-                Err(EventStoreError::VersionConflict)
-            }
-        }
-
-        let store = AlwaysConflictStore {
-            inner: InMemoryEventStore::new(),
-        };
+        let store = AlwaysConflictStore::new();
 
         // And: A simple test command
         let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
@@ -622,50 +598,28 @@ mod tests {
         if let CommandError::ConcurrencyError(_) = &error {
             let error_msg = error.to_string();
             assert_eq!(
-                error_msg, "concurrency conflict after 5 retry attempts",
+                error_msg, "concurrency conflict after 4 retry attempts",
                 "error message should clearly explain that retries were exhausted"
             );
         }
     }
 
-    /// Integration test: Verify execute() respects custom retry policy max_attempts.
+    /// Integration test: Verify execute() respects custom retry policy max_retries.
     ///
     /// This test ensures that library consumers can configure the maximum number
     /// of retry attempts via a RetryPolicy parameter to execute(). The test verifies
-    /// that when a developer specifies max_attempts=2 (not the default 5), execute()
-    /// respects this configuration and fails after exactly 2 attempts.
+    /// that when a developer specifies max_retries=1 (not the default 4), execute()
+    /// respects this configuration and fails after exactly 1 retry (2 total attempts).
     ///
     /// This is the simplest test for I-003 (Configurable Retry Policies) - testing
     /// the most basic configuration parameter from the library consumer's perspective.
     #[tokio::test]
     async fn test_execute_with_custom_retry_policy() {
         // Given: An event store that ALWAYS conflicts (reuse from I-002 test)
-        struct AlwaysConflictStore {
-            inner: InMemoryEventStore,
-        }
+        let store = AlwaysConflictStore::new();
 
-        impl EventStore for AlwaysConflictStore {
-            async fn read_stream<E: crate::Event>(
-                &self,
-                stream_id: StreamId,
-            ) -> Result<EventStreamReader<E>, EventStoreError> {
-                self.inner.read_stream(stream_id).await
-            }
-
-            async fn append_events(
-                &self,
-                _writes: StreamWrites,
-            ) -> Result<EventStreamSlice, EventStoreError> {
-                Err(EventStoreError::VersionConflict)
-            }
-        }
-
-        let store = AlwaysConflictStore {
-            inner: InMemoryEventStore::new(),
-        };
-
-        // And: A retry policy with max 2 attempts (not default 5)
-        let policy = RetryPolicy::new().max_attempts(2);
+        // And: A retry policy with max 1 retry (2 total attempts, not default 4 retries)
+        let policy = RetryPolicy::new().max_retries(1);
 
         // And: A simple test command
         let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
@@ -677,12 +631,46 @@ mod tests {
         // When: Developer executes with custom policy
         let result = execute(&store, command, policy).await;
 
-        // Then: Fails after exactly 2 attempts (not 5)
+        // Then: Fails after exactly 1 retry (2 total attempts)
         assert!(
-            matches!(result, Err(CommandError::ConcurrencyError(2))),
-            "should fail after exactly 2 attempts as configured in policy, but got: {:?}",
+            matches!(result, Err(CommandError::ConcurrencyError(1))),
+            "should fail after exactly 1 retry as configured in policy, but got: {:?}",
             result
         );
+    }
+
+    /// Test helper: Event store that ALWAYS returns version conflicts.
+    ///
+    /// This store simulates persistent conflicts where retry will never succeed.
+    /// Useful for testing retry exhaustion and error handling.
+    struct AlwaysConflictStore {
+        inner: InMemoryEventStore,
+    }
+
+    impl AlwaysConflictStore {
+        fn new() -> Self {
+            Self {
+                inner: InMemoryEventStore::new(),
+            }
+        }
+    }
+
+    impl EventStore for AlwaysConflictStore {
+        async fn read_stream<E: crate::Event>(
+            &self,
+            stream_id: StreamId,
+        ) -> Result<EventStreamReader<E>, EventStoreError> {
+            // Delegate to inner store for reading (returns empty stream)
+            self.inner.read_stream(stream_id).await
+        }
+
+        async fn append_events(
+            &self,
+            _writes: StreamWrites,
+        ) -> Result<EventStreamSlice, EventStoreError> {
+            // ALWAYS return VersionConflict - simulates persistent conflicts
+            Err(EventStoreError::VersionConflict)
+        }
     }
 
     /// Test helper: Event store that conflicts N times before succeeding.
@@ -742,7 +730,7 @@ mod tests {
     async fn test_execute_with_fixed_backoff_strategy() {
         // Given: A retry policy with fixed 50ms backoff (not exponential)
         let policy = RetryPolicy::new()
-            .max_attempts(3)
+            .max_retries(2)
             .backoff_strategy(BackoffStrategy::Fixed { delay_ms: 50 });
 
         // And: An event store that conflicts twice then succeeds
@@ -760,7 +748,7 @@ mod tests {
         let result = execute(&store, command, policy).await;
         let elapsed = start.elapsed();
 
-        // Then: Command succeeds after 2 retries
+        // Then: Command succeeds after 2 retries (3 total attempts)
         assert!(result.is_ok(), "command should succeed after 2 retries");
 
         // And: Total delay is ~100ms (2 retries × 50ms fixed)
@@ -768,6 +756,49 @@ mod tests {
         assert!(
             elapsed.as_millis() >= 70 && elapsed.as_millis() <= 130,
             "expected ~100ms for 2 retries with 50ms fixed backoff, got {}ms",
+            elapsed.as_millis()
+        );
+    }
+
+    /// Integration test: Verify execute() disables retry when max_retries is zero.
+    ///
+    /// This test ensures that library consumers can disable automatic retry entirely
+    /// by setting max_retries(0). This is useful in testing scenarios where developers
+    /// want immediate failure on ConcurrencyError without retry overhead.
+    ///
+    /// When max_retries=0, execute() should return ConcurrencyError immediately on
+    /// the first conflict without attempting any retries or backoff delays.
+    #[tokio::test]
+    async fn test_execute_with_zero_max_retries_disables_retry() {
+        // Given: A retry policy with max_retries set to 0 (no retry)
+        let policy = RetryPolicy::new().max_retries(0);
+
+        // And: An event store that ALWAYS conflicts
+        let store = AlwaysConflictStore::new();
+
+        // And: A simple test command
+        let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
+        let command = MockCommand {
+            stream_id,
+            handle_called: Arc::new(AtomicBool::new(false)),
+        };
+
+        // When: Developer executes with zero max_retries
+        let start = std::time::Instant::now();
+        let result = execute(&store, command, policy).await;
+        let elapsed = start.elapsed();
+
+        // Then: Returns ConcurrencyError immediately (no retry attempts)
+        assert!(
+            matches!(result, Err(CommandError::ConcurrencyError(0))),
+            "should return ConcurrencyError(0) for zero max_retries, but got: {:?}",
+            result
+        );
+
+        // And: Executes quickly (no backoff delays)
+        assert!(
+            elapsed.as_millis() < 10,
+            "expected <10ms for immediate failure, got {}ms",
             elapsed.as_millis()
         );
     }
