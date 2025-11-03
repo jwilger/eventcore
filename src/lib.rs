@@ -238,6 +238,10 @@ where
                 continue; // Retry
             }
             Err(CommandError::ConcurrencyError(_)) => {
+                tracing::error!(
+                    max_retries = policy.max_retries,
+                    stream_id = command.stream_id().as_ref()
+                );
                 return Err(CommandError::ConcurrencyError(policy.max_retries));
             }
             Err(e) => return Err(e), // Other permanent errors
@@ -876,6 +880,50 @@ mod tests {
         assert!(
             logs_contain("stream_id="),
             "logs should contain stream_id field"
+        );
+    }
+
+    /// Integration test: Verify error event logged when retries exhausted.
+    ///
+    /// This test ensures that when all retry attempts are exhausted, an error
+    /// event is logged with structured fields for debugging and monitoring.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_error_event_when_retries_exhausted() {
+        // Given: Event store that always conflicts
+        let store = AlwaysConflictStore::new();
+
+        // And: Policy allowing only 2 retries
+        let policy = RetryPolicy::new().max_retries(2);
+
+        // And: A test command
+        let stream_id = StreamId::try_new("always-fails").expect("valid stream id");
+        let command = MockCommand {
+            stream_id,
+            handle_called: Arc::new(AtomicBool::new(false)),
+        };
+
+        // When: Execute command that will exhaust all retries
+        let result = execute(&store, command, policy).await;
+
+        // Then: Execution fails
+        assert!(
+            matches!(result, Err(CommandError::ConcurrencyError(2))),
+            "should fail after exhausting retries"
+        );
+
+        // And: Error event was logged with structured fields
+        assert!(
+            logs_contain("ERROR"),
+            "should log error event when retries exhausted"
+        );
+        assert!(
+            logs_contain("max_retries="),
+            "error event should include max_retries field"
+        );
+        assert!(
+            logs_contain("stream_id="),
+            "error event should include stream_id field"
         );
     }
 }
