@@ -217,7 +217,7 @@ where
             Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries => {
                 tracing::warn!(
                     "Retrying after concurrency conflict (retry {} of {})",
-                    attempt,
+                    attempt + 1,
                     policy.max_retries
                 );
 
@@ -552,8 +552,8 @@ mod tests {
             }
 
             let log_msg = retry_logs[0];
-            if !log_msg.contains("retry 0") {
-                return Err(format!("Log should contain 'retry 0', got: {}", log_msg));
+            if !log_msg.contains("retry 1") {
+                return Err(format!("Log should contain 'retry 1', got: {}", log_msg));
             }
             if !log_msg.contains("4") {
                 return Err(format!(
