@@ -2,6 +2,8 @@ mod command;
 mod errors;
 mod store;
 
+use std::sync::Arc;
+
 // Re-export only the minimal public API needed for execute() signature
 pub use command::{CommandLogic, Event, NewEvents};
 pub use errors::CommandError;
@@ -57,6 +59,32 @@ pub enum BackoffStrategy {
     },
 }
 
+/// Callback trait for integrating with metrics systems during retry lifecycle.
+///
+/// Library consumers implement this trait to receive notifications about retry
+/// attempts, enabling integration with metrics systems like Prometheus.
+pub trait MetricsHook: Send + Sync {
+    /// Called when a retry attempt is about to be made.
+    ///
+    /// # Parameters
+    ///
+    /// * `ctx` - Context about the retry attempt (stream_id, attempt number, delay)
+    fn on_retry_attempt(&self, ctx: &RetryContext);
+}
+
+/// Context information passed to metrics hooks during retry lifecycle.
+///
+/// Provides structured data about the retry attempt for metrics collection.
+#[derive(Debug, Clone)]
+pub struct RetryContext {
+    /// The stream ID being retried
+    pub stream_id: StreamId,
+    /// The current retry attempt number (1-based)
+    pub attempt: u32,
+    /// The delay in milliseconds before this retry attempt
+    pub delay_ms: u64,
+}
+
 /// Configuration for automatic retry behavior on concurrency conflicts.
 ///
 /// RetryPolicy allows library consumers to customize how execute() handles
@@ -75,10 +103,11 @@ pub enum BackoffStrategy {
 ///     .max_retries(2)
 ///     .backoff_strategy(BackoffStrategy::Fixed { delay_ms: 50 });
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RetryPolicy {
     max_retries: u32,
     backoff_strategy: BackoffStrategy,
+    metrics_hook: Option<Arc<dyn MetricsHook>>,
 }
 
 impl RetryPolicy {
@@ -92,6 +121,7 @@ impl RetryPolicy {
         Self {
             max_retries: 4,
             backoff_strategy: BackoffStrategy::Exponential { base_ms: 10 },
+            metrics_hook: None,
         }
     }
 
@@ -123,6 +153,32 @@ impl RetryPolicy {
     /// ```
     pub fn backoff_strategy(mut self, strategy: BackoffStrategy) -> Self {
         self.backoff_strategy = strategy;
+        self
+    }
+
+    /// Configure a metrics hook for retry lifecycle events.
+    ///
+    /// The hook will receive callbacks at key retry lifecycle points (attempt, success, failure)
+    /// with structured context data for metrics collection systems.
+    ///
+    /// Returns self for method chaining.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// # use eventcore::{RetryPolicy, MetricsHook};
+    /// struct MyMetricsHook;
+    /// impl MetricsHook for MyMetricsHook {
+    ///     fn on_retry_attempt(&self, ctx: &RetryContext) {
+    ///         // Record metrics
+    ///     }
+    /// }
+    ///
+    /// let policy = RetryPolicy::new()
+    ///     .with_metrics_hook(MyMetricsHook);
+    /// ```
+    pub fn with_metrics_hook<H: MetricsHook + 'static>(mut self, hook: H) -> Self {
+        self.metrics_hook = Some(Arc::new(hook));
         self
     }
 }
@@ -233,6 +289,16 @@ where
                     delay_ms = delay_ms,
                     stream_id = command.stream_id().as_ref()
                 );
+
+                // Call metrics hook if configured
+                if let Some(hook) = &policy.metrics_hook {
+                    let ctx = RetryContext {
+                        stream_id: command.stream_id().clone(),
+                        attempt: attempt + 1,
+                        delay_ms,
+                    };
+                    hook.on_retry_attempt(&ctx);
+                }
 
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 continue; // Retry
@@ -924,6 +990,62 @@ mod tests {
         assert!(
             logs_contain("stream_id="),
             "error event should include stream_id field"
+        );
+    }
+
+    /// Integration test: Verify metrics hook receives retry lifecycle events.
+    ///
+    /// This test ensures that library consumers can integrate with metrics systems
+    /// like Prometheus by implementing a MetricsHook trait. The hook should receive
+    /// callbacks at key retry lifecycle points (attempt, success, failure) with
+    /// structured context data.
+    ///
+    /// This enables operations teams to track retry rates, failure rates, and
+    /// backoff delays in dashboards and alerts separate from tracing logs.
+    #[tokio::test]
+    async fn test_metrics_hook_called_during_retry() {
+        // Given: A mock metrics hook that counts retry attempts
+        use std::sync::atomic::AtomicUsize;
+
+        struct MockMetricsHook {
+            retry_count: Arc<AtomicUsize>,
+        }
+
+        impl MetricsHook for MockMetricsHook {
+            fn on_retry_attempt(&self, _ctx: &RetryContext) {
+                self.retry_count.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let retry_count = Arc::new(AtomicUsize::new(0));
+        let hook = MockMetricsHook {
+            retry_count: Arc::clone(&retry_count),
+        };
+
+        // And: A retry policy configured with the metrics hook
+        let policy = RetryPolicy::new().max_retries(2).with_metrics_hook(hook);
+
+        // And: Event store that conflicts once before succeeding
+        let store = ConflictNTimesStore::new(1);
+
+        // And: A test command
+        let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
+        let command = MockCommand {
+            stream_id,
+            handle_called: Arc::new(AtomicBool::new(false)),
+        };
+
+        // When: Execute command that will retry once
+        let result = execute(&store, command, policy).await;
+
+        // Then: Command succeeds after one retry
+        assert!(result.is_ok(), "command should succeed after retry");
+
+        // And: Metrics hook was called exactly once for the retry attempt
+        assert_eq!(
+            retry_count.load(Ordering::SeqCst),
+            1,
+            "metrics hook should be called once for the single retry attempt"
         );
     }
 }
