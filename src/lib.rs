@@ -215,12 +215,6 @@ where
                 return Ok(ExecutionResponse);
             }
             Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries => {
-                tracing::warn!(
-                    "Retrying after concurrency conflict (retry {} of {})",
-                    attempt + 1,
-                    policy.max_retries
-                );
-
                 // Calculate backoff delay based on strategy
                 let delay_ms = match &policy.backoff_strategy {
                     BackoffStrategy::Fixed { delay_ms } => *delay_ms,
@@ -233,6 +227,12 @@ where
                         (base_delay as f64 * jitter) as u64
                     }
                 };
+
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    delay_ms = delay_ms,
+                    stream_id = command.stream_id().as_ref()
+                );
 
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 continue; // Retry
@@ -529,41 +529,19 @@ mod tests {
             result
         );
 
-        // And: Retry attempt should be logged for observability
-        // From I-002 Scenario 2: "log shows 'Retry attempt 1/5 for stream...'"
-        // Use tracing-test crate to capture and verify logs
+        // And: Retry attempt should be logged with structured fields for observability
         assert!(
-            logs_contain("Retrying"),
-            "logs should contain retry message"
+            logs_contain("attempt="),
+            "logs should contain structured attempt field"
         );
-
-        // Verify log message contains retry number and total
-        logs_assert(|lines: &[&str]| {
-            let retry_logs: Vec<_> = lines
-                .iter()
-                .filter(|line| line.contains("Retrying"))
-                .collect();
-
-            if retry_logs.len() != 1 {
-                return Err(format!(
-                    "Expected exactly one retry log entry, but found {}",
-                    retry_logs.len()
-                ));
-            }
-
-            let log_msg = retry_logs[0];
-            if !log_msg.contains("retry 1") {
-                return Err(format!("Log should contain 'retry 1', got: {}", log_msg));
-            }
-            if !log_msg.contains("4") {
-                return Err(format!(
-                    "Log should contain max retries '4', got: {}",
-                    log_msg
-                ));
-            }
-
-            Ok(())
-        });
+        assert!(
+            logs_contain("delay_ms="),
+            "logs should contain structured delay_ms field"
+        );
+        assert!(
+            logs_contain("stream_id="),
+            "logs should contain structured stream_id field"
+        );
     }
 
     /// Integration test: Verify execute() returns error after exhausting retries.
@@ -856,5 +834,48 @@ mod tests {
             logs_contain("command execution succeeded") || logs_contain("execution complete"),
             "should log success event when command completes"
         )
+    }
+
+    /// Integration test: Verify retry warnings include structured fields.
+    ///
+    /// This test ensures retry warnings emit structured fields (attempt, delay_ms, stream_id)
+    /// instead of just formatted strings. Structured fields enable metrics systems and log
+    /// aggregation tools to extract machine-readable data for dashboards and alerts.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_retry_warnings_include_structured_fields() {
+        // Given: Event store that conflicts 2 times before succeeding
+        let store = ConflictNTimesStore::new(2);
+
+        // And: Policy allowing 3 retries
+        let policy = RetryPolicy::new().max_retries(3);
+
+        // And: A command with identifiable stream
+        let stream_id = StreamId::try_new("test-stream-123").expect("valid stream id");
+        let command = MockCommand {
+            stream_id: stream_id.clone(),
+            handle_called: Arc::new(AtomicBool::new(false)),
+        };
+
+        // When: Execute command that will retry twice
+        let result = execute(&store, command, policy).await;
+
+        // Then: Command succeeds after retries
+        assert!(result.is_ok(), "command should succeed after 2 retries");
+
+        // And: Logs contain structured field data
+        // Note: tracing-test shows fields as "key=value" in log output
+        assert!(
+            logs_contain("attempt="),
+            "logs should contain attempt field"
+        );
+        assert!(
+            logs_contain("delay_ms="),
+            "logs should contain delay_ms field"
+        );
+        assert!(
+            logs_contain("stream_id="),
+            "logs should contain stream_id field"
+        );
     }
 }
