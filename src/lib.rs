@@ -158,8 +158,8 @@ impl RetryPolicy {
 
     /// Configure a metrics hook for retry lifecycle events.
     ///
-    /// The hook will receive callbacks at key retry lifecycle points (attempt, success, failure)
-    /// with structured context data for metrics collection systems.
+    /// The hook will receive callbacks on each retry attempt with structured context data
+    /// for metrics collection systems.
     ///
     /// Returns self for method chaining.
     ///
@@ -329,7 +329,8 @@ where
                 tracing::warn!(
                     attempt = attempt + 1,
                     delay_ms = delay_ms,
-                    stream_id = command.stream_id().as_ref()
+                    stream_id = command.stream_id().as_ref(),
+                    "retrying command after concurrency conflict"
                 );
 
                 // Call metrics hook if configured
