@@ -77,3 +77,7 @@ website/src/logo.png
 
 # Beads daemon lock file
 .beads/daemon.lock
+
+# Mutation testing output
+mutants.out/
+mutants.out.old/

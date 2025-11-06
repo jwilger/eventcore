@@ -1,5 +1,6 @@
 use eventcore::{
-    CommandError, CommandLogic, Event, EventStore, InMemoryEventStore, NewEvents, StreamId, execute,
+    CommandError, CommandLogic, Event, EventStore, InMemoryEventStore, NewEvents, RetryPolicy,
+    StreamId, execute,
 };
 use nutype::nutype;
 use uuid::Uuid;
@@ -151,7 +152,7 @@ async fn main_success() {
     };
 
     // When: Developer executes the command
-    execute(&store, command)
+    execute(&store, command, RetryPolicy::new())
         .await
         .expect("command execution to succeed");
 
@@ -195,7 +196,7 @@ async fn insufficient_funds_returns_business_rule_violation() {
         account_id: account_id.clone(),
         amount: initial_amount,
     };
-    execute(&store, seed_deposit)
+    execute(&store, seed_deposit, RetryPolicy::new())
         .await
         .expect("initial deposit to succeed");
 
@@ -207,7 +208,7 @@ async fn insufficient_funds_returns_business_rule_violation() {
     };
 
     // When: Developer executes the withdraw command
-    let error = match execute(&store, withdraw).await {
+    let error = match execute(&store, withdraw, RetryPolicy::new()).await {
         Ok(_) => panic!("expected business rule violation but command succeeded"),
         Err(error) => error,
     };
