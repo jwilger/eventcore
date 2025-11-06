@@ -157,11 +157,12 @@ async fn metrics_hook_receives_correct_attempt_numbers() {
     assert!(contexts[1].delay_ms > 0, "second retry should have delay");
     assert!(contexts[2].delay_ms > 0, "third retry should have delay");
 
-    // And: Delays increase due to exponential backoff (with jitter tolerance)
-    // Note: Due to jitter (±20%), we check that delay2 is at least 1.6x delay1
-    // (since 2.0 * 0.8 = 1.6) to account for worst case jitter combination
-    assert!(
-        contexts[1].delay_ms >= (contexts[0].delay_ms * 16) / 10,
-        "second retry delay should be ~2x first (accounting for jitter)"
-    );
+    // Note: We do NOT assert exponential backoff progression here because:
+    // 1. Jitter (±20%) makes this assertion flaky - worst case is delay1=12ms, delay2=16ms
+    //    giving ratio of 1.33x which fails a 1.6x threshold
+    // 2. Exponential backoff arithmetic is thoroughly tested in unit tests (jitter_tests module)
+    // 3. This integration test's purpose is to verify MetricsHook receives correct RetryContext,
+    //    not to re-test jitter arithmetic
+    //
+    // The fact that delay_ms > 0 confirms backoff is being calculated and passed through.
 }
