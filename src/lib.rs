@@ -189,6 +189,47 @@ impl Default for RetryPolicy {
     }
 }
 
+/// Calculate jitter factor from a random value in [0.0, 1.0].
+///
+/// Converts a uniformly distributed random value into a jitter factor
+/// that provides ±20% variation around 1.0.
+///
+/// # Formula
+///
+/// `jitter_factor = 1.0 + (random_value - 0.5) * 0.4`
+///
+/// This produces a range of [0.8, 1.2]:
+/// - When random_value = 0.0: jitter = 1.0 + (-0.5 * 0.4) = 0.8
+/// - When random_value = 0.5: jitter = 1.0 + (0.0 * 0.4) = 1.0
+/// - When random_value = 1.0: jitter = 1.0 + (0.5 * 0.4) = 1.2
+///
+/// # Arguments
+///
+/// * `random_value` - A uniformly distributed random value in [0.0, 1.0]
+///
+/// # Returns
+///
+/// A jitter factor in the range [0.8, 1.2]
+fn calculate_jitter_factor(random_value: f64) -> f64 {
+    1.0 + (random_value - 0.5) * 0.4
+}
+
+/// Apply jitter factor to a base delay value.
+///
+/// Multiplies the base delay by the jitter factor and converts to microseconds.
+///
+/// # Arguments
+///
+/// * `base_delay` - Base delay in milliseconds
+/// * `jitter_factor` - Multiplicative factor to apply (typically in range [0.8, 1.2])
+///
+/// # Returns
+///
+/// Jittered delay in milliseconds as u64
+fn apply_jitter(base_delay: u64, jitter_factor: f64) -> u64 {
+    (base_delay as f64 * jitter_factor) as u64
+}
+
 /// Execute a command against the event store with a custom retry policy.
 ///
 /// This is the primary entry point for EventCore. It orchestrates the complete
@@ -279,8 +320,9 @@ where
                             .checked_pow(attempt)
                             .and_then(|exp| base_ms.checked_mul(exp))
                             .unwrap_or(u64::MAX);
-                        let jitter = 1.0 + (rand::random::<f64>() - 0.5) * 0.4; // ±20%
-                        (base_delay as f64 * jitter) as u64
+                        let random_value = rand::random::<f64>();
+                        let jitter_factor = calculate_jitter_factor(random_value);
+                        apply_jitter(base_delay, jitter_factor)
                     }
                 };
 
@@ -1047,5 +1089,90 @@ mod tests {
             1,
             "metrics hook should be called once for the single retry attempt"
         );
+    }
+
+    #[cfg(test)]
+    mod jitter_tests {
+        use super::*;
+
+        /// Unit test: Verify minimum jitter factor calculation (0.8).
+        ///
+        /// When random_value = 0.0, the formula should produce:
+        /// 1.0 + (0.0 - 0.5) * 0.4 = 1.0 + (-0.5 * 0.4) = 1.0 - 0.2 = 0.8
+        #[test]
+        fn test_calculate_jitter_factor_minimum() {
+            let result = calculate_jitter_factor(0.0);
+            assert_eq!(result, 0.8);
+        }
+
+        /// Unit test: Verify no jitter factor (1.0).
+        ///
+        /// When random_value = 0.5, the formula should produce:
+        /// 1.0 + (0.5 - 0.5) * 0.4 = 1.0 + 0.0 = 1.0
+        #[test]
+        fn test_calculate_jitter_factor_no_jitter() {
+            let result = calculate_jitter_factor(0.5);
+            assert_eq!(result, 1.0);
+        }
+
+        /// Unit test: Verify maximum jitter factor calculation (1.2).
+        ///
+        /// When random_value = 1.0, the formula should produce:
+        /// 1.0 + (1.0 - 0.5) * 0.4 = 1.0 + (0.5 * 0.4) = 1.0 + 0.2 = 1.2
+        #[test]
+        fn test_calculate_jitter_factor_maximum() {
+            let result = calculate_jitter_factor(1.0);
+            assert_eq!(result, 1.2);
+        }
+
+        /// Unit test: Verify minimum jitter application (80% of base).
+        ///
+        /// When base_delay = 100 and jitter_factor = 0.8:
+        /// 100 * 0.8 = 80
+        #[test]
+        fn test_apply_jitter_minimum() {
+            let result = apply_jitter(100, 0.8);
+            assert_eq!(result, 80);
+        }
+
+        /// Unit test: Verify no jitter application (100% of base).
+        ///
+        /// When base_delay = 100 and jitter_factor = 1.0:
+        /// 100 * 1.0 = 100
+        #[test]
+        fn test_apply_jitter_no_jitter() {
+            let result = apply_jitter(100, 1.0);
+            assert_eq!(result, 100);
+        }
+
+        /// Unit test: Verify maximum jitter application (120% of base).
+        ///
+        /// When base_delay = 100 and jitter_factor = 1.2:
+        /// 100 * 1.2 = 120
+        #[test]
+        fn test_apply_jitter_maximum() {
+            let result = apply_jitter(100, 1.2);
+            assert_eq!(result, 120);
+        }
+
+        /// Unit test: Verify zero base delay handling.
+        ///
+        /// When base_delay = 0, regardless of jitter_factor:
+        /// 0 * 1.0 = 0
+        #[test]
+        fn test_apply_jitter_zero_base_delay() {
+            let result = apply_jitter(0, 1.0);
+            assert_eq!(result, 0);
+        }
+
+        /// Unit test: Verify large value jitter application.
+        ///
+        /// When base_delay = 10000 and jitter_factor = 1.1:
+        /// 10000 * 1.1 = 11000
+        #[test]
+        fn test_apply_jitter_large_values() {
+            let result = apply_jitter(10000, 1.1);
+            assert_eq!(result, 11000);
+        }
     }
 }
