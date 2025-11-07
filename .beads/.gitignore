@@ -18,3 +18,11 @@ bd.db
 !*.jsonl
 !metadata.json
 !config.json
+
+# merge files
+beads.left.jsonl
+beads.right.jsonl
+beads.base.jsonl
+beads.base.meta.json
+beads.left.meta.json
+beads.right.meta.json
