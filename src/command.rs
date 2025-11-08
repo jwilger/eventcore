@@ -57,6 +57,10 @@ impl CommandStreams {
         self.streams.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.streams.is_empty()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &StreamId> {
         self.streams.iter()
     }
@@ -123,6 +127,11 @@ mod tests {
         .expect("multi-stream declaration should succeed");
 
         assert_eq!(2, streams.len());
+    }
+
+    #[test]
+    fn single_stream_is_not_empty() {
+        assert!(!CommandStreams::single(stream("accounts::primary")).is_empty());
     }
 }
 
