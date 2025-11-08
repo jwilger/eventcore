@@ -119,11 +119,8 @@ jobs:
       - name: Install cargo-mutants
         run: cargo install cargo-mutants --locked
 
-      - name: Run cargo mutants for command.rs
-        run: cargo mutants --no-guidance --scope src/command.rs
-
-      - name: Run cargo mutants for lib.rs
-        run: cargo mutants --no-guidance --scope src/lib.rs
+      - name: Run cargo mutants
+        run: cargo mutants --workspace
 
       - name: Upload mutation report
         uses: actions/upload-artifact@v4
