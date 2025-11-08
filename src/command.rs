@@ -82,7 +82,7 @@ pub trait Event: Clone + Send + 'static {
     ///
     /// The stream ID represents the aggregate identity in Domain-Driven Design.
     /// Each domain event knows which aggregate instance it belongs to.
-    fn stream_id(&self) -> &crate::StreamId;
+    fn stream_id(&self) -> &StreamId;
 }
 
 /// Trait defining the business logic of a command.

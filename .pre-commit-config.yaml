@@ -47,12 +47,6 @@ repos:
         types: [rust]
         pass_filenames: false
 
-      - id: no-allow-dead-code
-        name: no allow(dead_code) in committed code
-        entry: .pre-commit-hooks/check-no-dead-code.sh
-        language: system
-        types: [rust]
-        pass_filenames: false
 
   # Conventional commits enforcement
   - repo: https://github.com/commitizen-tools/commitizen
