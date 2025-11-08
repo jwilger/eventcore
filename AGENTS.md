@@ -1,6 +1,7 @@
 # EventCore Agent Guidelines
 
 ## Build & Test Commands
+
 - Format: `cargo fmt --all` (required before commit)
 - Lint: `cargo clippy --all-targets --all-features` (warnings = errors via `lints.rust`)
 - Test all: `cargo test --workspace` or `cargo nextest run --workspace`
@@ -8,6 +9,7 @@
 - Setup: `docker-compose up -d` for Postgres; `nix develop` for reproducible toolchain
 
 ## Code Style
+
 - **Rust 2024 edition**: 4-space indent, trailing commas, early returns over nesting
 - **Naming**: `snake_case` files/modules, `PascalCase` types/traits, `SCREAMING_SNAKE_CASE` constants/macros
 - **Imports**: Use `crate::` for internal, group `std` → external → internal, re-export public API via `lib.rs`
@@ -16,12 +18,14 @@
 - **Traits**: Derive `serde`, `thiserror`, `Debug`, `Clone` where applicable; avoid manual impls
 
 ## Testing
+
 - **Integration tests**: `tests/I-NNN-feature_name_test.rs` format (e.g., `I-001-single_stream-command_test.rs`)
 - **Unit tests**: `#[cfg(test)] mod tests` within source files
 - **Naming**: Descriptive async test names like `executes_successfully_with_valid_state`
 - **Coverage**: Test happy path, business rule violations, concurrency conflicts, and error conditions
 
 ## Commits & PRs
+
 - **Format**: `feat(I-123): description` or `fix(module): description` (Conventional Commits enforced by pre-commit)
 - **Scope**: Reference issue IDs (I-NNN) or ADR numbers in commit scope
 - **PRs**: Link issues/ADRs, list verification steps, update CHANGELOG/README for behavior changes

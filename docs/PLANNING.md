@@ -5,37 +5,44 @@
 ## Using Beads for Planning
 
 **View all issues:**
+
 ```bash
 bd list
 ```
 
 **View specific issue details (design, acceptance criteria, dependencies):**
+
 ```bash
 bd show <issue-id>
 # Example: bd show eventcore-004
 ```
 
 **Find ready work:**
+
 ```bash
 bd ready
 ```
 
 **View blocked items:**
+
 ```bash
 bd blocked
 ```
 
 **Update issue status:**
+
 ```bash
 bd update <issue-id> --status <status>
 ```
 
 **Close completed work:**
+
 ```bash
 bd close <issue-id> --reason "Completed because..."
 ```
 
 **View project statistics:**
+
 ```bash
 bd stats
 ```

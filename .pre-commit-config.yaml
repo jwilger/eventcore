@@ -47,7 +47,6 @@ repos:
         types: [rust]
         pass_filenames: false
 
-
   # Conventional commits enforcement
   - repo: https://github.com/commitizen-tools/commitizen
     rev: v3.13.0
