@@ -184,7 +184,6 @@ impl ConflictInjectingStore {
     }
 }
 
-#[allow(dead_code)]
 struct TransferMoney {
     from: StreamId,
     to: StreamId,

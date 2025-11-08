@@ -1,3 +1,5 @@
+#![deny(clippy::allow_attributes)]
+
 mod command;
 mod errors;
 mod store;

@@ -53,7 +53,10 @@ impl CommandStreams {
         Self::try_from_streams(streams)
     }
 
-    #[allow(clippy::len_without_is_empty)]
+    pub fn is_empty(&self) -> bool {
+        self.streams.is_empty()
+    }
+
     pub fn len(&self) -> usize {
         self.streams.len()
     }
@@ -242,5 +245,30 @@ mod tests {
         .expect("multi-stream declaration should succeed");
 
         assert_eq!(2, streams.len());
+    }
+
+    #[test]
+    fn is_empty_returns_true_for_empty_construction() {
+        let result = CommandStreams::try_from_streams(Vec::<StreamId>::new());
+
+        assert!(matches!(result, Err(CommandStreamsError::Empty)));
+    }
+
+    #[test]
+    fn is_empty_returns_false_for_single_stream() {
+        let streams = CommandStreams::single(stream("accounts::primary"));
+
+        assert!(!streams.is_empty());
+    }
+
+    #[test]
+    fn is_empty_returns_false_for_multi_stream() {
+        let streams = CommandStreams::try_from_streams(vec![
+            stream("accounts::primary"),
+            stream("audit::shadow"),
+        ])
+        .expect("multi-stream declaration should succeed");
+
+        assert!(!streams.is_empty());
     }
 }
