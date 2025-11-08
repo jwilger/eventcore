@@ -1,8 +1,16 @@
-use std::{convert::TryFrom, sync::Mutex};
+use std::{
+    convert::TryFrom,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use eventcore::{
-    CommandLogic, CommandStreams, Event, EventStore, EventStoreError, EventStreamSlice,
-    InMemoryEventStore, NewEvents, RetryPolicy, StreamId, StreamVersion, StreamWrites, execute,
+    CommandLogic, CommandStreams, Event, EventStore, EventStoreError, EventStreamReader,
+    EventStreamSlice, InMemoryEventStore, NewEvents, RetryPolicy, StreamId, StreamVersion,
+    StreamWrites, execute,
 };
 use nutype::nutype;
 use uuid::Uuid;
@@ -57,6 +65,79 @@ struct TransferAcceptanceResult {
     attempts: Option<u32>,
     from_account: AccountSnapshot,
     to_account: AccountSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StreamSnapshot {
+    source_events: Vec<TestDomainEvents>,
+    destination_events: Vec<TestDomainEvents>,
+}
+
+struct SnapshottingStore {
+    inner: Arc<InMemoryEventStore>,
+    source_stream: StreamId,
+    destination_stream: StreamId,
+    snapshots: Arc<tokio::sync::Mutex<Vec<StreamSnapshot>>>,
+}
+
+impl SnapshottingStore {
+    fn new(
+        inner: Arc<InMemoryEventStore>,
+        source_stream: StreamId,
+        destination_stream: StreamId,
+    ) -> Self {
+        Self {
+            inner,
+            source_stream,
+            destination_stream,
+            snapshots: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    fn snapshots(&self) -> Arc<tokio::sync::Mutex<Vec<StreamSnapshot>>> {
+        Arc::clone(&self.snapshots)
+    }
+
+    async fn record_snapshot(&self) {
+        let source_events = self
+            .inner
+            .read_stream::<TestDomainEvents>(self.source_stream.clone())
+            .await
+            .expect("snapshotting store should read source stream after write");
+        let destination_events = self
+            .inner
+            .read_stream::<TestDomainEvents>(self.destination_stream.clone())
+            .await
+            .expect("snapshotting store should read destination stream after write");
+
+        let snapshot = StreamSnapshot {
+            source_events: source_events.into_iter().collect(),
+            destination_events: destination_events.into_iter().collect(),
+        };
+
+        let mut snapshots = self.snapshots.lock().await;
+        snapshots.push(snapshot);
+    }
+}
+
+impl EventStore for SnapshottingStore {
+    async fn read_stream<E: Event>(
+        &self,
+        stream_id: StreamId,
+    ) -> Result<EventStreamReader<E>, EventStoreError> {
+        self.inner.read_stream(stream_id).await
+    }
+
+    async fn append_events(
+        &self,
+        writes: StreamWrites,
+    ) -> Result<EventStreamSlice, EventStoreError> {
+        let result = self.inner.append_events(writes).await;
+        if result.is_ok() {
+            self.record_snapshot().await;
+        }
+        result
+    }
 }
 
 fn account_snapshot(stream_id: &StreamId, events: Vec<TestDomainEvents>) -> AccountSnapshot {
@@ -170,8 +251,7 @@ impl EventStore for ConflictInjectingStore {
             let audit_event = TestDomainEvents::Audit {
                 account_id: self.conflict_stream.clone(),
             };
-            let writes_to_inject =
-                StreamWrites::new().append(audit_event, expected_version);
+            let writes_to_inject = StreamWrites::new().append(audit_event, expected_version);
 
             self.inner
                 .append_events(writes_to_inject)
@@ -265,10 +345,7 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
         .expect("reading destination account stream succeeds");
 
     // Single assertion: struct comparison keeps one assert while inspecting both accounts.
-    let attempts = result
-        .as_ref()
-        .ok()
-        .map(|response| response.attempts());
+    let attempts = result.as_ref().ok().map(|response| response.attempts());
     let actual = TransferAcceptanceResult {
         succeeded: result.is_ok(),
         attempts,
@@ -348,10 +425,7 @@ async fn transfer_retries_after_destination_conflict() {
         .await
         .expect("reading destination account stream succeeds after retry");
 
-    let attempts = result
-        .as_ref()
-        .ok()
-        .map(|response| response.attempts());
+    let attempts = result.as_ref().ok().map(|response| response.attempts());
     let actual = TransferAcceptanceResult {
         succeeded: result.is_ok(),
         attempts,
@@ -396,5 +470,219 @@ async fn transfer_retries_after_destination_conflict() {
     assert_eq!(
         actual, expected,
         "retry logic should succeed after destination stream version conflict"
+    );
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PartialVisibilityEvidence {
+    first_transfer_ok: bool,
+    first_attempts_at_least_one: bool,
+    second_transfer_ok: bool,
+    second_attempts_at_least_one: bool,
+    final_source_version: usize,
+    final_destination_version: usize,
+    final_source_balance: MoneyAmount,
+    final_destination_balance: MoneyAmount,
+    final_source_debits: Vec<u16>,
+    final_destination_transfer_credits: Vec<u16>,
+    event_counts_always_matched: bool,
+    debit_credit_counts_balanced: bool,
+}
+
+/// Scenario 3: Concurrent transfers never expose partially applied changes across streams.
+#[tokio::test]
+async fn concurrent_transfers_never_expose_partial_state() {
+    let base_store = Arc::new(InMemoryEventStore::new());
+    let from_account = test_account_id();
+    let to_account = test_account_id();
+    let from_initial_balance = test_amount(100);
+    let to_initial_balance = test_amount(50);
+
+    seed_account_balance(base_store.as_ref(), &from_account, from_initial_balance).await;
+    seed_account_balance(base_store.as_ref(), &to_account, to_initial_balance).await;
+
+    let snapshotting_store = Arc::new(SnapshottingStore::new(
+        Arc::clone(&base_store),
+        from_account.clone(),
+        to_account.clone(),
+    ));
+    let snapshots = snapshotting_store.snapshots();
+
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let poller_store = Arc::clone(&snapshotting_store);
+    let poller_snapshots = Arc::clone(&snapshots);
+    let poller_from_stream = from_account.clone();
+    let poller_to_stream = to_account.clone();
+    let poller_stop_flag = Arc::clone(&stop_flag);
+
+    let poller_handle = tokio::spawn(async move {
+        loop {
+            if poller_stop_flag.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let source_events = poller_store
+                .read_stream::<TestDomainEvents>(poller_from_stream.clone())
+                .await
+                .expect("poller should read source stream");
+            let destination_events = poller_store
+                .read_stream::<TestDomainEvents>(poller_to_stream.clone())
+                .await
+                .expect("poller should read destination stream");
+
+            let snapshot = StreamSnapshot {
+                source_events: source_events.into_iter().collect(),
+                destination_events: destination_events.into_iter().collect(),
+            };
+
+            let mut guard = poller_snapshots.lock().await;
+            guard.push(snapshot);
+
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    });
+
+    tokio::time::sleep(Duration::from_millis(5)).await;
+
+    let first_transfer_amount = test_amount(30);
+    let second_transfer_amount = test_amount(40);
+
+    let first_command = TransferMoney {
+        from: from_account.clone(),
+        to: to_account.clone(),
+        amount: first_transfer_amount,
+    };
+
+    let second_command = TransferMoney {
+        from: from_account.clone(),
+        to: to_account.clone(),
+        amount: second_transfer_amount,
+    };
+
+    let store_for_first = Arc::clone(&snapshotting_store);
+    let store_for_second = Arc::clone(&snapshotting_store);
+
+    let (first_result, second_result) = tokio::join!(
+        async move { execute(store_for_first.as_ref(), first_command, RetryPolicy::new()).await },
+        async move {
+            execute(
+                store_for_second.as_ref(),
+                second_command,
+                RetryPolicy::new(),
+            )
+            .await
+        }
+    );
+
+    stop_flag.store(true, Ordering::SeqCst);
+    poller_handle
+        .await
+        .expect("poller task should complete without panicking");
+
+    let final_source_reader = snapshotting_store
+        .read_stream::<TestDomainEvents>(from_account.clone())
+        .await
+        .expect("reading final source stream succeeds");
+    let final_destination_reader = snapshotting_store
+        .read_stream::<TestDomainEvents>(to_account.clone())
+        .await
+        .expect("reading final destination stream succeeds");
+
+    let final_source_snapshot =
+        account_snapshot(&from_account, final_source_reader.into_iter().collect());
+    let final_destination_snapshot =
+        account_snapshot(&to_account, final_destination_reader.into_iter().collect());
+
+    let recorded_snapshots = {
+        let guard = snapshots.lock().await;
+        guard.clone()
+    };
+
+    let event_counts_always_matched = recorded_snapshots
+        .iter()
+        .all(|snapshot| snapshot.source_events.len() == snapshot.destination_events.len());
+
+    let debit_credit_counts_balanced = recorded_snapshots.iter().all(|snapshot| {
+        let debited_after_initial = snapshot
+            .source_events
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, event)| matches!(event, TestDomainEvents::Debited { .. }))
+            .count();
+
+        let credited_after_initial = snapshot
+            .destination_events
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, event)| matches!(event, TestDomainEvents::Credited { .. }))
+            .count();
+
+        debited_after_initial == credited_after_initial
+    });
+
+    let mut final_source_debits: Vec<u16> = final_source_snapshot
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            TestDomainEvents::Debited { amount, .. } => Some(amount.into_inner()),
+            _ => None,
+        })
+        .collect();
+    final_source_debits.sort_unstable();
+
+    let mut final_destination_transfer_credits: Vec<u16> = final_destination_snapshot
+        .events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| match event {
+            TestDomainEvents::Credited { amount, .. } if index > 0 => Some(amount.into_inner()),
+            _ => None,
+        })
+        .collect();
+    final_destination_transfer_credits.sort_unstable();
+
+    let actual_analysis = PartialVisibilityEvidence {
+        first_transfer_ok: first_result.is_ok(),
+        first_attempts_at_least_one: first_result
+            .as_ref()
+            .ok()
+            .map(|response| response.attempts() >= 1)
+            .unwrap_or(false),
+        second_transfer_ok: second_result.is_ok(),
+        second_attempts_at_least_one: second_result
+            .as_ref()
+            .ok()
+            .map(|response| response.attempts() >= 1)
+            .unwrap_or(false),
+        final_source_version: final_source_snapshot.version,
+        final_destination_version: final_destination_snapshot.version,
+        final_source_balance: final_source_snapshot.balance,
+        final_destination_balance: final_destination_snapshot.balance,
+        final_source_debits,
+        final_destination_transfer_credits,
+        event_counts_always_matched,
+        debit_credit_counts_balanced,
+    };
+
+    let expected_analysis = PartialVisibilityEvidence {
+        first_transfer_ok: true,
+        first_attempts_at_least_one: true,
+        second_transfer_ok: true,
+        second_attempts_at_least_one: true,
+        final_source_version: 3,
+        final_destination_version: 3,
+        final_source_balance: test_amount(30),
+        final_destination_balance: test_amount(120),
+        final_source_debits: vec![30, 40],
+        final_destination_transfer_credits: vec![30, 40],
+        event_counts_always_matched: true,
+        debit_credit_counts_balanced: true,
+    };
+
+    assert_eq!(
+        actual_analysis, expected_analysis,
+        "concurrent transfers must never reveal partially applied state across streams"
     );
 }
