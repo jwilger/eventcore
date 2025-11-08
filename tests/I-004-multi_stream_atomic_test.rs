@@ -1,5 +1,6 @@
 use std::{
     convert::TryFrom,
+    num::NonZeroU32,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -62,7 +63,7 @@ struct AccountSnapshot {
 #[derive(Debug, PartialEq, Eq)]
 struct TransferAcceptanceResult {
     succeeded: bool,
-    attempts: Option<u32>,
+    attempts: Option<NonZeroU32>,
     from_account: AccountSnapshot,
     to_account: AccountSnapshot,
 }
@@ -345,7 +346,10 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
         .expect("reading destination account stream succeeds");
 
     // Single assertion: struct comparison keeps one assert while inspecting both accounts.
-    let attempts = result.as_ref().ok().map(|response| response.attempts());
+    let attempts = result
+        .as_ref()
+        .ok()
+        .and_then(|response| NonZeroU32::new(response.attempts()));
     let actual = TransferAcceptanceResult {
         succeeded: result.is_ok(),
         attempts,
@@ -355,7 +359,7 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
 
     let expected = TransferAcceptanceResult {
         succeeded: true,
-        attempts: Some(1),
+        attempts: Some(NonZeroU32::new(1).unwrap()),
         from_account: account_snapshot(
             &from_account,
             vec![
@@ -386,7 +390,7 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
 
     assert_eq!(
         actual, expected,
-        "multi-stream transfer should debit source, credit destination, and advance streams"
+        "retry logic should succeed after destination stream version conflict"
     );
 }
 
@@ -425,7 +429,10 @@ async fn transfer_retries_after_destination_conflict() {
         .await
         .expect("reading destination account stream succeeds after retry");
 
-    let attempts = result.as_ref().ok().map(|response| response.attempts());
+    let attempts = result
+        .as_ref()
+        .ok()
+        .and_then(|response| NonZeroU32::new(response.attempts()));
     let actual = TransferAcceptanceResult {
         succeeded: result.is_ok(),
         attempts,
@@ -435,7 +442,7 @@ async fn transfer_retries_after_destination_conflict() {
 
     let expected = TransferAcceptanceResult {
         succeeded: true,
-        attempts: Some(2),
+        attempts: Some(NonZeroU32::new(2).unwrap()),
         from_account: account_snapshot(
             &from_account,
             vec![
