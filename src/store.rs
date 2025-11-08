@@ -425,4 +425,62 @@ mod tests {
             "Event data should match what was stored"
         );
     }
+
+    #[tokio::test]
+    async fn read_stream_on_empty_store_is_empty() {
+        let store = InMemoryEventStore::new();
+        let stream_id = StreamId::try_new("empty-stream".to_string()).expect("valid stream id");
+
+        let reader = store
+            .read_stream::<TestEvent>(stream_id)
+            .await
+            .expect("read to succeed");
+
+        let observed = (
+            reader.is_empty(),
+            reader.len(),
+            reader.iter().next().is_none(),
+        );
+
+        assert_eq!(observed, (true, 0usize, true));
+    }
+
+    #[tokio::test]
+    async fn read_stream_iterates_through_events_in_order() {
+        let store = InMemoryEventStore::new();
+        let stream_id = StreamId::try_new("ordered-stream".to_string()).expect("valid stream id");
+
+        let first_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "first".to_string(),
+        };
+
+        let second_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "second".to_string(),
+        };
+
+        let writes = StreamWrites::new()
+            .append(first_event, StreamVersion::new(0))
+            .append(second_event, StreamVersion::new(0));
+
+        store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+
+        let reader = store
+            .read_stream::<TestEvent>(stream_id)
+            .await
+            .expect("read to succeed");
+
+        let collected: Vec<String> = reader.iter().map(|event| event.data.clone()).collect();
+
+        let observed = (reader.is_empty(), collected);
+
+        assert_eq!(
+            observed,
+            (false, vec!["first".to_string(), "second".to_string()])
+        );
+    }
 }

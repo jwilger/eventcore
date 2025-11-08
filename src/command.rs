@@ -53,12 +53,9 @@ impl CommandStreams {
         Self::try_from_streams(streams)
     }
 
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.streams.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.streams.is_empty()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &StreamId> {
@@ -245,10 +242,5 @@ mod tests {
         .expect("multi-stream declaration should succeed");
 
         assert_eq!(2, streams.len());
-    }
-
-    #[test]
-    fn single_stream_is_not_empty() {
-        assert!(!CommandStreams::single(stream("accounts::primary")).is_empty());
     }
 }
