@@ -280,9 +280,11 @@ mod tests {
         let single = CommandStreams::single(primary.clone());
         let multi = CommandStreams::try_from_streams(vec![primary, secondary])
             .expect("multi-stream declaration should succeed");
-        let empty_error =
-            CommandStreams::try_from_streams(Vec::<StreamId>::new()).expect_err("empty set rejected");
-        let invariant_empty = CommandStreams { streams: Vec::new() };
+        let empty_error = CommandStreams::try_from_streams(Vec::<StreamId>::new())
+            .expect_err("empty set rejected");
+        let invariant_empty = CommandStreams {
+            streams: Vec::new(),
+        };
 
         let observed = (
             single.len(),
