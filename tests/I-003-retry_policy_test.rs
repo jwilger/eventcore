@@ -1,7 +1,7 @@
 use eventcore::{
-    CommandError, CommandLogic, Event, EventStore, EventStoreError, EventStreamReader,
-    EventStreamSlice, InMemoryEventStore, MetricsHook, NewEvents, RetryContext, RetryPolicy,
-    StreamId, StreamWrites, execute,
+    CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
+    EventStreamReader, EventStreamSlice, InMemoryEventStore, MetricsHook, NewEvents, RetryContext,
+    RetryPolicy, StreamId, StreamWrites, execute,
 };
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -32,8 +32,8 @@ impl CommandLogic for TestCommand {
     type Event = TestEvent;
     type State = ();
 
-    fn stream_id(&self) -> &StreamId {
-        &self.stream_id
+    fn streams(&self) -> CommandStreams {
+        CommandStreams::single(self.stream_id.clone())
     }
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
@@ -147,10 +147,10 @@ async fn metrics_hook_receives_correct_attempt_numbers() {
     // And: Third retry has attempt=3
     assert_eq!(contexts[2].attempt, 3, "third retry should have attempt=3");
 
-    // And: All retries reference the correct stream_id
-    assert_eq!(contexts[0].stream_id, stream_id);
-    assert_eq!(contexts[1].stream_id, stream_id);
-    assert_eq!(contexts[2].stream_id, stream_id);
+    // And: All retries reference the declared streams
+    assert_eq!(contexts[0].streams, vec![stream_id.clone()]);
+    assert_eq!(contexts[1].streams, vec![stream_id.clone()]);
+    assert_eq!(contexts[2].streams, vec![stream_id]);
 
     // And: All retries have non-zero delay_ms (exponential backoff applied)
     assert!(contexts[0].delay_ms > 0, "first retry should have delay");

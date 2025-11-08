@@ -2,10 +2,11 @@ mod command;
 mod errors;
 mod store;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 // Re-export only the minimal public API needed for execute() signature
-pub use command::{CommandLogic, Event, NewEvents};
+pub use command::{CommandLogic, CommandStreams, CommandStreamsError, Event, NewEvents};
 pub use errors::CommandError;
 pub use store::EventStore;
 
@@ -68,7 +69,7 @@ pub trait MetricsHook: Send + Sync {
     ///
     /// # Parameters
     ///
-    /// * `ctx` - Context about the retry attempt (stream_id, attempt number, delay)
+    /// * `ctx` - Context about the retry attempt (streams, attempt number, delay)
     fn on_retry_attempt(&self, ctx: &RetryContext);
 }
 
@@ -77,8 +78,8 @@ pub trait MetricsHook: Send + Sync {
 /// Provides structured data about the retry attempt for metrics collection.
 #[derive(Debug, Clone)]
 pub struct RetryContext {
-    /// The stream ID being retried
-    pub stream_id: StreamId,
+    /// The set of streams being retried (guaranteed non-empty)
+    pub streams: Vec<StreamId>,
     /// The current retry attempt number (1-based)
     pub attempt: u32,
     /// The delay in milliseconds before this retry attempt
@@ -266,30 +267,39 @@ where
     S: EventStore,
 {
     for attempt in 0..=policy.max_retries {
-        // Read existing events from the command's stream
-        let stream_id = command.stream_id().clone();
-        let reader = store
-            .read_stream::<C::Event>(stream_id)
-            .await
-            .map_err(CommandError::EventStoreError)?;
+        let declared_streams = command.streams();
+        let mut expected_versions: HashMap<StreamId, StreamVersion> =
+            HashMap::with_capacity(declared_streams.len());
+        let mut state = C::State::default();
 
-        // Capture the stream version (number of events) for optimistic concurrency control
-        let expected_version = store::StreamVersion::new(reader.len());
+        for stream_id in declared_streams.iter() {
+            let reader = store
+                .read_stream::<C::Event>(stream_id.clone())
+                .await
+                .map_err(CommandError::EventStoreError)?;
+            let expected_version = StreamVersion::new(reader.len());
+            expected_versions.insert(stream_id.clone(), expected_version);
+            state = reader
+                .into_iter()
+                .fold(state, |acc, event| command.apply(acc, &event));
+        }
 
-        // Reconstruct state by folding events via apply()
-        let state = reader
-            .into_iter()
-            .fold(C::State::default(), |acc, event| command.apply(acc, &event));
-
-        // Call handle() with reconstructed state
         let new_events = command.handle(state)?;
 
-        // Convert NewEvents to StreamWrites with version information and store atomically
-        let writes: StreamWrites = Vec::from(new_events)
-            .into_iter()
-            .fold(StreamWrites::new(), |writes, event| {
-                writes.append(event, expected_version)
-            });
+        // Convert NewEvents to StreamWrites with per-stream version information and store atomically
+        let writes: StreamWrites =
+            Vec::from(new_events)
+                .into_iter()
+                .fold(StreamWrites::new(), |writes, event| {
+                    let stream_id = event.stream_id();
+                    let expected_version = *expected_versions.get(stream_id).unwrap_or_else(|| {
+                        panic!(
+                            "command emitted event for stream not declared via CommandLogic::streams(): {}",
+                            stream_id.as_ref()
+                        )
+                    });
+                    writes.append(event, expected_version)
+                });
 
         // Convert EventStoreError variants to appropriate CommandError types.
         //
@@ -326,17 +336,19 @@ where
                     }
                 };
 
+                let streams: Vec<StreamId> = declared_streams.iter().cloned().collect();
+
                 tracing::warn!(
                     attempt = attempt + 1,
                     delay_ms = delay_ms,
-                    stream_id = command.stream_id().as_ref(),
+                    streams = ?streams.as_slice(),
                     "retrying command after concurrency conflict"
                 );
 
                 // Call metrics hook if configured
                 if let Some(hook) = &policy.metrics_hook {
                     let ctx = RetryContext {
-                        stream_id: command.stream_id().clone(),
+                        streams: streams.clone(),
                         attempt: attempt + 1,
                         delay_ms,
                     };
@@ -347,9 +359,10 @@ where
                 continue; // Retry
             }
             Err(CommandError::ConcurrencyError(_)) => {
+                let streams: Vec<StreamId> = declared_streams.iter().cloned().collect();
                 tracing::error!(
                     max_retries = policy.max_retries,
-                    stream_id = command.stream_id().as_ref()
+                    streams = ?streams.as_slice()
                 );
                 return Err(CommandError::ConcurrencyError(policy.max_retries));
             }
@@ -364,6 +377,7 @@ where
 mod tests {
     use super::*;
     use std::sync::Arc;
+
     use std::sync::atomic::{AtomicBool, Ordering};
 
     /// Test-specific event type for unit testing.
@@ -391,8 +405,8 @@ mod tests {
         type Event = TestEvent;
         type State = ();
 
-        fn stream_id(&self) -> &StreamId {
-            &self.stream_id
+        fn streams(&self) -> CommandStreams {
+            CommandStreams::single(self.stream_id.clone())
         }
 
         fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
@@ -466,8 +480,8 @@ mod tests {
         type Event = TestEventWithValue;
         type State = TestState;
 
-        fn stream_id(&self) -> &StreamId {
-            &self.stream_id
+        fn streams(&self) -> CommandStreams {
+            CommandStreams::single(self.stream_id.clone())
         }
 
         fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
@@ -652,8 +666,8 @@ mod tests {
             "logs should contain structured delay_ms field"
         );
         assert!(
-            logs_contain("stream_id="),
-            "logs should contain structured stream_id field"
+            logs_contain("streams="),
+            "logs should contain structured streams field"
         );
     }
 
@@ -987,8 +1001,8 @@ mod tests {
             "logs should contain delay_ms field"
         );
         assert!(
-            logs_contain("stream_id="),
-            "logs should contain stream_id field"
+            logs_contain("streams="),
+            "logs should contain streams field"
         );
     }
 
@@ -1031,8 +1045,8 @@ mod tests {
             "error event should include max_retries field"
         );
         assert!(
-            logs_contain("stream_id="),
-            "error event should include stream_id field"
+            logs_contain("streams="),
+            "error event should include streams field"
         );
     }
 

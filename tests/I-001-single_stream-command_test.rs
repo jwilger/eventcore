@@ -1,6 +1,6 @@
 use eventcore::{
-    CommandError, CommandLogic, Event, EventStore, InMemoryEventStore, NewEvents, RetryPolicy,
-    StreamId, execute,
+    CommandError, CommandLogic, CommandStreams, Event, EventStore, InMemoryEventStore, NewEvents,
+    RetryPolicy, StreamId, execute,
 };
 use nutype::nutype;
 use uuid::Uuid;
@@ -70,8 +70,8 @@ impl CommandLogic for Deposit {
     type Event = TestDomainEvents;
     type State = ();
 
-    fn stream_id(&self) -> &StreamId {
-        &self.account_id
+    fn streams(&self) -> CommandStreams {
+        CommandStreams::single(self.account_id.clone())
     }
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
@@ -100,8 +100,8 @@ impl CommandLogic for Withdraw {
     type Event = TestDomainEvents;
     type State = AccountBalance;
 
-    fn stream_id(&self) -> &StreamId {
-        &self.account_id
+    fn streams(&self) -> CommandStreams {
+        CommandStreams::single(self.account_id.clone())
     }
 
     fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {

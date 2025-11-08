@@ -1,5 +1,61 @@
+use std::collections::HashSet;
+
+use thiserror::Error;
+
 use crate::errors::CommandError;
 use crate::store::StreamId;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandStreams {
+    streams: Vec<StreamId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum CommandStreamsError {
+    #[error("commands must declare at least one stream")]
+    Empty,
+    #[error("duplicate stream declared: {duplicate:?}")]
+    DuplicateStream { duplicate: StreamId },
+}
+
+impl CommandStreams {
+    pub fn try_from_streams(streams: Vec<StreamId>) -> Result<Self, CommandStreamsError> {
+        if streams.is_empty() {
+            return Err(CommandStreamsError::Empty);
+        }
+
+        let mut seen = HashSet::new();
+        for stream in &streams {
+            if !seen.insert(stream.clone()) {
+                return Err(CommandStreamsError::DuplicateStream {
+                    duplicate: stream.clone(),
+                });
+            }
+        }
+
+        Ok(Self { streams })
+    }
+
+    pub fn single(stream: StreamId) -> Self {
+        Self {
+            streams: vec![stream],
+        }
+    }
+
+    pub fn with_participant(self, participant: StreamId) -> Result<Self, CommandStreamsError> {
+        let mut streams = self.streams;
+        streams.push(participant);
+        Self::try_from_streams(streams)
+    }
+
+    pub fn len(&self) -> usize {
+        self.streams.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &StreamId> {
+        self.streams.iter()
+    }
+}
 
 /// Event trait for domain-first event sourcing.
 ///
@@ -49,16 +105,14 @@ pub trait CommandLogic {
     /// each command execution by applying events via `apply()`.
     type State: Default;
 
-    /// Returns the stream ID for single-stream commands.
+    /// Declares the ordered set of streams the command will interact with
+    /// during execution.
     ///
-    /// For I-001, all commands operate on exactly one stream. This method
-    /// identifies which stream to read for state reconstruction.
-    ///
-    /// # Note
-    ///
-    /// This method is specific to I-001 (single-stream commands).
-    /// Multi-stream support (I-004) will replace this with a different mechanism.
-    fn stream_id(&self) -> &StreamId;
+    /// Commands must always include at least one stream. Single-stream
+    /// commands can return [`CommandStreams::single`], while multi-stream
+    /// commands should construct a `CommandStreams` instance using the
+    /// fallible APIs to guarantee uniqueness.
+    fn streams(&self) -> CommandStreams;
 
     /// Reconstruct state by applying a single event.
     ///
