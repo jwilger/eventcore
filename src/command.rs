@@ -19,21 +19,26 @@ pub enum CommandStreamsError {
 }
 
 impl CommandStreams {
-    pub fn try_from_streams(streams: Vec<StreamId>) -> Result<Self, CommandStreamsError> {
-        if streams.is_empty() {
+    pub fn try_from_streams<I>(streams: I) -> Result<Self, CommandStreamsError>
+    where
+        I: IntoIterator<Item = StreamId>,
+    {
+        let mut seen = HashSet::new();
+        let mut collected = Vec::new();
+
+        for stream in streams.into_iter() {
+            if !seen.insert(stream.clone()) {
+                return Err(CommandStreamsError::DuplicateStream { duplicate: stream });
+            }
+
+            collected.push(stream);
+        }
+
+        if collected.is_empty() {
             return Err(CommandStreamsError::Empty);
         }
 
-        let mut seen = HashSet::new();
-        for stream in &streams {
-            if !seen.insert(stream.clone()) {
-                return Err(CommandStreamsError::DuplicateStream {
-                    duplicate: stream.clone(),
-                });
-            }
-        }
-
-        Ok(Self { streams })
+        Ok(Self { streams: collected })
     }
 
     pub fn single(stream: StreamId) -> Self {
@@ -54,6 +59,59 @@ impl CommandStreams {
 
     pub fn iter(&self) -> impl Iterator<Item = &StreamId> {
         self.streams.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stream(id: &str) -> StreamId {
+        StreamId::try_new(id.to_owned()).expect("valid stream id")
+    }
+
+    #[test]
+    fn try_from_streams_succeeds_with_unique_streams() {
+        let result = CommandStreams::try_from_streams(vec![
+            stream("accounts::primary"),
+            stream("accounts::secondary"),
+        ]);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn try_from_streams_rejects_empty_collections() {
+        let result = CommandStreams::try_from_streams(Vec::new());
+
+        assert_eq!(Err(CommandStreamsError::Empty), result);
+    }
+
+    #[test]
+    fn try_from_streams_rejects_duplicate_streams() {
+        let duplicate = stream("accounts::primary");
+        let result = CommandStreams::try_from_streams(vec![duplicate.clone(), duplicate.clone()]);
+
+        assert_eq!(
+            Err(CommandStreamsError::DuplicateStream {
+                duplicate: duplicate.clone(),
+            }),
+            result,
+        );
+    }
+
+    #[test]
+    fn with_participant_rejects_duplicate_streams() {
+        let existing = stream("accounts::primary");
+        let streams = CommandStreams::single(existing.clone());
+        let result = streams.with_participant(existing.clone());
+
+        assert_eq!(
+            Err(CommandStreamsError::DuplicateStream {
+                duplicate: existing,
+            }),
+            result,
+        );
     }
 }
 
