@@ -66,75 +66,6 @@ impl CommandStreams {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn stream(id: &str) -> StreamId {
-        StreamId::try_new(id.to_owned()).expect("valid stream id")
-    }
-
-    #[test]
-    fn try_from_streams_succeeds_with_unique_streams() {
-        let result = CommandStreams::try_from_streams(vec![
-            stream("accounts::primary"),
-            stream("accounts::secondary"),
-        ]);
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn try_from_streams_rejects_empty_collections() {
-        let result = CommandStreams::try_from_streams(Vec::new());
-
-        assert_eq!(Err(CommandStreamsError::Empty), result);
-    }
-
-    #[test]
-    fn try_from_streams_rejects_duplicate_streams() {
-        let duplicate = stream("accounts::primary");
-        let result = CommandStreams::try_from_streams(vec![duplicate.clone(), duplicate.clone()]);
-
-        assert_eq!(
-            Err(CommandStreamsError::DuplicateStream {
-                duplicate: duplicate.clone(),
-            }),
-            result,
-        );
-    }
-
-    #[test]
-    fn with_participant_rejects_duplicate_streams() {
-        let existing = stream("accounts::primary");
-        let streams = CommandStreams::single(existing.clone());
-        let result = streams.with_participant(existing.clone());
-
-        assert_eq!(
-            Err(CommandStreamsError::DuplicateStream {
-                duplicate: existing,
-            }),
-            result,
-        );
-    }
-
-    #[test]
-    fn len_returns_number_of_declared_streams() {
-        let streams = CommandStreams::try_from_streams(vec![
-            stream("accounts::primary"),
-            stream("audit::shadow"),
-        ])
-        .expect("multi-stream declaration should succeed");
-
-        assert_eq!(2, streams.len());
-    }
-
-    #[test]
-    fn single_stream_is_not_empty() {
-        assert!(!CommandStreams::single(stream("accounts::primary")).is_empty());
-    }
-}
-
 /// Event trait for domain-first event sourcing.
 ///
 /// Per ADR-012, domain types implement this trait to become events. The trait provides
@@ -250,5 +181,74 @@ impl<E: Event> From<NewEvents<E>> for Vec<E> {
 impl<E: Event> Default for NewEvents<E> {
     fn default() -> Self {
         Self { events: Vec::new() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stream(id: &str) -> StreamId {
+        StreamId::try_new(id.to_owned()).expect("valid stream id")
+    }
+
+    #[test]
+    fn try_from_streams_succeeds_with_unique_streams() {
+        let result = CommandStreams::try_from_streams(vec![
+            stream("accounts::primary"),
+            stream("accounts::secondary"),
+        ]);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn try_from_streams_rejects_empty_collections() {
+        let result = CommandStreams::try_from_streams(Vec::new());
+
+        assert_eq!(Err(CommandStreamsError::Empty), result);
+    }
+
+    #[test]
+    fn try_from_streams_rejects_duplicate_streams() {
+        let duplicate = stream("accounts::primary");
+        let result = CommandStreams::try_from_streams(vec![duplicate.clone(), duplicate.clone()]);
+
+        assert_eq!(
+            Err(CommandStreamsError::DuplicateStream {
+                duplicate: duplicate.clone(),
+            }),
+            result,
+        );
+    }
+
+    #[test]
+    fn with_participant_rejects_duplicate_streams() {
+        let existing = stream("accounts::primary");
+        let streams = CommandStreams::single(existing.clone());
+        let result = streams.with_participant(existing.clone());
+
+        assert_eq!(
+            Err(CommandStreamsError::DuplicateStream {
+                duplicate: existing,
+            }),
+            result,
+        );
+    }
+
+    #[test]
+    fn len_returns_number_of_declared_streams() {
+        let streams = CommandStreams::try_from_streams(vec![
+            stream("accounts::primary"),
+            stream("audit::shadow"),
+        ])
+        .expect("multi-stream declaration should succeed");
+
+        assert_eq!(2, streams.len());
+    }
+
+    #[test]
+    fn single_stream_is_not_empty() {
+        assert!(!CommandStreams::single(stream("accounts::primary")).is_empty());
     }
 }
