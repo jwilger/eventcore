@@ -280,12 +280,15 @@ where
     S: EventStore,
 {
     for attempt in 0..=policy.max_retries {
-        let declared_streams = command.streams();
+        let stream_ids: Vec<StreamId> = {
+            let declared_streams = command.streams();
+            declared_streams.iter().cloned().collect()
+        };
         let mut expected_versions: HashMap<StreamId, StreamVersion> =
-            HashMap::with_capacity(declared_streams.len());
+            HashMap::with_capacity(stream_ids.len());
         let mut state = C::State::default();
 
-        for stream_id in declared_streams.iter() {
+        for stream_id in stream_ids.iter() {
             let reader = store
                 .read_stream::<C::Event>(stream_id.clone())
                 .await
@@ -351,19 +354,17 @@ where
                     }
                 };
 
-                let streams: Vec<StreamId> = declared_streams.iter().cloned().collect();
-
                 tracing::warn!(
                     attempt = attempt + 1,
                     delay_ms = delay_ms,
-                    streams = ?streams.as_slice(),
+                    streams = ?stream_ids.as_slice(),
                     "retrying command after concurrency conflict"
                 );
 
                 // Call metrics hook if configured
                 if let Some(hook) = &policy.metrics_hook {
                     let ctx = RetryContext {
-                        streams: streams.clone(),
+                        streams: stream_ids.clone(),
                         attempt: attempt + 1,
                         delay_ms,
                     };
@@ -374,10 +375,9 @@ where
                 continue; // Retry
             }
             Err(CommandError::ConcurrencyError(_)) => {
-                let streams: Vec<StreamId> = declared_streams.iter().cloned().collect();
                 tracing::error!(
                     max_retries = policy.max_retries,
-                    streams = ?streams.as_slice()
+                    streams = ?stream_ids.as_slice()
                 );
                 return Err(CommandError::ConcurrencyError(policy.max_retries));
             }
