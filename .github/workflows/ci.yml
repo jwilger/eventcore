@@ -99,6 +99,38 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features
 
+  mutation:
+    name: Mutation
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      - name: Run cargo mutants for command.rs
+        run: cargo mutants --no-guidance --scope src/command.rs
+
+      - name: Run cargo mutants for lib.rs
+        run: cargo mutants --no-guidance --scope src/lib.rs
+
+      - name: Upload mutation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: target/mutants/everything/.mutants.json
+
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest
