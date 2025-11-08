@@ -413,6 +413,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn event_stream_reader_is_empty_reflects_stream_population() {
+        let store = InMemoryEventStore::new();
+        let stream_id =
+            StreamId::try_new("is-empty-observation".to_string()).expect("valid stream id");
+
+        let initial_reader = store
+            .read_stream::<TestEvent>(stream_id.clone())
+            .await
+            .expect("initial read to succeed");
+
+        let event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "populated event".to_string(),
+        };
+
+        let writes = StreamWrites::new().append(event, StreamVersion::new(0));
+
+        let _ = store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+
+        let populated_reader = store
+            .read_stream::<TestEvent>(stream_id)
+            .await
+            .expect("populated read to succeed");
+
+        let observed = (
+            initial_reader.is_empty(),
+            initial_reader.len(),
+            populated_reader.is_empty(),
+            populated_reader.len(),
+        );
+
+        assert_eq!(observed, (true, 0usize, false, 1usize));
+    }
+
+    #[tokio::test]
     async fn read_stream_iterates_through_events_in_order() {
         let store = InMemoryEventStore::new();
         let stream_id = StreamId::try_new("ordered-stream".to_string()).expect("valid stream id");

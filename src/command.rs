@@ -271,4 +271,28 @@ mod tests {
 
         assert!(!streams.is_empty());
     }
+
+    #[test]
+    fn command_streams_len_and_is_empty_consistency() {
+        let primary = stream("accounts::primary");
+        let secondary = stream("audit::shadow");
+
+        let single = CommandStreams::single(primary.clone());
+        let multi = CommandStreams::try_from_streams(vec![primary, secondary])
+            .expect("multi-stream declaration should succeed");
+        let empty_error =
+            CommandStreams::try_from_streams(Vec::<StreamId>::new()).expect_err("empty set rejected");
+        let invariant_empty = CommandStreams { streams: Vec::new() };
+
+        let observed = (
+            single.len(),
+            single.is_empty(),
+            multi.len(),
+            multi.is_empty(),
+            matches!(empty_error, CommandStreamsError::Empty),
+            invariant_empty.is_empty(),
+        );
+
+        assert_eq!(observed, (1, false, 2, false, true, true));
+    }
 }
