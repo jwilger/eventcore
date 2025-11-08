@@ -113,6 +113,17 @@ mod tests {
             result,
         );
     }
+
+    #[test]
+    fn len_returns_number_of_declared_streams() {
+        let streams = CommandStreams::try_from_streams(vec![
+            stream("accounts::primary"),
+            stream("audit::shadow"),
+        ])
+        .expect("multi-stream declaration should succeed");
+
+        assert_eq!(2, streams.len());
+    }
 }
 
 /// Event trait for domain-first event sourcing.
