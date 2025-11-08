@@ -3,6 +3,7 @@ mod errors;
 mod store;
 
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 // Re-export only the minimal public API needed for execute() signature
@@ -24,7 +25,19 @@ pub use store::{
 /// The specific data included in this response is yet to be determined based
 /// on actual usage requirements.
 #[derive(Debug)]
-pub struct ExecutionResponse;
+pub struct ExecutionResponse {
+    attempts: NonZeroU32,
+}
+
+impl ExecutionResponse {
+    pub fn new(attempts: NonZeroU32) -> Self {
+        Self { attempts }
+    }
+
+    pub fn attempts(&self) -> u32 {
+        self.attempts.get()
+    }
+}
 
 /// Defines the delay strategy between retry attempts.
 ///
@@ -319,7 +332,9 @@ where
         match result {
             Ok(_) => {
                 tracing::info!("command execution succeeded");
-                return Ok(ExecutionResponse);
+                return Ok(ExecutionResponse::new(
+                    NonZeroU32::new(attempt + 1).expect("attempts are 1-based"),
+                ));
             }
             Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries => {
                 // Calculate backoff delay based on strategy

@@ -1,8 +1,8 @@
-use std::convert::TryFrom;
+use std::{convert::TryFrom, sync::Mutex};
 
 use eventcore::{
-    CommandLogic, CommandStreams, Event, EventStore, InMemoryEventStore, NewEvents, RetryPolicy,
-    StreamId, execute,
+    CommandLogic, CommandStreams, Event, EventStore, EventStoreError, EventStreamSlice,
+    InMemoryEventStore, NewEvents, RetryPolicy, StreamId, StreamVersion, StreamWrites, execute,
 };
 use nutype::nutype;
 use uuid::Uuid;
@@ -28,13 +28,17 @@ enum TestDomainEvents {
         account_id: StreamId,
         amount: MoneyAmount,
     },
+    Audit {
+        account_id: StreamId,
+    },
 }
 
 impl Event for TestDomainEvents {
     fn stream_id(&self) -> &StreamId {
         match self {
             TestDomainEvents::Debited { account_id, .. }
-            | TestDomainEvents::Credited { account_id, .. } => account_id,
+            | TestDomainEvents::Credited { account_id, .. }
+            | TestDomainEvents::Audit { account_id } => account_id,
         }
     }
 }
@@ -50,6 +54,7 @@ struct AccountSnapshot {
 #[derive(Debug, PartialEq, Eq)]
 struct TransferAcceptanceResult {
     succeeded: bool,
+    attempts: Option<u32>,
     from_account: AccountSnapshot,
     to_account: AccountSnapshot,
 }
@@ -67,6 +72,7 @@ fn compute_balance(events: &[TestDomainEvents]) -> MoneyAmount {
     let balance = events.iter().fold(0i32, |current, event| match event {
         TestDomainEvents::Credited { amount, .. } => current + i32::from(amount.into_inner()),
         TestDomainEvents::Debited { amount, .. } => current - i32::from(amount.into_inner()),
+        TestDomainEvents::Audit { .. } => current,
     });
 
     let non_negative_balance =
@@ -78,6 +84,22 @@ fn compute_balance(events: &[TestDomainEvents]) -> MoneyAmount {
 struct SeedDeposit {
     account_id: StreamId,
     amount: MoneyAmount,
+}
+
+struct ConflictInjectingStore {
+    inner: InMemoryEventStore,
+    conflict_stream: StreamId,
+    conflict_injected: Mutex<bool>,
+}
+
+impl ConflictInjectingStore {
+    fn new(inner: InMemoryEventStore, conflict_stream: StreamId) -> Self {
+        Self {
+            inner,
+            conflict_stream,
+            conflict_injected: Mutex::new(false),
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -108,6 +130,58 @@ impl CommandLogic for SeedDeposit {
             amount: self.amount,
         }]
         .into())
+    }
+}
+
+impl EventStore for ConflictInjectingStore {
+    async fn read_stream<E: Event>(
+        &self,
+        stream_id: StreamId,
+    ) -> Result<eventcore::EventStreamReader<E>, EventStoreError> {
+        self.inner.read_stream(stream_id).await
+    }
+
+    async fn append_events(
+        &self,
+        writes: StreamWrites,
+    ) -> Result<EventStreamSlice, EventStoreError> {
+        let should_inject = {
+            let mut flag = self
+                .conflict_injected
+                .lock()
+                .expect("conflict injector mutex must not be poisoned");
+
+            if !*flag {
+                *flag = true;
+                true
+            } else {
+                false
+            }
+        };
+
+        if should_inject {
+            let current_events = self
+                .inner
+                .read_stream::<TestDomainEvents>(self.conflict_stream.clone())
+                .await
+                .expect("conflict injector should read target stream prior to injection");
+
+            let expected_version = StreamVersion::new(current_events.len());
+            let audit_event = TestDomainEvents::Audit {
+                account_id: self.conflict_stream.clone(),
+            };
+            let writes_to_inject =
+                StreamWrites::new().append(audit_event, expected_version);
+
+            self.inner
+                .append_events(writes_to_inject)
+                .await
+                .expect("conflict injector should append audit event");
+
+            return Err(EventStoreError::VersionConflict);
+        }
+
+        self.inner.append_events(writes).await
     }
 }
 
@@ -191,14 +265,20 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
         .expect("reading destination account stream succeeds");
 
     // Single assertion: struct comparison keeps one assert while inspecting both accounts.
+    let attempts = result
+        .as_ref()
+        .ok()
+        .map(|response| response.attempts());
     let actual = TransferAcceptanceResult {
         succeeded: result.is_ok(),
+        attempts,
         from_account: account_snapshot(&from_account, from_events.into_iter().collect()),
         to_account: account_snapshot(&to_account, to_events.into_iter().collect()),
     };
 
     let expected = TransferAcceptanceResult {
         succeeded: true,
+        attempts: Some(1),
         from_account: account_snapshot(
             &from_account,
             vec![
@@ -230,5 +310,91 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
     assert_eq!(
         actual, expected,
         "multi-stream transfer should debit source, credit destination, and advance streams"
+    );
+}
+
+/// Scenario 2: Transfer retried after conflict injected on destination stream.
+#[tokio::test]
+async fn transfer_retries_after_destination_conflict() {
+    // Given: In-memory store with seeded accounts before wrapping in conflict injector.
+    let base_store = InMemoryEventStore::new();
+    let from_account = test_account_id();
+    let to_account = test_account_id();
+    let from_initial_balance = test_amount(100);
+    let to_initial_balance = test_amount(50);
+
+    seed_account_balance(&base_store, &from_account, from_initial_balance).await;
+    seed_account_balance(&base_store, &to_account, to_initial_balance).await;
+
+    let conflict_store = ConflictInjectingStore::new(base_store, to_account.clone());
+
+    // When: Transfer is executed against conflict injecting store.
+    let transfer_amount = test_amount(30);
+    let command = TransferMoney {
+        from: from_account.clone(),
+        to: to_account.clone(),
+        amount: transfer_amount,
+    };
+
+    let result = execute(&conflict_store, command, RetryPolicy::new()).await;
+
+    // Then: Source reflects debit, destination reflects injected audit between deposit and credit.
+    let from_events = conflict_store
+        .read_stream::<TestDomainEvents>(from_account.clone())
+        .await
+        .expect("reading source account stream succeeds after retry");
+    let to_events = conflict_store
+        .read_stream::<TestDomainEvents>(to_account.clone())
+        .await
+        .expect("reading destination account stream succeeds after retry");
+
+    let attempts = result
+        .as_ref()
+        .ok()
+        .map(|response| response.attempts());
+    let actual = TransferAcceptanceResult {
+        succeeded: result.is_ok(),
+        attempts,
+        from_account: account_snapshot(&from_account, from_events.into_iter().collect()),
+        to_account: account_snapshot(&to_account, to_events.into_iter().collect()),
+    };
+
+    let expected = TransferAcceptanceResult {
+        succeeded: true,
+        attempts: Some(2),
+        from_account: account_snapshot(
+            &from_account,
+            vec![
+                TestDomainEvents::Credited {
+                    account_id: from_account.clone(),
+                    amount: from_initial_balance,
+                },
+                TestDomainEvents::Debited {
+                    account_id: from_account.clone(),
+                    amount: transfer_amount,
+                },
+            ],
+        ),
+        to_account: account_snapshot(
+            &to_account,
+            vec![
+                TestDomainEvents::Credited {
+                    account_id: to_account.clone(),
+                    amount: to_initial_balance,
+                },
+                TestDomainEvents::Audit {
+                    account_id: to_account.clone(),
+                },
+                TestDomainEvents::Credited {
+                    account_id: to_account.clone(),
+                    amount: transfer_amount,
+                },
+            ],
+        ),
+    };
+
+    assert_eq!(
+        actual, expected,
+        "retry logic should succeed after destination stream version conflict"
     );
 }
