@@ -343,12 +343,9 @@ where
                 .into_iter()
                 .fold(StreamWrites::new(), |writes, event| {
                     let stream_id = event.stream_id();
-                    let expected_version = *expected_versions.get(stream_id).unwrap_or_else(|| {
-                        panic!(
-                            "command emitted event for stream not declared via CommandLogic::streams(): {}",
-                            stream_id.as_ref()
-                        )
-                    });
+                    let expected_version = *expected_versions.get(stream_id).expect(
+                        "command emitted event for stream not declared via CommandLogic::streams()",
+                    );
                     writes.append(event, expected_version)
                 });
 
