@@ -337,16 +337,21 @@ where
 
         let new_events = command.handle(state)?;
 
-        // Convert NewEvents to StreamWrites with per-stream version information and store atomically
-        let writes: StreamWrites = Vec::from(new_events)
+        // Register expected versions for each stream prior to appending events
+        let writes = expected_versions
+            .iter()
+            .try_fold(
+                StreamWrites::new(),
+                |writes, (stream_id, expected_version)| {
+                    writes.register_stream(stream_id.clone(), *expected_version)
+                },
+            )
+            .map_err(CommandError::EventStoreError)?;
+
+        // Convert NewEvents into StreamWrites, relying on prior registration
+        let writes = Vec::from(new_events)
             .into_iter()
-            .try_fold(StreamWrites::new(), |writes, event| {
-                let stream_id = event.stream_id();
-                let expected_version = *expected_versions.get(stream_id).expect(
-                    "command emitted event for stream not declared via CommandLogic::streams()",
-                );
-                writes.append(event, expected_version)
-            })
+            .try_fold(writes, |writes, event| writes.append(event))
             .map_err(CommandError::EventStoreError)?;
 
         // Convert EventStoreError variants to appropriate CommandError types.
@@ -616,7 +621,8 @@ mod tests {
             value: 50,
         };
         let writes = StreamWrites::new()
-            .append(seed_event, StreamVersion::new(0))
+            .register_stream(stream_id.clone(), StreamVersion::new(0))
+            .and_then(|writes| writes.append(seed_event))
             .expect("seed append should succeed");
         let _ = store
             .append_events(writes)
