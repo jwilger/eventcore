@@ -37,6 +37,49 @@ pub trait EventStore {
         stream_id: StreamId,
     ) -> impl Future<Output = Result<EventStreamReader<E>, EventStoreError>> + Send;
 
+    /// Atomically append events to multiple streams with optimistic concurrency control.
+    ///
+    /// This method provides the core write operation for event sourcing. It atomically
+    /// appends events to one or more streams while enforcing version constraints to
+    /// prevent concurrent modification conflicts.
+    ///
+    /// # Atomicity Guarantee
+    ///
+    /// All events in the write batch are committed atomically - either all events are
+    /// persisted or none are. If any stream's version check fails, the entire operation
+    /// is rolled back and no events are written.
+    ///
+    /// # Optimistic Concurrency Control
+    ///
+    /// Each stream write includes an expected version. The store verifies that each
+    /// stream's current version matches the expected version before writing. If any
+    /// version mismatch is detected, the operation fails with `EventStoreError::VersionConflict`.
+    ///
+    /// This prevents lost updates when multiple commands attempt to modify the same
+    /// stream(s) concurrently. The caller should retry the entire command execution
+    /// (reload state, re-validate, re-generate events) when conflicts occur.
+    ///
+    /// # Parameters
+    ///
+    /// * `writes` - Collection of events to append, organized by stream with expected versions
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(EventStreamSlice)` - Events successfully appended to all streams
+    /// * `Err(EventStoreError::VersionConflict)` - One or more streams had version mismatches
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let writes = StreamWrites::new()
+    ///     .append(event1, StreamVersion::new(0))
+    ///     .append(event2, StreamVersion::new(0));
+    ///
+    /// match store.append_events(writes).await {
+    ///     Ok(_) => println!("Events persisted"),
+    ///     Err(EventStoreError::VersionConflict) => println!("Concurrent modification detected"),
+    /// }
+    /// ```
     fn append_events(
         &self,
         writes: StreamWrites,
@@ -133,6 +176,13 @@ impl StreamWrites {
     /// The stream ID is extracted from the event itself via the Event trait's
     /// stream_id() method. This ensures type safety: events know their own
     /// aggregate identity and cannot be appended to the wrong stream.
+    ///
+    /// # Multiple Events to Same Stream
+    ///
+    /// If multiple events are appended to the same stream with different expected
+    /// versions, the last expected_version wins. This is intentional: commands that
+    /// emit multiple events to the same stream should use the same expected version
+    /// for all events (the version before any events are written).
     ///
     /// # Parameters
     ///

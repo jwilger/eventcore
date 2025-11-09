@@ -389,7 +389,7 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
 
     assert_eq!(
         actual, expected,
-        "retry logic should succeed after destination stream version conflict"
+        "multi-stream transfer should succeed when funds are sufficient"
     );
 }
 
@@ -496,8 +496,25 @@ struct PartialVisibilityEvidence {
 }
 
 /// Scenario 3: Concurrent transfers never expose partially applied changes across streams.
+///
+/// This test verifies the atomicity guarantee of multi-stream writes by running two
+/// concurrent transfer commands while a background poller continuously reads both streams.
+/// The test ensures that observers never see a debit without its corresponding credit
+/// (or vice versa) - proving that multi-stream writes are truly atomic.
+///
+/// Test strategy:
+/// 1. Seed two accounts with initial balances
+/// 2. Start a background poller that continuously snapshots both streams
+/// 3. Execute two concurrent transfer commands (racing for the same streams)
+/// 4. Verify that every snapshot shows balanced debit/credit counts
+/// 5. Verify final state shows both transfers completed successfully
+///
+/// The key invariant: At any point in time, the number of debits (after initial seed)
+/// must equal the number of credits (after initial seed) across both streams. If this
+/// invariant ever breaks, it means we observed a partial write.
 #[tokio::test]
 async fn concurrent_transfers_never_expose_partial_state() {
+    // Given: Two accounts with initial balances
     let base_store = Arc::new(InMemoryEventStore::new());
     let from_account = test_account_id();
     let to_account = test_account_id();
@@ -507,6 +524,7 @@ async fn concurrent_transfers_never_expose_partial_state() {
     seed_account_balance(base_store.as_ref(), &from_account, from_initial_balance).await;
     seed_account_balance(base_store.as_ref(), &to_account, to_initial_balance).await;
 
+    // And: A snapshotting store wrapper that records stream state after each write
     let snapshotting_store = Arc::new(SnapshottingStore::new(
         Arc::clone(&base_store),
         from_account.clone(),
@@ -514,6 +532,7 @@ async fn concurrent_transfers_never_expose_partial_state() {
     ));
     let snapshots = snapshotting_store.snapshots();
 
+    // And: A background poller that continuously reads both streams to detect partial writes
     let stop_flag = Arc::new(AtomicBool::new(false));
     let poller_store = Arc::clone(&snapshotting_store);
     let poller_snapshots = Arc::clone(&snapshots);
@@ -527,6 +546,7 @@ async fn concurrent_transfers_never_expose_partial_state() {
                 break;
             }
 
+            // Read both streams and record snapshot
             let source_events = poller_store
                 .read_stream::<TestDomainEvents>(poller_from_stream.clone())
                 .await
@@ -548,6 +568,7 @@ async fn concurrent_transfers_never_expose_partial_state() {
         }
     });
 
+    // Give poller time to start before executing transfers
     tokio::time::sleep(Duration::from_millis(5)).await;
 
     let first_transfer_amount = test_amount(30);

@@ -53,10 +53,12 @@ impl CommandStreams {
         Self::try_from_streams(streams)
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.streams.is_empty()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.streams.len()
     }
