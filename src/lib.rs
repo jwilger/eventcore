@@ -336,8 +336,9 @@ where
         }
 
         let new_events = command.handle(state)?;
+        let events = Vec::from(new_events);
 
-        // Register expected versions for each stream prior to appending events
+        // Register expected versions and append events as a single pipeline
         let writes = expected_versions
             .iter()
             .try_fold(
@@ -346,12 +347,11 @@ where
                     writes.register_stream(stream_id.clone(), *expected_version)
                 },
             )
-            .map_err(CommandError::EventStoreError)?;
-
-        // Convert NewEvents into StreamWrites, relying on prior registration
-        let writes = Vec::from(new_events)
-            .into_iter()
-            .try_fold(writes, |writes, event| writes.append(event))
+            .and_then(move |writes| {
+                events
+                    .into_iter()
+                    .try_fold(writes, |writes, event| writes.append(event))
+            })
             .map_err(CommandError::EventStoreError)?;
 
         // Convert EventStoreError variants to appropriate CommandError types.

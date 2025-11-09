@@ -2,6 +2,94 @@ use crate::Event;
 use nutype::nutype;
 use std::future::Future;
 
+/// Placeholder for collection of events to write, organized by stream.
+///
+/// StreamWrites represents the output of a command's handle() method,
+/// ready to be persisted atomically across multiple streams.
+///
+/// Uses type erasure to store events of different types in the same collection.
+/// Events are boxed as `Box<dyn Any>` for storage and later downcast when reading.
+///
+/// TODO: Refine based on multi-stream atomicity requirements.
+#[derive(Debug)]
+pub struct StreamWrites {
+    events: Vec<(StreamId, Box<dyn std::any::Any + Send>)>,
+    expected_versions: std::collections::HashMap<StreamId, StreamVersion>,
+}
+
+impl StreamWrites {
+    /// Create a new empty collection of stream writes.
+    ///
+    /// Returns an empty StreamWrites ready to have events appended via builder pattern.
+    pub fn new() -> Self {
+        Self {
+            events: Vec::new(),
+            expected_versions: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Register a stream and its expected version prior to appending events.
+    ///
+    /// Commands must declare their optimistic concurrency expectation for each
+    /// stream before appending events. The stream identifier must match one of
+    /// the streams declared by the command's workflow.
+    pub fn register_stream(
+        self,
+        stream_id: StreamId,
+        expected_version: StreamVersion,
+    ) -> Result<Self, EventStoreError> {
+        use std::collections::hash_map::Entry;
+
+        let mut writes = self;
+
+        match writes.expected_versions.entry(stream_id.clone()) {
+            Entry::Vacant(entry) => {
+                let _ = entry.insert(expected_version);
+                Ok(writes)
+            }
+            Entry::Occupied(entry) => {
+                let first_version = *entry.get();
+
+                if first_version != expected_version {
+                    Err(EventStoreError::ConflictingExpectedVersions {
+                        stream_id,
+                        first_version,
+                        second_version: expected_version,
+                    })
+                } else {
+                    Ok(writes)
+                }
+            }
+        }
+    }
+
+    /// Append an event to a previously registered stream using builder pattern.
+    ///
+    /// This method consumes self and returns a new StreamWrites with the event added.
+    /// It must only be called after the stream has been registered via
+    /// [`StreamWrites::register_stream`]. If the stream has not been registered,
+    /// the method returns [`EventStoreError::UndeclaredStream`].
+    pub fn append<E: Event>(self, event: E) -> Result<Self, EventStoreError> {
+        let mut writes = self;
+        let stream_id = event.stream_id().clone();
+
+        if !writes.expected_versions.contains_key(&stream_id) {
+            return Err(EventStoreError::UndeclaredStream { stream_id });
+        }
+
+        let boxed: Box<dyn std::any::Any + Send> = Box::new(event);
+        writes.events.push((stream_id, boxed));
+
+        Ok(writes)
+    }
+}
+
+impl Default for StreamWrites {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Trait defining the contract for event store implementations.
 ///
 /// Event stores provide two core operations:
@@ -157,94 +245,6 @@ pub enum EventStoreError {
     /// modification occurred between read and write.
     #[error("version conflict detected")]
     VersionConflict,
-}
-
-/// Placeholder for collection of events to write, organized by stream.
-///
-/// StreamWrites represents the output of a command's handle() method,
-/// ready to be persisted atomically across multiple streams.
-///
-/// Uses type erasure to store events of different types in the same collection.
-/// Events are boxed as `Box<dyn Any>` for storage and later downcast when reading.
-///
-/// TODO: Refine based on multi-stream atomicity requirements.
-#[derive(Debug)]
-pub struct StreamWrites {
-    events: Vec<(StreamId, Box<dyn std::any::Any + Send>)>,
-    expected_versions: std::collections::HashMap<StreamId, StreamVersion>,
-}
-
-impl StreamWrites {
-    /// Create a new empty collection of stream writes.
-    ///
-    /// Returns an empty StreamWrites ready to have events appended via builder pattern.
-    pub fn new() -> Self {
-        Self {
-            events: Vec::new(),
-            expected_versions: std::collections::HashMap::new(),
-        }
-    }
-
-    /// Register a stream and its expected version prior to appending events.
-    ///
-    /// Commands must declare their optimistic concurrency expectation for each
-    /// stream before appending events. The stream identifier must match one of
-    /// the streams declared by the command's workflow.
-    pub fn register_stream(
-        self,
-        stream_id: StreamId,
-        expected_version: StreamVersion,
-    ) -> Result<Self, EventStoreError> {
-        use std::collections::hash_map::Entry;
-
-        let mut writes = self;
-
-        match writes.expected_versions.entry(stream_id.clone()) {
-            Entry::Vacant(entry) => {
-                let _ = entry.insert(expected_version);
-                Ok(writes)
-            }
-            Entry::Occupied(entry) => {
-                let first_version = *entry.get();
-
-                if first_version != expected_version {
-                    Err(EventStoreError::ConflictingExpectedVersions {
-                        stream_id,
-                        first_version,
-                        second_version: expected_version,
-                    })
-                } else {
-                    Ok(writes)
-                }
-            }
-        }
-    }
-
-    /// Append an event to a previously registered stream using builder pattern.
-    ///
-    /// This method consumes self and returns a new StreamWrites with the event added.
-    /// It must only be called after the stream has been registered via
-    /// [`StreamWrites::register_stream`]. If the stream has not been registered,
-    /// the method returns [`EventStoreError::UndeclaredStream`].
-    pub fn append<E: Event>(self, event: E) -> Result<Self, EventStoreError> {
-        let mut writes = self;
-        let stream_id = event.stream_id().clone();
-
-        if !writes.expected_versions.contains_key(&stream_id) {
-            return Err(EventStoreError::UndeclaredStream { stream_id });
-        }
-
-        let boxed: Box<dyn std::any::Any + Send> = Box::new(event);
-        writes.events.push((stream_id, boxed));
-
-        Ok(writes)
-    }
-}
-
-impl Default for StreamWrites {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// Event stream reader generic over event payload type.
