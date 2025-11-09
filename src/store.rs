@@ -1,5 +1,94 @@
 use crate::Event;
 use nutype::nutype;
+use std::future::Future;
+
+/// Placeholder for collection of events to write, organized by stream.
+///
+/// StreamWrites represents the output of a command's handle() method,
+/// ready to be persisted atomically across multiple streams.
+///
+/// Uses type erasure to store events of different types in the same collection.
+/// Events are boxed as `Box<dyn Any>` for storage and later downcast when reading.
+///
+/// TODO: Refine based on multi-stream atomicity requirements.
+#[derive(Debug)]
+pub struct StreamWrites {
+    events: Vec<(StreamId, Box<dyn std::any::Any + Send>)>,
+    expected_versions: std::collections::HashMap<StreamId, StreamVersion>,
+}
+
+impl StreamWrites {
+    /// Create a new empty collection of stream writes.
+    ///
+    /// Returns an empty StreamWrites ready to have events appended via builder pattern.
+    pub fn new() -> Self {
+        Self {
+            events: Vec::new(),
+            expected_versions: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Register a stream and its expected version prior to appending events.
+    ///
+    /// Commands must declare their optimistic concurrency expectation for each
+    /// stream before appending events. The stream identifier must match one of
+    /// the streams declared by the command's workflow.
+    pub fn register_stream(
+        self,
+        stream_id: StreamId,
+        expected_version: StreamVersion,
+    ) -> Result<Self, EventStoreError> {
+        use std::collections::hash_map::Entry;
+
+        let mut writes = self;
+
+        match writes.expected_versions.entry(stream_id.clone()) {
+            Entry::Vacant(entry) => {
+                let _ = entry.insert(expected_version);
+                Ok(writes)
+            }
+            Entry::Occupied(entry) => {
+                let first_version = *entry.get();
+
+                if first_version != expected_version {
+                    Err(EventStoreError::ConflictingExpectedVersions {
+                        stream_id,
+                        first_version,
+                        second_version: expected_version,
+                    })
+                } else {
+                    Ok(writes)
+                }
+            }
+        }
+    }
+
+    /// Append an event to a previously registered stream using builder pattern.
+    ///
+    /// This method consumes self and returns a new StreamWrites with the event added.
+    /// It must only be called after the stream has been registered via
+    /// [`StreamWrites::register_stream`]. If the stream has not been registered,
+    /// the method returns [`EventStoreError::UndeclaredStream`].
+    pub fn append<E: Event>(self, event: E) -> Result<Self, EventStoreError> {
+        let mut writes = self;
+        let stream_id = event.stream_id().clone();
+
+        if !writes.expected_versions.contains_key(&stream_id) {
+            return Err(EventStoreError::UndeclaredStream { stream_id });
+        }
+
+        let boxed: Box<dyn std::any::Any + Send> = Box::new(event);
+        writes.events.push((stream_id, boxed));
+
+        Ok(writes)
+    }
+}
+
+impl Default for StreamWrites {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Trait defining the contract for event store implementations.
 ///
@@ -31,29 +120,60 @@ pub trait EventStore {
     ///
     /// * `Ok(EventStreamReader<T>)` - Handle for reading events from the stream
     /// * `Err(EventStoreError)` - If stream cannot be read
-    fn read_stream<E: crate::Event>(
+    fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> impl std::future::Future<Output = Result<EventStreamReader<E>, EventStoreError>> + Send;
+    ) -> impl Future<Output = Result<EventStreamReader<E>, EventStoreError>> + Send;
 
-    /// Atomically append events to streams with optimistic concurrency control.
+    /// Atomically append events to multiple streams with optimistic concurrency control.
     ///
-    /// This operation is atomic across all streams: either all events are
-    /// written or none are. Version checking ensures no concurrent modifications
-    /// occurred since the command read the streams.
+    /// This method provides the core write operation for event sourcing. It atomically
+    /// appends events to one or more streams while enforcing version constraints to
+    /// prevent concurrent modification conflicts.
+    ///
+    /// # Atomicity Guarantee
+    ///
+    /// All events in the write batch are committed atomically - either all events are
+    /// persisted or none are. If any stream's version check fails, the entire operation
+    /// is rolled back and no events are written.
+    ///
+    /// # Optimistic Concurrency Control
+    ///
+    /// Each stream write includes an expected version. The store verifies that each
+    /// stream's current version matches the expected version before writing. If any
+    /// version mismatch is detected, the operation fails with `EventStoreError::VersionConflict`.
+    ///
+    /// This prevents lost updates when multiple commands attempt to modify the same
+    /// stream(s) concurrently. The caller should retry the entire command execution
+    /// (reload state, re-validate, re-generate events) when conflicts occur.
     ///
     /// # Parameters
     ///
-    /// * `writes` - Collection of events to append, organized by stream
+    /// * `writes` - Collection of events to append, organized by stream with expected versions
     ///
     /// # Returns
     ///
-    /// * `Ok(EventStreamSlice)` - Metadata about the successfully written events
-    /// * `Err(EventStoreError)` - Storage failure or version conflict
+    /// * `Ok(EventStreamSlice)` - Events successfully appended to all streams
+    /// * `Err(EventStoreError::VersionConflict)` - One or more streams had version mismatches
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let writes = StreamWrites::new()
+    ///     .register_stream(stream_id.clone(), StreamVersion::new(0))
+    ///     .and_then(|writes| writes.append(event1))
+    ///     .and_then(|writes| writes.append(event2))
+    ///     .expect("builder pattern should succeed");
+    ///
+    /// match store.append_events(writes).await {
+    ///     Ok(_) => println!("Events persisted"),
+    ///     Err(EventStoreError::VersionConflict) => println!("Concurrent modification detected"),
+    /// }
+    /// ```
     fn append_events(
         &self,
         writes: StreamWrites,
-    ) -> impl std::future::Future<Output = Result<EventStreamSlice, EventStoreError>> + Send;
+    ) -> impl Future<Output = Result<EventStreamSlice, EventStoreError>> + Send;
 }
 
 /// Stream identifier domain type.
@@ -67,7 +187,7 @@ pub trait EventStore {
 #[nutype(
     sanitize(trim),
     validate(not_empty, len_char_max = 255),
-    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref)
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display)
 )]
 pub struct StreamId(String);
 
@@ -75,7 +195,7 @@ pub struct StreamId(String);
 ///
 /// StreamVersion represents the version (event count) of an event stream.
 /// Versions start at 0 (empty stream) and increment with each event.
-#[nutype(derive(Clone, Copy, PartialEq))]
+#[nutype(derive(Clone, Copy, PartialEq, Debug, Display))]
 pub struct StreamVersion(usize);
 
 impl StreamVersion {
@@ -104,6 +224,20 @@ impl StreamVersion {
 /// TODO: Implement full error hierarchy per ADR-004.
 #[derive(thiserror::Error, Debug)]
 pub enum EventStoreError {
+    /// Returned when a stream is assigned multiple different expected versions within the same write batch.
+    #[error(
+        "conflicting expected versions for stream {stream_id}: first={first_version}, second={second_version}"
+    )]
+    ConflictingExpectedVersions {
+        stream_id: StreamId,
+        first_version: StreamVersion,
+        second_version: StreamVersion,
+    },
+
+    /// Returned when append attempts are made against a stream that has not been registered with an expected version.
+    #[error("stream {stream_id} must be registered before appending events")]
+    UndeclaredStream { stream_id: StreamId },
+
     /// Version conflict during optimistic concurrency control.
     ///
     /// Returned when append_events detects that the expected version
@@ -113,63 +247,6 @@ pub enum EventStoreError {
     VersionConflict,
 }
 
-/// Placeholder for collection of events to write, organized by stream.
-///
-/// StreamWrites represents the output of a command's handle() method,
-/// ready to be persisted atomically across multiple streams.
-///
-/// Uses type erasure to store events of different types in the same collection.
-/// Events are boxed as `Box<dyn Any>` for storage and later downcast when reading.
-///
-/// TODO: Refine based on multi-stream atomicity requirements.
-pub struct StreamWrites {
-    events: Vec<(StreamId, Box<dyn std::any::Any + Send>)>,
-    expected_versions: std::collections::HashMap<StreamId, StreamVersion>,
-}
-
-impl StreamWrites {
-    /// Create a new empty collection of stream writes.
-    ///
-    /// Returns an empty StreamWrites ready to have events appended via builder pattern.
-    pub fn new() -> Self {
-        Self {
-            events: Vec::new(),
-            expected_versions: std::collections::HashMap::new(),
-        }
-    }
-
-    /// Append an event to a stream using builder pattern.
-    ///
-    /// This method consumes self and returns a new StreamWrites with the event added.
-    /// Follows immutable builder pattern for type-safe construction.
-    ///
-    /// The stream ID is extracted from the event itself via the Event trait's
-    /// stream_id() method. This ensures type safety: events know their own
-    /// aggregate identity and cannot be appended to the wrong stream.
-    ///
-    /// # Parameters
-    ///
-    /// * `event` - The event to append (must implement Event trait)
-    /// * `expected_version` - The version this write expects the stream to be at
-    ///
-    /// # Returns
-    ///
-    /// New StreamWrites instance with the event added
-    pub fn append<E: crate::Event>(mut self, event: E, expected_version: StreamVersion) -> Self {
-        let stream_id = event.stream_id().clone();
-        self.expected_versions
-            .insert(stream_id.clone(), expected_version);
-        self.events.push((stream_id, Box::new(event)));
-        self
-    }
-}
-
-impl Default for StreamWrites {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Event stream reader generic over event payload type.
 ///
 /// EventStreamReader represents a handle for reading events from a stream.
@@ -177,11 +254,11 @@ impl Default for StreamWrites {
 /// Will be refined with actual event iteration and filtering capabilities.
 ///
 /// TODO: Implement with async iterator or vector of events.
-pub struct EventStreamReader<E: crate::Event> {
+pub struct EventStreamReader<E: Event> {
     events: Vec<E>,
 }
 
-impl<E: crate::Event> EventStreamReader<E> {
+impl<E: Event> EventStreamReader<E> {
     /// Returns the number of events in the stream.
     ///
     /// TODO: Implement based on actual storage structure.
@@ -286,7 +363,7 @@ impl Default for InMemoryEventStore {
 }
 
 impl EventStore for InMemoryEventStore {
-    async fn read_stream<E: crate::Event>(
+    async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
     ) -> Result<EventStreamReader<E>, EventStoreError> {
@@ -345,7 +422,7 @@ impl EventStore for InMemoryEventStore {
 /// This is idiomatic Rust: traits that only need `&self` methods should work
 /// with references to avoid forcing consumers to clone or move stores.
 impl<T: EventStore + Sync> EventStore for &T {
-    async fn read_stream<E: crate::Event>(
+    async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
     ) -> Result<EventStreamReader<E>, EventStoreError> {
@@ -371,7 +448,7 @@ mod tests {
         data: String,
     }
 
-    impl crate::Event for TestEvent {
+    impl Event for TestEvent {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
         }
@@ -402,27 +479,212 @@ mod tests {
         };
 
         // And: A collection of writes containing the event (expected version 0 for empty stream)
-        let writes = StreamWrites::new().append(event.clone(), StreamVersion::new(0));
+        let writes = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(0))
+            .and_then(|writes| writes.append(event.clone()))
+            .expect("append should succeed");
 
         // When: We append the event to the store
-        store
+        let _ = store
             .append_events(writes)
             .await
             .expect("append to succeed");
 
-        // And: We read the stream back
-        let events = store
+        let reader = store
             .read_stream::<TestEvent>(stream_id)
             .await
             .expect("read to succeed");
 
-        // And: We access the first event
-        let first_event = events.first().expect("at least one event to exist");
-
-        // Then: The event data matches what we stored
-        assert_eq!(
-            first_event.data, "test event data",
-            "Event data should match what was stored"
+        let observed = (
+            reader.is_empty(),
+            reader.len(),
+            reader.iter().next().is_none(),
         );
+
+        assert_eq!(observed, (false, 1usize, false));
+    }
+
+    #[tokio::test]
+    async fn event_stream_reader_is_empty_reflects_stream_population() {
+        let store = InMemoryEventStore::new();
+        let stream_id =
+            StreamId::try_new("is-empty-observation".to_string()).expect("valid stream id");
+
+        let initial_reader = store
+            .read_stream::<TestEvent>(stream_id.clone())
+            .await
+            .expect("initial read to succeed");
+
+        let event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "populated event".to_string(),
+        };
+
+        let writes = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(0))
+            .and_then(|writes| writes.append(event))
+            .expect("append should succeed");
+
+        let _ = store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+
+        let populated_reader = store
+            .read_stream::<TestEvent>(stream_id)
+            .await
+            .expect("populated read to succeed");
+
+        let observed = (
+            initial_reader.is_empty(),
+            initial_reader.len(),
+            populated_reader.is_empty(),
+            populated_reader.len(),
+        );
+
+        assert_eq!(observed, (true, 0usize, false, 1usize));
+    }
+
+    #[tokio::test]
+    async fn read_stream_iterates_through_events_in_order() {
+        let store = InMemoryEventStore::new();
+        let stream_id = StreamId::try_new("ordered-stream".to_string()).expect("valid stream id");
+
+        let first_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "first".to_string(),
+        };
+
+        let second_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "second".to_string(),
+        };
+
+        let writes = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(0))
+            .and_then(|writes| writes.append(first_event))
+            .and_then(|writes| writes.append(second_event))
+            .expect("append chain should succeed");
+
+        let _ = store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+
+        let reader = store
+            .read_stream::<TestEvent>(stream_id)
+            .await
+            .expect("read to succeed");
+
+        let collected: Vec<String> = reader.iter().map(|event| event.data.clone()).collect();
+
+        let observed = (reader.is_empty(), collected);
+
+        assert_eq!(
+            observed,
+            (false, vec!["first".to_string(), "second".to_string()])
+        );
+    }
+
+    #[test]
+    fn stream_writes_accepts_duplicate_stream_with_same_expected_version() {
+        let stream_id = StreamId::try_new("duplicate-stream-same-version".to_string())
+            .expect("valid stream id");
+
+        let first_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "first-event".to_string(),
+        };
+
+        let second_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "second-event".to_string(),
+        };
+
+        let writes_result = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(0))
+            .and_then(|writes| writes.append(first_event))
+            .and_then(|writes| writes.append(second_event));
+
+        assert!(writes_result.is_ok());
+    }
+
+    #[test]
+    fn stream_writes_rejects_duplicate_stream_with_conflicting_expected_versions() {
+        let stream_id =
+            StreamId::try_new("duplicate-stream-conflict".to_string()).expect("valid stream id");
+
+        let first_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "first-event-conflict".to_string(),
+        };
+
+        let second_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "second-event-conflict".to_string(),
+        };
+
+        let conflict = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(0))
+            .and_then(|writes| writes.append(first_event))
+            .and_then(|writes| writes.register_stream(stream_id.clone(), StreamVersion::new(1)))
+            .and_then(|writes| writes.append(second_event));
+
+        let message = conflict.unwrap_err().to_string();
+
+        assert_eq!(
+            message,
+            "conflicting expected versions for stream duplicate-stream-conflict: first=0, second=1"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_writes_registers_stream_before_appending_multiple_events() {
+        let store = InMemoryEventStore::new();
+        let stream_id =
+            StreamId::try_new("registered-stream".to_string()).expect("valid stream id");
+
+        let first_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "first-registered-event".to_string(),
+        };
+
+        let second_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "second-registered-event".to_string(),
+        };
+
+        let writes = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(0))
+            .and_then(|writes| writes.append(first_event))
+            .and_then(|writes| writes.append(second_event))
+            .expect("registered stream should accept events");
+
+        let result = store.append_events(writes).await;
+
+        assert!(
+            result.is_ok(),
+            "append should succeed when stream registered before events"
+        );
+    }
+
+    #[test]
+    fn stream_writes_rejects_appends_for_unregistered_streams() {
+        let stream_id =
+            StreamId::try_new("unregistered-stream".to_string()).expect("valid stream id");
+
+        let event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "unregistered-event".to_string(),
+        };
+
+        let error = StreamWrites::new()
+            .append(event)
+            .expect_err("append without prior registration should fail");
+
+        assert!(matches!(
+            error,
+            EventStoreError::UndeclaredStream { stream_id: ref actual } if *actual == stream_id
+        ));
     }
 }

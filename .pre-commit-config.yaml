@@ -6,7 +6,7 @@ repos:
     hooks:
       - id: cargo-fmt
         name: cargo fmt
-        entry: cargo fmt --all --
+        entry: cargo fmt --all
         language: system
         types: [rust]
         pass_filenames: false
@@ -20,7 +20,7 @@ repos:
 
       - id: cargo-test
         name: cargo test
-        entry: cargo nextest run --workspace --all-features --fail-fast --no-tests=pass
+        entry: cargo test --workspace --all-features
         language: system
         types: [rust]
         pass_filenames: false
@@ -43,13 +43,6 @@ repos:
       - id: cargo-audit
         name: cargo audit
         entry: cargo audit --db .cargo-advisory-db
-        language: system
-        types: [rust]
-        pass_filenames: false
-
-      - id: no-allow-dead-code
-        name: no allow(dead_code) in committed code
-        entry: .pre-commit-hooks/check-no-dead-code.sh
         language: system
         types: [rust]
         pass_filenames: false

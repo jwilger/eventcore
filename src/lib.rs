@@ -1,11 +1,48 @@
+#![forbid(
+    dead_code,
+    invalid_value,
+    overflowing_literals,
+    unconditional_recursion,
+    unreachable_pub,
+    unused_allocation,
+    unsafe_code
+)]
+#![deny(
+    bad_style,
+    clippy::allow_attributes,
+    deprecated,
+    meta_variable_misuse,
+    non_ascii_idents,
+    non_camel_case_types,
+    non_snake_case,
+    non_upper_case_globals,
+    rust_2018_idioms,
+    rust_2021_compatibility,
+    trivial_casts,
+    trivial_numeric_casts,
+    unreachable_code,
+    unused_assignments,
+    unused_attributes,
+    unused_extern_crates,
+    unused_imports,
+    unused_must_use,
+    unused_mut,
+    unused_parens,
+    unused_qualifications,
+    unused_results,
+    unused_variables
+)]
+
 mod command;
 mod errors;
 mod store;
 
+use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 // Re-export only the minimal public API needed for execute() signature
-pub use command::{CommandLogic, Event, NewEvents};
+pub use command::{CommandLogic, CommandStreams, CommandStreamsError, Event, NewEvents};
 pub use errors::CommandError;
 pub use store::EventStore;
 
@@ -23,7 +60,19 @@ pub use store::{
 /// The specific data included in this response is yet to be determined based
 /// on actual usage requirements.
 #[derive(Debug)]
-pub struct ExecutionResponse;
+pub struct ExecutionResponse {
+    attempts: NonZeroU32,
+}
+
+impl ExecutionResponse {
+    pub fn new(attempts: NonZeroU32) -> Self {
+        Self { attempts }
+    }
+
+    pub fn attempts(&self) -> u32 {
+        self.attempts.get()
+    }
+}
 
 /// Defines the delay strategy between retry attempts.
 ///
@@ -68,7 +117,7 @@ pub trait MetricsHook: Send + Sync {
     ///
     /// # Parameters
     ///
-    /// * `ctx` - Context about the retry attempt (stream_id, attempt number, delay)
+    /// * `ctx` - Context about the retry attempt (streams, attempt number, delay)
     fn on_retry_attempt(&self, ctx: &RetryContext);
 }
 
@@ -77,8 +126,8 @@ pub trait MetricsHook: Send + Sync {
 /// Provides structured data about the retry attempt for metrics collection.
 #[derive(Debug, Clone)]
 pub struct RetryContext {
-    /// The stream ID being retried
-    pub stream_id: StreamId,
+    /// The set of streams being retried (guaranteed non-empty)
+    pub streams: Vec<StreamId>,
     /// The current retry attempt number (1-based)
     pub attempt: u32,
     /// The delay in milliseconds before this retry attempt
@@ -266,30 +315,44 @@ where
     S: EventStore,
 {
     for attempt in 0..=policy.max_retries {
-        // Read existing events from the command's stream
-        let stream_id = command.stream_id().clone();
-        let reader = store
-            .read_stream::<C::Event>(stream_id)
-            .await
-            .map_err(CommandError::EventStoreError)?;
+        let stream_ids: Vec<StreamId> = {
+            let declared_streams = command.streams();
+            declared_streams.iter().cloned().collect()
+        };
+        let mut expected_versions: HashMap<StreamId, StreamVersion> =
+            HashMap::with_capacity(stream_ids.len());
+        let mut state = C::State::default();
 
-        // Capture the stream version (number of events) for optimistic concurrency control
-        let expected_version = store::StreamVersion::new(reader.len());
+        for stream_id in stream_ids.iter() {
+            let reader = store
+                .read_stream::<C::Event>(stream_id.clone())
+                .await
+                .map_err(CommandError::EventStoreError)?;
+            let expected_version = StreamVersion::new(reader.len());
+            let _ = expected_versions.insert(stream_id.clone(), expected_version);
+            state = reader
+                .into_iter()
+                .fold(state, |acc, event| command.apply(acc, &event));
+        }
 
-        // Reconstruct state by folding events via apply()
-        let state = reader
-            .into_iter()
-            .fold(C::State::default(), |acc, event| command.apply(acc, &event));
-
-        // Call handle() with reconstructed state
         let new_events = command.handle(state)?;
+        let events = Vec::from(new_events);
 
-        // Convert NewEvents to StreamWrites with version information and store atomically
-        let writes: StreamWrites = Vec::from(new_events)
-            .into_iter()
-            .fold(StreamWrites::new(), |writes, event| {
-                writes.append(event, expected_version)
-            });
+        // Register expected versions and append events as a single pipeline
+        let writes = expected_versions
+            .iter()
+            .try_fold(
+                StreamWrites::new(),
+                |writes, (stream_id, expected_version)| {
+                    writes.register_stream(stream_id.clone(), *expected_version)
+                },
+            )
+            .and_then(move |writes| {
+                events
+                    .into_iter()
+                    .try_fold(writes, |writes, event| writes.append(event))
+            })
+            .map_err(CommandError::EventStoreError)?;
 
         // Convert EventStoreError variants to appropriate CommandError types.
         //
@@ -302,14 +365,20 @@ where
         //   - Other errors → EventStoreError(e)
         //
         // Manual map_err with match is the idiomatic solution for this.
-        let result = store.append_events(writes).await.map_err(|e| match e {
-            EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt),
-        });
+        let result = store
+            .append_events(writes)
+            .await
+            .map_err(|error| match error {
+                EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt),
+                other => CommandError::EventStoreError(other),
+            });
 
         match result {
             Ok(_) => {
                 tracing::info!("command execution succeeded");
-                return Ok(ExecutionResponse);
+                return Ok(ExecutionResponse::new(
+                    NonZeroU32::new(attempt + 1).expect("attempts are 1-based"),
+                ));
             }
             Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries => {
                 // Calculate backoff delay based on strategy
@@ -329,14 +398,14 @@ where
                 tracing::warn!(
                     attempt = attempt + 1,
                     delay_ms = delay_ms,
-                    stream_id = command.stream_id().as_ref(),
+                    streams = ?stream_ids.as_slice(),
                     "retrying command after concurrency conflict"
                 );
 
                 // Call metrics hook if configured
                 if let Some(hook) = &policy.metrics_hook {
                     let ctx = RetryContext {
-                        stream_id: command.stream_id().clone(),
+                        streams: stream_ids.clone(),
                         attempt: attempt + 1,
                         delay_ms,
                     };
@@ -349,7 +418,7 @@ where
             Err(CommandError::ConcurrencyError(_)) => {
                 tracing::error!(
                     max_retries = policy.max_retries,
-                    stream_id = command.stream_id().as_ref()
+                    streams = ?stream_ids.as_slice()
                 );
                 return Err(CommandError::ConcurrencyError(policy.max_retries));
             }
@@ -364,6 +433,7 @@ where
 mod tests {
     use super::*;
     use std::sync::Arc;
+
     use std::sync::atomic::{AtomicBool, Ordering};
 
     /// Test-specific event type for unit testing.
@@ -391,8 +461,8 @@ mod tests {
         type Event = TestEvent;
         type State = ();
 
-        fn stream_id(&self) -> &StreamId {
-            &self.stream_id
+        fn streams(&self) -> CommandStreams {
+            CommandStreams::single(self.stream_id.clone())
         }
 
         fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
@@ -466,8 +536,8 @@ mod tests {
         type Event = TestEventWithValue;
         type State = TestState;
 
-        fn stream_id(&self) -> &StreamId {
-            &self.stream_id
+        fn streams(&self) -> CommandStreams {
+            CommandStreams::single(self.stream_id.clone())
         }
 
         fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
@@ -496,7 +566,7 @@ mod tests {
         struct FailingEventStore;
 
         impl EventStore for FailingEventStore {
-            async fn read_stream<E: crate::Event>(
+            async fn read_stream<E: Event>(
                 &self,
                 _stream_id: StreamId,
             ) -> Result<EventStreamReader<E>, EventStoreError> {
@@ -550,8 +620,11 @@ mod tests {
             stream_id: stream_id.clone(),
             value: 50,
         };
-        let writes = StreamWrites::new().append(seed_event, StreamVersion::new(0));
-        store
+        let writes = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(0))
+            .and_then(|writes| writes.append(seed_event))
+            .expect("seed append should succeed");
+        let _ = store
             .append_events(writes)
             .await
             .expect("seed event to be stored");
@@ -564,7 +637,7 @@ mod tests {
         };
 
         // When: Developer executes the command
-        execute(&store, command, RetryPolicy::new())
+        let _ = execute(&store, command, RetryPolicy::new())
             .await
             .expect("command execution to succeed");
 
@@ -597,7 +670,7 @@ mod tests {
         }
 
         impl EventStore for ConflictOnceStore {
-            async fn read_stream<E: crate::Event>(
+            async fn read_stream<E: Event>(
                 &self,
                 stream_id: StreamId,
             ) -> Result<EventStreamReader<E>, EventStoreError> {
@@ -652,8 +725,8 @@ mod tests {
             "logs should contain structured delay_ms field"
         );
         assert!(
-            logs_contain("stream_id="),
-            "logs should contain structured stream_id field"
+            logs_contain("streams="),
+            "logs should contain structured streams field"
         );
     }
 
@@ -751,7 +824,7 @@ mod tests {
     }
 
     impl EventStore for AlwaysConflictStore {
-        async fn read_stream<E: crate::Event>(
+        async fn read_stream<E: Event>(
             &self,
             stream_id: StreamId,
         ) -> Result<EventStreamReader<E>, EventStoreError> {
@@ -789,7 +862,7 @@ mod tests {
     }
 
     impl EventStore for ConflictNTimesStore {
-        async fn read_stream<E: crate::Event>(
+        async fn read_stream<E: Event>(
             &self,
             stream_id: StreamId,
         ) -> Result<EventStreamReader<E>, EventStoreError> {
@@ -987,8 +1060,8 @@ mod tests {
             "logs should contain delay_ms field"
         );
         assert!(
-            logs_contain("stream_id="),
-            "logs should contain stream_id field"
+            logs_contain("streams="),
+            "logs should contain streams field"
         );
     }
 
@@ -1031,8 +1104,8 @@ mod tests {
             "error event should include max_retries field"
         );
         assert!(
-            logs_contain("stream_id="),
-            "error event should include stream_id field"
+            logs_contain("streams="),
+            "error event should include streams field"
         );
     }
 
@@ -1056,7 +1129,7 @@ mod tests {
 
         impl MetricsHook for MockMetricsHook {
             fn on_retry_attempt(&self, _ctx: &RetryContext) {
-                self.retry_count.fetch_add(1, Ordering::SeqCst);
+                let _ = self.retry_count.fetch_add(1, Ordering::SeqCst);
             }
         }
 
