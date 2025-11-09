@@ -97,7 +97,7 @@ pub trait EventStore {
 #[nutype(
     sanitize(trim),
     validate(not_empty, len_char_max = 255),
-    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref)
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display)
 )]
 pub struct StreamId(String);
 
@@ -105,7 +105,7 @@ pub struct StreamId(String);
 ///
 /// StreamVersion represents the version (event count) of an event stream.
 /// Versions start at 0 (empty stream) and increment with each event.
-#[nutype(derive(Clone, Copy, PartialEq))]
+#[nutype(derive(Clone, Copy, PartialEq, Debug, Display))]
 pub struct StreamVersion(usize);
 
 impl StreamVersion {
@@ -134,6 +134,16 @@ impl StreamVersion {
 /// TODO: Implement full error hierarchy per ADR-004.
 #[derive(thiserror::Error, Debug)]
 pub enum EventStoreError {
+    /// Returned when a stream is assigned multiple different expected versions within the same write batch.
+    #[error(
+        "conflicting expected versions for stream {stream_id}: first={first_version}, second={second_version}"
+    )]
+    ConflictingExpectedVersions {
+        stream_id: StreamId,
+        first_version: StreamVersion,
+        second_version: StreamVersion,
+    },
+
     /// Version conflict during optimistic concurrency control.
     ///
     /// Returned when append_events detects that the expected version
@@ -152,6 +162,7 @@ pub enum EventStoreError {
 /// Events are boxed as `Box<dyn Any>` for storage and later downcast when reading.
 ///
 /// TODO: Refine based on multi-stream atomicity requirements.
+#[derive(Debug)]
 pub struct StreamWrites {
     events: Vec<(StreamId, Box<dyn std::any::Any + Send>)>,
     expected_versions: std::collections::HashMap<StreamId, StreamVersion>,
@@ -192,13 +203,35 @@ impl StreamWrites {
     /// # Returns
     ///
     /// New StreamWrites instance with the event added
-    pub fn append<E: Event>(mut self, event: E, expected_version: StreamVersion) -> Self {
+    pub fn append<E: Event>(
+        mut self,
+        event: E,
+        expected_version: StreamVersion,
+    ) -> Result<Self, EventStoreError> {
+        use std::collections::hash_map::Entry;
+
         let stream_id = event.stream_id().clone();
-        let _ = self
-            .expected_versions
-            .insert(stream_id.clone(), expected_version);
-        self.events.push((stream_id, Box::new(event)));
-        self
+
+        match self.expected_versions.entry(stream_id.clone()) {
+            Entry::Occupied(entry) => {
+                let first_version = *entry.get();
+                if first_version != expected_version {
+                    return Err(EventStoreError::ConflictingExpectedVersions {
+                        stream_id: stream_id.clone(),
+                        first_version,
+                        second_version: expected_version,
+                    });
+                }
+            }
+            Entry::Vacant(entry) => {
+                let _ = entry.insert(expected_version);
+            }
+        }
+
+        let boxed_event: Box<dyn std::any::Any + Send> = Box::new(event);
+        self.events.push((stream_id, boxed_event));
+
+        Ok(self)
     }
 }
 
@@ -440,7 +473,9 @@ mod tests {
         };
 
         // And: A collection of writes containing the event (expected version 0 for empty stream)
-        let writes = StreamWrites::new().append(event.clone(), StreamVersion::new(0));
+        let writes = StreamWrites::new()
+            .append(event.clone(), StreamVersion::new(0))
+            .expect("append should succeed");
 
         // When: We append the event to the store
         let _ = store
@@ -478,7 +513,9 @@ mod tests {
             data: "populated event".to_string(),
         };
 
-        let writes = StreamWrites::new().append(event, StreamVersion::new(0));
+        let writes = StreamWrites::new()
+            .append(event, StreamVersion::new(0))
+            .expect("append should succeed");
 
         let _ = store
             .append_events(writes)
@@ -517,7 +554,8 @@ mod tests {
 
         let writes = StreamWrites::new()
             .append(first_event, StreamVersion::new(0))
-            .append(second_event, StreamVersion::new(0));
+            .and_then(|writes| writes.append(second_event, StreamVersion::new(0)))
+            .expect("append chain should succeed");
 
         let _ = store
             .append_events(writes)
@@ -536,6 +574,55 @@ mod tests {
         assert_eq!(
             observed,
             (false, vec!["first".to_string(), "second".to_string()])
+        );
+    }
+
+    #[test]
+    fn stream_writes_accepts_duplicate_stream_with_same_expected_version() {
+        let stream_id = StreamId::try_new("duplicate-stream-same-version".to_string())
+            .expect("valid stream id");
+
+        let first_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "first-event".to_string(),
+        };
+
+        let second_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "second-event".to_string(),
+        };
+
+        let writes_result = StreamWrites::new()
+            .append(first_event, StreamVersion::new(0))
+            .and_then(|writes| writes.append(second_event, StreamVersion::new(0)));
+
+        assert!(writes_result.is_ok());
+    }
+
+    #[test]
+    fn stream_writes_rejects_duplicate_stream_with_conflicting_expected_versions() {
+        let stream_id = StreamId::try_new("duplicate-stream-conflict".to_string())
+            .expect("valid stream id");
+
+        let first_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "first-event-conflict".to_string(),
+        };
+
+        let second_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "second-event-conflict".to_string(),
+        };
+
+        let conflict = StreamWrites::new()
+            .append(first_event, StreamVersion::new(0))
+            .and_then(|writes| writes.append(second_event, StreamVersion::new(1)));
+
+        let message = conflict.unwrap_err().to_string();
+
+        assert_eq!(
+            message,
+            "conflicting expected versions for stream duplicate-stream-conflict: first=0, second=1"
         );
     }
 }

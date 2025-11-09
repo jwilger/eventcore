@@ -251,7 +251,9 @@ impl EventStore for ConflictInjectingStore {
             let audit_event = TestDomainEvents::Audit {
                 account_id: self.conflict_stream.clone(),
             };
-            let writes_to_inject = StreamWrites::new().append(audit_event, expected_version);
+            let writes_to_inject = StreamWrites::new()
+                .append(audit_event, expected_version)
+                .expect("conflict injector should append audit event payload");
 
             self.inner
                 .append_events(writes_to_inject)

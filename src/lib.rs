@@ -338,16 +338,16 @@ where
         let new_events = command.handle(state)?;
 
         // Convert NewEvents to StreamWrites with per-stream version information and store atomically
-        let writes: StreamWrites =
-            Vec::from(new_events)
-                .into_iter()
-                .fold(StreamWrites::new(), |writes, event| {
-                    let stream_id = event.stream_id();
-                    let expected_version = *expected_versions.get(stream_id).expect(
-                        "command emitted event for stream not declared via CommandLogic::streams()",
-                    );
-                    writes.append(event, expected_version)
-                });
+        let writes: StreamWrites = Vec::from(new_events)
+            .into_iter()
+            .try_fold(StreamWrites::new(), |writes, event| {
+                let stream_id = event.stream_id();
+                let expected_version = *expected_versions.get(stream_id).expect(
+                    "command emitted event for stream not declared via CommandLogic::streams()",
+                );
+                writes.append(event, expected_version)
+            })
+            .map_err(CommandError::EventStoreError)?;
 
         // Convert EventStoreError variants to appropriate CommandError types.
         //
@@ -360,8 +360,9 @@ where
         //   - Other errors → EventStoreError(e)
         //
         // Manual map_err with match is the idiomatic solution for this.
-        let result = store.append_events(writes).await.map_err(|e| match e {
+        let result = store.append_events(writes).await.map_err(|error| match error {
             EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt),
+            other => CommandError::EventStoreError(other),
         });
 
         match result {
@@ -611,7 +612,9 @@ mod tests {
             stream_id: stream_id.clone(),
             value: 50,
         };
-        let writes = StreamWrites::new().append(seed_event, StreamVersion::new(0));
+        let writes = StreamWrites::new()
+            .append(seed_event, StreamVersion::new(0))
+            .expect("seed append should succeed");
         let _ = store
             .append_events(writes)
             .await
