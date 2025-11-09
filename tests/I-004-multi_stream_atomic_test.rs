@@ -571,6 +571,9 @@ async fn concurrent_transfers_never_expose_partial_state() {
     // Give poller time to start before executing transfers
     tokio::time::sleep(Duration::from_millis(5)).await;
 
+    // When: Execute two concurrent transfers that will race for the same streams
+    // These transfers will conflict with each other, forcing retries and creating
+    // opportunities for partial writes to be observed if atomicity is broken
     let first_transfer_amount = test_amount(30);
     let second_transfer_amount = test_amount(40);
 
@@ -586,9 +589,11 @@ async fn concurrent_transfers_never_expose_partial_state() {
         amount: second_transfer_amount,
     };
 
+    // Clone store references for concurrent execution
     let store_for_first = Arc::clone(&snapshotting_store);
     let store_for_second = Arc::clone(&snapshotting_store);
 
+    // Execute both transfers concurrently - they will race and one will retry
     let (first_result, second_result) = tokio::join!(
         async move { execute(store_for_first.as_ref(), first_command, RetryPolicy::new()).await },
         async move {
@@ -601,11 +606,13 @@ async fn concurrent_transfers_never_expose_partial_state() {
         }
     );
 
+    // Stop the background poller now that transfers are complete
     stop_flag.store(true, Ordering::SeqCst);
     poller_handle
         .await
         .expect("poller task should complete without panicking");
 
+    // Then: Read final state of both streams to verify transfers completed
     let final_source_reader = snapshotting_store
         .read_stream::<TestDomainEvents>(from_account.clone())
         .await
@@ -620,21 +627,29 @@ async fn concurrent_transfers_never_expose_partial_state() {
     let final_destination_snapshot =
         account_snapshot(&to_account, final_destination_reader.into_iter().collect());
 
+    // Retrieve all snapshots captured by the poller and snapshotting store
     let recorded_snapshots = {
         let guard = snapshots.lock().await;
         guard.clone()
     };
 
+    // Verify atomicity invariant #1: Event counts always matched across streams
+    // If we ever saw N events in source but M events in destination (N != M),
+    // it means we observed a partial write
     let event_counts_always_matched = recorded_snapshots
         .iter()
         .all(|snapshot| snapshot.source_events.len() == snapshot.destination_events.len());
 
+    // Verify atomicity invariant #2: Debit/credit counts always balanced
+    // After skipping the initial seed deposits, the number of debits in the source
+    // stream must always equal the number of credits in the destination stream.
+    // If this ever breaks, we observed a debit without its corresponding credit.
     let debit_credit_counts_balanced = recorded_snapshots.iter().all(|snapshot| {
         let debited_after_initial = snapshot
             .source_events
             .iter()
             .enumerate()
-            .skip(1)
+            .skip(1) // Skip initial seed deposit
             .filter(|(_, event)| matches!(event, TestDomainEvents::Debited { .. }))
             .count();
 
@@ -642,13 +657,14 @@ async fn concurrent_transfers_never_expose_partial_state() {
             .destination_events
             .iter()
             .enumerate()
-            .skip(1)
+            .skip(1) // Skip initial seed deposit
             .filter(|(_, event)| matches!(event, TestDomainEvents::Credited { .. }))
             .count();
 
         debited_after_initial == credited_after_initial
     });
 
+    // Extract and sort debit amounts from source stream for final verification
     let mut final_source_debits: Vec<u16> = final_source_snapshot
         .events
         .iter()
@@ -659,6 +675,7 @@ async fn concurrent_transfers_never_expose_partial_state() {
         .collect();
     final_source_debits.sort_unstable();
 
+    // Extract and sort credit amounts from destination stream (excluding initial seed)
     let mut final_destination_transfer_credits: Vec<u16> = final_destination_snapshot
         .events
         .iter()
@@ -670,6 +687,7 @@ async fn concurrent_transfers_never_expose_partial_state() {
         .collect();
     final_destination_transfer_credits.sort_unstable();
 
+    // Collect all evidence into a single struct for assertion
     let actual_analysis = PartialVisibilityEvidence {
         first_transfer_ok: first_result.is_ok(),
         first_attempts_at_least_one: first_result
