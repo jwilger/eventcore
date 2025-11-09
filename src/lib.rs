@@ -360,10 +360,13 @@ where
         //   - Other errors → EventStoreError(e)
         //
         // Manual map_err with match is the idiomatic solution for this.
-        let result = store.append_events(writes).await.map_err(|error| match error {
-            EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt),
-            other => CommandError::EventStoreError(other),
-        });
+        let result = store
+            .append_events(writes)
+            .await
+            .map_err(|error| match error {
+                EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt),
+                other => CommandError::EventStoreError(other),
+            });
 
         match result {
             Ok(_) => {

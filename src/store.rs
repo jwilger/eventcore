@@ -601,8 +601,8 @@ mod tests {
 
     #[test]
     fn stream_writes_rejects_duplicate_stream_with_conflicting_expected_versions() {
-        let stream_id = StreamId::try_new("duplicate-stream-conflict".to_string())
-            .expect("valid stream id");
+        let stream_id =
+            StreamId::try_new("duplicate-stream-conflict".to_string()).expect("valid stream id");
 
         let first_event = TestEvent {
             stream_id: stream_id.clone(),
