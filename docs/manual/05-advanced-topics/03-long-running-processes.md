@@ -94,105 +94,75 @@ impl CommandLogic for OrderFulfillmentProcess {
         }
     }
 
-    async fn handle(
-        &self,
-        stream_declarations: StreamDeclarations<Self::StreamSet>,
-        state: Self::State,
-        stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Check for timeout
         if let Some(timeout) = state.timeout_at {
             if Utc::now() > timeout {
-                return Ok(vec![
-                    StreamWrite::new(
-                        &stream_declarations,
-                        self.process_id.clone(),
-                        ProcessEvent::Failed {
-                            reason: "Process timed out".to_string(),
-                        }
-                    )?
-                ]);
+                return Ok(NewEvents::from(vec![ProcessEvent::Failed {
+                    reason: "Process timed out".to_string(),
+                }]));
             }
         }
 
         // Execute current step
         match state.current_step {
             FulfillmentStep::PaymentPending => {
-                self.handle_payment_step(&stream_declarations, &state).await
+                self.handle_payment_step(&state)
             }
             FulfillmentStep::PaymentConfirmed => {
-                self.handle_inventory_step(&stream_declarations, &state).await
+                self.handle_inventory_step(&state)
             }
             FulfillmentStep::InventoryReserved => {
-                self.handle_shipping_step(&stream_declarations, &state).await
+                self.handle_shipping_step(&state)
             }
             FulfillmentStep::Shipped => {
-                self.handle_delivery_step(&stream_declarations, &state).await
+                self.handle_delivery_step(&state)
             }
             FulfillmentStep::Delivered => {
-                self.handle_completion_step(&stream_declarations, &state).await
+                self.handle_completion_step(&state)
             }
             FulfillmentStep::Completed | FulfillmentStep::Failed(_) => {
                 // Process finished - no more events
-                Ok(vec![])
+                Ok(NewEvents::from(vec![]))
             }
         }
     }
 }
 
 impl OrderFulfillmentProcess {
-    async fn handle_payment_step(
-        &self,
-        stream_declarations: &StreamDeclarations<OrderFulfillmentProcessStreamSet>,
-        state: &OrderFulfillmentState,
-    ) -> CommandResult<Vec<StreamWrite<OrderFulfillmentProcessStreamSet, ProcessEvent>>> {
+    fn handle_payment_step(&self, state: &OrderFulfillmentState) -> Result<NewEvents<ProcessEvent>, CommandError> {
         if !state.payment_confirmed {
             // Check if payment was confirmed by external event
-            // This would typically listen to payment events
-            Ok(vec![])
+            // This would typically be driven by an external event handler
+            Ok(NewEvents::from(vec![]))
         } else {
             // Move to next step
-            Ok(vec![
-                StreamWrite::new(
-                    stream_declarations,
-                    self.process_id.clone(),
-                    ProcessEvent::StepCompleted {
-                        step: FulfillmentStep::PaymentConfirmed,
-                    }
-                )?
-            ])
+            Ok(NewEvents::from(vec![ProcessEvent::StepCompleted { step: FulfillmentStep::PaymentConfirmed }]))
         }
     }
 
-    async fn handle_inventory_step(
-        &self,
-        stream_declarations: &StreamDeclarations<OrderFulfillmentProcessStreamSet>,
-        state: &OrderFulfillmentState,
-    ) -> CommandResult<Vec<StreamWrite<OrderFulfillmentProcessStreamSet, ProcessEvent>>> {
+    fn handle_inventory_step(&self, state: &OrderFulfillmentState) -> Result<NewEvents<ProcessEvent>, CommandError> {
         if !state.inventory_reserved {
             // Reserve inventory
-            Ok(vec![
-                StreamWrite::new(
-                    stream_declarations,
-                    self.process_id.clone(),
-                    ProcessEvent::InventoryReserved,
-                )?
-            ])
+            Ok(NewEvents::from(vec![ProcessEvent::InventoryReserved]))
         } else {
             // Move to shipping
-            Ok(vec![
-                StreamWrite::new(
-                    stream_declarations,
-                    self.process_id.clone(),
-                    ProcessEvent::StepCompleted {
-                        step: FulfillmentStep::InventoryReserved,
-                    }
-                )?
-            ])
+            Ok(NewEvents::from(vec![ProcessEvent::StepCompleted { step: FulfillmentStep::InventoryReserved }]))
         }
     }
 
-    // Similar implementations for other steps...
+    // Similar synchronous implementations for other steps...
+    fn handle_shipping_step(&self, _state: &OrderFulfillmentState) -> Result<NewEvents<ProcessEvent>, CommandError> {
+        Ok(NewEvents::from(vec![ProcessEvent::StepCompleted { step: FulfillmentStep::Shipped }]))
+    }
+
+    fn handle_delivery_step(&self, _state: &OrderFulfillmentState) -> Result<NewEvents<ProcessEvent>, CommandError> {
+        Ok(NewEvents::from(vec![ProcessEvent::StepCompleted { step: FulfillmentStep::Delivered }]))
+    }
+
+    fn handle_completion_step(&self, _state: &OrderFulfillmentState) -> Result<NewEvents<ProcessEvent>, CommandError> {
+        Ok(NewEvents::from(vec![ProcessEvent::StepCompleted { step: FulfillmentStep::Completed }]))
+    }
 }
 ```
 
@@ -293,35 +263,20 @@ impl CommandLogic for BookingSaga {
     type State = SagaState;
     type Event = SagaEvent;
 
-    async fn handle(
-        &self,
-        stream_declarations: StreamDeclarations<Self::StreamSet>,
-        state: Self::State,
-        _stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         if state.compensation_mode {
-            self.handle_compensation(&stream_declarations, &state).await
+            self.handle_compensation(&state)
         } else {
-            self.handle_forward_execution(&stream_declarations, &state).await
+            self.handle_forward_execution(&state)
         }
     }
 }
 
 impl BookingSaga {
-    async fn handle_forward_execution(
-        &self,
-        stream_declarations: &StreamDeclarations<BookingSagaStreamSet>,
-        state: &SagaState,
-    ) -> CommandResult<Vec<StreamWrite<BookingSagaStreamSet, SagaEvent>>> {
+    fn handle_forward_execution(&self, state: &SagaState) -> Result<NewEvents<SagaEvent>, CommandError> {
         if state.current_step >= state.steps.len() {
             // All steps completed
-            return Ok(vec![
-                StreamWrite::new(
-                    stream_declarations,
-                    self.saga_id.clone(),
-                    SagaEvent::Completed,
-                )?
-            ]);
+            return Ok(NewEvents::from(vec![SagaEvent::Completed]));
         }
 
         let current_step = &state.steps[state.current_step];
@@ -329,77 +284,31 @@ impl BookingSaga {
         match current_step.status {
             StepStatus::Pending => {
                 // Execute current step
-                Ok(vec![
-                    StreamWrite::new(
-                        stream_declarations,
-                        self.saga_id.clone(),
-                        SagaEvent::StepStarted {
-                            step_index: state.current_step,
-                            step_name: current_step.name.clone(),
-                        }
-                    )?
-                ])
+                Ok(NewEvents::from(vec![SagaEvent::StepStarted { step_index: state.current_step, step_name: current_step.name.clone() }]))
             }
             StepStatus::Completed => {
                 // Move to next step
-                Ok(vec![
-                    StreamWrite::new(
-                        stream_declarations,
-                        self.saga_id.clone(),
-                        SagaEvent::StepAdvanced {
-                            next_step: state.current_step + 1,
-                        }
-                    )?
-                ])
+                Ok(NewEvents::from(vec![SagaEvent::StepAdvanced { next_step: state.current_step + 1 }]))
             }
             StepStatus::Failed => {
                 // Start compensation
-                Ok(vec![
-                    StreamWrite::new(
-                        stream_declarations,
-                        self.saga_id.clone(),
-                        SagaEvent::CompensationStarted {
-                            failed_step: state.current_step,
-                        }
-                    )?
-                ])
+                Ok(NewEvents::from(vec![SagaEvent::CompensationStarted { failed_step: state.current_step }]))
             }
             StepStatus::Compensated => unreachable!("Cannot be compensated in forward mode"),
         }
     }
 
-    async fn handle_compensation(
-        &self,
-        stream_declarations: &StreamDeclarations<BookingSagaStreamSet>,
-        state: &SagaState,
-    ) -> CommandResult<Vec<StreamWrite<BookingSagaStreamSet, SagaEvent>>> {
+    fn handle_compensation(&self, state: &SagaState) -> Result<NewEvents<SagaEvent>, CommandError> {
         // Compensate completed steps in reverse order
-        let compensation_step = state.steps
-            .iter()
-            .rposition(|step| step.status == StepStatus::Completed);
+        let compensation_step = state.steps.iter().rposition(|step| step.status == StepStatus::Completed);
 
         match compensation_step {
             Some(index) => {
-                Ok(vec![
-                    StreamWrite::new(
-                        stream_declarations,
-                        self.saga_id.clone(),
-                        SagaEvent::CompensationStepStarted {
-                            step_index: index,
-                            step_name: state.steps[index].name.clone(),
-                        }
-                    )?
-                ])
+                Ok(NewEvents::from(vec![SagaEvent::CompensationStepStarted { step_index: index, step_name: state.steps[index].name.clone() }]))
             }
             None => {
                 // All compensations completed
-                Ok(vec![
-                    StreamWrite::new(
-                        stream_declarations,
-                        self.saga_id.clone(),
-                        SagaEvent::CompensationCompleted,
-                    )?
-                ])
+                Ok(NewEvents::from(vec![SagaEvent::CompensationCompleted]))
             }
         }
     }
@@ -415,25 +324,19 @@ fn create_travel_booking_saga(
         SagaStep {
             name: "book_hotel".to_string(),
             command: Box::new(hotel_booking.clone()),
-            compensation: Box::new(CancelHotelCommand {
-                booking_id: hotel_booking.booking_id,
-            }),
+            compensation: Box::new(CancelHotelCommand { booking_id: hotel_booking.booking_id }),
             status: StepStatus::Pending,
         },
         SagaStep {
             name: "book_flight".to_string(),
             command: Box::new(flight_booking.clone()),
-            compensation: Box::new(CancelFlightCommand {
-                booking_id: flight_booking.booking_id,
-            }),
+            compensation: Box::new(CancelFlightCommand { booking_id: flight_booking.booking_id }),
             status: StepStatus::Pending,
         },
         SagaStep {
             name: "book_car".to_string(),
             command: Box::new(car_booking.clone()),
-            compensation: Box::new(CancelCarCommand {
-                booking_id: car_booking.booking_id,
-            }),
+            compensation: Box::new(CancelCarCommand { booking_id: car_booking.booking_id }),
             status: StepStatus::Pending,
         },
     ];
@@ -452,7 +355,7 @@ fn create_travel_booking_saga(
 
 Long-running processes need robust timeout and retry logic:
 
-```rust
+````rust
 #[derive(Debug, Clone)]
 struct ProcessTimeout {
     timeout_at: DateTime<Utc>,
@@ -536,10 +439,7 @@ impl InMemoryTimeoutScheduler {
 
         // Trigger timeout commands
         for process_id in expired {
-            let timeout_command = ProcessTimeoutCommand {
-                process_id,
-                timed_out_at: now,
-            };
+            let timeout_command = ProcessTimeoutCommand { process_id, timed_out_at: now };
 
             if let Err(e) = self.executor.execute(&timeout_command).await {
                 tracing::error!("Failed to execute timeout command: {}", e);
@@ -560,44 +460,19 @@ impl CommandLogic for ProcessTimeoutCommand {
     type State = ProcessState;
     type Event = ProcessEvent;
 
-    async fn handle(
-        &self,
-        stream_declarations: StreamDeclarations<Self::StreamSet>,
-        state: Self::State,
-        _stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Check if process should retry or fail
-        let should_retry = state.timeout.as_ref()
-            .map(|t| t.should_retry())
-            .unwrap_or(false);
+        let should_retry = state.timeout.as_ref().map(|t| t.should_retry()).unwrap_or(false);
 
         if should_retry {
             let next_timeout = state.timeout.as_ref().unwrap().next_timeout();
 
-            Ok(vec![
-                StreamWrite::new(
-                    &stream_declarations,
-                    self.process_id.clone(),
-                    ProcessEvent::RetryScheduled {
-                        retry_at: next_timeout,
-                        attempt: state.timeout.as_ref().unwrap().current_retries + 1,
-                    }
-                )?
-            ])
+            Ok(NewEvents::from(vec![ProcessEvent::RetryScheduled { retry_at: next_timeout, attempt: state.timeout.as_ref().unwrap().current_retries + 1 }]))
         } else {
-            Ok(vec![
-                StreamWrite::new(
-                    &stream_declarations,
-                    self.process_id.clone(),
-                    ProcessEvent::Failed {
-                        reason: "Process timed out after maximum retries".to_string(),
-                    }
-                )?
-            ])
+            Ok(NewEvents::from(vec![ProcessEvent::Failed { reason: "Process timed out after maximum retries".to_string() }]))
         }
     }
 }
-```
 
 ## Process Monitoring and Observability
 
@@ -632,6 +507,6 @@ lazy_static! {
         "Number of currently active processes"
     ).unwrap();
 }
-```
+````
 
 ... (rest unchanged)

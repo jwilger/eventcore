@@ -19,9 +19,8 @@ Let's implement task creation:
 
 ```rust
 use crate::domain::{events::*, types::*};
-use async_trait::async_trait;
 use chrono::Utc;
-use eventcore::{prelude::*, CommandLogic, StreamDeclarations, StreamResolver, StreamWrite};
+use eventcore::{prelude::*, CommandLogic, StreamDeclarations};
 use eventcore_macros::Command;
 
 /// Command to create a new task
@@ -62,7 +61,6 @@ pub struct CreateTaskState {
     exists: bool,
 }
 
-#[async_trait]
 impl CommandLogic for CreateTask {
     type State = CreateTaskState;
     type Event = TaskEvent;
@@ -76,12 +74,7 @@ impl CommandLogic for CreateTask {
         }
     }
 
-    async fn handle(
-        &self,
-        stream_declarations: StreamDeclarations,
-        state: Self::State,
-        _stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Business rule: Can't create a task that already exists
         require!(
             !state.exists,
@@ -98,10 +91,8 @@ impl CommandLogic for CreateTask {
             created_at: Utc::now(),
         };
 
-        // Write to the task stream
-        Ok(vec![
-            StreamWrite::new(&stream_declarations, self.task_id.clone(), event)?
-        ])
+        // Return domain events. The executor will map events to streams via event.stream_id().
+        Ok(NewEvents::from(vec![event]))
     }
 }
 ```
@@ -109,19 +100,17 @@ impl CommandLogic for CreateTask {
 ### Key Points
 
 1. **#[derive(Command)]** generates:
-   - The `StreamSet` phantom type
-   - Implementation of `CommandStreams` trait
    - The `stream_declarations()` method returning a `StreamDeclarations` value
 
 2. **#[stream] attribute** declares which streams this command needs
 
 3. **apply() method** reconstructs state from events
 
-4. **handle() method** contains your business logic
+4. **handle() method** contains your business logic and returns `NewEvents` (no direct storage writes)
 
 5. **require! macro** provides clean validation with good error messages
 
-6. **StreamWrite::new()** ensures type-safe writes to declared streams
+6. **Executors** are responsible for mapping returned events to storage writes and enforcing declared streams
 
 ## Multi-Stream Command: Assign Task
 
@@ -131,9 +120,8 @@ Task assignment affects both the task and the user:
 
 ```rust
 use crate::domain::{events::*, types::*};
-use async_trait::async_trait;
 use chrono::Utc;
-use eventcore::{prelude::*, CommandLogic, StreamDeclarations, StreamResolver, StreamWrite};
+use eventcore::{prelude::*, CommandLogic, StreamDeclarations};
 use eventcore_macros::Command;
 
 /// Command to assign a task to a user
@@ -178,7 +166,6 @@ pub struct AssignTaskState {
     active_task_count: u32,
 }
 
-#[async_trait]
 impl CommandLogic for AssignTask {
     type State = AssignTaskState;
     type Event = SystemEvent;
@@ -220,12 +207,7 @@ impl CommandLogic for AssignTask {
         }
     }
 
-    async fn handle(
-        &self,
-        stream_declarations: StreamDeclarations,
-        state: Self::State,
-        _stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Validate business rules
         require!(
             state.task_exists,
@@ -258,53 +240,37 @@ impl CommandLogic for AssignTask {
 
         // If task is currently assigned, unassign first
         if let Some(previous_assignee) = state.current_assignee {
-            events.push(StreamWrite::new(
-                &stream_declarations,
-                self.task_id.clone(),
-                SystemEvent::Task(TaskEvent::Unassigned {
-                    task_id,
-                    previous_assignee,
-                    unassigned_by: self.assigned_by.clone(),
-                    unassigned_at: now,
-                })
-            )?);
+            events.push(SystemEvent::Task(TaskEvent::Unassigned {
+                task_id,
+                previous_assignee,
+                unassigned_by: self.assigned_by.clone(),
+                unassigned_at: now,
+            }));
         }
 
         // Write assignment event to task stream
-        events.push(StreamWrite::new(
-            &stream_declarations,
-            self.task_id.clone(),
-            SystemEvent::Task(TaskEvent::Assigned {
-                task_id,
-                assignee: assignee.clone(),
-                assigned_by: self.assigned_by.clone(),
-                assigned_at: now,
-            })
-        )?);
+        events.push(SystemEvent::Task(TaskEvent::Assigned {
+            task_id,
+            assignee: assignee.clone(),
+            assigned_by: self.assigned_by.clone(),
+            assigned_at: now,
+        }));
 
         // Write assignment event to user stream
-        events.push(StreamWrite::new(
-            &stream_declarations,
-            self.assignee_id.clone(),
-            SystemEvent::User(UserEvent::TaskAssigned {
-                user_name: assignee,
-                task_id,
-                assigned_at: now,
-            })
-        )?);
+        events.push(SystemEvent::User(UserEvent::TaskAssigned {
+            user_name: assignee,
+            task_id,
+            assigned_at: now,
+        }));
 
         // Update user workload
-        events.push(StreamWrite::new(
-            &stream_declarations,
-            self.assignee_id.clone(),
-            SystemEvent::User(UserEvent::WorkloadUpdated {
-                user_name: assignee,
-                active_tasks: state.active_task_count + 1,
-                completed_today: 0, // Would calculate from state
-            })
-        )?);
+        events.push(SystemEvent::User(UserEvent::WorkloadUpdated {
+            user_name: UserName::from(&self.assignee_id),
+            active_tasks: state.active_task_count + 1,
+            completed_today: 0, // Would calculate from state
+        }));
 
-        Ok(events)
+        Ok(NewEvents::from(events))
     }
 }
 ```
@@ -314,7 +280,7 @@ impl CommandLogic for AssignTask {
 1. **Atomic Updates**: Both task and user streams update together
 2. **Consistent State**: No partial updates possible
 3. **Rich Events**: Each stream gets relevant events
-4. **Type Safety**: Can only write to declared streams
+4. **Type Safety**: Executor enforces writes only to declared streams
 
 ## Command with Business Logic: Complete Task
 
@@ -322,9 +288,8 @@ impl CommandLogic for AssignTask {
 
 ```rust
 use crate::domain::{events::*, types::*};
-use async_trait::async_trait;
 use chrono::Utc;
-use eventcore::{prelude::*, CommandLogic, StreamDeclarations, StreamResolver, StreamWrite};
+use eventcore::{prelude::*, CommandLogic, StreamDeclarations};
 use eventcore_macros::Command;
 
 /// Command to complete a task
@@ -349,7 +314,6 @@ pub struct CompleteTaskState {
     completed_count: u32,
 }
 
-#[async_trait]
 impl CommandLogic for CompleteTask {
     type State = CompleteTaskState;
     type Event = SystemEvent;
@@ -386,12 +350,7 @@ impl CommandLogic for CompleteTask {
         }
     }
 
-    async fn handle(
-        &self,
-        stream_declarations: StreamDeclarations,
-        state: Self::State,
-        _stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Business rules
         require!(
             state.task_exists,
@@ -419,29 +378,23 @@ impl CommandLogic for CompleteTask {
         let now = Utc::now();
         let task_id = TaskId::from(&self.task_id);
 
-        Ok(vec![
-            // Mark task as completed
-            StreamWrite::new(
-                &stream_declarations,
-                self.task_id.clone(),
-                SystemEvent::Task(TaskEvent::Completed {
-                    task_id,
-                    completed_by: self.completed_by.clone(),
-                    completed_at: now,
-                })
-            )?,
+        let mut events = Vec::new();
 
-            // Update user's completion stats
-            StreamWrite::new(
-                &stream_declarations,
-                self.user_id.clone(),
-                SystemEvent::User(UserEvent::TaskCompleted {
-                    user_name: self.completed_by.clone(),
-                    task_id,
-                    completed_at: now,
-                })
-            )?,
-        ])
+        // Mark task as completed
+        events.push(SystemEvent::Task(TaskEvent::Completed {
+            task_id,
+            completed_by: self.completed_by.clone(),
+            completed_at: now,
+        }));
+
+        // Update user's completion stats
+        events.push(SystemEvent::User(UserEvent::TaskCompleted {
+            user_name: self.completed_by.clone(),
+            task_id,
+            completed_at: now,
+        }));
+
+        Ok(NewEvents::from(events))
     }
 }
 ```
@@ -609,7 +562,7 @@ where
 
 1. **Macro Magic**: `#[derive(Command)]` eliminates boilerplate
 2. **Stream Declaration**: `#[stream]` attributes declare what you need
-3. **Type Safety**: Can only write to declared streams
+3. **Type Safety**: Can only write to declared streams (enforced by the executor)
 4. **Multi-Stream**: Natural support for operations across entities
 5. **Business Logic**: Clear separation in `handle()` method
 6. **State Building**: `apply()` reconstructs state from events
@@ -618,23 +571,21 @@ where
 
 ### Conditional Stream Access
 
-Sometimes you need streams based on runtime data:
+Sometimes you need streams based on runtime data. Dynamic discovery is handled by the executor as a separate phase; your `handle()` implementation returns the events the command needs to emit.
 
 ```rust
-async fn handle(
-    &self,
-    stream_declarations: StreamDeclarations,
-    state: Self::State,
-    stream_resolver: &mut StreamResolver,  // Note: not unused
-) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
-    // Discover we need another stream
+fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+    // Discover we need another stream based on state and return events accordingly.
     if state.requires_manager_approval {
-        let manager_stream = StreamId::from_static("user-manager");
-        stream_resolver.add_streams(vec![manager_stream]);
-        // EventCore will re-execute with the additional stream
+        let approval_event = TaskEvent::ManagerApprovalRequested {
+            task_id: TaskId::from(&self.task_id),
+            requested_by: self.creator.clone(),
+        };
+
+        return Ok(NewEvents::from(vec![approval_event]));
     }
 
-    // Continue with logic...
+    Ok(NewEvents::from(vec![]))
 }
 ```
 
@@ -646,14 +597,10 @@ For operations on multiple items:
 let mut events = Vec::new();
 
 for task_id in &self.task_ids {
-    events.push(StreamWrite::new(
-        &stream_declarations,
-        task_id.clone(),
-        TaskEvent::BatchUpdated { /* ... */ }
-    )?);
+    events.push(TaskEvent::BatchUpdated { /* ... */ });
 }
 
-Ok(events)
+Ok(NewEvents::from(events))
 ```
 
 ## Summary

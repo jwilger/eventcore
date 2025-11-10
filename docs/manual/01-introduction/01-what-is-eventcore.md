@@ -79,22 +79,13 @@ struct FulfillOrder {
 
 ### 3. **Type-Safe Stream Access**
 
-The macro system ensures you can only write to streams you declared:
+The macro system ensures you can only write to streams you declared. Command implementations return domain events; the executor maps those events to streams based on each event's `stream_id()` method and enforces the declared streams:
 
 ```rust
 // In your handle method:
-let events = vec![
-    StreamWrite::new(
-        &stream_declarations,
-        self.order_id.clone(),      // ✅ OK - declared with #[stream]
-        OrderEvent::Fulfilled
-    )?,
-    StreamWrite::new(
-        &stream_declarations,
-        some_other_stream,           // ❌ Compile error! Not declared
-        SomeEvent::Happened
-    )?,
-];
+let event = OrderEvent::Fulfilled { order_id: self.order_id.clone() };
+// Return domain events; executor will map to streams and enforce declarations
+Ok(NewEvents::from(vec![event]))
 ```
 
 ### 4. **Optimistic Concurrency Control**
@@ -151,7 +142,6 @@ struct TransferMoney {
     amount: Money,
 }
 
-#[async_trait]
 impl CommandLogic for TransferMoney {
     type State = AccountBalances;
     type Event = BankingEvent;
@@ -169,40 +159,28 @@ impl CommandLogic for TransferMoney {
         }
     }
 
-    async fn handle(
-        &self,
-        stream_declarations: StreamDeclarations<Self::StreamSet>,
-        state: Self::State,
-        _stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Check balance
         let from_balance = state.balance(&self.from_account);
         require!(
             from_balance >= self.amount.value(),
-            "Insufficient funds: balance={}, requested={}",
+            "Insufficient funds: balance={}, requested= {}",
             from_balance,
             self.amount
         );
 
-        // Create atomic events for both accounts
-        Ok(vec![
-            StreamWrite::new(
-                &stream_declarations,
-                self.from_account.clone(),
-                BankingEvent::MoneyWithdrawn {
-                    amount: self.amount.value(),
-                    to: self.to_account.to_string(),
-                }
-            )?,
-            StreamWrite::new(
-                &stream_declarations,
-                self.to_account.clone(),
-                BankingEvent::MoneyDeposited {
-                    amount: self.amount.value(),
-                    from: self.from_account.to_string(),
-                }
-            )?,
-        ])
+        // Create atomic events for both accounts (domain events)
+        let withdraw = BankingEvent::MoneyWithdrawn {
+            amount: self.amount.value(),
+            to: self.to_account.to_string(),
+        };
+
+        let deposit = BankingEvent::MoneyDeposited {
+            amount: self.amount.value(),
+            from: self.from_account.to_string(),
+        };
+
+        Ok(NewEvents::from(vec![withdraw, deposit]))
     }
 }
 ```

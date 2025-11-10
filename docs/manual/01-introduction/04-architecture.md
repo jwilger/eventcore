@@ -221,12 +221,20 @@ EventCore leverages Rust's type system for correctness:
 ```rust
 // Compile-time enforcement
 impl TransferMoney {
-    fn handle(&self, stream_declarations: StreamDeclarations<Self::StreamSet>) {
-        // ✅ Can only write to declared streams
-        StreamWrite::new(&stream_declarations, self.from_account, event)?;
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+        let declarations = self.stream_declarations();
 
-        // ❌ Compile error - stream not declared!
-        StreamWrite::new(&stream_declarations, other_stream, event)?;
+        // ✅ Can only emit events for declared streams
+        let events = vec![BankEvent::TransferInitiated {
+            from: self.from_account.clone(),
+            to: self.to_account.clone(),
+            amount: self.amount,
+        }];
+
+        // ❌ Infrastructure rejects events that target undeclared streams
+        // BankEvent::AuditOnly { stream: other_stream } -> would fail validation
+
+        Ok(NewEvents::from(events))
     }
 }
 ```

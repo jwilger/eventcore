@@ -73,10 +73,9 @@ impl Command for MyCommand {
     async fn handle(&self, state: Self::State, input: Self::Input) -> CommandResult<Vec<Event>>
 }
 
-// After - StreamResolver parameter added
-impl Command for MyCommand {
-    async fn handle(&self, stream_declarations: StreamDeclarations<Self::StreamSet>, state: Self::State,
-                   input: Self::Input, stream_resolver: &mut StreamResolver) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>>
+// After - CommandStreams provides declarations; handle focuses on domain logic
+impl CommandLogic for MyCommand {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError>
 }
 ```
 

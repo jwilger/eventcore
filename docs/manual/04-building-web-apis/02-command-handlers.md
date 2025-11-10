@@ -384,30 +384,22 @@ struct TransferMoney {
 impl CommandLogic for TransferMoney {
     // ... other implementations
 
-    async fn handle(
-        &self,
-        stream_declarations: StreamDeclarations<Self::StreamSet>,
-        state: Self::State,
-        _stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    fn handle(&self, mut state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Check if transfer already processed
         if state.processed_transfers.contains(&self.transfer_id) {
-            // Already processed - return success with no new events
-            return Ok(vec![]);
+            // Already processed - no new events
+            return Ok(NewEvents::default());
         }
 
-        // Process transfer...
-        Ok(vec![
-            StreamWrite::new(
-                &stream_declarations,
-                self.from_account.clone(),
-                BankEvent::TransferProcessed {
-                    transfer_id: self.transfer_id,
-                    amount: self.amount,
-                }
-            )?,
+        state.processed_transfers.insert(self.transfer_id);
+
+        Ok(NewEvents::from(vec![
+            BankEvent::TransferProcessed {
+                transfer_id: self.transfer_id,
+                amount: self.amount,
+            },
             // ... other events
-        ])
+        ]))
     }
 }
 ```

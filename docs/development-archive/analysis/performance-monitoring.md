@@ -334,13 +334,13 @@ command_tracer.record_completion(true, 1);
 1. **Reduce Stream Access**: Minimize streams declared per command
 
    ```rust
-   // Good: Declare only required streams
-   fn stream_declarations(&self, input: &Self::Input) -> StreamDeclarations<Self::StreamSet> {
+   // Good: Helper that builds the declarations used by CommandStreams
+   fn declared_streams(&self, input: &Self::Input) -> StreamDeclarations {
         StreamDeclarations::single(input.account_stream_id().clone())
     }
 
-   // Bad: Declare unnecessary streams
-   fn stream_declarations(&self, input: &Self::Input) -> StreamDeclarations<Self::StreamSet> {
+   // Bad: Helper declares unnecessary streams
+   fn declared_streams(&self, input: &Self::Input) -> StreamDeclarations {
         StreamDeclarations::try_from_streams(vec![
             input.account_stream_id().clone(),
             input.audit_stream_id().clone(), // Only needed for audit commands
