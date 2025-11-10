@@ -244,7 +244,7 @@ impl CommandLogic for CreateTask {
 
     async fn handle(
         &self,
-        read_streams: ReadStreams<Self::StreamSet>,
+        stream_declarations: StreamDeclarations<Self::StreamSet>,
         state: Self::State,
         _resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -252,7 +252,7 @@ impl CommandLogic for CreateTask {
 
         Ok(vec![
             StreamWrite::new(
-                &read_streams,
+                &stream_declarations,
                 self.task_id.clone(),
                 TaskEvent::Created {
                     title: self.title.as_ref().to_string(),

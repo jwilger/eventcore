@@ -86,7 +86,7 @@ use eventcore::require;
 
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations<Self::StreamSet>,
     state: Self::State,
     _stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -315,13 +315,13 @@ async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Sel
 
     // Compensating events
     Ok(vec![
-        StreamWrite::new(&read_streams, self.payment.clone(),
+        StreamWrite::new(&stream_declarations, self.payment.clone(),
             PaymentEvent::Refunded {
                 amount: state.payment.amount,
                 reason: self.reason.clone(),
             })?,
 
-        StreamWrite::new(&read_streams, self.account.clone(),
+        StreamWrite::new(&stream_declarations, self.account.clone(),
             AccountEvent::Credited {
                 amount: state.payment.amount,
                 reference: format!("Refund for payment {}", state.payment.id),
@@ -430,10 +430,10 @@ Log errors with full context:
 ```rust
 use tracing::{error, warn, info, instrument};
 
-#[instrument(skip(self, read_streams, state, stream_resolver))]
+#[instrument(skip(self, stream_declarations, state, stream_resolver))]
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations<Self::StreamSet>,
     state: Self::State,
     stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {

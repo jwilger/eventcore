@@ -21,7 +21,7 @@ Let's implement task creation:
 use crate::domain::{events::*, types::*};
 use async_trait::async_trait;
 use chrono::Utc;
-use eventcore::{prelude::*, CommandLogic, ReadStreams, StreamResolver, StreamWrite};
+use eventcore::{prelude::*, CommandLogic, StreamDeclarations, StreamResolver, StreamWrite};
 use eventcore_macros::Command;
 
 /// Command to create a new task
@@ -78,7 +78,7 @@ impl CommandLogic for CreateTask {
 
     async fn handle(
         &self,
-        read_streams: ReadStreams<Self::StreamSet>,
+        stream_declarations: StreamDeclarations,
         state: Self::State,
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -100,7 +100,7 @@ impl CommandLogic for CreateTask {
 
         // Write to the task stream
         Ok(vec![
-            StreamWrite::new(&read_streams, self.task_id.clone(), event)?
+            StreamWrite::new(&stream_declarations, self.task_id.clone(), event)?
         ])
     }
 }
@@ -111,7 +111,7 @@ impl CommandLogic for CreateTask {
 1. **#[derive(Command)]** generates:
    - The `StreamSet` phantom type
    - Implementation of `CommandStreams` trait
-   - The `read_streams()` method
+   - The `stream_declarations()` method returning a `StreamDeclarations` value
 
 2. **#[stream] attribute** declares which streams this command needs
 
@@ -133,7 +133,7 @@ Task assignment affects both the task and the user:
 use crate::domain::{events::*, types::*};
 use async_trait::async_trait;
 use chrono::Utc;
-use eventcore::{prelude::*, CommandLogic, ReadStreams, StreamResolver, StreamWrite};
+use eventcore::{prelude::*, CommandLogic, StreamDeclarations, StreamResolver, StreamWrite};
 use eventcore_macros::Command;
 
 /// Command to assign a task to a user
@@ -222,7 +222,7 @@ impl CommandLogic for AssignTask {
 
     async fn handle(
         &self,
-        read_streams: ReadStreams<Self::StreamSet>,
+        stream_declarations: StreamDeclarations,
         state: Self::State,
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -259,7 +259,7 @@ impl CommandLogic for AssignTask {
         // If task is currently assigned, unassign first
         if let Some(previous_assignee) = state.current_assignee {
             events.push(StreamWrite::new(
-                &read_streams,
+                &stream_declarations,
                 self.task_id.clone(),
                 SystemEvent::Task(TaskEvent::Unassigned {
                     task_id,
@@ -272,7 +272,7 @@ impl CommandLogic for AssignTask {
 
         // Write assignment event to task stream
         events.push(StreamWrite::new(
-            &read_streams,
+            &stream_declarations,
             self.task_id.clone(),
             SystemEvent::Task(TaskEvent::Assigned {
                 task_id,
@@ -284,7 +284,7 @@ impl CommandLogic for AssignTask {
 
         // Write assignment event to user stream
         events.push(StreamWrite::new(
-            &read_streams,
+            &stream_declarations,
             self.assignee_id.clone(),
             SystemEvent::User(UserEvent::TaskAssigned {
                 user_name: assignee,
@@ -295,7 +295,7 @@ impl CommandLogic for AssignTask {
 
         // Update user workload
         events.push(StreamWrite::new(
-            &read_streams,
+            &stream_declarations,
             self.assignee_id.clone(),
             SystemEvent::User(UserEvent::WorkloadUpdated {
                 user_name: assignee,
@@ -324,7 +324,7 @@ impl CommandLogic for AssignTask {
 use crate::domain::{events::*, types::*};
 use async_trait::async_trait;
 use chrono::Utc;
-use eventcore::{prelude::*, CommandLogic, ReadStreams, StreamResolver, StreamWrite};
+use eventcore::{prelude::*, CommandLogic, StreamDeclarations, StreamResolver, StreamWrite};
 use eventcore_macros::Command;
 
 /// Command to complete a task
@@ -388,7 +388,7 @@ impl CommandLogic for CompleteTask {
 
     async fn handle(
         &self,
-        read_streams: ReadStreams<Self::StreamSet>,
+        stream_declarations: StreamDeclarations,
         state: Self::State,
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -422,7 +422,7 @@ impl CommandLogic for CompleteTask {
         Ok(vec![
             // Mark task as completed
             StreamWrite::new(
-                &read_streams,
+                &stream_declarations,
                 self.task_id.clone(),
                 SystemEvent::Task(TaskEvent::Completed {
                     task_id,
@@ -433,7 +433,7 @@ impl CommandLogic for CompleteTask {
 
             // Update user's completion stats
             StreamWrite::new(
-                &read_streams,
+                &stream_declarations,
                 self.user_id.clone(),
                 SystemEvent::User(UserEvent::TaskCompleted {
                     user_name: self.completed_by.clone(),
@@ -623,7 +623,7 @@ Sometimes you need streams based on runtime data:
 ```rust
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations,
     state: Self::State,
     stream_resolver: &mut StreamResolver,  // Note: not unused
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -647,7 +647,7 @@ let mut events = Vec::new();
 
 for task_id in &self.task_ids {
     events.push(StreamWrite::new(
-        &read_streams,
+        &stream_declarations,
         task_id.clone(),
         TaskEvent::BatchUpdated { /* ... */ }
     )?);

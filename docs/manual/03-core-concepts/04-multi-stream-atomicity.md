@@ -75,7 +75,7 @@ EventCore reads all declared streams with version tracking:
 // EventCore does this internally:
 let stream_data = HashMap::new();
 
-for stream_id in command.read_streams() {
+for stream_id in command.stream_declarations() {
     let events = event_store.read_stream(&stream_id).await?;
     stream_data.insert(stream_id, StreamData {
         version: events.version,
@@ -105,7 +105,7 @@ Your business logic runs with full state:
 ```rust
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations,
     state: Self::State,
     stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -117,13 +117,13 @@ async fn handle(
 
     // Generate events for multiple streams
     Ok(vec![
-        StreamWrite::new(&read_streams, self.order.clone(),
+        StreamWrite::new(&stream_declarations, self.order.clone(),
             OrderEvent::Confirmed { /* ... */ })?,
-        StreamWrite::new(&read_streams, self.inventory.clone(),
+        StreamWrite::new(&stream_declarations, self.inventory.clone(),
             InventoryEvent::Reserved { /* ... */ })?,
-        StreamWrite::new(&read_streams, self.customer.clone(),
+        StreamWrite::new(&stream_declarations, self.customer.clone(),
             CustomerEvent::OrderPlaced { /* ... */ })?,
-        StreamWrite::new(&read_streams, self.payment.clone(),
+        StreamWrite::new(&stream_declarations, self.payment.clone(),
             PaymentEvent::Charged { /* ... */ })?,
     ])
 }
@@ -197,7 +197,7 @@ Commands can discover additional streams during execution:
 ```rust
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations,
     state: Self::State,
     stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -236,7 +236,7 @@ struct CheckoutCart {
 
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations,
     state: Self::State,
     stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -260,22 +260,22 @@ async fn handle(
     // Generate events for all affected streams
     let mut events = vec![
         // Convert cart to order
-        StreamWrite::new(&read_streams, self.cart.clone(),
+        StreamWrite::new(&stream_declarations, self.cart.clone(),
             CartEvent::CheckedOut { order_id })?,
 
         // Create order
-        StreamWrite::new(&read_streams, order_stream,
+        StreamWrite::new(&stream_declarations, order_stream,
             OrderEvent::Created { /* ... */ })?,
 
         // Charge payment
-        StreamWrite::new(&read_streams, self.payment_method.clone(),
+        StreamWrite::new(&stream_declarations, self.payment_method.clone(),
             PaymentEvent::Charged { amount: state.cart.total })?,
     ];
 
     // Reserve inventory from each product
     for (product_id, quantity) in &state.cart.items {
         let product_stream = StreamId::from(format!("product-{}", product_id));
-        events.push(StreamWrite::new(&read_streams, product_stream,
+        events.push(StreamWrite::new(&stream_declarations, product_stream,
             ProductEvent::StockReserved { quantity: *quantity })?);
     }
 
@@ -302,7 +302,7 @@ struct RecordTransaction {
 
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations,
     state: Self::State,
     stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -320,16 +320,16 @@ async fn handle(
 
     // Record atomically in all streams
     Ok(vec![
-        StreamWrite::new(&read_streams, self.ledger.clone(),
+        StreamWrite::new(&stream_declarations, self.ledger.clone(),
             LedgerEvent::EntryRecorded { entry: self.entry.clone() })?,
 
-        StreamWrite::new(&read_streams, self.account_a.clone(),
+        StreamWrite::new(&stream_declarations, self.account_a.clone(),
             AccountEvent::Debited {
                 amount: self.entry.debit_amount,
                 reference: self.entry.id,
             })?,
 
-        StreamWrite::new(&read_streams, self.account_b.clone(),
+        StreamWrite::new(&stream_declarations, self.account_b.clone(),
             AccountEvent::Credited {
                 amount: self.entry.credit_amount,
                 reference: self.entry.id,
@@ -356,7 +356,7 @@ struct CompleteWorkflowStep {
 
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations,
     state: Self::State,
     stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -377,13 +377,13 @@ async fn handle(
 
     // Atomic update across workflow and steps
     let mut events = vec![
-        StreamWrite::new(&read_streams, self.workflow.clone(),
+        StreamWrite::new(&stream_declarations, self.workflow.clone(),
             WorkflowEvent::StepCompleted {
                 step_id: state.current_step.id,
                 result: self.step_result.clone(),
             })?,
 
-        StreamWrite::new(&read_streams, self.current_step.clone(),
+        StreamWrite::new(&stream_declarations, self.current_step.clone(),
             StepEvent::Completed {
                 result: self.step_result.clone(),
             })?,
@@ -392,7 +392,7 @@ async fn handle(
     // Activate next step
     if let Some(next_id) = next_step_id {
         let next_stream = StreamId::from(format!("step-{}", next_id));
-        events.push(StreamWrite::new(&read_streams, next_stream,
+        events.push(StreamWrite::new(&stream_declarations, next_stream,
             StepEvent::Activated {
                 workflow_id: state.workflow.id,
                 activation_time: Utc::now(),
@@ -567,7 +567,7 @@ async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Sel
 
     // Only write to transaction stream
     Ok(vec![
-        StreamWrite::new(&read_streams, self.transaction.clone(),
+        StreamWrite::new(&stream_declarations, self.transaction.clone(),
             TransactionEvent::Validated { risk_score })?
     ])
 }
@@ -582,17 +582,17 @@ async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Sel
     let mut events = vec![];
 
     // Always update the main stream
-    events.push(StreamWrite::new(&read_streams, self.order.clone(),
+    events.push(StreamWrite::new(&stream_declarations, self.order.clone(),
         OrderEvent::Processed { /* ... */ })?);
 
     // Conditionally update other streams
     if state.customer.is_vip {
-        events.push(StreamWrite::new(&read_streams, self.customer.clone(),
+        events.push(StreamWrite::new(&stream_declarations, self.customer.clone(),
             CustomerEvent::VipPointsEarned { points: calculate_points() })?);
     }
 
     if state.requires_fraud_check() {
-        events.push(StreamWrite::new(&read_streams, fraud_stream,
+        events.push(StreamWrite::new(&stream_declarations, fraud_stream,
             FraudEvent::CheckRequested { /* ... */ })?);
     }
 

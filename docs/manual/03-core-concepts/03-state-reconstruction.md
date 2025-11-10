@@ -504,7 +504,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
 ```rust
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations<Self::StreamSet>,
     state: Self::State,
     _stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {

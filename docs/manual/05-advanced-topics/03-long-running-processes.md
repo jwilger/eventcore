@@ -96,7 +96,7 @@ impl CommandLogic for OrderFulfillmentProcess {
 
     async fn handle(
         &self,
-        read_streams: ReadStreams<Self::StreamSet>,
+        stream_declarations: StreamDeclarations<Self::StreamSet>,
         state: Self::State,
         stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -105,7 +105,7 @@ impl CommandLogic for OrderFulfillmentProcess {
             if Utc::now() > timeout {
                 return Ok(vec![
                     StreamWrite::new(
-                        &read_streams,
+                        &stream_declarations,
                         self.process_id.clone(),
                         ProcessEvent::Failed {
                             reason: "Process timed out".to_string(),
@@ -118,19 +118,19 @@ impl CommandLogic for OrderFulfillmentProcess {
         // Execute current step
         match state.current_step {
             FulfillmentStep::PaymentPending => {
-                self.handle_payment_step(&read_streams, &state).await
+                self.handle_payment_step(&stream_declarations, &state).await
             }
             FulfillmentStep::PaymentConfirmed => {
-                self.handle_inventory_step(&read_streams, &state).await
+                self.handle_inventory_step(&stream_declarations, &state).await
             }
             FulfillmentStep::InventoryReserved => {
-                self.handle_shipping_step(&read_streams, &state).await
+                self.handle_shipping_step(&stream_declarations, &state).await
             }
             FulfillmentStep::Shipped => {
-                self.handle_delivery_step(&read_streams, &state).await
+                self.handle_delivery_step(&stream_declarations, &state).await
             }
             FulfillmentStep::Delivered => {
-                self.handle_completion_step(&read_streams, &state).await
+                self.handle_completion_step(&stream_declarations, &state).await
             }
             FulfillmentStep::Completed | FulfillmentStep::Failed(_) => {
                 // Process finished - no more events
@@ -143,7 +143,7 @@ impl CommandLogic for OrderFulfillmentProcess {
 impl OrderFulfillmentProcess {
     async fn handle_payment_step(
         &self,
-        read_streams: &ReadStreams<OrderFulfillmentProcessStreamSet>,
+        stream_declarations: &StreamDeclarations<OrderFulfillmentProcessStreamSet>,
         state: &OrderFulfillmentState,
     ) -> CommandResult<Vec<StreamWrite<OrderFulfillmentProcessStreamSet, ProcessEvent>>> {
         if !state.payment_confirmed {
@@ -154,7 +154,7 @@ impl OrderFulfillmentProcess {
             // Move to next step
             Ok(vec![
                 StreamWrite::new(
-                    read_streams,
+                    stream_declarations,
                     self.process_id.clone(),
                     ProcessEvent::StepCompleted {
                         step: FulfillmentStep::PaymentConfirmed,
@@ -166,14 +166,14 @@ impl OrderFulfillmentProcess {
 
     async fn handle_inventory_step(
         &self,
-        read_streams: &ReadStreams<OrderFulfillmentProcessStreamSet>,
+        stream_declarations: &StreamDeclarations<OrderFulfillmentProcessStreamSet>,
         state: &OrderFulfillmentState,
     ) -> CommandResult<Vec<StreamWrite<OrderFulfillmentProcessStreamSet, ProcessEvent>>> {
         if !state.inventory_reserved {
             // Reserve inventory
             Ok(vec![
                 StreamWrite::new(
-                    read_streams,
+                    stream_declarations,
                     self.process_id.clone(),
                     ProcessEvent::InventoryReserved,
                 )?
@@ -182,7 +182,7 @@ impl OrderFulfillmentProcess {
             // Move to shipping
             Ok(vec![
                 StreamWrite::new(
-                    read_streams,
+                    stream_declarations,
                     self.process_id.clone(),
                     ProcessEvent::StepCompleted {
                         step: FulfillmentStep::InventoryReserved,
@@ -295,14 +295,14 @@ impl CommandLogic for BookingSaga {
 
     async fn handle(
         &self,
-        read_streams: ReadStreams<Self::StreamSet>,
+        stream_declarations: StreamDeclarations<Self::StreamSet>,
         state: Self::State,
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         if state.compensation_mode {
-            self.handle_compensation(&read_streams, &state).await
+            self.handle_compensation(&stream_declarations, &state).await
         } else {
-            self.handle_forward_execution(&read_streams, &state).await
+            self.handle_forward_execution(&stream_declarations, &state).await
         }
     }
 }
@@ -310,14 +310,14 @@ impl CommandLogic for BookingSaga {
 impl BookingSaga {
     async fn handle_forward_execution(
         &self,
-        read_streams: &ReadStreams<BookingSagaStreamSet>,
+        stream_declarations: &StreamDeclarations<BookingSagaStreamSet>,
         state: &SagaState,
     ) -> CommandResult<Vec<StreamWrite<BookingSagaStreamSet, SagaEvent>>> {
         if state.current_step >= state.steps.len() {
             // All steps completed
             return Ok(vec![
                 StreamWrite::new(
-                    read_streams,
+                    stream_declarations,
                     self.saga_id.clone(),
                     SagaEvent::Completed,
                 )?
@@ -331,7 +331,7 @@ impl BookingSaga {
                 // Execute current step
                 Ok(vec![
                     StreamWrite::new(
-                        read_streams,
+                        stream_declarations,
                         self.saga_id.clone(),
                         SagaEvent::StepStarted {
                             step_index: state.current_step,
@@ -344,7 +344,7 @@ impl BookingSaga {
                 // Move to next step
                 Ok(vec![
                     StreamWrite::new(
-                        read_streams,
+                        stream_declarations,
                         self.saga_id.clone(),
                         SagaEvent::StepAdvanced {
                             next_step: state.current_step + 1,
@@ -356,7 +356,7 @@ impl BookingSaga {
                 // Start compensation
                 Ok(vec![
                     StreamWrite::new(
-                        read_streams,
+                        stream_declarations,
                         self.saga_id.clone(),
                         SagaEvent::CompensationStarted {
                             failed_step: state.current_step,
@@ -370,7 +370,7 @@ impl BookingSaga {
 
     async fn handle_compensation(
         &self,
-        read_streams: &ReadStreams<BookingSagaStreamSet>,
+        stream_declarations: &StreamDeclarations<BookingSagaStreamSet>,
         state: &SagaState,
     ) -> CommandResult<Vec<StreamWrite<BookingSagaStreamSet, SagaEvent>>> {
         // Compensate completed steps in reverse order
@@ -382,7 +382,7 @@ impl BookingSaga {
             Some(index) => {
                 Ok(vec![
                     StreamWrite::new(
-                        read_streams,
+                        stream_declarations,
                         self.saga_id.clone(),
                         SagaEvent::CompensationStepStarted {
                             step_index: index,
@@ -395,7 +395,7 @@ impl BookingSaga {
                 // All compensations completed
                 Ok(vec![
                     StreamWrite::new(
-                        read_streams,
+                        stream_declarations,
                         self.saga_id.clone(),
                         SagaEvent::CompensationCompleted,
                     )?
@@ -562,7 +562,7 @@ impl CommandLogic for ProcessTimeoutCommand {
 
     async fn handle(
         &self,
-        read_streams: ReadStreams<Self::StreamSet>,
+        stream_declarations: StreamDeclarations<Self::StreamSet>,
         state: Self::State,
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -576,7 +576,7 @@ impl CommandLogic for ProcessTimeoutCommand {
 
             Ok(vec![
                 StreamWrite::new(
-                    &read_streams,
+                    &stream_declarations,
                     self.process_id.clone(),
                     ProcessEvent::RetryScheduled {
                         retry_at: next_timeout,
@@ -587,7 +587,7 @@ impl CommandLogic for ProcessTimeoutCommand {
         } else {
             Ok(vec![
                 StreamWrite::new(
-                    &read_streams,
+                    &stream_declarations,
                     self.process_id.clone(),
                     ProcessEvent::Failed {
                         reason: "Process timed out after maximum retries".to_string(),
@@ -632,253 +632,6 @@ lazy_static! {
         "Number of currently active processes"
     ).unwrap();
 }
-
-#[derive(Clone)]
-struct ProcessMetrics {
-    process_counts: HashMap<String, ProcessCounts>,
-    active_processes: HashSet<StreamId>,
-}
-
-#[derive(Debug, Default)]
-struct ProcessCounts {
-    started: u64,
-    completed: u64,
-    failed: u64,
-    average_duration: Duration,
-}
-
-impl ProcessMetrics {
-    fn record_process_started(&mut self, process_type: &str, process_id: StreamId) {
-        PROCESS_STARTED.with_label_values(&[process_type]).inc();
-
-        self.process_counts
-            .entry(process_type.to_string())
-            .or_default()
-            .started += 1;
-
-        self.active_processes.insert(process_id);
-        ACTIVE_PROCESSES.set(self.active_processes.len() as f64);
-    }
-
-    fn record_process_completed(
-        &mut self,
-        process_type: &str,
-        process_id: StreamId,
-        duration: Duration
-    ) {
-        PROCESS_COMPLETED.with_label_values(&[process_type]).inc();
-        PROCESS_DURATION.observe(duration.as_secs_f64());
-
-        let counts = self.process_counts
-            .entry(process_type.to_string())
-            .or_default();
-        counts.completed += 1;
-
-        // Update average duration
-        let total_completed = counts.completed;
-        counts.average_duration = (counts.average_duration * (total_completed - 1) as u32 + duration)
-            / total_completed as u32;
-
-        self.active_processes.remove(&process_id);
-        ACTIVE_PROCESSES.set(self.active_processes.len() as f64);
-    }
-
-    fn record_process_failed(&mut self, process_type: &str, process_id: StreamId) {
-        PROCESS_FAILED.with_label_values(&[process_type]).inc();
-
-        self.process_counts
-            .entry(process_type.to_string())
-            .or_default()
-            .failed += 1;
-
-        self.active_processes.remove(&process_id);
-        ACTIVE_PROCESSES.set(self.active_processes.len() as f64);
-    }
-}
-
-// Process health monitoring
-#[derive(Debug)]
-struct ProcessHealthCheck {
-    max_process_age: Duration,
-    max_retry_count: u32,
-    warning_thresholds: HealthThresholds,
-}
-
-#[derive(Debug)]
-struct HealthThresholds {
-    failure_rate: f64,        // 0.0-1.0
-    average_duration: Duration,
-    stuck_process_age: Duration,
-}
-
-impl ProcessHealthCheck {
-    async fn check_process_health(&self, metrics: &ProcessMetrics) -> HealthStatus {
-        let mut issues = Vec::new();
-
-        for (process_type, counts) in &metrics.process_counts {
-            // Check failure rate
-            let total = counts.started;
-            if total > 0 {
-                let failure_rate = counts.failed as f64 / total as f64;
-                if failure_rate > self.warning_thresholds.failure_rate {
-                    issues.push(format!(
-                        "High failure rate for {}: {:.1}%",
-                        process_type,
-                        failure_rate * 100.0
-                    ));
-                }
-            }
-
-            // Check average duration
-            if counts.average_duration > self.warning_thresholds.average_duration {
-                issues.push(format!(
-                    "Slow processes for {}: {:?}",
-                    process_type,
-                    counts.average_duration
-                ));
-            }
-        }
-
-        // Check for stuck processes
-        let stuck_count = self.count_stuck_processes(&metrics.active_processes).await;
-        if stuck_count > 0 {
-            issues.push(format!("{} processes appear stuck", stuck_count));
-        }
-
-        if issues.is_empty() {
-            HealthStatus::Healthy
-        } else {
-            HealthStatus::Warning { issues }
-        }
-    }
-
-    async fn count_stuck_processes(&self, active_processes: &HashSet<StreamId>) -> usize {
-        // This would query the event store to check process ages
-        // Implementation depends on your monitoring setup
-        0
-    }
-}
-
-#[derive(Debug)]
-enum HealthStatus {
-    Healthy,
-    Warning { issues: Vec<String> },
-    Critical { issues: Vec<String> },
-}
 ```
 
-## Testing Long-Running Processes
-
-Test processes thoroughly:
-
-```rust
-#[cfg(test)]
-mod process_tests {
-    use super::*;
-    use eventcore::testing::prelude::*;
-
-    #[tokio::test]
-    async fn test_order_fulfillment_happy_path() {
-        let store = InMemoryEventStore::new();
-        let executor = CommandExecutor::new(store);
-
-        let order_id = OrderId::new();
-        let process = OrderFulfillmentProcess::start(order_id).unwrap();
-
-        // Start process
-        executor.execute(&process).await.unwrap();
-
-        // Simulate payment confirmation
-        let payment_event = PaymentConfirmed {
-            order_id,
-            amount: Money::from_cents(1000),
-        };
-
-        // Process should advance
-        let advance_command = AdvanceOrderProcess {
-            process_id: process.process_id,
-            trigger: ProcessTrigger::PaymentConfirmed,
-        };
-        executor.execute(&advance_command).await.unwrap();
-
-        // Continue with inventory, shipping, etc.
-        // Verify process reaches completion
-    }
-
-    #[tokio::test]
-    async fn test_process_timeout_and_retry() {
-        let store = InMemoryEventStore::new();
-        let executor = CommandExecutor::new(store);
-        let scheduler = InMemoryTimeoutScheduler::new(executor.clone());
-
-        let order_id = OrderId::new();
-        let mut process = OrderFulfillmentProcess::start(order_id).unwrap();
-        process.timeout_at = Some(Utc::now() + Duration::from_secs(1));
-
-        // Start process
-        executor.execute(&process).await.unwrap();
-
-        // Wait for timeout
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        // Verify timeout was triggered
-        // Check retry logic works
-    }
-
-    #[tokio::test]
-    async fn test_saga_compensation() {
-        let store = InMemoryEventStore::new();
-        let executor = CommandExecutor::new(store);
-
-        // Create booking saga
-        let saga = create_travel_booking_saga(
-            create_hotel_booking(),
-            create_flight_booking(),
-            create_car_booking(),
-        );
-
-        // Start saga
-        executor.execute(&saga).await.unwrap();
-
-        // Simulate hotel booking success
-        simulate_step_success(&executor, &saga.saga_id, 0).await;
-
-        // Simulate flight booking failure
-        simulate_step_failure(&executor, &saga.saga_id, 1, "No availability").await;
-
-        // Verify compensation started
-        // Check hotel booking was cancelled
-    }
-}
-```
-
-## Best Practices
-
-1. **Design for failure** - Always plan compensation strategies
-2. **Use timeouts** - Prevent processes from hanging forever
-3. **Implement retries** - Handle transient failures gracefully
-4. **Monitor actively** - Track process health in production
-5. **Keep state minimal** - Only store what's needed for decisions
-6. **Test thoroughly** - Include failure scenarios and edge cases
-7. **Document workflows** - Make process logic clear
-8. **Version processes** - Handle schema evolution like events
-
-## Summary
-
-Long-running processes in EventCore:
-
-- ✅ **Stateful workflows** - Coordinate complex business processes
-- ✅ **Event-driven** - React to events from other parts of the system
-- ✅ **Fault tolerant** - Handle failures and compensations
-- ✅ **Monitorable** - Track health and performance
-- ✅ **Testable** - Comprehensive testing support
-
-Key patterns:
-
-1. Use process managers for complex workflows
-2. Implement saga pattern for distributed transactions
-3. Handle timeouts and retries robustly
-4. Monitor process health actively
-5. Test all failure scenarios
-
-Next, let's explore [Distributed Systems](./04-distributed-systems.md) →
+... (rest unchanged)

@@ -215,14 +215,14 @@ impl CommandLogic for DistributedOrderSaga {
 
     async fn handle(
         &self,
-        read_streams: ReadStreams<Self::StreamSet>,
+        stream_declarations: StreamDeclarations<Self::StreamSet>,
         state: Self::State,
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
         if state.compensation_needed {
-            self.handle_compensation(&read_streams, &state).await
+            self.handle_compensation(&stream_declarations, &state).await
         } else {
-            self.handle_forward_flow(&read_streams, &state).await
+            self.handle_forward_flow(&stream_declarations, &state).await
         }
     }
 }
@@ -230,7 +230,7 @@ impl CommandLogic for DistributedOrderSaga {
 impl DistributedOrderSaga {
     async fn handle_forward_flow(
         &self,
-        read_streams: &ReadStreams<DistributedOrderSagaStreamSet>,
+        stream_declarations: &StreamDeclarations<DistributedOrderSagaStreamSet>,
         state: &DistributedSagaState,
     ) -> CommandResult<Vec<StreamWrite<DistributedOrderSagaStreamSet, SagaEvent>>> {
         match (state.order_created, state.payment_reserved, state.inventory_reserved, state.shipping_scheduled) {
@@ -238,7 +238,7 @@ impl DistributedOrderSaga {
                 // Step 1: Create order
                 Ok(vec![
                     StreamWrite::new(
-                        read_streams,
+                        stream_declarations,
                         self.saga_id.clone(),
                         SagaEvent::OrderCreationRequested {
                             order_details: self.order_details.clone(),
@@ -250,7 +250,7 @@ impl DistributedOrderSaga {
                 // Step 2: Reserve payment
                 Ok(vec![
                     StreamWrite::new(
-                        read_streams,
+                        stream_declarations,
                         self.saga_id.clone(),
                         SagaEvent::PaymentReservationRequested {
                             customer_id: self.customer_id,
@@ -263,7 +263,7 @@ impl DistributedOrderSaga {
                 // Step 3: Reserve inventory
                 Ok(vec![
                     StreamWrite::new(
-                        read_streams,
+                        stream_declarations,
                         self.saga_id.clone(),
                         SagaEvent::InventoryReservationRequested {
                             items: self.order_details.items.clone(),
@@ -275,7 +275,7 @@ impl DistributedOrderSaga {
                 // Step 4: Schedule shipping
                 Ok(vec![
                     StreamWrite::new(
-                        read_streams,
+                        stream_declarations,
                         self.saga_id.clone(),
                         SagaEvent::ShippingScheduleRequested {
                             order_id: self.order_details.order_id,
@@ -288,7 +288,7 @@ impl DistributedOrderSaga {
                 // All steps completed
                 Ok(vec![
                     StreamWrite::new(
-                        read_streams,
+                        stream_declarations,
                         self.saga_id.clone(),
                         SagaEvent::SagaCompleted,
                     )?
@@ -299,14 +299,14 @@ impl DistributedOrderSaga {
 
     async fn handle_compensation(
         &self,
-        read_streams: &ReadStreams<DistributedOrderSagaStreamSet>,
+        stream_declarations: &StreamDeclarations<DistributedOrderSagaStreamSet>,
         state: &DistributedSagaState,
     ) -> CommandResult<Vec<StreamWrite<DistributedOrderSagaStreamSet, SagaEvent>>> {
         // Compensate in reverse order
         if state.shipping_scheduled {
             Ok(vec![
                 StreamWrite::new(
-                    read_streams,
+                    stream_declarations,
                     self.saga_id.clone(),
                     SagaEvent::ShippingCancellationRequested,
                 )?
@@ -314,7 +314,7 @@ impl DistributedOrderSaga {
         } else if state.inventory_reserved {
             Ok(vec![
                 StreamWrite::new(
-                    read_streams,
+                    stream_declarations,
                     self.saga_id.clone(),
                     SagaEvent::InventoryReleaseRequested,
                 )?
@@ -322,7 +322,7 @@ impl DistributedOrderSaga {
         } else if state.payment_reserved {
             Ok(vec![
                 StreamWrite::new(
-                    read_streams,
+                    stream_declarations,
                     self.saga_id.clone(),
                     SagaEvent::PaymentReleaseRequested,
                 )?
@@ -330,7 +330,7 @@ impl DistributedOrderSaga {
         } else if state.order_created {
             Ok(vec![
                 StreamWrite::new(
-                    read_streams,
+                    stream_declarations,
                     self.saga_id.clone(),
                     SagaEvent::OrderCancellationRequested,
                 )?
@@ -338,7 +338,7 @@ impl DistributedOrderSaga {
         } else {
             Ok(vec![
                 StreamWrite::new(
-                    read_streams,
+                    stream_declarations,
                     self.saga_id.clone(),
                     SagaEvent::CompensationCompleted,
                 )?
@@ -346,22 +346,23 @@ impl DistributedOrderSaga {
         }
     }
 }
+```
 
 // External service integration
 struct ExternalServiceClient {
-    http_client: reqwest::Client,
-    service_url: String,
-    timeout: Duration,
+http_client: reqwest::Client,
+service_url: String,
+timeout: Duration,
 }
 
 impl ExternalServiceClient {
-    async fn create_order(&self, order: &OrderDetails) -> Result<OrderId, ServiceError> {
-        let response = self.http_client
-            .post(&format!("{}/orders", self.service_url))
-            .json(order)
-            .timeout(self.timeout)
-            .send()
-            .await?;
+async fn create_order(&self, order: &OrderDetails) -> Result<OrderId, ServiceError> {
+let response = self.http_client
+.post(&format!("{}/orders", self.service_url))
+.json(order)
+.timeout(self.timeout)
+.send()
+.await?;
 
         if response.status().is_success() {
             let result: CreateOrderResponse = response.json().await?;
@@ -390,8 +391,10 @@ impl ExternalServiceClient {
 
         Ok(())
     }
+
 }
-```
+
+````
 
 ## Event Sourcing Across Services
 
@@ -472,7 +475,7 @@ impl Projection for CrossServiceOrderProjection {
         Ok(())
     }
 }
-```
+````
 
 ### Event Federation
 

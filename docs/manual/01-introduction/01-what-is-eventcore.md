@@ -85,12 +85,12 @@ The macro system ensures you can only write to streams you declared:
 // In your handle method:
 let events = vec![
     StreamWrite::new(
-        &read_streams,
+        &stream_declarations,
         self.order_id.clone(),      // ✅ OK - declared with #[stream]
         OrderEvent::Fulfilled
     )?,
     StreamWrite::new(
-        &read_streams,
+        &stream_declarations,
         some_other_stream,           // ❌ Compile error! Not declared
         SomeEvent::Happened
     )?,
@@ -171,7 +171,7 @@ impl CommandLogic for TransferMoney {
 
     async fn handle(
         &self,
-        read_streams: ReadStreams<Self::StreamSet>,
+        stream_declarations: StreamDeclarations<Self::StreamSet>,
         state: Self::State,
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -187,7 +187,7 @@ impl CommandLogic for TransferMoney {
         // Create atomic events for both accounts
         Ok(vec![
             StreamWrite::new(
-                &read_streams,
+                &stream_declarations,
                 self.from_account.clone(),
                 BankingEvent::MoneyWithdrawn {
                     amount: self.amount.value(),
@@ -195,7 +195,7 @@ impl CommandLogic for TransferMoney {
                 }
             )?,
             StreamWrite::new(
-                &read_streams,
+                &stream_declarations,
                 self.to_account.clone(),
                 BankingEvent::MoneyDeposited {
                     amount: self.amount.value(),

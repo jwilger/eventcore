@@ -386,7 +386,7 @@ impl CommandLogic for TransferMoney {
 
     async fn handle(
         &self,
-        read_streams: ReadStreams<Self::StreamSet>,
+        stream_declarations: StreamDeclarations<Self::StreamSet>,
         state: Self::State,
         _stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -399,7 +399,7 @@ impl CommandLogic for TransferMoney {
         // Process transfer...
         Ok(vec![
             StreamWrite::new(
-                &read_streams,
+                &stream_declarations,
                 self.from_account.clone(),
                 BankEvent::TransferProcessed {
                     transfer_id: self.transfer_id,

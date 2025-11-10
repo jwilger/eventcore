@@ -405,24 +405,24 @@ impl OptimizedCommandExecutor {
         &self,
         command: &C,
     ) -> CommandResult<ExecutionResult> {
-        let read_streams = self.read_streams_for_command(command).await?;
+        let stream_declarations = self.read_streams_for_command(command).await?;
 
         // Try to get cached state
-        let cached_state = self.get_cached_state::<C>(&read_streams).await;
+        let cached_state = self.get_cached_state::<C>(&stream_declarations).await;
 
         let state = match cached_state {
             Some(state) => state,
             None => {
                 // Reconstruct state and cache it
-                let state = self.reconstruct_state::<C>(&read_streams).await?;
-                self.cache_state(&read_streams, &state).await;
+                let state = self.reconstruct_state::<C>(&stream_declarations).await?;
+                self.cache_state(&stream_declarations, &state).await;
                 state
             }
         };
 
         // Execute command
         let mut stream_resolver = StreamResolver::new();
-        let events = command.handle(read_streams, state, &mut stream_resolver).await?;
+        let events = command.handle(stream_declarations, state, &mut stream_resolver).await?;
 
         // Write events and invalidate cache
         let result = self.write_events(events).await?;
@@ -431,11 +431,11 @@ impl OptimizedCommandExecutor {
         Ok(result)
     }
 
-    async fn get_cached_state<C: Command>(&self, read_streams: &ReadStreams<C::StreamSet>) -> Option<C::State> {
+    async fn get_cached_state<C: Command>(&self, stream_declarations: &StreamDeclarations<C::StreamSet>) -> Option<C::State> {
         let cache = self.state_cache.read().await;
 
         // Check if all streams are cached and up-to-date
-        for stream_data in read_streams.iter() {
+        for stream_data in stream_declarations.iter() {
             if let Some(cached) = cache.get(&stream_data.stream_id) {
                 // Verify cache is current
                 if !self.is_cache_current(&stream_data, cached).await {
@@ -447,13 +447,13 @@ impl OptimizedCommandExecutor {
         }
 
         // All streams cached - reconstruct state from cache
-        self.reconstruct_from_cache(read_streams).await
+        self.reconstruct_from_cache(stream_declarations).await
     }
 
-    async fn cache_state<C: Command>(&self, read_streams: &ReadStreams<C::StreamSet>, state: &C::State) {
+    async fn cache_state<C: Command>(&self, stream_declarations: &StreamDeclarations<C::StreamSet>, state: &C::State) {
         let mut cache = self.state_cache.write().await;
 
-        for stream_data in read_streams.iter() {
+        for stream_data in stream_declarations.iter() {
             let cached_data = CachedStreamData {
                 stream_id: stream_data.stream_id.clone(),
                 version: stream_data.version,
@@ -542,12 +542,12 @@ impl StreamingEventStore for OptimizedPostgresEventStore {
         }
     }
 }
+```
 
-// Usage in projections
-#[async_trait]
+// Usage in projections #[async_trait]
 impl Projection for StreamingProjection {
-    type Event = serde_json::Value;
-    type Error = ProjectionError;
+type Event = serde_json::Value;
+type Error = ProjectionError;
 
     async fn rebuild_from_stream(
         &mut self,
@@ -567,8 +567,10 @@ impl Projection for StreamingProjection {
 
         Ok(())
     }
+
 }
-```
+
+````
 
 ## Concurrency Optimization
 
@@ -640,7 +642,7 @@ impl ParallelCommandExecutor {
         let mut groups = HashMap::new();
 
         for command in commands {
-            let streams = command.read_streams(&command).into_iter().collect();
+            let streams = command.stream_declarations().into_iter().collect();
             groups.entry(streams).or_insert_with(Vec::new).push(command.clone());
         }
 
@@ -679,7 +681,7 @@ impl ParallelCommandExecutor {
         locks
     }
 }
-```
+````
 
 ### Async Batching
 
@@ -1135,48 +1137,6 @@ impl PerformanceMonitor {
             }))
     }
 }
-
-// HTML dashboard template
-const DASHBOARD_HTML: &str = r#"
-<!DOCTYPE html>
-<html>
-<head>
-    <title>EventCore Performance Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-</head>
-<body>
-    <h1>EventCore Performance Metrics</h1>
-
-    <div style="display: flex; flex-wrap: wrap;">
-        <div style="width: 50%; padding: 10px;">
-            <canvas id="throughputChart"></canvas>
-        </div>
-        <div style="width: 50%; padding: 10px;">
-            <canvas id="latencyChart"></canvas>
-        </div>
-        <div style="width: 50%; padding: 10px;">
-            <canvas id="memoryChart"></canvas>
-        </div>
-        <div style="width: 50%; padding: 10px;">
-            <canvas id="streamsChart"></canvas>
-        </div>
-    </div>
-
-    <script>
-        // Real-time dashboard implementation
-        async function updateMetrics() {
-            const response = await fetch('/metrics');
-            const text = await response.text();
-            // Parse Prometheus metrics and update charts
-            parseAndUpdateCharts(text);
-        }
-
-        setInterval(updateMetrics, 5000); // Update every 5 seconds
-        updateMetrics(); // Initial load
-    </script>
-</body>
-</html>
-"#;
 ```
 
 ### Alerting

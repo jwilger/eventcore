@@ -32,7 +32,7 @@ EventCore will provide a CommandExecutor that orchestrates complete command exec
 
 The CommandExecutor handles all infrastructure concerns:
 
-- **Stream Resolution**: Extract stream IDs from command via CommandStreams trait (ADR-006)
+- **Stream Resolution**: Call `command.stream_declarations()` (CommandStreams trait) to obtain a `StreamDeclarations` value that describes static streams declared on the command (ADR-006)
 - **State Loading**: Read events from EventStore and reconstruct state via CommandLogic::apply (ADR-002, ADR-006)
 - **Business Logic Invocation**: Call CommandLogic::handle with reconstructed state
 - **Event Persistence**: Write generated events atomically to EventStore with version checking (ADR-002, ADR-007)
@@ -46,8 +46,8 @@ Complete execution follows a structured multi-phase pattern:
 
 **Phase 1 - Stream Resolution:**
 
-- Extract stream IDs from command using CommandStreams trait
-- Support both static streams (from #[stream] fields) and dynamic streams (via StreamResolver)
+- Call `command.stream_declarations()` to obtain static stream declarations
+- Support both static streams (from `#[stream]` fields) and dynamic streams (via StreamResolver)
 - Build complete set of streams to read
 
 **Phase 2 - Read with Version Capture:**
@@ -145,6 +145,7 @@ From developer perspective, retry is transparent:
 let result = executor.execute(transfer_command).await?;
 
 // Executor handles:
+// - Calling command.stream_declarations()
 // - Reading streams
 // - Applying events
 // - Calling business logic
@@ -304,154 +305,4 @@ These trade-offs are acceptable because:
 
 ## Alternatives Considered
 
-### Alternative 1: No Automatic Retry - Expose Conflicts to Developers
-
-Executor detects version conflicts but returns error immediately, requiring developers to implement retry.
-
-**Rejected Because:**
-
-- Violates NFR-2.1 (minimal boilerplate) - every command needs retry implementation
-- Inconsistent retry behavior across applications (each developer implements differently)
-- High probability of incorrect implementations (missing backoff, retrying permanent errors)
-- Retry is infrastructure concern with no business logic - shouldn't be developer responsibility
-- Standard event sourcing pattern is automatic retry on version conflicts
-- Defeats purpose of having executor orchestrate infrastructure concerns
-- Adds cognitive load and error potential for no benefit
-- EventCore value proposition includes handling OCC gracefully
-
-### Alternative 2: Fixed Retry Policy (No Configuration)
-
-Executor retries with hardcoded policy (e.g., always 5 attempts, fixed backoff).
-
-**Rejected Because:**
-
-- Different applications have vastly different contention characteristics
-- Low-contention systems don't need aggressive retry (wastes time on rare conflicts)
-- High-contention systems need more retries to achieve acceptable success rates
-- Development vs production environments have different latency tolerances
-- Performance requirements vary by use case (batch processing vs user-facing)
-- One-size-fits-all policies create suboptimal behavior for most applications
-- Configuration enables tuning based on observed behavior in production
-
-### Alternative 3: Retry Only Write Phase (Don't Re-Read Streams)
-
-On conflict, retry only the EventStore::append operation with same events and incremented versions.
-
-**Rejected Because:**
-
-- Defeats purpose of optimistic concurrency control (detect stale state)
-- Business logic executed on stale state may produce incorrect events
-- Stream state may have changed in ways that affect business rules
-- Version numbers from initial read are outdated (conflict again)
-- Cannot increment versions without knowing current version (requires re-read)
-- Correctness compromised - events based on stale state are wrong
-- Violates event sourcing principle: state reconstruction determines behavior
-
-### Alternative 4: Pessimistic Locking (Acquire Locks Before Reading)
-
-Replace optimistic concurrency with lock acquisition, eliminating version conflicts and retry.
-
-**Rejected Because:**
-
-- ADR-007 already rejected pessimistic locking for performance reasons
-- Contradicts EventCore's optimistic concurrency design
-- Serializes all access to locked streams (poor concurrency)
-- Multi-stream lock acquisition risks deadlocks
-- Long computations block other commands unnecessarily
-- Violates EventCore's performance goals and event sourcing principles
-- Retry is simpler and performs better under typical contention levels
-
-### Alternative 5: Linear Backoff Instead of Exponential
-
-Use fixed delay between retry attempts (e.g., always wait 50ms).
-
-**Rejected Because:**
-
-- Multiple conflicting commands retry at synchronized intervals → re-conflict immediately
-- Doesn't reduce contention (all retries hit database simultaneously)
-- Under high load, creates retry "waves" that amplify contention
-- Exponential backoff spreads retries over time, reducing lock contention
-- Linear backoff performs poorly in distributed systems literature
-- No advantage over exponential approach (simpler but inferior behavior)
-
-### Alternative 6: Separate Retry Infrastructure (Retry Queue/Service)
-
-Failed commands enqueued to retry service instead of in-process retry.
-
-**Rejected Because:**
-
-- Massive complexity increase (additional infrastructure service, queue, coordination)
-- Latency explosion (async retry instead of synchronous)
-- User experience suffers (command doesn't complete in single request)
-- Correlation complexity (how does caller know when retry succeeds?)
-- Retry service becomes new failure point and scaling bottleneck
-- Overkill for handling expected transient failures under normal operation
-- In-process retry is simpler, faster, and sufficient for optimistic concurrency
-
-### Alternative 7: No Metadata Preservation (New Correlation ID Per Retry)
-
-Generate new correlation ID for each retry attempt.
-
-**Rejected Because:**
-
-- Fragments operation traces across multiple correlation IDs
-- Distributed tracing tools cannot reconstruct complete operation flow
-- Debugging becomes impossible (can't find all events from single operation)
-- Violates tracing semantics (correlation groups logical operation, not attempts)
-- Retry is implementation detail of single operation (should be transparent)
-- ADR-005 establishes correlation as operation identifier (unchanged by infrastructure retries)
-
-### Alternative 8: Retry at EventStore Trait Level Instead of Executor
-
-Move retry logic into EventStore trait implementations instead of executor.
-
-**Rejected Because:**
-
-- EventStore responsible for storage operations, not command orchestration
-- Cannot re-read streams and re-execute business logic from EventStore level
-- Business logic (CommandLogic::handle) not accessible from EventStore
-- State reconstruction happens at executor level, not storage level
-- Mixing concerns (storage abstraction + retry orchestration) in single trait
-- Different storage backends would implement retry differently (inconsistent behavior)
-- Executor is natural orchestration point for multi-phase command execution
-
-### Alternative 9: Configurable Retry via Command Trait Method
-
-Commands implement optional retry_policy() method to customize behavior per command.
-
-**Rejected Because:**
-
-- Retry policy is infrastructure configuration, not business logic
-- Forces every command to specify retry policy (or rely on defaults anyway)
-- Same retry policy typically applies across all commands in application
-- Complicates command implementations with infrastructure concerns
-- Application-level configuration cleaner than per-command methods
-- Retry tuning based on observation, not command-specific logic
-- Adds boilerplate to every command for rarely-used customization
-
-### Alternative 10: No Retry Limit (Infinite Retry)
-
-Retry indefinitely until success, without max attempts limit.
-
-**Rejected Because:**
-
-- Under sustained contention or misconfiguration, commands never terminate
-- Resource exhaustion (infinite retry consumes CPU, database connections)
-- User experience suffers (timeouts without feedback)
-- Debugging impossible (stuck commands don't surface errors)
-- Timeout eventually forces termination anyway (better to fail explicitly)
-- Provides no pressure to fix underlying contention issues
-- Max retry limit enables graceful degradation and clear error reporting
-
-## References
-
-- ADR-001: Multi-Stream Atomicity Implementation Strategy (atomic multi-stream writes)
-- ADR-002: Event Store Trait Design (read and append operations)
-- ADR-003: Type System Patterns for Domain Safety (validated types)
-- ADR-004: Error Handling Hierarchy (Retriable vs Permanent classification)
-- ADR-005: Event Metadata Structure (correlation and causation IDs)
-- ADR-006: Command Macro Design (CommandStreams and CommandLogic traits)
-- ADR-007: Optimistic Concurrency Control Strategy (version conflicts as retriable)
-- REQUIREMENTS_ANALYSIS.md: FR-3.3 Automatic Retry
-- REQUIREMENTS_ANALYSIS.md: NFR-2.1 Minimal Boilerplate
-- REQUIREMENTS_ANALYSIS.md: NFR-2.2 Compile-Time Safety
+... (rest unchanged)

@@ -42,11 +42,11 @@ pub struct TransferMoneyStreamSet;
 impl CommandStreams for TransferMoney {
     type StreamSet = TransferMoneyStreamSet;
 
-    fn read_streams(&self) -> Vec<StreamId> {
-        vec![
+    fn stream_declarations(&self) -> StreamDeclarations {
+        StreamDeclarations::try_from_streams(vec![
             self.from_account.clone(),
             self.to_account.clone(),
-        ]
+        ]).expect("valid stream declarations")
     }
 }
 
@@ -67,8 +67,8 @@ pub trait CommandStreams: Send + Sync + Clone {
     /// Phantom type for compile-time stream access control
     type StreamSet: Send + Sync;
 
-    /// Returns the streams this command needs to read
-    fn read_streams(&self) -> Vec<StreamId>;
+    /// Returns the declared streams for this command as a StreamDeclarations value
+    fn stream_declarations(&self) -> StreamDeclarations;
 }
 ```
 
@@ -91,7 +91,7 @@ pub trait CommandLogic: CommandStreams {
     /// Business logic that validates and produces events
     async fn handle(
         &self,
-        read_streams: ReadStreams<Self::StreamSet>,
+        stream_declarations: StreamDeclarations,
         state: Self::State,
         stream_resolver: &mut StreamResolver,
     ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>>;
@@ -146,7 +146,7 @@ For streams discovered at runtime:
 ```rust
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations,
     state: Self::State,
     stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -163,26 +163,26 @@ async fn handle(
 
 ## Type-Safe Stream Access
 
-The `ReadStreams` type ensures you can only write to declared streams:
+The `StreamDeclarations` value ensures you can only write to declared streams:
 
 ```rust
 // In your handle method:
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations,
     state: Self::State,
     _stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
     // ✅ This works - from_account was declared with #[stream]
     let withdraw_event = StreamWrite::new(
-        &read_streams,
+        &stream_declarations,
         self.from_account.clone(),
         BankEvent::MoneyWithdrawn { amount: self.amount }
     )?;
 
     // ❌ This won't compile - random_stream wasn't declared
     let invalid = StreamWrite::new(
-        &read_streams,
+        &stream_declarations,
         StreamId::from_static("random-stream"),
         SomeEvent {}
     )?; // Compile error!
@@ -221,7 +221,7 @@ This is called for each event in sequence to rebuild current state.
 ```rust
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations,
     state: Self::State,
     _stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -358,7 +358,7 @@ struct LazyState {
 
 async fn handle(
     &self,
-    read_streams: ReadStreams<Self::StreamSet>,
+    stream_declarations: StreamDeclarations,
     mut state: Self::State,
     _stream_resolver: &mut StreamResolver,
 ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
@@ -385,7 +385,7 @@ fn test_command_stream_declaration() {
         reference: "test".to_string(),
     };
 
-    let streams = cmd.read_streams();
+    let streams = cmd.stream_declarations();
     assert_eq!(streams.len(), 2);
     assert!(streams.contains(&StreamId::from_static("account-1")));
     assert!(streams.contains(&StreamId::from_static("account-2")));

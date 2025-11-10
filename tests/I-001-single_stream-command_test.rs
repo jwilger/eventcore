@@ -1,6 +1,6 @@
 use eventcore::{
-    CommandError, CommandLogic, Event, EventStore, InMemoryEventStore, NewEvents, RetryPolicy,
-    StreamDeclarations, StreamId, execute,
+    CommandError, CommandLogic, CommandStreams, Event, EventStore, InMemoryEventStore, NewEvents,
+    RetryPolicy, StreamDeclarations, StreamId, execute,
 };
 use nutype::nutype;
 use uuid::Uuid;
@@ -66,13 +66,15 @@ struct Deposit {
     amount: MoneyAmount,
 }
 
+impl CommandStreams for Deposit {
+    fn stream_declarations(&self) -> StreamDeclarations {
+        StreamDeclarations::single(self.account_id.clone())
+    }
+}
+
 impl CommandLogic for Deposit {
     type Event = TestDomainEvents;
     type State = ();
-
-    fn streams(&self) -> StreamDeclarations {
-        StreamDeclarations::single(self.account_id.clone())
-    }
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state
@@ -96,13 +98,15 @@ struct Withdraw {
     amount: MoneyAmount,
 }
 
+impl CommandStreams for Withdraw {
+    fn stream_declarations(&self) -> StreamDeclarations {
+        StreamDeclarations::single(self.account_id.clone())
+    }
+}
+
 impl CommandLogic for Withdraw {
     type Event = TestDomainEvents;
     type State = AccountBalance;
-
-    fn streams(&self) -> StreamDeclarations {
-        StreamDeclarations::single(self.account_id.clone())
-    }
 
     fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
         state.apply_event(event)

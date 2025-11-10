@@ -1,7 +1,7 @@
 use eventcore::{
-    CommandError, CommandLogic, Event, EventStore, EventStoreError, EventStreamReader,
-    EventStreamSlice, InMemoryEventStore, MetricsHook, NewEvents, RetryContext, RetryPolicy,
-    StreamDeclarations, StreamId, StreamWrites, execute,
+    CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
+    EventStreamReader, EventStreamSlice, InMemoryEventStore, MetricsHook, NewEvents, RetryContext,
+    RetryPolicy, StreamDeclarations, StreamId, StreamWrites, execute,
 };
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -28,13 +28,15 @@ struct TestCommand {
     stream_id: StreamId,
 }
 
+impl CommandStreams for TestCommand {
+    fn stream_declarations(&self) -> StreamDeclarations {
+        StreamDeclarations::single(self.stream_id.clone())
+    }
+}
+
 impl CommandLogic for TestCommand {
     type Event = TestEvent;
     type State = ();
-
-    fn streams(&self) -> StreamDeclarations {
-        StreamDeclarations::single(self.stream_id.clone())
-    }
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state

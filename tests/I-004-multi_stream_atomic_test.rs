@@ -9,9 +9,9 @@ use std::{
 };
 
 use eventcore::{
-    CommandLogic, Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice,
-    InMemoryEventStore, NewEvents, RetryPolicy, StreamDeclarations, StreamId, StreamVersion,
-    StreamWrites, execute,
+    CommandLogic, CommandStreams, Event, EventStore, EventStoreError, EventStreamReader,
+    EventStreamSlice, InMemoryEventStore, NewEvents, RetryPolicy, StreamDeclarations, StreamId,
+    StreamVersion, StreamWrites, execute,
 };
 use nutype::nutype;
 use uuid::Uuid;
@@ -190,13 +190,15 @@ struct TransferMoney {
     amount: MoneyAmount,
 }
 
+impl CommandStreams for SeedDeposit {
+    fn stream_declarations(&self) -> StreamDeclarations {
+        StreamDeclarations::single(self.account_id.clone())
+    }
+}
+
 impl CommandLogic for SeedDeposit {
     type Event = TestDomainEvents;
     type State = ();
-
-    fn streams(&self) -> StreamDeclarations {
-        StreamDeclarations::single(self.account_id.clone())
-    }
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state
@@ -268,14 +270,16 @@ impl EventStore for ConflictInjectingStore {
     }
 }
 
-impl CommandLogic for TransferMoney {
-    type Event = TestDomainEvents;
-    type State = ();
-
-    fn streams(&self) -> StreamDeclarations {
+impl CommandStreams for TransferMoney {
+    fn stream_declarations(&self) -> StreamDeclarations {
         StreamDeclarations::try_from_streams(vec![self.from.clone(), self.to.clone()])
             .expect("transfer command must declare unique streams")
     }
+}
+
+impl CommandLogic for TransferMoney {
+    type Event = TestDomainEvents;
+    type State = ();
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state

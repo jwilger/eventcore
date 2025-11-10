@@ -75,7 +75,7 @@ impl Command for MyCommand {
 
 // After - StreamResolver parameter added
 impl Command for MyCommand {
-    async fn handle(&self, read_streams: ReadStreams<Self::StreamSet>, state: Self::State,
+    async fn handle(&self, stream_declarations: StreamDeclarations<Self::StreamSet>, state: Self::State,
                    input: Self::Input, stream_resolver: &mut StreamResolver) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>>
 }
 ```

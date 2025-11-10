@@ -78,9 +78,9 @@ A monotonically increasing number representing the position of an event within i
 
 The result of executing a command, containing information about events written, affected streams, and execution metadata.
 
-### ReadStreams
+### StreamDeclarations
 
-A type-safe container providing access to stream data during command execution. Prevents commands from accessing streams they didn't declare.
+A type-safe value representing the streams a command declares. Commands expose these via `command.stream_declarations()`. Use StreamDeclarations when constructing writes (for example, pass them to `StreamWrite::new`) and to enforce that commands only write to streams they declared.
 
 ### StreamData
 

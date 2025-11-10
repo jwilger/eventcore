@@ -68,6 +68,16 @@ impl StreamDeclarations {
     }
 }
 
+/// Infrastructure trait describing the streams required to execute a command.
+///
+/// Per ADR-006, stream declarations are generated or implemented separately from
+/// the business logic so infrastructure can evolve independently. Commands
+/// typically use [`StreamDeclarations::single`] for single-stream workflows or
+/// [`StreamDeclarations::try_from_streams`] when coordinating multiple streams.
+pub trait CommandStreams {
+    fn stream_declarations(&self) -> StreamDeclarations;
+}
+
 /// Event trait for domain-first event sourcing.
 ///
 /// Per ADR-012, domain types implement this trait to become events. The trait provides
@@ -92,8 +102,9 @@ pub trait Event: Clone + Send + 'static {
 /// Commands encapsulate business operations that read from event streams,
 /// reconstruct state, validate business rules, and produce events.
 ///
-/// This trait focuses solely on domain logic. Infrastructure concerns
-/// (stream management, event persistence) are handled by the executor.
+/// Stream declarations are provided separately via [`CommandStreams`] so that
+/// infrastructure (such as proc-macros defined in ADR-006) can evolve
+/// independently while this trait focuses purely on domain behavior.
 ///
 /// Per ADR-012, commands use an associated type for their event type rather than
 /// a generic parameter, providing better type inference and cleaner APIs.
@@ -102,7 +113,7 @@ pub trait Event: Clone + Send + 'static {
 ///
 /// * `Event` - The domain event type implementing the Event trait
 /// * `State` - The state type reconstructed from events via `apply()`
-pub trait CommandLogic {
+pub trait CommandLogic: CommandStreams {
     /// The domain event type this command produces.
     ///
     /// Must implement the Event trait to provide stream identity and
@@ -115,15 +126,6 @@ pub trait CommandLogic {
     /// business rules and produce events. It's rebuilt from scratch for
     /// each command execution by applying events via `apply()`.
     type State: Default;
-
-    /// Declares the ordered set of streams the command will interact with
-    /// during execution.
-    ///
-    /// Commands must always include at least one stream. Single-stream
-    /// commands can return [`StreamDeclarations::single`], while multi-stream
-    /// commands should construct a `StreamDeclarations` instance using the
-    /// fallible APIs to guarantee uniqueness.
-    fn streams(&self) -> StreamDeclarations;
 
     /// Reconstruct state by applying a single event.
     ///

@@ -31,10 +31,10 @@ async fn debug_command_execution<C: Command>(
     );
 
     // Check stream access patterns
-    let read_streams = command.read_streams(&command);
+    let stream_declarations = command.stream_declarations();
     tracing::debug!(
-        stream_count = read_streams.len(),
-        streams = ?read_streams,
+        stream_count = stream_declarations.len(),
+        streams = ?stream_declarations,
         "Command will read from streams"
     );
 
@@ -842,7 +842,7 @@ pub async fn execute_with_tracing<C: Command>(
 
     // Phase 1: Stream Reading
     tracer.add_phase(trace_id, "stream_reading", hashmap! {
-        "streams_to_read".to_string() => command.read_streams(command).len().to_string(),
+        "streams_to_read".to_string() => command.stream_declarations().len().to_string(),
     });
 
     let result = executor.execute(command).await;
