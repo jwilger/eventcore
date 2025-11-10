@@ -350,7 +350,6 @@ impl TransferMoney {
 - Accessor pattern adds runtime overhead
 - Generated API surface larger and more complex
 - Type-level tracking superior for compile-time safety
-- Generated API surface larger and more complex
 
 ### Alternative 8: Attribute Macro Instead of Derive Macro
 
