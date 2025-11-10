@@ -60,6 +60,7 @@ Macro generates `CommandStreams` trait implementation (infrastructure):
 - Extracts stream IDs from command fields
 - Manages phantom type for compile-time tracking
 - Handles interaction with EventStore trait
+- Exposes `fn stream_declarations(&self) -> StreamDeclarations` for executor use
 - Pure boilerplate - no business logic
 
 Developers implement `CommandLogic` trait manually (business logic):
@@ -184,8 +185,7 @@ Event emission needs type-safe stream association. The `emit!` macro:
 - Provides ergonomic syntax for event production
 - Works with generated phantom types for access control
 - Enables compiler errors with clear messages ("stream not declared in command")
-
-Without macro integration, developers would need verbose API calls with runtime checks.
+- Without macro integration, developers would need verbose API calls with runtime checks.
 
 **Why Separate eventcore-macros Crate:**
 
@@ -196,22 +196,6 @@ Rust ecosystem best practices for procedural macros:
 - Macro dependencies (syn, quote) don't pollute core library
 - Standard pattern across Rust ecosystem (serde_derive, tokio-macros, etc.)
 - Enables independent versioning if needed
-
-**Trade-offs Accepted:**
-
-- **Macro Complexity**: Procedural macros are harder to write and debug than regular code
-- **Generated Code Size**: Macro generates significant code per command (but eliminated from developer burden)
-- **Compile Time**: Macro expansion and generated code increase compilation time
-- **Debuggability Gap**: Macro errors can be cryptic compared to regular Rust errors
-- **Learning Curve**: Developers must understand macro attributes and conventions
-
-These trade-offs are acceptable because:
-
-- Macro complexity is one-time implementation cost; developer simplicity is ongoing benefit
-- Generated code is internal implementation detail (developers don't maintain it)
-- Compile time cost is acceptable for type safety guarantees
-- Clear error messages and documentation mitigate macro error crypticness
-- Macro pattern is common in Rust ecosystem (developers already familiar from serde, etc.)
 
 ## Consequences
 
@@ -274,8 +258,13 @@ Use builder methods to declare streams instead of field attributes:
 
 ```rust
 impl CommandStreams for TransferMoney {
-    fn streams(&self) -> Vec<StreamId> {
-        vec![self.from_account.clone(), self.to_account.clone()]
+    type StreamSet = TransferMoneyStreamSet;
+
+    fn stream_declarations(&self) -> StreamDeclarations {
+        StreamDeclarations::try_from_streams(vec![
+            self.from_account.clone(),
+            self.to_account.clone(),
+        ]).expect("valid stream declarations")
     }
 }
 ```
@@ -359,8 +348,8 @@ impl TransferMoney {
 - Verbose API (named methods per stream)
 - Phantom type approach more idiomatic in Rust
 - Accessor pattern adds runtime overhead
-- Type-level tracking superior for compile-time safety
 - Generated API surface larger and more complex
+- Type-level tracking superior for compile-time safety
 
 ### Alternative 8: Attribute Macro Instead of Derive Macro
 
@@ -373,7 +362,7 @@ Use `#[command]` attribute macro instead of `#[derive(Command)]`.
 - Attribute macro syntax less discoverable
 - No significant advantage over derive approach
 - Derive macro clearer intent (generating trait implementation)
-- Ecosystem convention favors derive for trait implementation generation
+- Ecosystem convention favors derive for trait implementation
 
 ### Alternative 9: Include Dynamic Stream Discovery in Field Attributes
 

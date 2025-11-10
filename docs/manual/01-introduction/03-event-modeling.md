@@ -95,7 +95,7 @@ Read models answer questions. Look at your UI/API needs:
 
 ```
 Question                     →  Read Model (Green)
-────────────────────────────────────────────────
+──────────────────────────────────────────────
 "What tasks do I have?"      →  My Tasks List
 "What's the project status?" →  Project Dashboard
 "Who worked on what?"        →  Activity Timeline
@@ -237,29 +237,17 @@ struct CreateTask {
     title: TaskTitle,
 }
 
-#[async_trait]
 impl CommandLogic for CreateTask {
     type Event = TaskEvent;
     type State = TaskState;
 
-    async fn handle(
-        &self,
-        read_streams: ReadStreams<Self::StreamSet>,
-        state: Self::State,
-        _resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         require!(!state.exists, "Task already exists");
 
-        Ok(vec![
-            StreamWrite::new(
-                &read_streams,
-                self.task_id.clone(),
-                TaskEvent::Created {
-                    title: self.title.as_ref().to_string(),
-                    description: String::new(),
-                }
-            )?
-        ])
+        Ok(NewEvents::from(vec![TaskEvent::Created {
+            title: self.title.as_ref().to_string(),
+            description: String::new(),
+        }]))
     }
 }
 ```

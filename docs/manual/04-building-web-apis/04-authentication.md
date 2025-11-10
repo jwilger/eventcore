@@ -395,12 +395,7 @@ struct UpdateTask {
 impl CommandLogic for UpdateTask {
     // ... other implementations
 
-    async fn handle(
-        &self,
-        read_streams: ReadStreams<Self::StreamSet>,
-        state: Self::State,
-        _stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Check authorization within command
         require!(
             state.can_user_update_task(&self.updated_by),
@@ -410,6 +405,7 @@ impl CommandLogic for UpdateTask {
         );
 
         // Proceed with update...
+        Ok(NewEvents::default())
     }
 }
 

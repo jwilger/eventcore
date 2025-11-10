@@ -6,20 +6,20 @@ use crate::errors::CommandError;
 use crate::store::StreamId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandStreams {
+pub struct StreamDeclarations {
     streams: Vec<StreamId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum CommandStreamsError {
+pub enum StreamDeclarationsError {
     #[error("commands must declare at least one stream")]
     Empty,
     #[error("duplicate stream declared: {duplicate:?}")]
     DuplicateStream { duplicate: StreamId },
 }
 
-impl CommandStreams {
-    pub fn try_from_streams<I>(streams: I) -> Result<Self, CommandStreamsError>
+impl StreamDeclarations {
+    pub fn try_from_streams<I>(streams: I) -> Result<Self, StreamDeclarationsError>
     where
         I: IntoIterator<Item = StreamId>,
     {
@@ -28,14 +28,14 @@ impl CommandStreams {
 
         for stream in streams.into_iter() {
             if !seen.insert(stream.clone()) {
-                return Err(CommandStreamsError::DuplicateStream { duplicate: stream });
+                return Err(StreamDeclarationsError::DuplicateStream { duplicate: stream });
             }
 
             collected.push(stream);
         }
 
         if collected.is_empty() {
-            return Err(CommandStreamsError::Empty);
+            return Err(StreamDeclarationsError::Empty);
         }
 
         Ok(Self { streams: collected })
@@ -47,7 +47,7 @@ impl CommandStreams {
         }
     }
 
-    pub fn with_participant(self, participant: StreamId) -> Result<Self, CommandStreamsError> {
+    pub fn with_participant(self, participant: StreamId) -> Result<Self, StreamDeclarationsError> {
         let mut streams = self.streams;
         streams.push(participant);
         Self::try_from_streams(streams)
@@ -66,6 +66,16 @@ impl CommandStreams {
     pub fn iter(&self) -> impl Iterator<Item = &StreamId> {
         self.streams.iter()
     }
+}
+
+/// Infrastructure trait describing the streams required to execute a command.
+///
+/// Per ADR-006, stream declarations are generated or implemented separately from
+/// the business logic so infrastructure can evolve independently. Commands
+/// typically use [`StreamDeclarations::single`] for single-stream workflows or
+/// [`StreamDeclarations::try_from_streams`] when coordinating multiple streams.
+pub trait CommandStreams {
+    fn stream_declarations(&self) -> StreamDeclarations;
 }
 
 /// Event trait for domain-first event sourcing.
@@ -92,8 +102,9 @@ pub trait Event: Clone + Send + 'static {
 /// Commands encapsulate business operations that read from event streams,
 /// reconstruct state, validate business rules, and produce events.
 ///
-/// This trait focuses solely on domain logic. Infrastructure concerns
-/// (stream management, event persistence) are handled by the executor.
+/// Stream declarations are provided separately via [`CommandStreams`] so that
+/// infrastructure (such as proc-macros defined in ADR-006) can evolve
+/// independently while this trait focuses purely on domain behavior.
 ///
 /// Per ADR-012, commands use an associated type for their event type rather than
 /// a generic parameter, providing better type inference and cleaner APIs.
@@ -102,7 +113,7 @@ pub trait Event: Clone + Send + 'static {
 ///
 /// * `Event` - The domain event type implementing the Event trait
 /// * `State` - The state type reconstructed from events via `apply()`
-pub trait CommandLogic {
+pub trait CommandLogic: CommandStreams {
     /// The domain event type this command produces.
     ///
     /// Must implement the Event trait to provide stream identity and
@@ -115,15 +126,6 @@ pub trait CommandLogic {
     /// business rules and produce events. It's rebuilt from scratch for
     /// each command execution by applying events via `apply()`.
     type State: Default;
-
-    /// Declares the ordered set of streams the command will interact with
-    /// during execution.
-    ///
-    /// Commands must always include at least one stream. Single-stream
-    /// commands can return [`CommandStreams::single`], while multi-stream
-    /// commands should construct a `CommandStreams` instance using the
-    /// fallible APIs to guarantee uniqueness.
-    fn streams(&self) -> CommandStreams;
 
     /// Reconstruct state by applying a single event.
     ///
@@ -196,7 +198,7 @@ mod tests {
 
     #[test]
     fn try_from_streams_succeeds_with_unique_streams() {
-        let result = CommandStreams::try_from_streams(vec![
+        let result = StreamDeclarations::try_from_streams(vec![
             stream("accounts::primary"),
             stream("accounts::secondary"),
         ]);
@@ -206,18 +208,19 @@ mod tests {
 
     #[test]
     fn try_from_streams_rejects_empty_collections() {
-        let result = CommandStreams::try_from_streams(Vec::new());
+        let result = StreamDeclarations::try_from_streams(Vec::new());
 
-        assert_eq!(Err(CommandStreamsError::Empty), result);
+        assert_eq!(Err(StreamDeclarationsError::Empty), result);
     }
 
     #[test]
     fn try_from_streams_rejects_duplicate_streams() {
         let duplicate = stream("accounts::primary");
-        let result = CommandStreams::try_from_streams(vec![duplicate.clone(), duplicate.clone()]);
+        let result =
+            StreamDeclarations::try_from_streams(vec![duplicate.clone(), duplicate.clone()]);
 
         assert_eq!(
-            Err(CommandStreamsError::DuplicateStream {
+            Err(StreamDeclarationsError::DuplicateStream {
                 duplicate: duplicate.clone(),
             }),
             result,
@@ -227,11 +230,11 @@ mod tests {
     #[test]
     fn with_participant_rejects_duplicate_streams() {
         let existing = stream("accounts::primary");
-        let streams = CommandStreams::single(existing.clone());
+        let streams = StreamDeclarations::single(existing.clone());
         let result = streams.with_participant(existing.clone());
 
         assert_eq!(
-            Err(CommandStreamsError::DuplicateStream {
+            Err(StreamDeclarationsError::DuplicateStream {
                 duplicate: existing,
             }),
             result,
@@ -240,7 +243,7 @@ mod tests {
 
     #[test]
     fn len_returns_number_of_declared_streams() {
-        let streams = CommandStreams::try_from_streams(vec![
+        let streams = StreamDeclarations::try_from_streams(vec![
             stream("accounts::primary"),
             stream("audit::shadow"),
         ])
@@ -251,21 +254,21 @@ mod tests {
 
     #[test]
     fn is_empty_returns_true_for_empty_construction() {
-        let result = CommandStreams::try_from_streams(Vec::<StreamId>::new());
+        let result = StreamDeclarations::try_from_streams(Vec::<StreamId>::new());
 
-        assert!(matches!(result, Err(CommandStreamsError::Empty)));
+        assert!(matches!(result, Err(StreamDeclarationsError::Empty)));
     }
 
     #[test]
     fn is_empty_returns_false_for_single_stream() {
-        let streams = CommandStreams::single(stream("accounts::primary"));
+        let streams = StreamDeclarations::single(stream("accounts::primary"));
 
         assert!(!streams.is_empty());
     }
 
     #[test]
     fn is_empty_returns_false_for_multi_stream() {
-        let streams = CommandStreams::try_from_streams(vec![
+        let streams = StreamDeclarations::try_from_streams(vec![
             stream("accounts::primary"),
             stream("audit::shadow"),
         ])
@@ -275,16 +278,16 @@ mod tests {
     }
 
     #[test]
-    fn command_streams_len_and_is_empty_consistency() {
+    fn stream_declarations_len_and_is_empty_consistency() {
         let primary = stream("accounts::primary");
         let secondary = stream("audit::shadow");
 
-        let single = CommandStreams::single(primary.clone());
-        let multi = CommandStreams::try_from_streams(vec![primary, secondary])
+        let single = StreamDeclarations::single(primary.clone());
+        let multi = StreamDeclarations::try_from_streams(vec![primary, secondary])
             .expect("multi-stream declaration should succeed");
-        let empty_error = CommandStreams::try_from_streams(Vec::<StreamId>::new())
+        let empty_error = StreamDeclarations::try_from_streams(Vec::<StreamId>::new())
             .expect_err("empty set rejected");
-        let invariant_empty = CommandStreams {
+        let invariant_empty = StreamDeclarations {
             streams: Vec::new(),
         };
 
@@ -293,7 +296,7 @@ mod tests {
             single.is_empty(),
             multi.len(),
             multi.is_empty(),
-            matches!(empty_error, CommandStreamsError::Empty),
+            matches!(empty_error, StreamDeclarationsError::Empty),
             invariant_empty.is_empty(),
         );
 

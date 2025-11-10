@@ -42,7 +42,9 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 // Re-export only the minimal public API needed for execute() signature
-pub use command::{CommandLogic, CommandStreams, CommandStreamsError, Event, NewEvents};
+pub use command::{
+    CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamDeclarationsError,
+};
 pub use errors::CommandError;
 pub use store::EventStore;
 
@@ -316,7 +318,7 @@ where
 {
     for attempt in 0..=policy.max_retries {
         let stream_ids: Vec<StreamId> = {
-            let declared_streams = command.streams();
+            let declared_streams = command.stream_declarations();
             declared_streams.iter().cloned().collect()
         };
         let mut expected_versions: HashMap<StreamId, StreamVersion> =
@@ -457,13 +459,15 @@ mod tests {
         handle_called: Arc<AtomicBool>,
     }
 
+    impl CommandStreams for MockCommand {
+        fn stream_declarations(&self) -> StreamDeclarations {
+            StreamDeclarations::single(self.stream_id.clone())
+        }
+    }
+
     impl CommandLogic for MockCommand {
         type Event = TestEvent;
         type State = ();
-
-        fn streams(&self) -> CommandStreams {
-            CommandStreams::single(self.stream_id.clone())
-        }
 
         fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
             state
@@ -532,13 +536,15 @@ mod tests {
         captured_state: Arc<std::sync::Mutex<Option<TestState>>>,
     }
 
+    impl CommandStreams for StateCapturingCommand {
+        fn stream_declarations(&self) -> StreamDeclarations {
+            StreamDeclarations::single(self.stream_id.clone())
+        }
+    }
+
     impl CommandLogic for StateCapturingCommand {
         type Event = TestEventWithValue;
         type State = TestState;
-
-        fn streams(&self) -> CommandStreams {
-            CommandStreams::single(self.stream_id.clone())
-        }
 
         fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
             state.value += event.value;

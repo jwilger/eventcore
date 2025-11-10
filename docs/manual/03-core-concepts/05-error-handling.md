@@ -84,12 +84,7 @@ The `require!` macro makes validation concise:
 ```rust
 use eventcore::require;
 
-async fn handle(
-    &self,
-    read_streams: ReadStreams<Self::StreamSet>,
-    state: Self::State,
-    _stream_resolver: &mut StreamResolver,
-) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
     // Simple validation
     require!(self.amount > 0, "Amount must be positive");
 
@@ -108,7 +103,7 @@ async fn handle(
     );
 
     // Continue with business logic...
-    Ok(vec![/* events */])
+    Ok(NewEvents::from(vec![/* events */]))
 }
 ```
 
@@ -118,7 +113,7 @@ For complex validations:
 
 ```rust
 impl TransferMoney {
-    fn validate_business_rules(&self, state: &AccountState) -> CommandResult<()> {
+    fn validate_business_rules(&self, state: &AccountState) -> Result<(), CommandError> {
         // Daily limit check
         self.validate_daily_limit(state)?;
 
@@ -131,7 +126,7 @@ impl TransferMoney {
         Ok(())
     }
 
-    fn validate_daily_limit(&self, state: &AccountState) -> CommandResult<()> {
+    fn validate_daily_limit(&self, state: &AccountState) -> Result<(), CommandError> {
         const DAILY_LIMIT: Money = Money::from_cents(50_000_00);
 
         let today_total = state.transfers_today() + self.amount;
@@ -147,11 +142,12 @@ impl TransferMoney {
 }
 
 // In handle()
-async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
     // Run all validations
     self.validate_business_rules(&state)?;
 
     // Generate events...
+    Ok(NewEvents::from(vec![]))
 }
 ```
 
@@ -301,7 +297,7 @@ struct RefundPayment {
     reason: RefundReason,
 }
 
-async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
     // Validate refund is possible
     require!(
         state.payment.status == PaymentStatus::Completed,
@@ -314,19 +310,10 @@ async fn handle(/* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Sel
     );
 
     // Compensating events
-    Ok(vec![
-        StreamWrite::new(&read_streams, self.payment.clone(),
-            PaymentEvent::Refunded {
-                amount: state.payment.amount,
-                reason: self.reason.clone(),
-            })?,
-
-        StreamWrite::new(&read_streams, self.account.clone(),
-            AccountEvent::Credited {
-                amount: state.payment.amount,
-                reference: format!("Refund for payment {}", state.payment.id),
-            })?,
-    ])
+    Ok(NewEvents::from(vec![
+        PaymentEvent::Refunded { amount: state.payment.amount, reason: self.reason.clone() },
+        AccountEvent::Credited { amount: state.payment.amount, reference: format!("Refund for payment {}", state.payment.id) },
+    ]))
 }
 ```
 
@@ -430,13 +417,8 @@ Log errors with full context:
 ```rust
 use tracing::{error, warn, info, instrument};
 
-#[instrument(skip(self, read_streams, state, stream_resolver))]
-async fn handle(
-    &self,
-    read_streams: ReadStreams<Self::StreamSet>,
-    state: Self::State,
-    stream_resolver: &mut StreamResolver,
-) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+#[instrument(skip(self, state))]
+fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
     info!(
         amount = %self.amount,
         from = %self.from_account,
@@ -455,6 +437,7 @@ async fn handle(
     }
 
     // Continue...
+    Ok(NewEvents::from(vec![/* events */]))
 }
 ```
 

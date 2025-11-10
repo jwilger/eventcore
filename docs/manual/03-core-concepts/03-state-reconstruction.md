@@ -274,15 +274,15 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
 }
 
 // In handle(), decide what to load:
-async fn handle(&self, /* ... */) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
-    // Enable history loading for this command
+fn handle(&self, /* ... */) -> Result<NewEvents<Self::Event>, CommandError> {
+    // Enable history loading for this command by setting state hints (executor performs actual IO)
     let mut state = Self::State::default();
     if self.requires_history() {
         state.transaction_history = Some(Vec::new());
     }
 
-    // State reconstruction will populate history
-    // ...
+    // State reconstruction will populate history before handle() is invoked by the executor
+    Ok(NewEvents::from(vec![]))
 }
 ```
 
@@ -502,16 +502,12 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
 ✅ **Right**: Calculate in handle() if needed
 
 ```rust
-async fn handle(
-    &self,
-    read_streams: ReadStreams<Self::StreamSet>,
-    state: Self::State,
-    _stream_resolver: &mut StreamResolver,
-) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
     // Calculate age here, not in apply()
     let age_in_days = (Utc::now() - state.created_at).num_days();
 
     // Use for business logic...
+    Ok(NewEvents::default())
 }
 ```
 
