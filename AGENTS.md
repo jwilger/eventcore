@@ -4,8 +4,8 @@
 
 - Format: `cargo fmt --all` (required before commit)
 - Lint: `cargo clippy --all-targets --all-features` (warnings = errors via `lints.rust`)
-- Test all: `cargo test --workspace` or `cargo nextest run --workspace`
-- Test single: `cargo test <module>::<test_name>` (e.g., `cargo test single_stream::executes_successfully`)
+- Test all: `cargo nextest run --workspace` (default; fallback: `cargo test --workspace` if nextest isn't available)
+- Test single: `cargo nextest run --workspace --test <name>` (preferred; fallback: `cargo test <module>::<test_name>`)
 - Setup: `docker-compose up -d` for Postgres; `nix develop` for reproducible toolchain
 
 ## Code Style

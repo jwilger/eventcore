@@ -22,6 +22,7 @@
           inherit system overlays;
         };
 
+        cargoNextestVersion = "0.9.105";
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
       in
       {
@@ -42,8 +43,8 @@
 
           shellHook = ''
             CARGO_MCP_VERSION="0.2.0"
-            CARGO_NEXTEST_VERSION="0.9.105"
             CARGO_AUDIT_VERSION="0.21.0"
+            CARGO_NEXTEST_VERSION="${cargoNextestVersion}"
 
             # Setup local cargo bin directory
             export CARGO_INSTALL_ROOT="$PWD/.cargo-bin"
@@ -61,7 +62,7 @@
             # Check cargo-nextest version
             if ! command -v cargo-nextest >/dev/null 2>&1 || [ "$(cargo-nextest --version 2>/dev/null | awk '{print $2}')" != "$CARGO_NEXTEST_VERSION" ]; then
               echo "Installing cargo-nextest $CARGO_NEXTEST_VERSION to $CARGO_INSTALL_ROOT..."
-              cargo install cargo-nextest --version "$CARGO_NEXTEST_VERSION" --root "$CARGO_INSTALL_ROOT"
+              cargo install cargo-nextest --version "$CARGO_NEXTEST_VERSION" --locked --root "$CARGO_INSTALL_ROOT"
             fi
 
             # Check cargo-audit version
