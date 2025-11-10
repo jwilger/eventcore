@@ -13,6 +13,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   RUSTFLAGS: -D warnings
+  CARGO_NEXTEST_VERSION: 0.9.105
 
 jobs:
   test:
@@ -57,7 +58,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-nextest
-        run: cargo install cargo-nextest --locked --version 0.9.105
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ env.CARGO_NEXTEST_VERSION }}
 
       - name: Run tests
         env:
