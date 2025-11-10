@@ -46,6 +46,7 @@ pub use command::{
     CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamDeclarationsError,
 };
 pub use errors::CommandError;
+pub use eventcore_macros::Command;
 pub use store::EventStore;
 
 // Re-export InMemoryEventStore for library consumers (per ADR-011)
