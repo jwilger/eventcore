@@ -28,6 +28,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             rustToolchain
+            cargo-nextest
             git
             pre-commit
             nodejs_22
@@ -42,7 +43,6 @@
 
           shellHook = ''
             CARGO_MCP_VERSION="0.2.0"
-            CARGO_NEXTEST_VERSION="0.9.105"
             CARGO_AUDIT_VERSION="0.21.0"
 
             # Setup local cargo bin directory
@@ -56,12 +56,6 @@
             if ! command -v cargo-mcp >/dev/null 2>&1 || [ "$(cargo-mcp --version 2>/dev/null | awk '{print $2}')" != "$CARGO_MCP_VERSION" ]; then
               echo "Installing cargo-mcp $CARGO_MCP_VERSION to $CARGO_INSTALL_ROOT..."
               cargo install cargo-mcp --version "$CARGO_MCP_VERSION" --root "$CARGO_INSTALL_ROOT"
-            fi
-
-            # Check cargo-nextest version
-            if ! command -v cargo-nextest >/dev/null 2>&1 || [ "$(cargo-nextest --version 2>/dev/null | awk '{print $2}')" != "$CARGO_NEXTEST_VERSION" ]; then
-              echo "Installing cargo-nextest $CARGO_NEXTEST_VERSION to $CARGO_INSTALL_ROOT..."
-              cargo install cargo-nextest --version "$CARGO_NEXTEST_VERSION" --root "$CARGO_INSTALL_ROOT"
             fi
 
             # Check cargo-audit version
