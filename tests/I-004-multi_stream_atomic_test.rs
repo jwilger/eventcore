@@ -9,8 +9,8 @@ use std::{
 };
 
 use eventcore::{
-    CommandLogic, CommandStreams, Event, EventStore, EventStoreError, EventStreamReader,
-    EventStreamSlice, InMemoryEventStore, NewEvents, RetryPolicy, StreamId, StreamVersion,
+    CommandLogic, Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice,
+    InMemoryEventStore, NewEvents, RetryPolicy, StreamDeclarations, StreamId, StreamVersion,
     StreamWrites, execute,
 };
 use nutype::nutype;
@@ -194,8 +194,8 @@ impl CommandLogic for SeedDeposit {
     type Event = TestDomainEvents;
     type State = ();
 
-    fn streams(&self) -> CommandStreams {
-        CommandStreams::single(self.account_id.clone())
+    fn streams(&self) -> StreamDeclarations {
+        StreamDeclarations::single(self.account_id.clone())
     }
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
@@ -272,8 +272,8 @@ impl CommandLogic for TransferMoney {
     type Event = TestDomainEvents;
     type State = ();
 
-    fn streams(&self) -> CommandStreams {
-        CommandStreams::try_from_streams(vec![self.from.clone(), self.to.clone()])
+    fn streams(&self) -> StreamDeclarations {
+        StreamDeclarations::try_from_streams(vec![self.from.clone(), self.to.clone()])
             .expect("transfer command must declare unique streams")
     }
 

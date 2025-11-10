@@ -42,7 +42,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 // Re-export only the minimal public API needed for execute() signature
-pub use command::{CommandLogic, CommandStreams, CommandStreamsError, Event, NewEvents};
+pub use command::{CommandLogic, Event, NewEvents, StreamDeclarations, StreamDeclarationsError};
 pub use errors::CommandError;
 pub use store::EventStore;
 
@@ -461,8 +461,8 @@ mod tests {
         type Event = TestEvent;
         type State = ();
 
-        fn streams(&self) -> CommandStreams {
-            CommandStreams::single(self.stream_id.clone())
+        fn streams(&self) -> StreamDeclarations {
+            StreamDeclarations::single(self.stream_id.clone())
         }
 
         fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
@@ -536,8 +536,8 @@ mod tests {
         type Event = TestEventWithValue;
         type State = TestState;
 
-        fn streams(&self) -> CommandStreams {
-            CommandStreams::single(self.stream_id.clone())
+        fn streams(&self) -> StreamDeclarations {
+            StreamDeclarations::single(self.stream_id.clone())
         }
 
         fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
