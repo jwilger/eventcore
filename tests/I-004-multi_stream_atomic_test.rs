@@ -9,9 +9,8 @@ use std::{
 };
 
 use eventcore::{
-    CommandLogic, CommandStreams, Event, EventStore, EventStoreError, EventStreamReader,
-    EventStreamSlice, InMemoryEventStore, NewEvents, RetryPolicy, StreamDeclarations, StreamId,
-    StreamVersion, StreamWrites, execute,
+    Command, CommandLogic, Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice,
+    InMemoryEventStore, NewEvents, RetryPolicy, StreamId, StreamVersion, StreamWrites, execute,
 };
 use nutype::nutype;
 use uuid::Uuid;
@@ -163,7 +162,9 @@ fn compute_balance(events: &[TestDomainEvents]) -> MoneyAmount {
         .expect("balance should remain positive in test scenario")
 }
 
+#[derive(Command)]
 struct SeedDeposit {
+    #[stream]
     account_id: StreamId,
     amount: MoneyAmount,
 }
@@ -184,16 +185,13 @@ impl ConflictInjectingStore {
     }
 }
 
+#[derive(Command)]
 struct TransferMoney {
+    #[stream]
     from: StreamId,
+    #[stream]
     to: StreamId,
     amount: MoneyAmount,
-}
-
-impl CommandStreams for SeedDeposit {
-    fn stream_declarations(&self) -> StreamDeclarations {
-        StreamDeclarations::single(self.account_id.clone())
-    }
 }
 
 impl CommandLogic for SeedDeposit {
@@ -267,13 +265,6 @@ impl EventStore for ConflictInjectingStore {
         }
 
         self.inner.append_events(writes).await
-    }
-}
-
-impl CommandStreams for TransferMoney {
-    fn stream_declarations(&self) -> StreamDeclarations {
-        StreamDeclarations::try_from_streams(vec![self.from.clone(), self.to.clone()])
-            .expect("transfer command must declare unique streams")
     }
 }
 

@@ -1,0 +1,5 @@
+error: EventCore: #[derive(Command)] requires at least one field annotated with #[stream]
+ --> tests/ui/missing_stream_attribute.rs:5:8
+  |
+5 | struct MissingStreamAttribute {
+  |        ^^^^^^^^^^^^^^^^^^^^^^

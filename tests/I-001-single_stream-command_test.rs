@@ -1,6 +1,6 @@
 use eventcore::{
-    CommandError, CommandLogic, CommandStreams, Event, EventStore, InMemoryEventStore, NewEvents,
-    RetryPolicy, StreamDeclarations, StreamId, execute,
+    Command, CommandError, CommandLogic, Event, EventStore, InMemoryEventStore, NewEvents,
+    RetryPolicy, StreamId, execute,
 };
 use nutype::nutype;
 use uuid::Uuid;
@@ -61,15 +61,11 @@ impl AccountBalance {
 }
 
 /// Deposit command for testing single-stream command execution.
+#[derive(Command)]
 struct Deposit {
+    #[stream]
     account_id: StreamId,
     amount: MoneyAmount,
-}
-
-impl CommandStreams for Deposit {
-    fn stream_declarations(&self) -> StreamDeclarations {
-        StreamDeclarations::single(self.account_id.clone())
-    }
 }
 
 impl CommandLogic for Deposit {
@@ -93,15 +89,11 @@ impl CommandLogic for Deposit {
 }
 
 /// Withdraw command validates state before emitting events.
+#[derive(Command)]
 struct Withdraw {
+    #[stream]
     account_id: StreamId,
     amount: MoneyAmount,
-}
-
-impl CommandStreams for Withdraw {
-    fn stream_declarations(&self) -> StreamDeclarations {
-        StreamDeclarations::single(self.account_id.clone())
-    }
 }
 
 impl CommandLogic for Withdraw {
