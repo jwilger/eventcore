@@ -1,40 +1,109 @@
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Data, Fields, parse_macro_input};
+use syn::{Data, DeriveInput, Error, Fields, Meta, Type, parse_macro_input};
 
 #[proc_macro_derive(Command, attributes(stream))]
 pub fn command(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as syn::DeriveInput);
+    let input = parse_macro_input!(input as DeriveInput);
 
-    let ident = input.ident;
+    match expand_command(&input) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
 
-    let stream_field_idents = match &input.data {
-        Data::Struct(data_struct) => match &data_struct.fields {
-            Fields::Named(fields) => fields
-                .named
-                .iter()
-                .filter(|field| {
-                    field
-                        .attrs
-                        .iter()
-                        .any(|attr| attr.path().is_ident("stream"))
-                })
-                .map(|field| field.ident.clone().expect("expected named field"))
-                .collect::<Vec<_>>(),
-            _ => panic!("expected struct with named fields"),
-        },
-        _ => panic!("expected named struct for #[derive(Command)]"),
+fn expand_command(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let ident = &input.ident;
+
+    let data_struct = match &input.data {
+        Data::Struct(data_struct) => data_struct,
+        _ => {
+            return Err(Error::new_spanned(
+                ident,
+                "EventCore: #[derive(Command)] currently supports structs with named fields",
+            ));
+        }
     };
 
-    if stream_field_idents.is_empty() {
-        panic!("expected at least one #[stream] field for #[derive(Command)]");
+    let fields = match &data_struct.fields {
+        Fields::Named(fields) => &fields.named,
+        _ => {
+            return Err(Error::new_spanned(
+                ident,
+                "EventCore: #[derive(Command)] currently supports structs with named fields",
+            ));
+        }
+    };
+
+    let mut stream_exprs: Vec<TokenStream2> = Vec::new();
+
+    for field in fields {
+        let mut has_stream_attribute = false;
+
+        for attr in &field.attrs {
+            if attr.path().is_ident("stream") {
+                match &attr.meta {
+                    Meta::Path(_) => {}
+                    _ => {
+                        return Err(Error::new_spanned(
+                            attr,
+                            "EventCore: #[stream] does not accept parameters",
+                        ));
+                    }
+                }
+
+                has_stream_attribute = true;
+            }
+        }
+
+        if has_stream_attribute {
+            let field_ident = match &field.ident {
+                Some(ident) => ident,
+                None => {
+                    return Err(Error::new_spanned(
+                        field,
+                        "EventCore: #[derive(Command)] currently supports structs with named fields",
+                    ));
+                }
+            };
+
+            match &field.ty {
+                Type::Path(type_path) => {
+                    let is_stream_id = type_path
+                        .path
+                        .segments
+                        .last()
+                        .map(|segment| segment.ident == "StreamId")
+                        .unwrap_or(false);
+
+                    if !is_stream_id {
+                        return Err(Error::new_spanned(
+                            field,
+                            "EventCore: #[stream] fields must have type StreamId",
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(Error::new_spanned(
+                        field,
+                        "EventCore: #[stream] fields must have type StreamId",
+                    ));
+                }
+            }
+
+            stream_exprs.push(quote! { self.#field_ident.clone() });
+        }
     }
 
-    let stream_exprs = stream_field_idents
-        .iter()
-        .map(|ident| quote! { self.#ident.clone() });
+    if stream_exprs.is_empty() {
+        return Err(Error::new_spanned(
+            ident,
+            "EventCore: #[derive(Command)] requires at least one #[stream] StreamId field; add #[stream] to your StreamId member",
+        ));
+    }
 
-    TokenStream::from(quote! {
+    Ok(quote! {
         impl ::eventcore::CommandStreams for #ident {
             fn stream_declarations(&self) -> ::eventcore::StreamDeclarations {
                 ::eventcore::StreamDeclarations::try_from_streams(vec![

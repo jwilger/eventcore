@@ -8,6 +8,12 @@ fn command_macro_single_stream_initial_red() {
 }
 
 #[test]
+fn command_macro_missing_stream_attribute_produces_error() {
+    let t = TestCases::new();
+    t.compile_fail("tests/ui/missing_stream_attribute.rs");
+}
+
+#[test]
 fn command_macro_single_stream_allows_account_id_field() {
     let t = TestCases::new();
     t.pass("tests/ui/single_stream_account.rs");

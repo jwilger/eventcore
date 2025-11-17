@@ -1,4 +1,4 @@
-error: EventCore: #[derive(Command)] requires at least one field annotated with #[stream]
+error: EventCore: #[derive(Command)] requires at least one #[stream] StreamId field; add #[stream] to your StreamId member
  --> tests/ui/missing_stream_attribute.rs:5:8
   |
 5 | struct MissingStreamAttribute {
