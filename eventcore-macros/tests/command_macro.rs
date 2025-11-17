@@ -24,6 +24,24 @@ fn command_macro_missing_stream_attribute_produces_error() {
 }
 
 #[test]
+fn command_macro_rejects_tuple_struct_stream_field() {
+    let t = TestCases::new();
+    t.compile_fail("tests/ui/tuple_struct.rs");
+}
+
+#[test]
+fn command_macro_rejects_wrong_stream_field_type() {
+    let t = TestCases::new();
+    t.compile_fail("tests/ui/wrong_stream_type.rs");
+}
+
+#[test]
+fn command_macro_rejects_stream_attribute_args() {
+    let t = TestCases::new();
+    t.compile_fail("tests/ui/stream_attr_args.rs");
+}
+
+#[test]
 fn command_macro_accepts_custom_stream_field_name() {
     let t = TestCases::new();
     t.pass("tests/ui/single_stream_account.rs");
