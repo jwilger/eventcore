@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Data, DeriveInput, Error, Fields, Meta, Type, parse_macro_input};
+use syn::{Data, DeriveInput, Error, Fields, Meta, Path, Type, parse_macro_input};
 
 #[proc_macro_derive(Command, attributes(stream))]
 pub fn command(input: TokenStream) -> TokenStream {
@@ -70,14 +70,7 @@ fn expand_command(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
             match &field.ty {
                 Type::Path(type_path) => {
-                    let is_stream_id = type_path
-                        .path
-                        .segments
-                        .last()
-                        .map(|segment| segment.ident == "StreamId")
-                        .unwrap_or(false);
-
-                    if !is_stream_id {
+                    if !is_eventcore_stream_id(&type_path.path) {
                         return Err(Error::new_spanned(
                             field,
                             "EventCore: #[stream] fields must have type StreamId",
@@ -113,4 +106,28 @@ fn expand_command(input: &DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
     })
+}
+
+fn is_eventcore_stream_id(path: &Path) -> bool {
+    if path.segments.is_empty() {
+        return false;
+    }
+
+    if let Some(last) = path.segments.last() {
+        if last.ident != "StreamId" {
+            return false;
+        }
+    } else {
+        return false;
+    }
+
+    path.segments
+        .iter()
+        .take(path.segments.len().saturating_sub(1))
+        .all(|segment| {
+            matches!(
+                segment.ident.to_string().as_str(),
+                "eventcore" | "crate" | "self" | "super"
+            )
+        })
 }
