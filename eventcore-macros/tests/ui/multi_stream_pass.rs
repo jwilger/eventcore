@@ -1,3 +1,5 @@
+// trybuild pass fixture: proving #[derive(Command)] handles two #[stream] fields.
+// Exercised via tests/trybuild.rs.
 extern crate eventcore;
 
 use eventcore::StreamId;

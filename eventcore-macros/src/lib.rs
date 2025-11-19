@@ -83,14 +83,14 @@ fn extract_named_fields(input: &DeriveInput) -> syn::Result<&Punctuated<Field, s
     let Data::Struct(data_struct) = &input.data else {
         return Err(Error::new_spanned(
             &input.ident,
-            "EventCore: #[derive(Command)] currently supports structs with named fields",
+            "EventCore: #[derive(Command)] only supports structs with named fields",
         ));
     };
 
     let Fields::Named(fields) = &data_struct.fields else {
         return Err(Error::new_spanned(
             &input.ident,
-            "EventCore: #[derive(Command)] currently supports structs with named fields",
+            "EventCore: #[derive(Command)] only supports structs with named fields",
         ));
     };
 
@@ -138,7 +138,7 @@ fn stream_expression(field: &Field) -> syn::Result<TokenStream2> {
     let Some(field_ident) = &field.ident else {
         return Err(Error::new_spanned(
             field,
-            "EventCore: #[derive(Command)] currently supports structs with named fields",
+            "EventCore: #[derive(Command)] only supports structs with named fields",
         ));
     };
 
@@ -153,7 +153,7 @@ fn ensure_stream_id_type(field: &Field) -> syn::Result<()> {
         Type::Path(type_path) if is_eventcore_stream_id(&type_path.path) => Ok(()),
         _ => Err(Error::new_spanned(
             field,
-            "EventCore: #[stream] fields must have type StreamId",
+            "EventCore: #[stream] fields must have type eventcore::StreamId",
         )),
     }
 }

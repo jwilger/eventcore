@@ -1,3 +1,5 @@
+// trybuild pass fixture: minimal single-stream command should compile via #[derive(Command)].
+// Exercised via tests/trybuild.rs.
 extern crate eventcore;
 
 use eventcore::StreamId;

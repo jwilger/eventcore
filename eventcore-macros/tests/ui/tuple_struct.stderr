@@ -1,5 +1,5 @@
-error: EventCore: #[derive(Command)] currently supports structs with named fields
- --> tests/ui/tuple_struct.rs:5:8
+error: EventCore: #[derive(Command)] only supports structs with named fields
+ --> tests/ui/tuple_struct.rs:7:8
   |
-5 | struct TupleCommand(#[stream] StreamId);
+7 | struct TupleCommand(#[stream] StreamId);
   |        ^^^^^^^^^^^^
