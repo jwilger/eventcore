@@ -9,9 +9,10 @@ use std::{
 };
 
 use eventcore::{
-    Command, CommandLogic, Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice,
+    CommandLogic, Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice,
     InMemoryEventStore, NewEvents, RetryPolicy, StreamId, StreamVersion, StreamWrites, execute,
 };
+use eventcore_macros::Command;
 use nutype::nutype;
 use uuid::Uuid;
 

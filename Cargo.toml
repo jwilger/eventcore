@@ -20,9 +20,9 @@ thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1.41"
 uuid = { version = "1.18.1", features = ["serde", "v1", "v7"] }
-eventcore-macros = { path = "eventcore-macros" }
 
 [dev-dependencies]
+eventcore-macros = { path = "eventcore-macros" }
 # tracing-mock is only available as beta (official tokio-rs crate); used for testing structured tracing output
 tracing-mock = "0.1.0-beta.1"
 tracing-test = "0.2.5"

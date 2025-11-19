@@ -1,7 +1,8 @@
 use eventcore::{
-    Command, CommandError, CommandLogic, CommandStreams, Event, EventStore, InMemoryEventStore,
-    NewEvents, RetryPolicy, StreamDeclarations, StreamId, execute,
+    CommandError, CommandLogic, CommandStreams, Event, EventStore, InMemoryEventStore, NewEvents,
+    RetryPolicy, StreamDeclarations, StreamId, execute,
 };
+use eventcore_macros::Command;
 use uuid::Uuid;
 
 /// Domain events expressed in the test to keep both implementations honest.

@@ -1,7 +1,8 @@
 use eventcore::{
-    Command, CommandError, CommandLogic, Event, EventStore, InMemoryEventStore, NewEvents,
-    RetryPolicy, StreamId, execute,
+    CommandError, CommandLogic, Event, EventStore, InMemoryEventStore, NewEvents, RetryPolicy,
+    StreamId, execute,
 };
+use eventcore_macros::Command;
 use nutype::nutype;
 use uuid::Uuid;
 
