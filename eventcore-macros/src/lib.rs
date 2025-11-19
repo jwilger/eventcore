@@ -109,15 +109,11 @@ fn expand_command(input: &DeriveInput) -> syn::Result<TokenStream2> {
 }
 
 fn is_eventcore_stream_id(path: &Path) -> bool {
-    if path.segments.is_empty() {
+    let Some(last) = path.segments.last() else {
         return false;
-    }
+    };
 
-    if let Some(last) = path.segments.last() {
-        if last.ident != "StreamId" {
-            return false;
-        }
-    } else {
+    if last.ident != "StreamId" {
         return false;
     }
 
