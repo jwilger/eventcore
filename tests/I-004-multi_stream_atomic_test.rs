@@ -9,10 +9,10 @@ use std::{
 };
 
 use eventcore::{
-    CommandLogic, Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice,
-    InMemoryEventStore, NewEvents, RetryPolicy, StreamId, StreamVersion, StreamWrites, execute,
+    CommandLogic, CommandStreams, Event, EventStore, EventStoreError, EventStreamReader,
+    EventStreamSlice, InMemoryEventStore, NewEvents, RetryPolicy, StreamDeclarations, StreamId,
+    StreamVersion, StreamWrites, execute,
 };
-use eventcore_macros::Command;
 use nutype::nutype;
 use uuid::Uuid;
 
@@ -163,11 +163,16 @@ fn compute_balance(events: &[TestDomainEvents]) -> MoneyAmount {
         .expect("balance should remain positive in test scenario")
 }
 
-#[derive(Command)]
 struct SeedDeposit {
-    #[stream]
     account_id: StreamId,
     amount: MoneyAmount,
+}
+
+impl CommandStreams for SeedDeposit {
+    fn stream_declarations(&self) -> StreamDeclarations {
+        StreamDeclarations::try_from_streams(vec![self.account_id.clone()])
+            .expect("seed deposit targets a single stream")
+    }
 }
 
 struct ConflictInjectingStore {
@@ -186,13 +191,17 @@ impl ConflictInjectingStore {
     }
 }
 
-#[derive(Command)]
 struct TransferMoney {
-    #[stream]
     from: StreamId,
-    #[stream]
     to: StreamId,
     amount: MoneyAmount,
+}
+
+impl CommandStreams for TransferMoney {
+    fn stream_declarations(&self) -> StreamDeclarations {
+        StreamDeclarations::try_from_streams(vec![self.from.clone(), self.to.clone()])
+            .expect("transfer money touches both source and destination streams")
+    }
 }
 
 impl CommandLogic for SeedDeposit {
