@@ -77,15 +77,15 @@ impl<A: StreamAuthorization> CommandAuthorizationLayer<A> {
         command: &impl Command,
         user: &User,
     ) -> Result<(), AuthError> {
-        // Check read permissions
-        for stream_id in command.read_streams() {
+        // Check permissions for all declared streams
+        for stream_id in command.stream_declarations() {
             if !self.auth.can_read(user, &stream_id).await {
                 return Err(AuthError::Forbidden(stream_id));
             }
         }
 
-        // Check write permissions
-        for stream_id in command.write_streams() {
+        // Write permissions use same declared streams (writes are restricted to declared streams)
+        for stream_id in command.stream_declarations() {
             if !self.auth.can_write(user, &stream_id).await {
                 return Err(AuthError::Forbidden(stream_id));
             }

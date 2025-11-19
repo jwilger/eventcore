@@ -63,6 +63,7 @@ let executor = CommandExecutor::builder()
     .build();
 
 let result = executor.execute(&command).await?;
+let stream_declarations = command.stream_declarations();
 ```
 
 **Execution Flow:**
@@ -220,12 +221,20 @@ EventCore leverages Rust's type system for correctness:
 ```rust
 // Compile-time enforcement
 impl TransferMoney {
-    fn handle(&self, read_streams: ReadStreams<Self::StreamSet>) {
-        // ✅ Can only write to declared streams
-        StreamWrite::new(&read_streams, self.from_account, event)?;
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+        let declarations = self.stream_declarations();
 
-        // ❌ Compile error - stream not declared!
-        StreamWrite::new(&read_streams, other_stream, event)?;
+        // ✅ Can only emit events for declared streams
+        let events = vec![BankEvent::TransferInitiated {
+            from: self.from_account.clone(),
+            to: self.to_account.clone(),
+            amount: self.amount,
+        }];
+
+        // ❌ Infrastructure rejects events that target undeclared streams
+        // BankEvent::AuditOnly { stream: other_stream } -> would fail validation
+
+        Ok(NewEvents::from(events))
     }
 }
 ```
@@ -334,7 +343,7 @@ eventcore.retries{reason="concurrency_conflict"}
 
 // OpenTelemetry traces
 TransferMoney
-  ├─ read_streams (5ms)
+  ├─ stream_declarations (5ms)
   ├─ reconstruct_state (2ms)
   ├─ handle_command (3ms)
   └─ write_events (5ms)

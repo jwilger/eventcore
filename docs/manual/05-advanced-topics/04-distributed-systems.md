@@ -213,155 +213,73 @@ impl CommandLogic for DistributedOrderSaga {
     type State = DistributedSagaState;
     type Event = SagaEvent;
 
-    async fn handle(
-        &self,
-        read_streams: ReadStreams<Self::StreamSet>,
-        state: Self::State,
-        _stream_resolver: &mut StreamResolver,
-    ) -> CommandResult<Vec<StreamWrite<Self::StreamSet, Self::Event>>> {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         if state.compensation_needed {
-            self.handle_compensation(&read_streams, &state).await
+            self.handle_compensation(&state)
         } else {
-            self.handle_forward_flow(&read_streams, &state).await
+            self.handle_forward_flow(&state)
         }
     }
 }
 
 impl DistributedOrderSaga {
-    async fn handle_forward_flow(
-        &self,
-        read_streams: &ReadStreams<DistributedOrderSagaStreamSet>,
-        state: &DistributedSagaState,
-    ) -> CommandResult<Vec<StreamWrite<DistributedOrderSagaStreamSet, SagaEvent>>> {
+    fn handle_forward_flow(&self, state: &DistributedSagaState) -> Result<NewEvents<SagaEvent>, CommandError> {
         match (state.order_created, state.payment_reserved, state.inventory_reserved, state.shipping_scheduled) {
             (false, _, _, _) => {
                 // Step 1: Create order
-                Ok(vec![
-                    StreamWrite::new(
-                        read_streams,
-                        self.saga_id.clone(),
-                        SagaEvent::OrderCreationRequested {
-                            order_details: self.order_details.clone(),
-                        }
-                    )?
-                ])
+                Ok(NewEvents::from(vec![SagaEvent::OrderCreationRequested { order_details: self.order_details.clone() }]))
             }
             (true, false, _, _) => {
                 // Step 2: Reserve payment
-                Ok(vec![
-                    StreamWrite::new(
-                        read_streams,
-                        self.saga_id.clone(),
-                        SagaEvent::PaymentReservationRequested {
-                            customer_id: self.customer_id,
-                            amount: self.order_details.total_amount(),
-                        }
-                    )?
-                ])
+                Ok(NewEvents::from(vec![SagaEvent::PaymentReservationRequested { customer_id: self.customer_id, amount: self.order_details.total_amount() }]))
             }
             (true, true, false, _) => {
                 // Step 3: Reserve inventory
-                Ok(vec![
-                    StreamWrite::new(
-                        read_streams,
-                        self.saga_id.clone(),
-                        SagaEvent::InventoryReservationRequested {
-                            items: self.order_details.items.clone(),
-                        }
-                    )?
-                ])
+                Ok(NewEvents::from(vec![SagaEvent::InventoryReservationRequested { items: self.order_details.items.clone() }]))
             }
             (true, true, true, false) => {
                 // Step 4: Schedule shipping
-                Ok(vec![
-                    StreamWrite::new(
-                        read_streams,
-                        self.saga_id.clone(),
-                        SagaEvent::ShippingScheduleRequested {
-                            order_id: self.order_details.order_id,
-                            shipping_address: self.order_details.shipping_address.clone(),
-                        }
-                    )?
-                ])
+                Ok(NewEvents::from(vec![SagaEvent::ShippingScheduleRequested { order_id: self.order_details.order_id, shipping_address: self.order_details.shipping_address.clone() }]))
             }
             (true, true, true, true) => {
                 // All steps completed
-                Ok(vec![
-                    StreamWrite::new(
-                        read_streams,
-                        self.saga_id.clone(),
-                        SagaEvent::SagaCompleted,
-                    )?
-                ])
+                Ok(NewEvents::from(vec![SagaEvent::SagaCompleted]))
             }
         }
     }
 
-    async fn handle_compensation(
-        &self,
-        read_streams: &ReadStreams<DistributedOrderSagaStreamSet>,
-        state: &DistributedSagaState,
-    ) -> CommandResult<Vec<StreamWrite<DistributedOrderSagaStreamSet, SagaEvent>>> {
+    fn handle_compensation(&self, state: &DistributedSagaState) -> Result<NewEvents<SagaEvent>, CommandError> {
         // Compensate in reverse order
         if state.shipping_scheduled {
-            Ok(vec![
-                StreamWrite::new(
-                    read_streams,
-                    self.saga_id.clone(),
-                    SagaEvent::ShippingCancellationRequested,
-                )?
-            ])
+            Ok(NewEvents::from(vec![SagaEvent::ShippingCancellationRequested]))
         } else if state.inventory_reserved {
-            Ok(vec![
-                StreamWrite::new(
-                    read_streams,
-                    self.saga_id.clone(),
-                    SagaEvent::InventoryReleaseRequested,
-                )?
-            ])
+            Ok(NewEvents::from(vec![SagaEvent::InventoryReleaseRequested]))
         } else if state.payment_reserved {
-            Ok(vec![
-                StreamWrite::new(
-                    read_streams,
-                    self.saga_id.clone(),
-                    SagaEvent::PaymentReleaseRequested,
-                )?
-            ])
+            Ok(NewEvents::from(vec![SagaEvent::PaymentReleaseRequested]))
         } else if state.order_created {
-            Ok(vec![
-                StreamWrite::new(
-                    read_streams,
-                    self.saga_id.clone(),
-                    SagaEvent::OrderCancellationRequested,
-                )?
-            ])
+            Ok(NewEvents::from(vec![SagaEvent::OrderCancellationRequested]))
         } else {
-            Ok(vec![
-                StreamWrite::new(
-                    read_streams,
-                    self.saga_id.clone(),
-                    SagaEvent::CompensationCompleted,
-                )?
-            ])
+            Ok(NewEvents::from(vec![SagaEvent::CompensationCompleted]))
         }
     }
 }
+```
 
 // External service integration
 struct ExternalServiceClient {
-    http_client: reqwest::Client,
-    service_url: String,
-    timeout: Duration,
+http_client: reqwest::Client,
+service_url: String,
+timeout: Duration,
 }
 
 impl ExternalServiceClient {
-    async fn create_order(&self, order: &OrderDetails) -> Result<OrderId, ServiceError> {
-        let response = self.http_client
-            .post(&format!("{}/orders", self.service_url))
-            .json(order)
-            .timeout(self.timeout)
-            .send()
-            .await?;
+async fn create_order(&self, order: &OrderDetails) -> Result<OrderId, ServiceError> {
+let response = self.http_client
+.post(&format!("{}/orders", self.service_url))
+.json(order)
+.timeout(self.timeout)
+.send()
+.await?;
 
         if response.status().is_success() {
             let result: CreateOrderResponse = response.json().await?;
@@ -390,8 +308,8 @@ impl ExternalServiceClient {
 
         Ok(())
     }
+
 }
-```
 
 ## Event Sourcing Across Services
 

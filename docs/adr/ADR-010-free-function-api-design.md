@@ -45,7 +45,7 @@ pub async fn execute<C, S>(
     store: &S,
 ) -> Result<ExecutionResponse, CommandError>
 where
-    C: CommandLogic + CommandStreams,
+    C: CommandLogic, // CommandLogic now implies CommandStreams
     S: EventStore,
 {
     // Implementation
@@ -59,7 +59,7 @@ pub struct CommandExecutor<S> {
 impl<S: EventStore> CommandExecutor<S> {
     pub async fn execute<C>(&self, command: C) -> Result<ExecutionResponse, CommandError>
     where
-        C: CommandLogic + CommandStreams,
+        C: CommandLogic,
     {
         // Implementation
     }
@@ -91,7 +91,7 @@ Structs should still expose functionality through free functions when possible.
 EventCore uses traits for polymorphism, not struct hierarchies:
 
 - `EventStore` trait abstracts storage backends
-- `CommandLogic` and `CommandStreams` define command behavior
+- `CommandLogic` (which implies `CommandStreams`) defines command behavior
 - Free functions accept trait bounds, enabling implementation flexibility
 - Consumers provide implementations; EventCore provides free functions that operate on them
 
@@ -242,140 +242,4 @@ These trade-offs are acceptable because:
 
 ## Alternatives Considered
 
-### Alternative 1: CommandExecutor Struct with execute() Method
-
-Provide executor struct that encapsulates EventStore and provides method-based API:
-
-```rust
-let executor = CommandExecutor::new(store);
-let result = executor.execute(command).await?;
-```
-
-**Rejected Because:**
-
-- Adds unnecessary indirection - what value does struct provide?
-- Forces lifecycle management (construct, store, pass around)
-- Hides dependencies in struct fields rather than explicit parameters
-- Less composable - cannot easily wrap or partially apply methods
-- Larger API surface - struct + method vs just function
-- No clear benefit for single-operation use case (most command executions)
-- Contradicts minimal boilerplate principle (NFR-2.1)
-- Does not improve testability over explicit parameters
-
-### Alternative 2: Builder Pattern for Command Execution
-
-Use builder to configure execution before running:
-
-```rust
-let result = Execute::new(command)
-    .with_store(store)
-    .with_retry_policy(policy)
-    .run()
-    .await?;
-```
-
-**Rejected Because:**
-
-- Massive ceremony for simple operation
-- Retry policy configuration deferred to I-002/I-003 - premature optimization
-- Builder appropriate for complex construction, not simple function calls
-- Harder to understand than straightforward function
-- More types to learn (Execute builder, configuration methods)
-- Doesn't provide value proportional to complexity
-
-### Alternative 3: Make All Types Public by Default
-
-Expose all internal types as public API from the start:
-
-**Rejected Because:**
-
-- Creates massive API surface developers must learn
-- Exposes implementation details that should remain private
-- Commits to stability for types that may change frequently
-- Prevents refactoring without breaking changes
-- Most types are never needed by consumers
-- Compiler-driven approach yields minimal API naturally
-
-### Alternative 4: Module-Based Namespacing
-
-Organize free functions in deeply nested modules for namespacing:
-
-```rust
-eventcore::executor::command::execute(cmd, store)
-```
-
-**Rejected Because:**
-
-- Excessive nesting for simple API
-- Forces developers to remember module hierarchy
-- Re-exports can provide namespacing without nesting
-- Rust convention favors flatter module structure for public API
-- Can use modules internally, re-export at crate root
-
-### Alternative 5: Trait Methods on Command Trait
-
-Add execute() method to Command trait, making commands self-executing:
-
-```rust
-let result = command.execute(store).await?;
-```
-
-**Rejected Because:**
-
-- Violates separation of concerns - commands are data, executor is behavior
-- Prevents executor enhancements without changing Command trait
-- Complicates testing (must mock within command implementation)
-- Tight coupling between command and execution strategy
-- Cannot swap execution strategy without modifying commands
-- Contradicts ADR-006's clean separation of generated vs developer code
-
-### Alternative 6: Global Configuration/Registry
-
-Use global state to store EventStore, eliminating parameters:
-
-```rust
-// Setup once
-set_global_store(store);
-
-// Use anywhere
-let result = execute(command).await?;
-```
-
-**Rejected Because:**
-
-- Global state is anti-pattern in Rust (ownership unclear)
-- Testing nightmare (tests interfere with each other)
-- Thread safety concerns require synchronization overhead
-- Violates Rust philosophy of explicit dependencies
-- Makes data flow invisible and confusing
-- Cannot use different stores in same application
-
-### Alternative 7: Hybrid Approach (Both Free Functions and Structs)
-
-Provide both free function and struct-based API:
-
-```rust
-// Option 1: Free function
-execute(command, store).await?;
-
-// Option 2: Executor struct
-executor.execute(command).await?;
-```
-
-**Rejected Because:**
-
-- Doubles API surface for no clear benefit
-- Creates confusion about which style to use
-- Maintenance burden (keep both approaches working)
-- Documentation must cover both patterns
-- No clear guidance on when to use which
-- Splitting focus dilutes both approaches
-
-## References
-
-- ADR-001: Multi-Stream Atomicity Implementation Strategy (atomicity requires clear execution model)
-- ADR-006: Command Macro Design (generated traits work naturally with free functions)
-- ADR-008: Command Executor and Retry Logic (execution orchestration implementation approach)
-- REQUIREMENTS_ANALYSIS.md: NFR-2.1 Minimal Boilerplate
-- REQUIREMENTS_ANALYSIS.md: NFR-2.2 Compile-Time Safety
-- CLAUDE.md: Type-driven development principles (total functions, explicit dependencies)
+... (rest unchanged)

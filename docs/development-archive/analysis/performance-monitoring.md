@@ -331,22 +331,22 @@ command_tracer.record_completion(true, 1);
 
 ### Command Optimization
 
-1. **Reduce Stream Access**: Minimize streams read per command
+1. **Reduce Stream Access**: Minimize streams declared per command
 
    ```rust
-   // Good: Read only required streams
-   fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-       vec![input.account_stream_id().clone()]
-   }
+   // Good: Helper that builds the declarations used by CommandStreams
+   fn declared_streams(&self, input: &Self::Input) -> StreamDeclarations {
+        StreamDeclarations::single(input.account_stream_id().clone())
+    }
 
-   // Bad: Read unnecessary streams
-   fn read_streams(&self, input: &Self::Input) -> Vec<StreamId> {
-       vec![
-           input.account_stream_id().clone(),
-           input.audit_stream_id().clone(), // Only needed for audit commands
-           input.notification_stream_id().clone(), // Only needed for notifications
-       ]
-   }
+   // Bad: Helper declares unnecessary streams
+   fn declared_streams(&self, input: &Self::Input) -> StreamDeclarations {
+        StreamDeclarations::try_from_streams(vec![
+            input.account_stream_id().clone(),
+            input.audit_stream_id().clone(), // Only needed for audit commands
+            input.notification_stream_id().clone(), // Only needed for notifications
+        ]).expect("valid stream declarations")
+    }
    ```
 
 2. **Optimize Event Size**: Keep events focused and minimal
