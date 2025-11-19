@@ -68,7 +68,8 @@ struct Deposit {
 
 impl CommandStreams for Deposit {
     fn stream_declarations(&self) -> StreamDeclarations {
-        StreamDeclarations::single(self.account_id.clone())
+        StreamDeclarations::try_from_streams(vec![self.account_id.clone()])
+            .expect("deposit declares a single stream")
     }
 }
 
@@ -100,7 +101,8 @@ struct Withdraw {
 
 impl CommandStreams for Withdraw {
     fn stream_declarations(&self) -> StreamDeclarations {
-        StreamDeclarations::single(self.account_id.clone())
+        StreamDeclarations::try_from_streams(vec![self.account_id.clone()])
+            .expect("withdraw references a single stream")
     }
 }
 

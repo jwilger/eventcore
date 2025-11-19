@@ -3,6 +3,11 @@ name = "eventcore"
 version = "0.1.8"
 edition = "2024"
 
+[workspace]
+members = [
+    "eventcore-macros",
+]
+
 [lints.rust]
 warnings = "deny"
 
@@ -17,6 +22,7 @@ tracing = "0.1.41"
 uuid = { version = "1.18.1", features = ["serde", "v1", "v7"] }
 
 [dev-dependencies]
+eventcore-macros = { path = "eventcore-macros" }
 # tracing-mock is only available as beta (official tokio-rs crate); used for testing structured tracing output
 tracing-mock = "0.1.0-beta.1"
 tracing-test = "0.2.5"

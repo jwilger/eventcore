@@ -1,0 +1,6 @@
+error: EventCore: #[stream] fields must have type eventcore::StreamId
+  --> tests/ui/wrong_stream_type.rs:9:5
+   |
+ 9 | /     #[stream]
+10 | |     amount: MoneyAmount,
+   | |_______________________^

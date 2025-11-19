@@ -168,6 +168,13 @@ struct SeedDeposit {
     amount: MoneyAmount,
 }
 
+impl CommandStreams for SeedDeposit {
+    fn stream_declarations(&self) -> StreamDeclarations {
+        StreamDeclarations::try_from_streams(vec![self.account_id.clone()])
+            .expect("seed deposit targets a single stream")
+    }
+}
+
 struct ConflictInjectingStore {
     inner: InMemoryEventStore,
     conflict_stream: StreamId,
@@ -190,9 +197,10 @@ struct TransferMoney {
     amount: MoneyAmount,
 }
 
-impl CommandStreams for SeedDeposit {
+impl CommandStreams for TransferMoney {
     fn stream_declarations(&self) -> StreamDeclarations {
-        StreamDeclarations::single(self.account_id.clone())
+        StreamDeclarations::try_from_streams(vec![self.from.clone(), self.to.clone()])
+            .expect("transfer money touches both source and destination streams")
     }
 }
 
@@ -267,13 +275,6 @@ impl EventStore for ConflictInjectingStore {
         }
 
         self.inner.append_events(writes).await
-    }
-}
-
-impl CommandStreams for TransferMoney {
-    fn stream_declarations(&self) -> StreamDeclarations {
-        StreamDeclarations::try_from_streams(vec![self.from.clone(), self.to.clone()])
-            .expect("transfer command must declare unique streams")
     }
 }
 
