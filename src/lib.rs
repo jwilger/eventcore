@@ -55,6 +55,57 @@ pub use store::{
     StreamVersion, StreamWrites,
 };
 
+/// Validates a business rule condition and returns early with
+/// `CommandError::BusinessRuleViolation` when the condition is false.
+///
+/// Designed for command handlers (or any function returning
+/// `Result<_, CommandError>`) so domain invariants stay close to the logic
+/// without verbose boilerplate.
+///
+/// # Examples
+///
+/// With a literal message:
+/// ```
+/// # use eventcore::{require, CommandError};
+/// # fn check(balance: u64, amount: u64) -> Result<(), CommandError> {
+/// require!(balance >= amount, "Insufficient funds");
+/// # Ok(())
+/// # }
+/// ```
+///
+/// With a formatted message:
+/// ```
+/// # use eventcore::{require, CommandError};
+/// # fn check(balance: u64, amount: u64) -> Result<(), CommandError> {
+/// require!(
+///     balance >= amount,
+///     "Insufficient: have {}, need {}",
+///     balance,
+///     amount,
+/// );
+/// # Ok(())
+/// # }
+/// ```
+#[macro_export]
+macro_rules! require {
+    ($condition:expr, $message:expr $(,)?) => {
+        if !$condition {
+            let message = ::std::string::ToString::to_string(&$message);
+            return ::core::result::Result::Err(
+                $crate::CommandError::BusinessRuleViolation(message),
+            );
+        }
+    };
+    ($condition:expr, $format:expr, $($arg:expr),+ $(,)?) => {
+        if !$condition {
+            let message = ::std::format!($format, $($arg),+);
+            return ::core::result::Result::Err(
+                $crate::CommandError::BusinessRuleViolation(message),
+            );
+        }
+    };
+}
+
 /// Represents the successful outcome of command execution.
 ///
 /// This type is returned when a command completes successfully, including
