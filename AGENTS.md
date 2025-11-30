@@ -2,10 +2,10 @@
 
 1. Enter `nix develop` for pinned toolchains; start Postgres via `docker-compose up -d` only when persistence is required.
 2. Format every change with `cargo fmt --all` before attempting a commit or PR.
-3. Run `cargo clippy --all-targets --all-features -D warnings` to satisfy the lint gate.
+3. Run `cargo clippy --all-targets --all-features -- -D warnings` to satisfy the lint gate.
 4. Execute the full test suite with `cargo nextest run --workspace` (fallback: `cargo test --workspace`).
-5. Target a single unit test via `cargo nextest run --workspace --test <binary> --filter <module::case>` or `cargo test module::case`.
-6. Target a single integration spec with `cargo nextest run --test I-0NN-*` or `cargo test --test I-0NN-feature_test.rs`.
+5. Target a single unit test via `cargo nextest run --workspace --test <binary> '<module::case>'` or `cargo nextest run --workspace --test <binary> -E 'test(<module::case>)'` (or `cargo test module::case`).
+6. Target a single integration spec with `cargo nextest run --test I-NNN-*` or `cargo test --test I-NNN-feature_test.rs`.
 7. Use Rust 2024 edition conventions: 4-space indent, trailing commas, and prefer early returns over nested branching.
 8. Naming: snake_case modules/functions, PascalCase types/traits/enums, SCREAMING_SNAKE_CASE for consts/macros, descriptive async test names.
 9. Import order: std → external crates → internal (prefixed with `crate::`); consolidate re-exports through `lib.rs`.
