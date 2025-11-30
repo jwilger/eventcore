@@ -258,9 +258,9 @@ Event metadata (timestamps, correlation IDs, etc.) remains an infrastructure con
 
 **StreamResolver Trait (Optional, ADR-009):**
 
-- `resolve_additional_streams(state)`: Discover streams at runtime based on state
-- Enables state-dependent stream requirements (payment processing, order fulfillment)
-- Integrates with static declarations for hybrid static/dynamic stream sets
+- `discover_related_streams(state)`: Discover streams at runtime based on reconstructed state
+- Executor queues newly discovered streams, deduplicates IDs, and reads each stream exactly once per execution attempt
+- Integrates with static declarations for hybrid static/dynamic stream sets so all participating streams share the same optimistic concurrency guarantees
 
 **Why This Design:** Clear separation between infrastructure (generated) and business logic (hand-written) minimizes boilerplate while maintaining compile-time safety. Optional dynamic discovery provides flexibility without compromising common-case simplicity.
 
@@ -305,9 +305,9 @@ sequenceDiagram
     Note over ExecFn: Phase 1: Stream Resolution
     ExecFn->>Cmd: call command.stream_declarations() -> StreamDeclarations
     opt Dynamic Discovery
-        ExecFn->>Store: read static streams
+        ExecFn->>Store: read static streams (queue front only once)
         ExecFn->>Cmd: apply(events) → state
-        ExecFn->>Cmd: resolve_additional_streams(state)
+        ExecFn->>Cmd: discover_related_streams(state)
     end
 
     Note over ExecFn: Phase 2: Read & Capture Versions
@@ -337,6 +337,8 @@ sequenceDiagram
         ExecFn-->>App: Fail immediately (no retry)
     end
 ```
+
+**Dynamic Discovery Workflow:** The executor maintains a FIFO queue of stream IDs. Static declarations seed the queue and every stream is read exactly once per attempt. After each read the executor folds events into the command state and, if `stream_resolver()` returns `Some(_)`, invokes `discover_related_streams(state)` to enqueue additional streams. A `HashSet` prevents duplicates so redundant IDs from the resolver are ignored. Every visited stream contributes an expected version entry, meaning both static and resolver-discovered streams participate in a single optimistic-concurrency check at write time.
 
 **Retry Logic:**
 

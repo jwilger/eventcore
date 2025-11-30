@@ -117,21 +117,28 @@ struct TransferMoney {
 
 ### Dynamic Stream Discovery
 
-Discover additional streams during execution:
+Some commands only learn about additional streams after inspecting state (e.g., an order references a payment-method stream). Implement `StreamResolver<State>` and return `Some(self)` from `CommandLogic::stream_resolver()` to opt in:
 
 ```rust
-async fn handle(...) -> CommandResult<Vec<StreamWrite<...>>> {
-    require!(state.is_valid(), "Invalid state");
+impl CommandLogic for ProcessPayment {
+    type State = CheckoutState;
+    type Event = CheckoutEvent;
 
-    if state.requires_approval() {
-        stream_resolver.add_streams(vec![approval_stream()]);
+    fn stream_resolver(&self) -> Option<&dyn StreamResolver<Self::State>> {
+        Some(self)
     }
 
-    let mut events = vec![];
-    emit!(events, &read_streams, input.account, AccountEvent::Updated { ... });
-    Ok(events)
+    // apply + handle omitted
+}
+
+impl StreamResolver<CheckoutState> for ProcessPayment {
+    fn discover_related_streams(&self, state: &CheckoutState) -> Vec<StreamId> {
+        state.payment_method_stream.clone().into_iter().collect()
+    }
 }
 ```
+
+The executor deduplicates IDs returned by `discover_related_streams`, reads each stream exactly once, and includes every visited stream in the same optimistic concurrency check as the statically declared streams.
 
 ### Built-in Concurrency Control
 

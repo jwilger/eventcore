@@ -34,21 +34,18 @@ Commands that need dynamic discovery implement the optional StreamResolver trait
 
 ```rust
 // Trait definition (conceptual - shows WHAT, not HOW)
-trait StreamResolver {
-    fn resolve_additional_streams(
-        &self,
-        static_state: &State
-    ) -> Result<Vec<StreamId>, DiscoveryError>;
+trait StreamResolver<State> {
+    fn discover_related_streams(&self, state: &State) -> Vec<StreamId>;
 }
 ```
 
 **Characteristics:**
 
 - **Optional**: Commands without dynamic needs don't implement it
-- **State-Based**: Receives reconstructed state from static streams to inform discovery
-- **Fallible**: Returns Result allowing discovery logic to fail with descriptive errors
-- **Pure Function**: Same state produces same discovered streams (deterministic)
+- **State-Based**: Receives reconstructed state from established streams to inform discovery
+- **Deterministic**: Same state produces the same discovered streams (pure function)
 - **Type-Safe IDs**: Returns validated StreamId types, not raw strings (ADR-003)
+- **Duplicate Tolerant**: Executor deduplicates IDs but resolvers should avoid redundant entries for efficiency
 
 **2. Integration with Static Streams**
 
@@ -60,39 +57,19 @@ Dynamic discovery complements, never replaces, static declarations:
 - Discovered streams added to working set
 - Complete stream set (static + dynamic) used for remainder of execution
 
-**3. Executor Re-Execution Protocol**
+**3. Executor Queue Protocol**
 
-When streams are discovered, executor restarts from read phase (ADR-008) with incremental reading optimization:
+Dynamic discovery is handled within a single execution attempt using a FIFO queue:
 
-**Initial Execution Phase:**
+- Phase 1: Extract static stream IDs from command and seed the queue/dedup set
+- Phase 2: While the queue has streams, pop one ID, read it exactly once from version 0, and capture its current version
+- Phase 3: Fold the stream's events into the reconstructed state
+- **Discovery Check**: If `stream_resolver()` returns `Some(resolver)`, call `discover_related_streams(&state)` and enqueue any new IDs not already in the dedup set
+- Repeat Phases 2–3 until the queue is empty; every visited stream now contributes an expected version entry
+- Phase 4: Execute business logic with the fully reconstructed state
+- Phase 5: Atomically write events with version checking for ALL streams (static + discovered)
 
-- Phase 1: Extract static stream IDs from command
-- Phase 2: Read static streams from version 0, capture versions
-- Phase 3: Reconstruct state from static streams only
-- **Discovery Check**: If StreamResolver implemented, invoke with static state
-- **If streams discovered**: Record discovered stream IDs, proceed to re-execution
-- **If no streams discovered**: Continue to Phase 4 (business logic)
-
-**Re-Execution Phase (after discovery):**
-
-- Phase 2 (repeated with incremental reading):
-  - **Already-read streams**: Read from (last captured version + 1) onward, append to state
-  - **Newly-discovered streams**: Read from version 0, capture versions
-  - All reads capture current stream versions for optimistic concurrency
-- Phase 3 (repeated): Reconstruct state from ALL events (cumulative from all reads)
-- **Discovery Check**: Invoke StreamResolver again with full state
-- **If NEW streams discovered**: Record new stream IDs, return to Phase 2 again
-- **If no NEW streams** (Set deduplication prevents duplicates): Continue to Phase 4 (business logic)
-- Phase 4: Execute business logic with complete state
-- Phase 5: Atomically write events with version checking for ALL streams (static + all discovered)
-
-**Incremental Reading Rationale:**
-
-- Events are immutable - already-read events remain valid and unchanged
-- Reading from last position avoids re-reading large event histories
-- Newly-discovered streams start from beginning (no prior context)
-- Significant performance optimization for multi-pass discovery scenarios
-- Maintains correctness while dramatically reducing I/O
+This queue-based approach avoids re-reading static streams entirely—each stream is read once per attempt. Newly discovered streams naturally enter the same queue, so multi-pass discovery emerges organically as additional IDs are enqueued when the resolver inspects progressively richer state.
 
 **4. Atomicity Guarantee Extension**
 
@@ -170,19 +147,19 @@ Discovery must determine which additional streams to read before full state avai
 - Full state requires reading all streams (chicken-and-egg without initial discovery)
 - Static state typically contains identifiers or references needed for discovery
 - Pattern: static streams identify entities, discovered streams provide related context
-- Re-execution with full state allows multi-pass discovery if needed
+- Queue iterations with progressively richer state allow multi-pass discovery if needed
 
 Alternative (discover from empty state) provides no context for discovery logic.
 
-**Why Re-Execute from Read Phase:**
+**Why Interleave Discovery with Reads:**
 
 Discovered streams contain events that affect state reconstruction:
 
 - Business logic must see complete state including events from discovered streams
 - Partial state reconstruction would produce incorrect decisions
-- Clean execution model: discovery happens during state loading, not after
-- Aligns with ADR-008's phase structure: read → apply → discover → read more → apply more
-- State determinism maintained: same streams, same events, same state
+- Clean execution model: discovery happens during state loading, while the queue still has work
+- Aligns with ADR-008's phase structure: read → apply → discover → enqueue → read next stream
+- State determinism maintained: same queue order, same events, same state
 
 Alternative (continue with partial state) produces incorrect business logic behavior.
 
@@ -265,7 +242,7 @@ Alternative (dynamic-only with empty static set) loses compile-time safety benef
 
 **Trade-offs Accepted:**
 
-- **Runtime Overhead**: Discovery adds latency via re-execution (acceptable for flexibility, mitigated by incremental reading)
+- **Runtime Overhead**: Discovery adds latency because additional streams extend the read phase (acceptable for flexibility, mitigated by incremental reading)
 - **Lost Compile-Time Safety**: Discovered streams not validated until runtime (necessary trade-off)
 - **Complexity Increase**: Re-execution protocol more complex than static-only (simplified by Set-based deduplication)
 - **Debugging Challenge**: Multi-pass discovery harder to trace than single pass (mitigated by logging)
@@ -289,7 +266,7 @@ These trade-offs are acceptable because:
 - **Flexible Stream Boundaries**: Consistency boundaries adapt to runtime state, not just compile-time declarations
 - **Real-World Patterns Supported**: Payment processing, order fulfillment, multi-tenant scenarios handled naturally
 - **Atomicity Preserved**: ADR-001 guarantees extend to dynamically discovered streams
-- **Incremental Reading Optimization**: Re-execution reads only new events from already-read streams, dramatically reducing I/O
+- **Incremental Reading Optimization**: The queue/dedup approach reads each stream at most once per attempt, dramatically reducing I/O
 - **Natural Deduplication**: Set-based approach prevents duplicate stream reads without artificial limits
 - **Fail-Fast Discovery**: Invalid discovery logic detected before business logic executes
 - **Retry Consistency**: Retries rediscover with fresh state, maintaining correctness
@@ -300,9 +277,9 @@ These trade-offs are acceptable because:
 
 **Negative:**
 
-- **Latency Increase**: Re-execution adds overhead for commands using discovery (mitigated by incremental reading)
+- **Latency Increase**: Discovery adds overhead for commands that enqueue additional streams (mitigated by the single-pass incremental reading)
 - **Runtime-Only Validation**: Discovered streams not checked until execution (no compile-time safety)
-- **Implementation Complexity**: Executor must coordinate re-execution protocol with incremental reading
+- **Implementation Complexity**: Executor must coordinate the queue/dedup protocol with incremental reading
 - **Debugging Difficulty**: Multi-pass discovery creates non-linear execution flow
 - **Potential for Misuse**: Developers might over-use dynamic discovery instead of static declarations
 - **Learning Curve**: Dynamic discovery concept adds to EventCore learning requirements

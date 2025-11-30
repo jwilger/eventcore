@@ -37,13 +37,14 @@ mod command;
 mod errors;
 mod store;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
 // Re-export only the minimal public API needed for execute() signature
 pub use command::{
     CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamDeclarationsError,
+    StreamResolver,
 };
 pub use errors::CommandError;
 pub use store::EventStore;
@@ -368,15 +369,29 @@ where
     S: EventStore,
 {
     for attempt in 0..=policy.max_retries {
-        let stream_ids: Vec<StreamId> = {
-            let declared_streams = command.stream_declarations();
-            declared_streams.iter().cloned().collect()
-        };
+        let declared_streams = command.stream_declarations();
+        let resolver = command.stream_resolver();
+        let mut scheduled: HashSet<StreamId> = HashSet::with_capacity(declared_streams.len());
+        let mut queue: VecDeque<StreamId> = VecDeque::with_capacity(declared_streams.len());
+
+        for stream_id in declared_streams.iter() {
+            let stream_id = stream_id.clone();
+            if scheduled.insert(stream_id.clone()) {
+                queue.push_back(stream_id);
+            }
+        }
+
+        let mut visited: HashSet<StreamId> = HashSet::with_capacity(scheduled.len());
+        let mut stream_ids: Vec<StreamId> = Vec::with_capacity(scheduled.len());
         let mut expected_versions: HashMap<StreamId, StreamVersion> =
-            HashMap::with_capacity(stream_ids.len());
+            HashMap::with_capacity(scheduled.len());
         let mut state = C::State::default();
 
-        for stream_id in stream_ids.iter() {
+        while let Some(stream_id) = queue.pop_front() {
+            if !visited.insert(stream_id.clone()) {
+                continue;
+            }
+
             let reader = store
                 .read_stream::<C::Event>(stream_id.clone())
                 .await
@@ -386,6 +401,15 @@ where
             state = reader
                 .into_iter()
                 .fold(state, |acc, event| command.apply(acc, &event));
+            stream_ids.push(stream_id.clone());
+
+            if let Some(resolver) = resolver {
+                for related_stream in resolver.discover_related_streams(&state) {
+                    if scheduled.insert(related_stream.clone()) {
+                        queue.push_back(related_stream);
+                    }
+                }
+            }
         }
 
         let new_events = command.handle(state)?;

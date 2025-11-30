@@ -78,6 +78,22 @@ pub trait CommandStreams {
     fn stream_declarations(&self) -> StreamDeclarations;
 }
 
+/// Trait for runtime stream discovery when static declarations are insufficient.
+///
+/// Commands implement this trait when related streams cannot be known at compile
+/// time (for example, when a customer ID needs to be resolved from reconstructed
+/// state). Executors call this hook after reading declared streams so commands
+/// can request additional stream IDs to load before running business logic.
+///
+/// Implementations should return unique stream IDs; the executor deduplicates
+/// defensively but redundant IDs still waste I/O. Streams listed here are folded
+/// into the state reconstruction pass and participate in optimistic concurrency
+/// along with the statically declared streams.
+pub trait StreamResolver<State> {
+    /// Discovers additional stream IDs to load based on reconstructed state.
+    fn discover_related_streams(&self, state: &State) -> Vec<StreamId>;
+}
+
 /// Event trait for domain-first event sourcing.
 ///
 /// Per ADR-012, domain types implement this trait to become events. The trait provides
@@ -158,6 +174,16 @@ pub trait CommandLogic: CommandStreams {
     /// * `Ok(NewEvents<Self::Event>)` if business rules pass and events produced
     /// * `Err(CommandError)` if business rules violated
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError>;
+
+    /// Returns a runtime stream resolver when the command needs dynamic discovery.
+    ///
+    /// Commands that implement [`StreamResolver`] can return `Some(self)` or a
+    /// dedicated resolver type so the executor loads additional streams after
+    /// reconstructing state. The default implementation returns `None`, meaning
+    /// the command relies solely on static [`CommandStreams`] declarations.
+    fn stream_resolver(&self) -> Option<&dyn StreamResolver<Self::State>> {
+        None
+    }
 }
 
 /// Collection of new events produced by a command.

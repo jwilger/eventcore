@@ -146,6 +146,16 @@ fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandEr
 }
 ```
 
+## Choosing Static, Dynamic, or Hybrid Strategies
+
+| Scenario                                                                        | Recommendation                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Streams are known at design time and every command instance needs the same set  | Declare them statically with `#[stream]` – simplest and fastest.                                                                                                                                                                                                                                       |
+| Streams depend on runtime data (e.g., order references a payment method stream) | Implement `StreamResolver<State>` and override `CommandLogic::stream_resolver()` to return `Some(self)`. Return additional `StreamId` values from `discover_related_streams(&state)`; the executor queues each new ID exactly once and folds its events into the same state before calling `handle()`. |
+| Some streams are always required but others are state-dependent                 | Use a hybrid: keep the guaranteed streams in `#[stream]` fields and return optional ones from the resolver. All streams (static + discovered) participate in the same optimistic concurrency check, so emitting events to a discovered stream is as safe as writing to a declared one.                 |
+
+**Guidance:** Prefer static declarations when possible. Reach for StreamResolver when state truly dictates stream boundaries (payment methods, per-item inventory, tenant shards, etc.). Combining both keeps compile-time guarantees for the known streams without sacrificing flexibility for state-dependent relationships.
+
 ## Type-Safe Stream Access
 
 Command authors produce domain events; the executor maps those events to their streams using each event's `stream_id()` implementation and ensures writes only target declared streams. Example `handle` returning a domain event:
