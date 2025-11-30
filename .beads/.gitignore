@@ -14,7 +14,12 @@ bd.sock
 db.sqlite
 bd.db
 
-# Keep JSONL exports and config (source of truth for git)
-!*.jsonl
+# Merge/conflict artifacts generated during issue sync
+beads.*.jsonl
+beads.*.meta.json
+
+# Canonical exports and configuration tracked in git
+!issues.jsonl
 !metadata.json
-!config.json
+!config.yaml
+!.gitignore
