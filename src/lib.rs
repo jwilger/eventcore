@@ -55,6 +55,26 @@ pub use store::{
     StreamVersion, StreamWrites,
 };
 
+#[macro_export]
+macro_rules! require {
+    ($condition:expr, $message:expr $(,)?) => {
+        if !$condition {
+            let message = ::std::string::ToString::to_string(&$message);
+            return ::core::result::Result::Err(
+                $crate::CommandError::BusinessRuleViolation(message),
+            );
+        }
+    };
+    ($condition:expr, $format:expr, $($arg:expr),+ $(,)?) => {
+        if !$condition {
+            let message = ::std::format!($format, $($arg),+);
+            return ::core::result::Result::Err(
+                $crate::CommandError::BusinessRuleViolation(message),
+            );
+        }
+    };
+}
+
 /// Represents the successful outcome of command execution.
 ///
 /// This type is returned when a command completes successfully, including
