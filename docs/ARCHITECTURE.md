@@ -106,9 +106,7 @@ A reusable contract test suite (`eventcore_testing::event_store_contract_tests`)
 
 Every backend (first-party or third-party) integrates these tests into its CI pipeline to guarantee semantic compliance.
 
-All of these helpers live in the dedicated `eventcore-testing` crate, which depends on the main `eventcore` library but stays out of release builds unless consumers add it as a dev-dependency. This keeps the production crate lean while still providing rich testing utilities.
-
-> **Status:** As of this PR the crate only ships chaos utilities; the contract suite is on the roadmap and will arrive in a future release.
+These helpers are provided by the dedicated `eventcore-testing` crate. Consumers should add `eventcore-testing` under the `[dev-dependencies]` section in their Cargo.toml so the testing utilities do not inflate production release binaries. The crate will only be included in downstream release artifacts if a project explicitly elects to list it under `[dependencies]`; keeping it as a dev-dependency preserves lean release builds while still enabling rich testing and contract verification during development and CI.
 
 ## Event System & Metadata
 
