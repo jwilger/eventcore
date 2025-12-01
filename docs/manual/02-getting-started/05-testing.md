@@ -321,12 +321,11 @@ EventCore provides testing utilities:
 
 Infrastructure authors can validate their `EventStore` implementations without
 rewriting the same scenario tests. Add the `eventcore-testing` crate to your
-`[dev-dependencies]` (path dependency inside this repository, crates.io release
-once published):
+`[dev-dependencies]` from crates.io:
 
 ```toml
 [dev-dependencies]
-eventcore-testing = { path = "eventcore-testing" }
+eventcore-testing = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
