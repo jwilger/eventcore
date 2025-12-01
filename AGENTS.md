@@ -19,7 +19,8 @@
 17. Follow ADR guidance (esp. ADR-012 on domain-first event traits) before adding new abstractions or APIs.
 18. All work items flow through Beads (`bd ... --json`); commit `.beads/issues.jsonl` with code changes, never edit it manually.
 19. Keep pre-commit hooks green: rerun fmt/clippy/nextest locally until clean before invoking `/commit`.
-20. No repository-specific Cursor or Copilot rules exist—treat this file as the authoritative agent contract.
+20. Use Conventional Commits for all git commit messages and PR titles (type/scope: summary) so history stays machine-readable.
+21. No repository-specific Cursor or Copilot rules exist—treat this file as the authoritative agent contract.
 
 ## Issue Tracking with bd (beads)
 

@@ -92,7 +92,7 @@ A validated identifier for event streams. Must be non-empty and under 255 charac
 
 ### StreamResolver
 
-A component that allows commands to dynamically request additional streams during execution.
+A command-implemented trait that inspects reconstructed state and returns additional `StreamId` values to enqueue for reading. The executor deduplicates IDs, reads each discovered stream exactly once per attempt, and includes every visited stream in optimistic concurrency checks so static and dynamic streams share the same atomicity guarantees.
 
 ### StreamWrite
 
