@@ -1,7 +1,7 @@
-use eventcore::testing::chaos::{ChaosConfig, ChaosEventStoreExt, ChaosOperation};
 use eventcore::{
     Event, EventStore, EventStoreError, InMemoryEventStore, StreamId, StreamVersion, StreamWrites,
 };
+use eventcore_testing::chaos::{ChaosConfig, ChaosEventStoreExt};
 
 #[derive(Debug, Clone)]
 struct TestEvent {
@@ -29,11 +29,11 @@ async fn chaos_mode_can_force_read_failure() {
         Err(err) => err,
     };
 
-    // Then: the failure reason is surfaced as a chaos injection error
+    // Then: the failure reason surfaces as a generic store failure
     assert_eq!(
         error,
-        EventStoreError::ChaosInjection {
-            operation: ChaosOperation::Read,
+        EventStoreError::StoreFailure {
+            operation: "read_stream",
         }
     );
 }

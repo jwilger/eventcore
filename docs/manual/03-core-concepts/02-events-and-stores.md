@@ -546,7 +546,7 @@ impl<ES: EventStore> CachedEventStore<ES> {
 Create test events easily:
 
 ```rust
-use eventcore::testing::builders::*;
+use eventcore_testing::builders::*;
 
 fn create_account_opened_event() -> StoredEvent<BankEvent> {
     StoredEventBuilder::new()
@@ -570,7 +570,7 @@ fn create_account_opened_event() -> StoredEvent<BankEvent> {
 Test event properties:
 
 ```rust
-use eventcore::testing::assertions::*;
+use eventcore_testing::assertions::*;
 
 #[test]
 fn test_events_are_ordered() {

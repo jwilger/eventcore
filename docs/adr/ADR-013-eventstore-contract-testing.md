@@ -71,7 +71,7 @@ EventCore will provide a **reusable contract test suite** for EventStore impleme
 
 **Contract Test Module:**
 
-Create a public `eventcore::testing::event_store_contract_tests` module that exports:
+Create a public `eventcore_testing::event_store_contract_tests` module that exports:
 
 1. **Contract Test Functions**: Reusable test functions that verify EventStore contract compliance
 2. **Version Conflict Scenarios**: Tests specifically for version checking behavior under concurrent writes

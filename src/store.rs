@@ -216,13 +216,6 @@ impl StreamVersion {
     }
 }
 
-/// Operation categories that chaos injection can target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChaosOperation {
-    Read,
-    Write,
-}
-
 /// Error type returned by event store operations.
 ///
 /// EventStoreError represents failures during read or append operations.
@@ -245,9 +238,9 @@ pub enum EventStoreError {
     #[error("stream {stream_id} must be registered before appending events")]
     UndeclaredStream { stream_id: StreamId },
 
-    /// Indicates an operation failed due to chaos injection hooks.
-    #[error("chaos injection triggered during {operation:?} operation")]
-    ChaosInjection { operation: ChaosOperation },
+    /// Represents infrastructure failures surfaced by the backing store (e.g., connection drops).
+    #[error("{operation} operation failed")]
+    StoreFailure { operation: &'static str },
 
     /// Version conflict during optimistic concurrency control.
     ///

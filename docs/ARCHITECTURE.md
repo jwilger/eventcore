@@ -98,13 +98,15 @@ Metadata is validated at construction time, persisted verbatim by every backend,
 
 ### Contract Testing
 
-A reusable contract test suite (`eventcore::testing::event_store_contract_tests`) verifies that implementations:
+A reusable contract test suite (`eventcore_testing::event_store_contract_tests`) verifies that implementations:
 
 - Detect version conflicts under concurrent writes (single and multi-stream scenarios).
 - Enforce atomicity—either all streams are updated or none are.
 - Preserve metadata and ordering guarantees.
 
 Every backend (first-party or third-party) integrates these tests into its CI pipeline to guarantee semantic compliance.
+
+All of these helpers live in the dedicated `eventcore-testing` crate, which depends on the main `eventcore` library but stays out of release builds unless consumers add it as a dev-dependency. This keeps the production crate lean while still providing rich testing utilities.
 
 ## Event System & Metadata
 

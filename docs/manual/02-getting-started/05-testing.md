@@ -20,7 +20,7 @@ EventCore testing follows these principles:
 mod tests {
     use super::*;
     use eventcore::prelude::*;
-    use eventcore::testing::prelude::*;
+    use eventcore_testing::prelude::*;
     use eventcore_memory::InMemoryEventStore;
 
     #[tokio::test]
@@ -145,7 +145,7 @@ async fn test_assign_task_multi_stream() {
 ```rust
 #[tokio::test]
 async fn test_user_task_list_projection() {
-    use eventcore::testing::builders::*;
+    use eventcore_testing::builders::*;
 
     // Arrange
     let mut projection = UserTaskListProjection::default();
@@ -319,7 +319,7 @@ EventCore provides testing utilities:
 ### Event Builders
 
 ```rust
-use eventcore::testing::builders::*;
+use eventcore_testing::builders::*;
 
 fn create_test_event(payload: SystemEvent) -> StoredEvent<SystemEvent> {
     StoredEventBuilder::new()
@@ -339,7 +339,7 @@ fn create_test_event(payload: SystemEvent) -> StoredEvent<SystemEvent> {
 ### Test Scenarios
 
 ```rust
-use eventcore::testing::fixtures::*;
+use eventcore_testing::fixtures::*;
 
 struct TaskScenario;
 
@@ -360,7 +360,7 @@ impl TestScenario for TaskScenario {
 ### Assertion Helpers
 
 ```rust
-use eventcore::testing::assertions::*;
+use eventcore_testing::assertions::*;
 
 #[tokio::test]
 async fn test_event_ordering() {

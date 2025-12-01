@@ -344,7 +344,7 @@ impl MemoizedState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::testing::builders::*;
+    use eventcore_testing::builders::*;
 
     #[test]
     fn test_balance_calculation() {

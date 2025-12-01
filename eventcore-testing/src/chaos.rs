@@ -1,12 +1,10 @@
 use std::{future::Future, sync::Mutex};
 
-use rand::{Rng, SeedableRng, random, rngs::StdRng};
-
-use crate::{
+use eventcore::{
     Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamId, StreamWrites,
 };
 
-pub use crate::ChaosOperation;
+use rand::{Rng, SeedableRng, random, rngs::StdRng};
 
 #[derive(Debug, Clone)]
 pub struct ChaosConfig {
@@ -101,8 +99,8 @@ where
 
         async move {
             if should_fail {
-                return Err(EventStoreError::ChaosInjection {
-                    operation: ChaosOperation::Read,
+                return Err(EventStoreError::StoreFailure {
+                    operation: "read_stream",
                 });
             }
 
@@ -124,8 +122,8 @@ where
             }
 
             if should_fail {
-                return Err(EventStoreError::ChaosInjection {
-                    operation: ChaosOperation::Write,
+                return Err(EventStoreError::StoreFailure {
+                    operation: "append_events",
                 });
             }
 
@@ -146,7 +144,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Event, InMemoryEventStore, StreamId, StreamVersion, StreamWrites};
+    use eventcore::{InMemoryEventStore, StreamVersion};
 
     #[derive(Debug, Clone)]
     struct PassthroughEvent {

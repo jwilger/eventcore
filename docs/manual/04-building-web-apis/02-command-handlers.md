@@ -608,7 +608,7 @@ async fn get_import_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::testing::prelude::*;
+    use eventcore_testing::prelude::*;
 
     #[tokio::test]
     async fn test_assign_task_authorization() {
