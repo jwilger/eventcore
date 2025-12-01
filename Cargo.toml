@@ -6,6 +6,7 @@ edition = "2024"
 [workspace]
 members = [
     "eventcore-macros",
+    "eventcore-testing",
 ]
 
 [lints.rust]

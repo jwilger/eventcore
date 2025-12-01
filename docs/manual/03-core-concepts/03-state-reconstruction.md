@@ -344,7 +344,6 @@ impl MemoizedState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::testing::builders::*;
 
     #[test]
     fn test_balance_calculation() {
@@ -379,6 +378,8 @@ mod tests {
     }
 }
 ```
+
+> **Note:** The `create_event` helper referenced above is intentionally left as a user-defined utility until dedicated fixtures land in `eventcore-testing`.
 
 ### Property-Based Testing
 

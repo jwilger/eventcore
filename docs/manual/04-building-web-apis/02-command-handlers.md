@@ -608,7 +608,6 @@ async fn get_import_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::testing::prelude::*;
 
     #[tokio::test]
     async fn test_assign_task_authorization() {
@@ -667,6 +666,8 @@ mod tests {
     }
 }
 ```
+
+> **Note:** Any helper utilities referenced in the tests above (e.g., `create_test_state`) are local fixtures you can build today; they'll eventually move into `eventcore-testing` as it matures.
 
 ## Monitoring and Metrics
 

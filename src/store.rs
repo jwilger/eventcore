@@ -222,7 +222,7 @@ impl StreamVersion {
 /// Will be refined with specific variants for different failure modes.
 ///
 /// TODO: Implement full error hierarchy per ADR-004.
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq)]
 pub enum EventStoreError {
     /// Returned when a stream is assigned multiple different expected versions within the same write batch.
     #[error(
@@ -237,6 +237,10 @@ pub enum EventStoreError {
     /// Returned when append attempts are made against a stream that has not been registered with an expected version.
     #[error("stream {stream_id} must be registered before appending events")]
     UndeclaredStream { stream_id: StreamId },
+
+    /// Represents infrastructure failures surfaced by the backing store (e.g., connection drops).
+    #[error("{operation} operation failed")]
+    StoreFailure { operation: &'static str },
 
     /// Version conflict during optimistic concurrency control.
     ///

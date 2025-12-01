@@ -537,7 +537,7 @@ async fn test_concurrent_modification_handling() {
 ### Chaos Testing
 
 ```rust
-use eventcore::testing::chaos::ChaosConfig;
+use eventcore_testing::chaos::ChaosConfig;
 
 #[tokio::test]
 async fn test_resilience_under_chaos() {
