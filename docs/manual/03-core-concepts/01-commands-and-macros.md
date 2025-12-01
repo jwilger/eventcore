@@ -127,7 +127,7 @@ struct BulkUpdate {
 
 ### Conditional Streams
 
-Commands declare their required streams via `stream_declarations()`. The executor may perform dynamic discovery as a separate phase (see StreamResolver in ADR-009) but your `handle` implementation focuses on domain logic and does not mutate infrastructure helpers. A typical `handle` implementation returns the events that should be emitted:
+Commands declare their required streams via `stream_declarations()`. The executor may perform dynamic discovery as a separate phase (see StreamResolver in ADR-014, which supersedes ADR-009) but your `handle` implementation focuses on domain logic and does not mutate infrastructure helpers. A typical `handle` implementation returns the events that should be emitted:
 
 ```rust
 fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {

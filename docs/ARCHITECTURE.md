@@ -2,7 +2,7 @@
 
 **Document Version:** 1.3
 **Date:** 2025-10-29
-**Phase:** 4 - Architecture Synthesis (Updated for ADR-013)
+**Phase:** 4 - Architecture Synthesis
 
 ## Overview
 
@@ -18,7 +18,7 @@ EventCore's architecture is guided by five foundational principles that inform a
 
 ### 1. Type-Driven Development
 
-The type system enforces domain constraints and prevents illegal states at compile time (ADR-003):
+The type system enforces domain constraints and prevents illegal states at compile time:
 
 - **Parse, Don't Validate**: Domain types validate at construction time using `nutype`, guaranteeing validity thereafter
 - **No Primitive Obsession**: All domain concepts use validated newtypes (StreamId, EventId, etc.)
@@ -27,7 +27,7 @@ The type system enforces domain constraints and prevents illegal states at compi
 
 ### 2. Correctness Over Performance
 
-Multi-stream atomicity and consistency are non-negotiable (ADR-001):
+Multi-stream atomicity and consistency are non-negotiable:
 
 - Atomic operations across multiple streams using storage-native transactions
 - Optimistic concurrency control ensures no lost updates
@@ -47,7 +47,7 @@ EventCore is library infrastructure, not business framework:
 
 ### 4. Free Function API Design
 
-Public API consists primarily of free functions, not methods on structs (ADR-010):
+Public API consists primarily of free functions, not methods on structs:
 
 - **Minimal API Surface**: Types remain private until compiler requires public exposure
 - **Composability**: Free functions enable function composition, partial application, easier testing
@@ -57,7 +57,7 @@ Public API consists primarily of free functions, not methods on structs (ADR-010
 
 ### 5. Developer Ergonomics
 
-Minimize boilerplate while maximizing type safety (ADR-006):
+Minimize boilerplate while maximizing type safety:
 
 - `#[derive(Command)]` macro eliminates infrastructure code
 - Automatic retry on version conflicts - zero manual retry logic
@@ -104,7 +104,7 @@ graph TB
     style Events fill:#fff3cd
 ```
 
-### 1. Event Store Abstraction (ADR-002, ADR-013)
+### 1. Event Store Abstraction
 
 **Purpose:** Pluggable storage abstraction supporting atomic multi-stream operations.
 
@@ -116,17 +116,17 @@ graph TB
 **Key Characteristics:**
 
 - Atomicity mechanisms internal to backend implementations (PostgreSQL ACID, in-memory locks)
-- Version-based optimistic concurrency control (ADR-007)
-- Metadata preservation for audit and tracing (ADR-005)
+- Version-based optimistic concurrency control
+- Metadata preservation for audit and tracing
 - Separate EventSubscription trait for projection building
-- Contract test suite verifies semantic behavior (ADR-013)
+- Contract test suite verifies semantic behavior
 
 **Storage Backend Examples:**
 
 - `eventcore-postgres`: Production backend using PostgreSQL ACID transactions (separate crate)
 - `InMemoryEventStore`: In-memory backend for testing with optional chaos injection (included in main `eventcore` crate)
 
-**Contract Testing (ADR-013):**
+**Contract Testing:**
 
 EventCore provides a reusable contract test suite (`eventcore::testing::event_store_contract_tests`) that verifies EventStore implementations handle critical semantic behaviors correctly:
 
@@ -141,7 +141,7 @@ All EventStore implementations (in-tree and external) MUST run and pass the cont
 
 **Why This Design:** Pushes atomicity complexity into battle-tested storage layers where it belongs, keeping library code simple while enabling backend flexibility. Contract tests provide verification mechanism with zero API complexity cost.
 
-### 2. Event System (ADR-012)
+### 2. Event System
 
 **Purpose:** Domain-first event representation where domain types ARE events, not wrapped in infrastructure.
 
@@ -225,11 +225,11 @@ fn append<E: Event>(&self, event: E) -> Result<()> {
 
 **Metadata Handling:**
 
-Event metadata (timestamps, correlation IDs, etc.) remains an infrastructure concern handled separately from domain types. See ADR-005 for metadata structure. The Event trait provides domain identity (stream_id); infrastructure manages audit trail, causation, and temporal ordering.
+Event metadata (timestamps, correlation IDs, etc.) remains an infrastructure concern handled separately from domain types. The Event trait provides domain identity (stream_id); infrastructure manages audit trail, causation, and temporal ordering.
 
 **Why This Design:** Aligns with Domain-Driven Design by making domain types first-class citizens. Infrastructure (Event trait) provides capabilities without obscuring the domain model. Maintains type safety through generic trait bounds while eliminating wrapper ceremony.
 
-### 3. Command System (ADR-006)
+### 3. Command System
 
 **Purpose:** Declarative command definition with compile-time stream access control.
 
@@ -256,7 +256,7 @@ Event metadata (timestamps, correlation IDs, etc.) remains an infrastructure con
 - `handle(state, context)`: Validate business rules and emit domain events
 - Domain-specific logic only - works directly with domain event types
 
-**StreamResolver Trait (Optional, ADR-009):**
+**StreamResolver Trait (Optional):**
 
 - `discover_related_streams(state)`: Discover streams at runtime based on reconstructed state
 - Executor queues newly discovered streams, deduplicates IDs, and reads each stream exactly once per execution attempt
@@ -264,11 +264,11 @@ Event metadata (timestamps, correlation IDs, etc.) remains an infrastructure con
 
 **Why This Design:** Clear separation between infrastructure (generated) and business logic (hand-written) minimizes boilerplate while maintaining compile-time safety. Optional dynamic discovery provides flexibility without compromising common-case simplicity.
 
-### 3. Command Execution (ADR-008, ADR-010)
+### 3. Command Execution
 
 **Purpose:** Orchestrate command execution with automatic retry on version conflicts via free function API.
 
-**API Design (ADR-010):**
+**API Design:**
 
 EventCore provides command execution through a free function, not a struct method:
 
@@ -351,20 +351,20 @@ sequenceDiagram
 
 **Why This Design:** Centralizes infrastructure concerns (retry, orchestration) in the execute function, keeping command implementations focused on business logic. Automatic retry provides correctness guarantees without developer intervention. Free function API maximizes composability and minimizes learning curve.
 
-### 4. Type System (ADR-003, ADR-012)
+### 4. Type System
 
 **Purpose:** Enforce domain constraints and prevent illegal states at compile time.
 
 **Patterns:**
 
-**Domain Event Types (ADR-012):**
+**Domain Event Types:**
 
 - Domain types implement `Event` trait directly - no infrastructure wrappers
 - StreamId is part of domain type (aggregate identity)
 - Trait bounds (`Clone + Send + 'static`) ensure storage compatibility
 - Type system enforces domain types ARE events, not wrapped in Event<T>
 
-**Validated Domain Types (ADR-003):**
+**Validated Domain Types:**
 
 - `StreamId`, `EventId`, `CorrelationId`, `CausationId` - all validated newtypes using `nutype`
 - Construction returns Result with descriptive validation errors
@@ -382,9 +382,9 @@ sequenceDiagram
 - No unwrap/expect in library code
 - Error paths explicit in signatures
 
-**Why This Design:** Leverages Rust's type system to catch entire classes of errors at compile time. Domain-first event design (ADR-012) keeps business types in foreground, infrastructure in background, reducing runtime failures and improving developer clarity.
+**Why This Design:** Leverages Rust's type system to catch entire classes of errors at compile time. Domain-first event design keeps business types in foreground, infrastructure in background, reducing runtime failures and improving developer clarity.
 
-### 5. Error Handling (ADR-004)
+### 5. Error Handling
 
 **Purpose:** Structured errors enabling programmatic handling and automatic retry classification.
 
