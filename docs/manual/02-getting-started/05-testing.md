@@ -317,6 +317,43 @@ async fn test_complete_task_workflow() {
 
 EventCore provides testing utilities:
 
+### EventStore Contract Suite
+
+Infrastructure authors can validate their `EventStore` implementations without
+rewriting the same scenario tests. Add the `eventcore-testing` crate to your
+`[dev-dependencies]` from crates.io:
+
+```toml
+[dev-dependencies]
+eventcore-testing = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+Then invoke the macro from `eventcore_testing::contract` in an integration test:
+
+```rust
+use eventcore_testing::contract::event_store_contract_tests;
+
+// Generates three #[tokio::test] functions that exercise the store.
+event_store_contract_tests! {
+    suite = postgres_backend,
+    make_store = || MyPostgresEventStore::test_instance(),
+}
+```
+
+The macro emits three async tests:
+
+- `basic_read_write_contract` – verifies a store can append and read a single
+  stream without data loss.
+- `concurrent_version_conflicts_contract` – appends twice with a stale expected
+  version and expects `EventStoreError::VersionConflict`.
+- `stream_isolation_contract` – writes events to multiple streams in one batch
+  and ensures reads never bleed across stream boundaries.
+
+Failures return structured error messages (scenario + detail) so implementors
+can pinpoint missing behaviors quickly. Running these tests in CI fulfills ADR-013
+and ADR-015’s requirement that every backend prove semantic correctness.
+
 ### Event Builders
 
 ```rust

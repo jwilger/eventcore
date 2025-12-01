@@ -35,5 +35,7 @@
 )]
 
 pub mod chaos;
+pub mod contract;
 
 pub use chaos::*;
+pub use contract::*;
