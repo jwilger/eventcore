@@ -333,6 +333,128 @@ fn apply_jitter(base_delay: u64, jitter_factor: f64) -> u64 {
     (base_delay as f64 * jitter_factor) as u64
 }
 
+struct PreparedExecution<C: CommandLogic> {
+    state: C::State,
+    stream_ids: Vec<StreamId>,
+    expected_versions: HashMap<StreamId, StreamVersion>,
+}
+
+async fn prepare_execution_context<C, S>(
+    store: &S,
+    command: &C,
+) -> Result<PreparedExecution<C>, CommandError>
+where
+    C: CommandLogic,
+    S: EventStore,
+{
+    let declared_streams = command.stream_declarations();
+    let resolver = command.stream_resolver();
+    let mut scheduled: HashSet<StreamId> = HashSet::with_capacity(declared_streams.len());
+    let mut queue: VecDeque<StreamId> = VecDeque::with_capacity(declared_streams.len());
+
+    for stream_id in declared_streams.iter() {
+        let stream_id = stream_id.clone();
+        if scheduled.insert(stream_id.clone()) {
+            queue.push_back(stream_id);
+        }
+    }
+
+    let mut visited: HashSet<StreamId> = HashSet::with_capacity(scheduled.len());
+    let mut stream_ids: Vec<StreamId> = Vec::with_capacity(scheduled.len());
+    let mut expected_versions: HashMap<StreamId, StreamVersion> =
+        HashMap::with_capacity(scheduled.len());
+    let mut state = C::State::default();
+
+    while let Some(stream_id) = queue.pop_front() {
+        if !visited.insert(stream_id.clone()) {
+            continue;
+        }
+
+        let reader = store
+            .read_stream::<C::Event>(stream_id.clone())
+            .await
+            .map_err(CommandError::EventStoreError)?;
+        let expected_version = StreamVersion::new(reader.len());
+        let _ = expected_versions.insert(stream_id.clone(), expected_version);
+        state = reader
+            .into_iter()
+            .fold(state, |acc, event| command.apply(acc, &event));
+        stream_ids.push(stream_id.clone());
+
+        if let Some(resolver) = resolver {
+            for related_stream in resolver.discover_related_streams(&state) {
+                if scheduled.insert(related_stream.clone()) {
+                    queue.push_back(related_stream);
+                }
+            }
+        }
+    }
+
+    Ok(PreparedExecution {
+        state,
+        stream_ids,
+        expected_versions,
+    })
+}
+
+fn build_stream_writes_from_events<C: CommandLogic>(
+    events: Vec<C::Event>,
+    expected_versions: HashMap<StreamId, StreamVersion>,
+) -> Result<StreamWrites, CommandError> {
+    expected_versions
+        .into_iter()
+        .try_fold(
+            StreamWrites::new(),
+            |writes, (stream_id, expected_version)| {
+                writes.register_stream(stream_id, expected_version)
+            },
+        )
+        .and_then(|writes| {
+            events
+                .into_iter()
+                .try_fold(writes, |writes, event| writes.append(event))
+        })
+        .map_err(CommandError::EventStoreError)
+}
+
+fn compute_retry_delay_ms(strategy: &BackoffStrategy, attempt: u32) -> u64 {
+    match strategy {
+        BackoffStrategy::Fixed { delay_ms } => *delay_ms,
+        BackoffStrategy::Exponential { base_ms } => {
+            let base_delay = 2_u64
+                .checked_pow(attempt)
+                .and_then(|exp| base_ms.checked_mul(exp))
+                .unwrap_or(u64::MAX);
+            let random_value = rand::random::<f64>();
+            let jitter_factor = calculate_jitter_factor(random_value);
+            apply_jitter(base_delay, jitter_factor)
+        }
+    }
+}
+
+async fn apply_retry_backoff(policy: &RetryPolicy, attempt: u32, stream_ids: &[StreamId]) {
+    let delay_ms = compute_retry_delay_ms(&policy.backoff_strategy, attempt);
+    let attempt_number = attempt + 1;
+
+    tracing::warn!(
+        attempt = attempt_number,
+        delay_ms = delay_ms,
+        streams = ?stream_ids,
+        "retrying command after concurrency conflict"
+    );
+
+    if let Some(hook) = &policy.metrics_hook {
+        let ctx = RetryContext {
+            streams: stream_ids.to_vec(),
+            attempt: attempt_number,
+            delay_ms,
+        };
+        hook.on_retry_attempt(&ctx);
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+}
+
 /// Execute a command against the event store with a custom retry policy.
 ///
 /// This is the primary entry point for EventCore. It orchestrates the complete
@@ -369,67 +491,15 @@ where
     S: EventStore,
 {
     for attempt in 0..=policy.max_retries {
-        let declared_streams = command.stream_declarations();
-        let resolver = command.stream_resolver();
-        let mut scheduled: HashSet<StreamId> = HashSet::with_capacity(declared_streams.len());
-        let mut queue: VecDeque<StreamId> = VecDeque::with_capacity(declared_streams.len());
-
-        for stream_id in declared_streams.iter() {
-            let stream_id = stream_id.clone();
-            if scheduled.insert(stream_id.clone()) {
-                queue.push_back(stream_id);
-            }
-        }
-
-        let mut visited: HashSet<StreamId> = HashSet::with_capacity(scheduled.len());
-        let mut stream_ids: Vec<StreamId> = Vec::with_capacity(scheduled.len());
-        let mut expected_versions: HashMap<StreamId, StreamVersion> =
-            HashMap::with_capacity(scheduled.len());
-        let mut state = C::State::default();
-
-        while let Some(stream_id) = queue.pop_front() {
-            if !visited.insert(stream_id.clone()) {
-                continue;
-            }
-
-            let reader = store
-                .read_stream::<C::Event>(stream_id.clone())
-                .await
-                .map_err(CommandError::EventStoreError)?;
-            let expected_version = StreamVersion::new(reader.len());
-            let _ = expected_versions.insert(stream_id.clone(), expected_version);
-            state = reader
-                .into_iter()
-                .fold(state, |acc, event| command.apply(acc, &event));
-            stream_ids.push(stream_id.clone());
-
-            if let Some(resolver) = resolver {
-                for related_stream in resolver.discover_related_streams(&state) {
-                    if scheduled.insert(related_stream.clone()) {
-                        queue.push_back(related_stream);
-                    }
-                }
-            }
-        }
+        let PreparedExecution {
+            state,
+            stream_ids,
+            expected_versions,
+        } = prepare_execution_context(&store, &command).await?;
 
         let new_events = command.handle(state)?;
-        let events = Vec::from(new_events);
-
-        // Register expected versions and append events as a single pipeline
-        let writes = expected_versions
-            .iter()
-            .try_fold(
-                StreamWrites::new(),
-                |writes, (stream_id, expected_version)| {
-                    writes.register_stream(stream_id.clone(), *expected_version)
-                },
-            )
-            .and_then(move |writes| {
-                events
-                    .into_iter()
-                    .try_fold(writes, |writes, event| writes.append(event))
-            })
-            .map_err(CommandError::EventStoreError)?;
+        let writes =
+            build_stream_writes_from_events::<C>(Vec::from(new_events), expected_versions)?;
 
         // Convert EventStoreError variants to appropriate CommandError types.
         //
@@ -458,38 +528,7 @@ where
                 ));
             }
             Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries => {
-                // Calculate backoff delay based on strategy
-                let delay_ms = match &policy.backoff_strategy {
-                    BackoffStrategy::Fixed { delay_ms } => *delay_ms,
-                    BackoffStrategy::Exponential { base_ms } => {
-                        let base_delay = 2_u64
-                            .checked_pow(attempt)
-                            .and_then(|exp| base_ms.checked_mul(exp))
-                            .unwrap_or(u64::MAX);
-                        let random_value = rand::random::<f64>();
-                        let jitter_factor = calculate_jitter_factor(random_value);
-                        apply_jitter(base_delay, jitter_factor)
-                    }
-                };
-
-                tracing::warn!(
-                    attempt = attempt + 1,
-                    delay_ms = delay_ms,
-                    streams = ?stream_ids.as_slice(),
-                    "retrying command after concurrency conflict"
-                );
-
-                // Call metrics hook if configured
-                if let Some(hook) = &policy.metrics_hook {
-                    let ctx = RetryContext {
-                        streams: stream_ids.clone(),
-                        attempt: attempt + 1,
-                        delay_ms,
-                    };
-                    hook.on_retry_attempt(&ctx);
-                }
-
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                apply_retry_backoff(&policy, attempt, &stream_ids).await;
                 continue; // Retry
             }
             Err(CommandError::ConcurrencyError(_)) => {
