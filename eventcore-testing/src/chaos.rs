@@ -3,7 +3,6 @@ use std::{future::Future, sync::Mutex};
 use eventcore::{
     Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamId, StreamWrites,
 };
-
 use rand::{Rng, SeedableRng, random, rngs::StdRng};
 
 #[derive(Debug, Clone)]

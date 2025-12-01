@@ -11,6 +11,8 @@ EventCore testing follows these principles:
 3. **Deterministic Tests** - Events provide repeatable test scenarios
 4. **Fast Feedback** - In-memory event store for rapid testing
 
+> **Note:** The examples below reference helper types such as `StoredEventBuilder` and `create_test_event`. Until `eventcore-testing` grows those fixtures, treat them as utilities you define inside your own tests.
+
 ## Testing Commands
 
 ### Basic Command Testing
@@ -20,7 +22,6 @@ EventCore testing follows these principles:
 mod tests {
     use super::*;
     use eventcore::prelude::*;
-    use eventcore_testing::prelude::*;
     use eventcore_memory::InMemoryEventStore;
 
     #[tokio::test]
@@ -145,7 +146,7 @@ async fn test_assign_task_multi_stream() {
 ```rust
 #[tokio::test]
 async fn test_user_task_list_projection() {
-    use eventcore_testing::builders::*;
+    // StoredEventBuilder is a project-specific helper shown here for illustration.
 
     // Arrange
     let mut projection = UserTaskListProjection::default();
@@ -319,7 +320,7 @@ EventCore provides testing utilities:
 ### Event Builders
 
 ```rust
-use eventcore_testing::builders::*;
+// Helper builders live alongside your tests until shared fixtures land.
 
 fn create_test_event(payload: SystemEvent) -> StoredEvent<SystemEvent> {
     StoredEventBuilder::new()
@@ -339,7 +340,7 @@ fn create_test_event(payload: SystemEvent) -> StoredEvent<SystemEvent> {
 ### Test Scenarios
 
 ```rust
-use eventcore_testing::fixtures::*;
+// Define your own scenario helpers to keep tests readable.
 
 struct TaskScenario;
 
@@ -360,7 +361,7 @@ impl TestScenario for TaskScenario {
 ### Assertion Helpers
 
 ```rust
-use eventcore_testing::assertions::*;
+// Assertions helpers can also live locally until the crate exposes them.
 
 #[tokio::test]
 async fn test_event_ordering() {

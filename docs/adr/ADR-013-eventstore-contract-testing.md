@@ -78,6 +78,8 @@ Create a public `eventcore_testing::event_store_contract_tests` module that expo
 3. **Multi-Stream Semantics**: Tests verifying atomic version checking across multiple streams
 4. **Error Classification**: Tests verifying correct EventStoreError variants returned
 
+> **Status:** Only the chaos utilities have shipped so far; the contract test harness described here remains planned work for the `eventcore-testing` crate.
+
 **Backend Implementation Requirements:**
 
 All EventStore implementations (in-tree or external) MUST:

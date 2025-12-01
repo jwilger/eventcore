@@ -581,7 +581,6 @@ Testing projections is straightforward:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore_testing::prelude::*;
 
     #[tokio::test]
     async fn test_user_task_list_projection() {
@@ -649,6 +648,8 @@ mod tests {
     }
 }
 ```
+
+> **Note:** Helper functions such as `create_test_event` are simple utilities you can define inside your test module today; the dedicated `eventcore-testing` crate will publish official fixtures in a future release.
 
 ## Performance Considerations
 

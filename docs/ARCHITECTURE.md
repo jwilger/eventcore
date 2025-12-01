@@ -108,6 +108,8 @@ Every backend (first-party or third-party) integrates these tests into its CI pi
 
 All of these helpers live in the dedicated `eventcore-testing` crate, which depends on the main `eventcore` library but stays out of release builds unless consumers add it as a dev-dependency. This keeps the production crate lean while still providing rich testing utilities.
 
+> **Status:** As of this PR the crate only ships chaos utilities; the contract suite is on the roadmap and will arrive in a future release.
+
 ## Event System & Metadata
 
 ### Domain-First Event Trait

@@ -546,7 +546,7 @@ impl<ES: EventStore> CachedEventStore<ES> {
 Create test events easily:
 
 ```rust
-use eventcore_testing::builders::*;
+// Helper builders live in your test module; implement what you need for your domain.
 
 fn create_account_opened_event() -> StoredEvent<BankEvent> {
     StoredEventBuilder::new()
@@ -565,12 +565,14 @@ fn create_account_opened_event() -> StoredEvent<BankEvent> {
 }
 ```
 
+> **Note:** `StoredEventBuilder` in this example represents a project-specific helper; feel free to adapt it to your needs until official testing fixtures are published.
+
 ### Event Assertions
 
 Test event properties:
 
 ```rust
-use eventcore_testing::assertions::*;
+// Custom assertions shown here can live in any test helper module.
 
 #[test]
 fn test_events_are_ordered() {
