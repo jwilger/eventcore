@@ -139,12 +139,19 @@ where
     let len = reader.len();
     let empty = reader.is_empty();
 
-    if empty || len != 1 {
+    if empty {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "expected stream to contain events but it was empty",
+        ));
+    }
+
+    if len != 1 {
         return Err(ContractTestFailure::assertion(
             SCENARIO,
             format!(
-                "expected stream to contain exactly one event, observed len={}, empty={}",
-                len, empty
+                "expected stream to contain exactly one event, observed len={}",
+                len
             ),
         ));
     }
