@@ -216,13 +216,20 @@ impl StreamVersion {
     }
 }
 
+/// Operation categories that chaos injection can target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChaosOperation {
+    Read,
+    Write,
+}
+
 /// Error type returned by event store operations.
 ///
 /// EventStoreError represents failures during read or append operations.
 /// Will be refined with specific variants for different failure modes.
 ///
 /// TODO: Implement full error hierarchy per ADR-004.
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq)]
 pub enum EventStoreError {
     /// Returned when a stream is assigned multiple different expected versions within the same write batch.
     #[error(
@@ -237,6 +244,10 @@ pub enum EventStoreError {
     /// Returned when append attempts are made against a stream that has not been registered with an expected version.
     #[error("stream {stream_id} must be registered before appending events")]
     UndeclaredStream { stream_id: StreamId },
+
+    /// Indicates an operation failed due to chaos injection hooks.
+    #[error("chaos injection triggered during {operation:?} operation")]
+    ChaosInjection { operation: ChaosOperation },
 
     /// Version conflict during optimistic concurrency control.
     ///

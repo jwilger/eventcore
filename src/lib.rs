@@ -37,6 +37,8 @@ mod command;
 mod errors;
 mod store;
 
+pub mod testing;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -52,8 +54,8 @@ pub use store::EventStore;
 // Re-export InMemoryEventStore for library consumers (per ADR-011)
 // Re-export EventStore trait helper types for trait implementations (per ADR-010 compiler-driven evolution)
 pub use store::{
-    EventStoreError, EventStreamReader, EventStreamSlice, InMemoryEventStore, StreamId,
-    StreamVersion, StreamWrites,
+    ChaosOperation, EventStoreError, EventStreamReader, EventStreamSlice, InMemoryEventStore,
+    StreamId, StreamVersion, StreamWrites,
 };
 
 /// Validates a business rule condition and returns early with
