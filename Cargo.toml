@@ -5,7 +5,7 @@ edition = "2024"
 
 [workspace]
 members = [
-    "eventcore-macros",
+    "eventcore-macros", "eventcore-postgres",
     "eventcore-testing",
 ]
 

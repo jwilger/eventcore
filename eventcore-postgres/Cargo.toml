@@ -1,0 +1,12 @@
+[package]
+name = "eventcore-postgres"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eventcore = { version = "0.1.8", path = ".." }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "macros", "migrate"] }
+thiserror = "2.0.17"
+
+[dev-dependencies]
+tokio = { version = "1.48.0", default-features = false, features = ["macros", "rt-multi-thread"] }
