@@ -21,22 +21,22 @@ async fn drop_events_table(connection_string: &str) -> Result<(), sqlx::Error> {
         .execute(&pool)
         .await?;
 
-    sqlx::query("DROP TABLE IF EXISTS _sqlx_migrations CASCADE")
-        .execute(&pool)
-        .await?;
-
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+        "CREATE TABLE IF NOT EXISTS public._sqlx_migrations (
             version BIGINT PRIMARY KEY,
             description TEXT NOT NULL,
             installed_on TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             success BOOLEAN NOT NULL,
-            checksum TEXT NOT NULL,
+            checksum BYTEA NOT NULL,
             execution_time BIGINT NOT NULL
         )",
     )
     .execute(&pool)
     .await?;
+
+    sqlx::query("DELETE FROM public._sqlx_migrations")
+        .execute(&pool)
+        .await?;
 
     Ok(())
 }

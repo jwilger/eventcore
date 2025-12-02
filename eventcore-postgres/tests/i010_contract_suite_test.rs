@@ -25,7 +25,21 @@ mod postgres_contract_suite {
         pool.execute("DROP TABLE IF EXISTS eventcore_events CASCADE")
             .await?;
 
-        pool.execute("DROP TABLE IF EXISTS _sqlx_migrations CASCADE")
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS public._sqlx_migrations (
+                version BIGINT PRIMARY KEY,
+                description TEXT NOT NULL,
+                installed_on TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                success BOOLEAN NOT NULL,
+                checksum BYTEA NOT NULL,
+                execution_time BIGINT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query("DELETE FROM public._sqlx_migrations")
+            .execute(&pool)
             .await?;
 
         Ok(())
