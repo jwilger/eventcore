@@ -53,7 +53,7 @@ pub use store::EventStore;
 // Re-export EventStore trait helper types for trait implementations (per ADR-010 compiler-driven evolution)
 pub use store::{
     EventStoreError, EventStreamReader, EventStreamSlice, InMemoryEventStore, StreamId,
-    StreamVersion, StreamWrites,
+    StreamVersion, StreamWriteEntry, StreamWrites,
 };
 
 /// Validates a business rule condition and returns early with
@@ -548,12 +548,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::{Deserialize, Serialize};
     use std::sync::Arc;
 
     use std::sync::atomic::{AtomicBool, Ordering};
 
     /// Test-specific event type for unit testing.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct TestEvent {
         stream_id: StreamId,
     }
@@ -626,7 +627,7 @@ mod tests {
     }
 
     /// Test event type with a value field for state reconstruction testing.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct TestEventWithValue {
         stream_id: StreamId,
         value: i32,

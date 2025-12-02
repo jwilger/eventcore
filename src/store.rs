@@ -1,5 +1,8 @@
 use crate::Event;
 use nutype::nutype;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
 use std::future::Future;
 
 /// Placeholder for collection of events to write, organized by stream.
@@ -13,8 +16,16 @@ use std::future::Future;
 /// TODO: Refine based on multi-stream atomicity requirements.
 #[derive(Debug)]
 pub struct StreamWrites {
-    events: Vec<(StreamId, Box<dyn std::any::Any + Send>)>,
-    expected_versions: std::collections::HashMap<StreamId, StreamVersion>,
+    entries: Vec<StreamWriteEntry>,
+    expected_versions: HashMap<StreamId, StreamVersion>,
+}
+
+#[derive(Debug)]
+pub struct StreamWriteEntry {
+    pub stream_id: StreamId,
+    pub event: Box<dyn std::any::Any + Send>,
+    pub event_type: &'static str,
+    pub event_data: Value,
 }
 
 impl StreamWrites {
@@ -23,8 +34,8 @@ impl StreamWrites {
     /// Returns an empty StreamWrites ready to have events appended via builder pattern.
     pub fn new() -> Self {
         Self {
-            events: Vec::new(),
-            expected_versions: std::collections::HashMap::new(),
+            entries: Vec::new(),
+            expected_versions: HashMap::new(),
         }
     }
 
@@ -77,10 +88,29 @@ impl StreamWrites {
             return Err(EventStoreError::UndeclaredStream { stream_id });
         }
 
-        let boxed: Box<dyn std::any::Any + Send> = Box::new(event);
-        writes.events.push((stream_id, boxed));
+        let event_data =
+            serde_json::to_value(&event).map_err(|error| EventStoreError::SerializationFailed {
+                stream_id: stream_id.clone(),
+                detail: error.to_string(),
+            })?;
+
+        let entry = StreamWriteEntry {
+            stream_id,
+            event: Box::new(event),
+            event_type: std::any::type_name::<E>(),
+            event_data,
+        };
+        writes.entries.push(entry);
 
         Ok(writes)
+    }
+
+    pub fn expected_versions(&self) -> &HashMap<StreamId, StreamVersion> {
+        &self.expected_versions
+    }
+
+    pub fn into_entries(self) -> Vec<StreamWriteEntry> {
+        self.entries
     }
 }
 
@@ -191,6 +221,25 @@ pub trait EventStore {
 )]
 pub struct StreamId(String);
 
+impl Serialize for StreamId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_ref())
+    }
+}
+
+impl<'de> Deserialize<'de> for StreamId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        StreamId::try_new(value).map_err(|error| serde::de::Error::custom(error.to_string()))
+    }
+}
+
 /// Stream version domain type.
 ///
 /// StreamVersion represents the version (event count) of an event stream.
@@ -238,6 +287,14 @@ pub enum EventStoreError {
     #[error("stream {stream_id} must be registered before appending events")]
     UndeclaredStream { stream_id: StreamId },
 
+    /// Returned when event serialization fails prior to persistence.
+    #[error("failed to serialize event for stream {stream_id}: {detail}")]
+    SerializationFailed { stream_id: StreamId, detail: String },
+
+    /// Returned when stored event payloads cannot be deserialized into the requested type.
+    #[error("failed to deserialize event for stream {stream_id}: {detail}")]
+    DeserializationFailed { stream_id: StreamId, detail: String },
+
     /// Represents infrastructure failures surfaced by the backing store (e.g., connection drops).
     #[error("{operation} operation failed")]
     StoreFailure { operation: &'static str },
@@ -263,6 +320,10 @@ pub struct EventStreamReader<E: Event> {
 }
 
 impl<E: Event> EventStreamReader<E> {
+    pub fn new(events: Vec<E>) -> Self {
+        Self { events }
+    }
+
     /// Returns the number of events in the stream.
     ///
     /// TODO: Implement based on actual storage structure.
@@ -345,7 +406,7 @@ pub struct EventStreamSlice;
 type StreamData = (Vec<Box<dyn std::any::Any + Send>>, StreamVersion);
 
 pub struct InMemoryEventStore {
-    streams: std::sync::Mutex<std::collections::HashMap<StreamId, StreamData>>,
+    streams: std::sync::Mutex<HashMap<StreamId, StreamData>>,
 }
 
 impl InMemoryEventStore {
@@ -355,7 +416,7 @@ impl InMemoryEventStore {
     /// All streams start at version 0 (no events).
     pub fn new() -> Self {
         Self {
-            streams: std::sync::Mutex::new(std::collections::HashMap::new()),
+            streams: std::sync::Mutex::new(HashMap::new()),
         }
     }
 }
@@ -383,7 +444,7 @@ impl EventStore for InMemoryEventStore {
             })
             .unwrap_or_default();
 
-        Ok(EventStreamReader { events })
+        Ok(EventStreamReader::new(events))
     }
 
     async fn append_events(
@@ -391,9 +452,10 @@ impl EventStore for InMemoryEventStore {
         writes: StreamWrites,
     ) -> Result<EventStreamSlice, EventStoreError> {
         let mut streams = self.streams.lock().unwrap();
+        let expected_versions = writes.expected_versions().clone();
 
         // Check all version constraints before writing any events
-        for (stream_id, expected_version) in &writes.expected_versions {
+        for (stream_id, expected_version) in &expected_versions {
             let current_version = streams
                 .get(stream_id)
                 .map(|(_events, version)| *version)
@@ -405,7 +467,10 @@ impl EventStore for InMemoryEventStore {
         }
 
         // All versions match - proceed with writes
-        for (stream_id, event) in writes.events {
+        for entry in writes.into_entries() {
+            let StreamWriteEntry {
+                stream_id, event, ..
+            } = entry;
             let (events, version) = streams
                 .entry(stream_id)
                 .or_insert_with(|| (Vec::new(), StreamVersion::new(0)));
@@ -444,9 +509,10 @@ impl<T: EventStore + Sync> EventStore for &T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::{Deserialize, Serialize};
 
     /// Test-specific domain event type for unit testing storage operations.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct TestEvent {
         stream_id: StreamId,
         data: String,

@@ -2,8 +2,9 @@ use eventcore::{
     Event, EventStore, EventStoreError, InMemoryEventStore, StreamId, StreamVersion, StreamWrites,
 };
 use eventcore_testing::chaos::{ChaosConfig, ChaosEventStoreExt};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TestEvent {
     stream_id: StreamId,
 }

@@ -1,6 +1,8 @@
 use eventcore::{Event, EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug)]
 pub struct ContractTestFailure {
     scenario: &'static str,
@@ -45,7 +47,7 @@ impl std::error::Error for ContractTestFailure {}
 
 pub type ContractTestResult = Result<(), ContractTestFailure>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractTestEvent {
     stream_id: StreamId,
 }

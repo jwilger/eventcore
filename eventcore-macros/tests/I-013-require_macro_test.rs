@@ -3,8 +3,9 @@ use eventcore::{
     require,
 };
 use eventcore_macros::Command;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct AccountEvent {
     stream_id: StreamId,
 }
