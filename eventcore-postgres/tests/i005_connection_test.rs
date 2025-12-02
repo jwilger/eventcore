@@ -25,6 +25,19 @@ async fn drop_events_table(connection_string: &str) -> Result<(), sqlx::Error> {
         .execute(&pool)
         .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+            version BIGINT PRIMARY KEY,
+            description TEXT NOT NULL,
+            installed_on TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            success BOOLEAN NOT NULL,
+            checksum TEXT NOT NULL,
+            execution_time BIGINT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
     Ok(())
 }
 

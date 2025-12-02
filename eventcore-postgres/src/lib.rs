@@ -9,6 +9,7 @@ use sqlx::types::Json;
 use sqlx::{Pool, Postgres, Row, postgres::PgPoolOptions, query, query_scalar};
 use std::collections::HashMap;
 use thiserror::Error;
+use tracing::{info, instrument};
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -57,10 +58,16 @@ impl PostgresEventStore {
 }
 
 impl EventStore for PostgresEventStore {
+    #[instrument(name = "postgres.read_stream", skip(self))]
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
     ) -> Result<EventStreamReader<E>, EventStoreError> {
+        info!(
+            stream = %stream_id,
+            "[postgres.read_stream] reading events from postgres"
+        );
+
         let rows = query(
             "SELECT event_data FROM eventcore_events WHERE stream_id = $1 ORDER BY stream_version ASC",
         )
@@ -86,11 +93,17 @@ impl EventStore for PostgresEventStore {
         Ok(EventStreamReader::new(events))
     }
 
+    #[instrument(name = "postgres.append_events", skip(self, writes))]
     async fn append_events(
         &self,
         writes: StreamWrites,
     ) -> Result<EventStreamSlice, EventStoreError> {
         let expected_versions = writes.expected_versions().clone();
+        info!(
+            stream_count = expected_versions.len(),
+            "[postgres.append_events] appending events to postgres"
+        );
+
         let mut connection = self
             .pool
             .acquire()
