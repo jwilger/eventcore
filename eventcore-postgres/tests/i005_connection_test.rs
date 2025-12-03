@@ -116,7 +116,7 @@ async fn developer_detects_ping_failure_when_postgres_is_unreachable() {
         .idle_timeout(Some(Duration::from_millis(50)))
         .max_connections(1)
         .connect_lazy_with(connect_options);
-    let store = PostgresEventStore::from_pool_for_tests(pool);
+    let store = PostgresEventStore::from_pool(pool);
 
     // When: Developer pings the unreachable postgres
     let ping_result = store.ping().await;

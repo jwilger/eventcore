@@ -22,27 +22,57 @@ pub enum PostgresEventStoreError {
     MigrationFailed(#[source] sqlx::migrate::MigrateError),
 }
 
+/// Configuration for PostgresEventStore connection pool.
+#[derive(Debug, Clone)]
+pub struct PostgresConfig {
+    /// Maximum number of connections in the pool (default: 10)
+    pub max_connections: u32,
+    /// Timeout for acquiring a connection from the pool (default: 30 seconds)
+    pub acquire_timeout: Duration,
+}
+
+impl Default for PostgresConfig {
+    fn default() -> Self {
+        Self {
+            max_connections: 10,
+            acquire_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PostgresEventStore {
     pool: Pool<Postgres>,
 }
 
 impl PostgresEventStore {
+    /// Create a new PostgresEventStore with default configuration.
     pub async fn new<S: Into<String>>(
         connection_string: S,
     ) -> Result<Self, PostgresEventStoreError> {
+        Self::with_config(connection_string, PostgresConfig::default()).await
+    }
+
+    /// Create a new PostgresEventStore with custom configuration.
+    pub async fn with_config<S: Into<String>>(
+        connection_string: S,
+        config: PostgresConfig,
+    ) -> Result<Self, PostgresEventStoreError> {
         let connection_string = connection_string.into();
         let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .acquire_timeout(Duration::from_secs(5))
+            .max_connections(config.max_connections)
+            .acquire_timeout(config.acquire_timeout)
             .connect(&connection_string)
             .await
             .map_err(PostgresEventStoreError::ConnectionFailed)?;
         Ok(Self { pool })
     }
 
-    /// Test-only constructor that exists solely for mutation testing and integration harnesses.
-    pub fn from_pool_for_tests(pool: Pool<Postgres>) -> Self {
+    /// Create a PostgresEventStore from an existing connection pool.
+    ///
+    /// Use this when you need full control over pool configuration or want to
+    /// share a pool across multiple components.
+    pub fn from_pool(pool: Pool<Postgres>) -> Self {
         Self { pool }
     }
 
