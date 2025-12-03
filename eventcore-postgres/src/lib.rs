@@ -9,7 +9,7 @@ use sqlx::types::Json;
 use sqlx::{Pool, Postgres, Row, postgres::PgPoolOptions, query, query_scalar};
 use std::collections::HashMap;
 use thiserror::Error;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -129,6 +129,12 @@ impl EventStore for PostgresEventStore {
 
                     let current = current_version.unwrap_or(0);
                     if current as usize != expected_version.into_inner() {
+                        warn!(
+                            stream = %stream_id,
+                            expected = expected_version.into_inner(),
+                            actual = current,
+                            "[postgres.version_conflict] optimistic concurrency mismatch detected"
+                        );
                         return Err(EventStoreError::VersionConflict);
                     }
                 }
@@ -165,7 +171,7 @@ impl EventStore for PostgresEventStore {
                     .bind(Json(json!({})))
                     .execute(&mut **connection)
                     .await
-                    .map_err(map_insert_error)?;
+                    .map_err(|error| map_insert_error(error, &stream_id))?;
                 }
 
                 Ok(EventStreamSlice)
@@ -202,10 +208,14 @@ fn map_sqlx_error(error: sqlx::Error, operation: &'static str) -> EventStoreErro
     }
 }
 
-fn map_insert_error(error: sqlx::Error) -> EventStoreError {
+fn map_insert_error(error: sqlx::Error, stream_id: &StreamId) -> EventStoreError {
     if let sqlx::Error::Database(db_error) = &error
         && db_error.code().as_deref() == Some("23505")
     {
+        warn!(
+            stream = %stream_id,
+            "[postgres.version_conflict] unique constraint detected during insert"
+        );
         return EventStoreError::VersionConflict;
     }
 
