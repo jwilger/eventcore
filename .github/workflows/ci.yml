@@ -66,12 +66,14 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
+          EVENTCORE_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
         run: cargo nextest run --workspace --all-features
 
       - name: Run doctests
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
+          EVENTCORE_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
         run: cargo test --doc --workspace --all-features
 
   format:
