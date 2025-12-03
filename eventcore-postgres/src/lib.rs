@@ -238,7 +238,7 @@ mod tests {
     use uuid::Uuid;
 
     fn postgres_connection_string() -> String {
-        env::var("EVENTCORE_TEST_POSTGRES_URL")
+        env::var("DATABASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| {

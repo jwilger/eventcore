@@ -8,7 +8,7 @@ mod postgres_contract_suite {
     use eventcore_testing::contract::event_store_contract_tests;
 
     fn postgres_connection_string() -> String {
-        env::var("EVENTCORE_TEST_POSTGRES_URL")
+        env::var("DATABASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| {

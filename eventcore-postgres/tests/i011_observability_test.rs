@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Executor, postgres::PgPoolOptions};
 
 fn postgres_connection_string() -> String {
-    env::var("EVENTCORE_TEST_POSTGRES_URL")
+    env::var("DATABASE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "postgres://postgres:postgres@localhost:5433/eventcore_test".to_string())
