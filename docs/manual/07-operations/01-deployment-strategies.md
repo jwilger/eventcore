@@ -688,52 +688,6 @@ migrations/
 └── 004_add_projection_checkpoints.sql
 ```
 
-#### Metadata Column Upgrade (eventcore-postgres)
-
-EventCore 0.1 introduced the `metadata` column to persist per-event envelopes. Existing
-deployments that created the `eventcore_events` table before this change can roll out the
-new column without downtime by running the additive migration `0002_add_metadata_column.sql`
-shipped with the `eventcore-postgres` crate.
-
-**Recommended rollout procedure**
-
-1. **Back up** the production database (logical or physical snapshot) before running migrations.
-2. **Apply the migration** ahead of the application deploy:
-
-   ```bash
-   DATABASE_URL=postgres://postgres:password@db:5432/eventcore \
-     sqlx migrate run --source eventcore-postgres/migrations
-   ```
-
-   Migration `0002_add_metadata_column.sql` executes the following statement:
-
-   ```sql
-   ALTER TABLE eventcore_events
-       ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
-   ```
-
-3. **Verify** that existing rows were back-filled with an empty JSON payload:
-
-   ```sql
-   SELECT DISTINCT metadata FROM eventcore_events;
-   ```
-
-   The result should be a single row containing `{}` until the new code starts storing
-   richer metadata.
-
-4. **Deploy** the new application version. Because the column addition is additive and the
-   default keeps existing rows readable, this can be done with the usual rolling/blue-green
-   strategy.
-
-5. **Monitor** the new telemetry (`postgres.version_conflict` logs and structured metadata)
-   to confirm the migration succeeded.
-
-The regression test `eventcore-postgres/tests/i014_schema_migration_test.rs` exercises this
-workflow by installing the legacy schema, running `PostgresEventStore::migrate()`, and then
-appending new events to ensure backward compatibility. Use it as a template for future
-additive migrations.
-
-
 Example migration:
 
 ```sql
