@@ -1,8 +1,11 @@
-use std::env;
+use std::{env, time::Duration};
 
-use sqlx::{Row, postgres::PgPoolOptions};
+use sqlx::{
+    Row,
+    postgres::{PgConnectOptions, PgPoolOptions},
+};
 
-use eventcore_postgres::PostgresEventStore;
+use eventcore_postgres::{PostgresEventStore, PostgresEventStoreError};
 
 fn postgres_connection_string() -> String {
     env::var("EVENTCORE_TEST_POSTGRES_URL")
@@ -97,4 +100,30 @@ async fn developer_runs_migrations_and_creates_events_table() {
     // Then: Events table exists after migrations
     let table_exists = table_exists(&connection_string, "eventcore_events").await;
     assert!(table_exists, "events table should exist after migrations");
+}
+
+#[tokio::test]
+async fn developer_detects_ping_failure_when_postgres_is_unreachable() {
+    // Given: Developer configures event store with unreachable postgres
+    let connect_options = PgConnectOptions::new()
+        .host("localhost")
+        .port(65433)
+        .username("postgres")
+        .password("postgres")
+        .database("eventcore_test");
+    let pool = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(50))
+        .idle_timeout(Some(Duration::from_millis(50)))
+        .max_connections(1)
+        .connect_lazy_with(connect_options);
+    let store = PostgresEventStore::from_pool_for_tests(pool);
+
+    // When: Developer pings the unreachable postgres
+    let ping_result = store.ping().await;
+
+    // Then: Developer observes ping failure error
+    assert!(
+        matches!(ping_result, Err(PostgresEventStoreError::PingFailed(_))),
+        "unreachable postgres should surface ping failure"
+    );
 }

@@ -41,6 +41,11 @@ impl PostgresEventStore {
         Ok(Self { pool })
     }
 
+    /// Test-only constructor that exists solely for mutation testing and integration harnesses.
+    pub fn from_pool_for_tests(pool: Pool<Postgres>) -> Self {
+        Self { pool }
+    }
+
     pub async fn ping(&self) -> Result<(), PostgresEventStoreError> {
         query("SELECT 1")
             .execute(&self.pool)
@@ -196,16 +201,17 @@ impl EventStore for PostgresEventStore {
 }
 
 fn map_sqlx_error(error: sqlx::Error, operation: &'static str) -> EventStoreError {
-    match &error {
-        sqlx::Error::Database(db_error) if db_error.code().is_some() => {
-            if db_error.code().as_deref() == Some("23505") {
-                EventStoreError::VersionConflict
-            } else {
-                EventStoreError::StoreFailure { operation }
-            }
-        }
-        _ => EventStoreError::StoreFailure { operation },
+    if let sqlx::Error::Database(db_error) = &error
+        && let Some(code) = db_error.code().as_deref()
+    {
+        return if code == "23505" {
+            EventStoreError::VersionConflict
+        } else {
+            EventStoreError::StoreFailure { operation }
+        };
     }
+
+    EventStoreError::StoreFailure { operation }
 }
 
 fn map_insert_error(error: sqlx::Error, stream_id: &StreamId) -> EventStoreError {
@@ -220,4 +226,67 @@ fn map_insert_error(error: sqlx::Error, stream_id: &StreamId) -> EventStoreError
     }
 
     map_sqlx_error(error, "append_events")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::{Executor, postgres::PgPoolOptions};
+    use std::env;
+    #[allow(unused_imports)]
+    use tokio::test;
+    use uuid::Uuid;
+
+    fn postgres_connection_string() -> String {
+        env::var("EVENTCORE_TEST_POSTGRES_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                "postgres://postgres:postgres@localhost:5433/eventcore_test".to_string()
+            })
+    }
+
+    #[tokio::test]
+    async fn map_sqlx_error_translates_unique_constraint_violations() {
+        // Given: Developer has a table with a unique constraint to trigger duplicates
+        let connection_string = postgres_connection_string();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&connection_string)
+            .await
+            .expect("postgres test database should be reachable for map_sqlx_error tests");
+        let table_name = format!("map_sqlx_error_test_{}", Uuid::now_v7().simple());
+        let create_statement = format!("CREATE TABLE {table_name} (event_id UUID PRIMARY KEY)");
+        pool.execute(create_statement.as_str())
+            .await
+            .expect("should create temporary table for unique constraint test");
+
+        let insert_statement = format!("INSERT INTO {table_name} (event_id) VALUES ($1)");
+        let event_id = Uuid::now_v7();
+        sqlx::query(insert_statement.as_str())
+            .bind(event_id)
+            .execute(&pool)
+            .await
+            .expect("initial insert should succeed");
+
+        let duplicate_error = sqlx::query(insert_statement.as_str())
+            .bind(event_id)
+            .execute(&pool)
+            .await
+            .expect_err("duplicate insert should trigger unique constraint");
+
+        let drop_statement = format!("DROP TABLE IF EXISTS {table_name}");
+        pool.execute(drop_statement.as_str())
+            .await
+            .expect("should drop temporary table after unique constraint test");
+
+        // When: Developer maps the sqlx duplicate error
+        let mapped_error = map_sqlx_error(duplicate_error, "append_events");
+
+        // Then: Developer sees version conflict error for 23505 violations
+        assert!(
+            matches!(mapped_error, EventStoreError::VersionConflict),
+            "unique constraint violations should map to version conflict"
+        );
+    }
 }
