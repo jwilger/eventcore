@@ -6,8 +6,7 @@ use eventcore::{
 };
 use serde_json::{Value, json};
 use sqlx::types::Json;
-use sqlx::{Pool, Postgres, Row, postgres::PgPoolOptions, query, query_scalar};
-use std::collections::HashMap;
+use sqlx::{Pool, Postgres, Row, postgres::PgPoolOptions, query};
 use thiserror::Error;
 use tracing::{info, instrument, warn};
 use uuid::Uuid;
@@ -134,128 +133,87 @@ impl EventStore for PostgresEventStore {
         writes: StreamWrites,
     ) -> Result<EventStreamSlice, EventStoreError> {
         let expected_versions = writes.expected_versions().clone();
+        let entries = writes.into_entries();
+
+        if entries.is_empty() {
+            return Ok(EventStreamSlice);
+        }
+
         info!(
             stream_count = expected_versions.len(),
+            event_count = entries.len(),
             "[postgres.append_events] appending events to postgres"
         );
 
-        let mut connection = self
-            .pool
-            .acquire()
-            .await
-            .map_err(|error| map_sqlx_error(error, "acquire_connection"))?;
+        // Build expected versions JSON for the trigger
+        let expected_versions_json: Value = expected_versions
+            .iter()
+            .map(|(stream_id, version)| {
+                (stream_id.as_ref().to_string(), json!(version.into_inner()))
+            })
+            .collect();
 
-        query("BEGIN")
-            .execute(&mut *connection)
+        let mut tx = self
+            .pool
+            .begin()
             .await
             .map_err(|error| map_sqlx_error(error, "begin_transaction"))?;
 
-        let append_result = {
-            let connection = &mut connection;
-            async move {
-                for (stream_id, expected_version) in &expected_versions {
-                    let current_version: Option<i64> = query_scalar(
-                        "SELECT stream_version FROM eventcore_events WHERE stream_id = $1 ORDER BY stream_version DESC LIMIT 1 FOR UPDATE",
-                    )
-                    .bind(stream_id.as_ref())
-                    .fetch_optional(&mut **connection)
-                    .await
-                    .map_err(|error| map_sqlx_error(error, "select_stream_version"))?;
+        // Set expected versions in session config for trigger validation
+        query("SELECT set_config('eventcore.expected_versions', $1, true)")
+            .bind(expected_versions_json.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| map_sqlx_error(error, "set_expected_versions"))?;
 
-                    let current = current_version.unwrap_or(0);
-                    if current as usize != expected_version.into_inner() {
-                        warn!(
-                            stream = %stream_id,
-                            expected = expected_version.into_inner(),
-                            actual = current,
-                            "[postgres.version_conflict] optimistic concurrency mismatch detected"
-                        );
-                        return Err(EventStoreError::VersionConflict);
-                    }
-                }
+        // Insert all events - trigger handles version assignment and validation
+        for entry in entries {
+            let StreamWriteEntry {
+                stream_id,
+                event_type,
+                event_data,
+                ..
+            } = entry;
 
-                let mut version_counters: HashMap<StreamId, usize> = expected_versions
-                    .iter()
-                    .map(|(stream_id, version)| (stream_id.clone(), version.into_inner()))
-                    .collect();
-
-                for entry in writes.into_entries() {
-                    let StreamWriteEntry {
-                        stream_id,
-                        event_type,
-                        event_data,
-                        ..
-                    } = entry;
-
-                    let counter = version_counters
-                        .get_mut(&stream_id)
-                        .expect("stream should have registered expected version");
-                    *counter += 1;
-                    let version = *counter as i64;
-
-                    let event_id = Uuid::now_v7();
-                    query(
-                        "INSERT INTO eventcore_events (event_id, stream_id, stream_version, event_type, event_data, metadata)
-                         VALUES ($1, $2, $3, $4, $5, $6)",
-                    )
-                    .bind(event_id)
-                    .bind(stream_id.as_ref())
-                    .bind(version)
-                    .bind(event_type)
-                    .bind(Json(event_data))
-                    .bind(Json(json!({})))
-                    .execute(&mut **connection)
-                    .await
-                    .map_err(|error| map_insert_error(error, &stream_id))?;
-                }
-
-                Ok(EventStreamSlice)
-            }
+            let event_id = Uuid::now_v7();
+            query(
+                "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata)
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(event_id)
+            .bind(stream_id.as_ref())
+            .bind(event_type)
+            .bind(Json(event_data))
+            .bind(Json(json!({})))
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| map_sqlx_error(error, "append_events"))?;
         }
-        .await;
 
-        match append_result {
-            Ok(slice) => {
-                query("COMMIT")
-                    .execute(&mut *connection)
-                    .await
-                    .map_err(|error| map_sqlx_error(error, "commit_transaction"))?;
-                Ok(slice)
-            }
-            Err(error) => {
-                let _ = query("ROLLBACK").execute(&mut *connection).await;
-                Err(error)
-            }
-        }
+        tx.commit()
+            .await
+            .map_err(|error| map_sqlx_error(error, "commit_transaction"))?;
+
+        Ok(EventStreamSlice)
     }
 }
 
 fn map_sqlx_error(error: sqlx::Error, operation: &'static str) -> EventStoreError {
-    if let sqlx::Error::Database(db_error) = &error
-        && let Some(code) = db_error.code().as_deref()
-    {
-        return if code == "23505" {
-            EventStoreError::VersionConflict
-        } else {
-            EventStoreError::StoreFailure { operation }
-        };
+    if let sqlx::Error::Database(db_error) = &error {
+        let code = db_error.code();
+        let code_str = code.as_deref();
+        // P0001: Custom error from trigger (version_conflict)
+        // 23505: Unique constraint violation (fallback for version conflict)
+        if code_str == Some("P0001") || code_str == Some("23505") {
+            warn!(
+                error = %db_error,
+                "[postgres.version_conflict] optimistic concurrency check failed"
+            );
+            return EventStoreError::VersionConflict;
+        }
     }
 
     EventStoreError::StoreFailure { operation }
-}
-
-fn map_insert_error(error: sqlx::Error, stream_id: &StreamId) -> EventStoreError {
-    if let sqlx::Error::Database(db_error) = &error
-        && db_error.code().as_deref() == Some("23505")
-    {
-        warn!(
-            stream = %stream_id,
-            "[postgres.version_conflict] unique constraint detected during insert"
-        );
-        return EventStoreError::VersionConflict;
-    }
-
-    map_sqlx_error(error, "append_events")
 }
 
 #[cfg(test)]
@@ -274,6 +232,65 @@ mod tests {
             .unwrap_or_else(|| {
                 "postgres://postgres:postgres@localhost:5433/eventcore_test".to_string()
             })
+    }
+
+    async fn setup_test_db() -> Pool<Postgres> {
+        let connection_string = postgres_connection_string();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&connection_string)
+            .await
+            .expect("should connect to test database");
+
+        // Clean up
+        pool.execute("DROP TABLE IF EXISTS eventcore_events CASCADE")
+            .await
+            .expect("should drop events table");
+        pool.execute("DROP FUNCTION IF EXISTS eventcore_assign_stream_version CASCADE")
+            .await
+            .ok(); // May not exist
+        pool.execute("DELETE FROM _sqlx_migrations").await.ok(); // May not exist
+
+        // Run migrations
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("migrations should succeed");
+
+        pool
+    }
+
+    #[tokio::test]
+    async fn trigger_assigns_sequential_versions() {
+        let pool = setup_test_db().await;
+
+        // Set expected version via session config
+        pool.execute(
+            "SELECT set_config('eventcore.expected_versions', '{\"test-stream\": 0}', true)",
+        )
+        .await
+        .expect("should set expected versions");
+
+        // Insert first event
+        let result = sqlx::query(
+            "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata)
+             VALUES ($1, $2, $3, $4, $5) RETURNING stream_version",
+        )
+        .bind(Uuid::now_v7())
+        .bind("test-stream")
+        .bind("TestEvent")
+        .bind(serde_json::json!({"n": 1}))
+        .bind(serde_json::json!({}))
+        .fetch_one(&pool)
+        .await;
+
+        match &result {
+            Ok(row) => {
+                let version: i64 = row.get("stream_version");
+                assert_eq!(version, 1, "first event should have version 1");
+            }
+            Err(e) => panic!("insert failed: {}", e),
+        }
     }
 
     #[tokio::test]
