@@ -22,10 +22,7 @@ mod postgres_contract_suite {
             .await
             .expect("contract suite should construct postgres event store");
 
-        store
-            .migrate()
-            .await
-            .expect("contract suite migrations should succeed");
+        store.migrate().await;
 
         store
     }

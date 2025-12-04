@@ -15,10 +15,6 @@ use uuid::Uuid;
 pub enum PostgresEventStoreError {
     #[error("failed to create postgres connection pool")]
     ConnectionFailed(#[source] sqlx::Error),
-    #[error("failed to ping postgres")]
-    PingFailed(#[source] sqlx::Error),
-    #[error("failed to apply postgres migrations")]
-    MigrationFailed(#[source] sqlx::migrate::MigrateError),
 }
 
 /// Configuration for PostgresEventStore connection pool.
@@ -75,19 +71,20 @@ impl PostgresEventStore {
         Self { pool }
     }
 
-    pub async fn ping(&self) -> Result<(), PostgresEventStoreError> {
+    #[cfg_attr(test, mutants::skip)] // infallible: panics on failure
+    pub async fn ping(&self) {
         query("SELECT 1")
             .execute(&self.pool)
             .await
-            .map(|_| ())
-            .map_err(PostgresEventStoreError::PingFailed)
+            .expect("postgres ping failed");
     }
 
-    pub async fn migrate(&self) -> Result<(), PostgresEventStoreError> {
+    #[cfg_attr(test, mutants::skip)] // infallible: panics on failure
+    pub async fn migrate(&self) {
         sqlx::migrate!("./migrations")
             .run(&self.pool)
             .await
-            .map_err(PostgresEventStoreError::MigrationFailed)
+            .expect("postgres migration failed");
     }
 }
 

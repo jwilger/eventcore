@@ -64,10 +64,7 @@ async fn make_store() -> (PostgresEventStore, String) {
         .await
         .expect("multi-stream test should construct postgres store");
 
-    store
-        .migrate()
-        .await
-        .expect("multi-stream test migrations should succeed");
+    store.migrate().await;
 
     (store, connection_string)
 }

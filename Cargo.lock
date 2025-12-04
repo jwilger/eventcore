@@ -329,6 +329,7 @@ dependencies = [
  "eventcore",
  "eventcore-testing",
  "futures",
+ "mutants",
  "serde",
  "serde_json",
  "sqlx",
@@ -857,6 +858,12 @@ dependencies = [
  "wasi",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "mutants"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc0287524726960e07b119cebd01678f852f147742ae0d925e6a520dca956126"
 
 [[package]]
 name = "nu-ansi-term"

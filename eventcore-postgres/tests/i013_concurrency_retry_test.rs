@@ -24,10 +24,7 @@ async fn make_store() -> PostgresEventStore {
         .await
         .expect("concurrency test should construct postgres event store");
 
-    store
-        .migrate()
-        .await
-        .expect("concurrency test migrations should succeed");
+    store.migrate().await;
 
     store
 }
