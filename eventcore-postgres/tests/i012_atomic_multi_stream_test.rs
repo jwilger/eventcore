@@ -3,7 +3,8 @@ use std::env;
 use eventcore::{Event, EventStore, StreamId, StreamVersion, StreamWrites};
 use eventcore_postgres::PostgresEventStore;
 use serde::{Deserialize, Serialize};
-use sqlx::{Executor, postgres::PgPoolOptions};
+use sqlx::postgres::PgPoolOptions;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TestEvent {
@@ -17,15 +18,18 @@ impl Event for TestEvent {
     }
 }
 
+fn unique_stream_id(prefix: &str) -> StreamId {
+    StreamId::try_new(format!("{}-{}", prefix, Uuid::now_v7())).expect("valid stream id")
+}
+
 #[tokio::test]
 async fn developer_observes_atomic_multi_stream_commit() {
-    // Given: a migrated Postgres store starting from a clean slate
+    // Given: a migrated Postgres store
     let (store, connection_string) = make_store().await;
 
-    let source_stream =
-        StreamId::try_new("account/A").expect("source account stream id should be valid");
-    let destination_stream =
-        StreamId::try_new("account/B").expect("destination account stream id should be valid");
+    // Use unique stream IDs for parallel test execution
+    let source_stream = unique_stream_id("account/source");
+    let destination_stream = unique_stream_id("account/dest");
 
     // And: a multi-stream write registering both accounts at version 0 with one event each
     let writes = build_multi_stream_writes(&source_stream, &destination_stream);
@@ -56,10 +60,6 @@ fn postgres_connection_string() -> String {
 async fn make_store() -> (PostgresEventStore, String) {
     let connection_string = postgres_connection_string();
 
-    clean_database(&connection_string)
-        .await
-        .expect("multi-stream test should start with clean database");
-
     let store = PostgresEventStore::new(connection_string.clone())
         .await
         .expect("multi-stream test should construct postgres store");
@@ -70,21 +70,6 @@ async fn make_store() -> (PostgresEventStore, String) {
         .expect("multi-stream test migrations should succeed");
 
     (store, connection_string)
-}
-
-async fn clean_database(connection_string: &str) -> Result<(), sqlx::Error> {
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(connection_string)
-        .await?;
-
-    pool.execute("DROP TABLE IF EXISTS eventcore_events CASCADE")
-        .await?;
-
-    pool.execute("DROP TABLE IF EXISTS _sqlx_migrations CASCADE")
-        .await?;
-
-    Ok(())
 }
 
 fn build_multi_stream_writes(

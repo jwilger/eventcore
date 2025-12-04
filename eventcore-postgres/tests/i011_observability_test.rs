@@ -3,7 +3,7 @@ use std::env;
 use eventcore::{Event, EventStore, StreamId, StreamVersion, StreamWrites};
 use eventcore_postgres::PostgresEventStore;
 use serde::{Deserialize, Serialize};
-use sqlx::{Executor, postgres::PgPoolOptions};
+use uuid::Uuid;
 
 fn postgres_connection_string() -> String {
     env::var("DATABASE_URL")
@@ -12,27 +12,8 @@ fn postgres_connection_string() -> String {
         .unwrap_or_else(|| "postgres://postgres:postgres@localhost:5433/eventcore_test".to_string())
 }
 
-async fn clean_database(connection_string: &str) -> Result<(), sqlx::Error> {
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(connection_string)
-        .await?;
-
-    pool.execute("DROP TABLE IF EXISTS eventcore_events CASCADE")
-        .await?;
-
-    pool.execute("DROP TABLE IF EXISTS _sqlx_migrations CASCADE")
-        .await?;
-
-    Ok(())
-}
-
 async fn make_store() -> PostgresEventStore {
     let connection_string = postgres_connection_string();
-
-    clean_database(&connection_string)
-        .await
-        .expect("observability test should start from clean database");
 
     let store = PostgresEventStore::new(connection_string.clone())
         .await
@@ -44,6 +25,10 @@ async fn make_store() -> PostgresEventStore {
         .expect("observability test migrations should succeed");
 
     store
+}
+
+fn unique_stream_id(prefix: &str) -> StreamId {
+    StreamId::try_new(format!("{}-{}", prefix, Uuid::now_v7())).expect("valid stream id")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,9 +49,8 @@ async fn developer_observes_postgres_tracing_spans() {
     // Given: A migrated Postgres store instrumented with tracing spans
     let store = make_store().await;
 
-    // And: A stream with a single event write
-    let stream_id =
-        StreamId::try_new("account-123").expect("valid stream id for observability test");
+    // And: A stream with a single event write (unique per test run)
+    let stream_id = unique_stream_id("observability-test");
     let writes = StreamWrites::new()
         .register_stream(stream_id.clone(), StreamVersion::new(0))
         .and_then(|writes| {

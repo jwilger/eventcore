@@ -3,8 +3,8 @@ use std::{env, sync::Arc};
 use eventcore::{Event, EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
 use eventcore_postgres::PostgresEventStore;
 use serde::{Deserialize, Serialize};
-use sqlx::{Executor, postgres::PgPoolOptions};
 use tokio::sync::Barrier;
+use uuid::Uuid;
 
 fn postgres_connection_string() -> String {
     env::var("DATABASE_URL")
@@ -13,26 +13,12 @@ fn postgres_connection_string() -> String {
         .unwrap_or_else(|| "postgres://postgres:postgres@localhost:5433/eventcore_test".to_string())
 }
 
-async fn clean_database(connection_string: &str) -> Result<(), sqlx::Error> {
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(connection_string)
-        .await?;
-
-    pool.execute("DROP TABLE IF EXISTS eventcore_events CASCADE")
-        .await?;
-    pool.execute("DROP TABLE IF EXISTS _sqlx_migrations CASCADE")
-        .await?;
-
-    Ok(())
+fn unique_stream_id(prefix: &str) -> StreamId {
+    StreamId::try_new(format!("{}-{}", prefix, Uuid::now_v7())).expect("valid stream id")
 }
 
 async fn make_store() -> PostgresEventStore {
     let connection_string = postgres_connection_string();
-
-    clean_database(&connection_string)
-        .await
-        .expect("concurrency test should start from clean database");
 
     let store = PostgresEventStore::new(connection_string.clone())
         .await
@@ -79,8 +65,8 @@ fn build_single_stream_writes(
 async fn developer_retries_after_postgres_version_conflict() {
     // Given: A migrated Postgres store that enforces optimistic concurrency
     let store = make_store().await;
-    let stream_id =
-        StreamId::try_new("account/concurrency").expect("valid stream id for concurrency test");
+    // Unique stream ID per test run for parallel execution
+    let stream_id = unique_stream_id("account/concurrency");
 
     // And: Two separate writes targeting the same stream at version 0
     let first_writes =

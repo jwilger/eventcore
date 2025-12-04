@@ -234,7 +234,7 @@ mod tests {
             })
     }
 
-    async fn setup_test_db() -> Pool<Postgres> {
+    async fn get_migrated_pool() -> Pool<Postgres> {
         let connection_string = postgres_connection_string();
         let pool = PgPoolOptions::new()
             .max_connections(1)
@@ -242,16 +242,7 @@ mod tests {
             .await
             .expect("should connect to test database");
 
-        // Clean up
-        pool.execute("DROP TABLE IF EXISTS eventcore_events CASCADE")
-            .await
-            .expect("should drop events table");
-        pool.execute("DROP FUNCTION IF EXISTS eventcore_assign_stream_version CASCADE")
-            .await
-            .ok(); // May not exist
-        pool.execute("DELETE FROM _sqlx_migrations").await.ok(); // May not exist
-
-        // Run migrations
+        // Ensure migrations have run (idempotent)
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
@@ -260,16 +251,24 @@ mod tests {
         pool
     }
 
+    fn unique_stream_id(prefix: &str) -> String {
+        format!("{}-{}", prefix, Uuid::now_v7())
+    }
+
     #[tokio::test]
     async fn trigger_assigns_sequential_versions() {
-        let pool = setup_test_db().await;
+        let pool = get_migrated_pool().await;
+        let stream_id = unique_stream_id("trigger-test");
 
         // Set expected version via session config
-        pool.execute(
-            "SELECT set_config('eventcore.expected_versions', '{\"test-stream\": 0}', true)",
-        )
-        .await
-        .expect("should set expected versions");
+        let config_query = format!(
+            "SELECT set_config('eventcore.expected_versions', '{{\"{}\":0}}', true)",
+            stream_id
+        );
+        sqlx::query(&config_query)
+            .execute(&pool)
+            .await
+            .expect("should set expected versions");
 
         // Insert first event
         let result = sqlx::query(
@@ -277,7 +276,7 @@ mod tests {
              VALUES ($1, $2, $3, $4, $5) RETURNING stream_version",
         )
         .bind(Uuid::now_v7())
-        .bind("test-stream")
+        .bind(&stream_id)
         .bind("TestEvent")
         .bind(serde_json::json!({"n": 1}))
         .bind(serde_json::json!({}))
