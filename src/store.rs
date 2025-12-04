@@ -1,6 +1,5 @@
 use crate::Event;
 use nutype::nutype;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
@@ -217,28 +216,20 @@ pub trait EventStore {
 #[nutype(
     sanitize(trim),
     validate(not_empty, len_char_max = 255),
-    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display)
+    derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Hash,
+        AsRef,
+        Deref,
+        Display,
+        Serialize,
+        Deserialize
+    )
 )]
 pub struct StreamId(String);
-
-impl Serialize for StreamId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.as_ref())
-    }
-}
-
-impl<'de> Deserialize<'de> for StreamId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        StreamId::try_new(value).map_err(|error| serde::de::Error::custom(error.to_string()))
-    }
-}
 
 /// Stream version domain type.
 ///
