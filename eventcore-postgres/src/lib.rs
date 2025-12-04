@@ -1,0 +1,335 @@
+use std::time::Duration;
+
+use eventcore::{
+    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamId,
+    StreamWriteEntry, StreamWrites,
+};
+use serde_json::{Value, json};
+use sqlx::types::Json;
+use sqlx::{Pool, Postgres, Row, postgres::PgPoolOptions, query};
+use thiserror::Error;
+use tracing::{info, instrument, warn};
+use uuid::Uuid;
+
+#[derive(Debug, Error)]
+pub enum PostgresEventStoreError {
+    #[error("failed to create postgres connection pool")]
+    ConnectionFailed(#[source] sqlx::Error),
+}
+
+/// Configuration for PostgresEventStore connection pool.
+#[derive(Debug, Clone)]
+pub struct PostgresConfig {
+    /// Maximum number of connections in the pool (default: 10)
+    pub max_connections: u32,
+    /// Timeout for acquiring a connection from the pool (default: 30 seconds)
+    pub acquire_timeout: Duration,
+}
+
+impl Default for PostgresConfig {
+    fn default() -> Self {
+        Self {
+            max_connections: 10,
+            acquire_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PostgresEventStore {
+    pool: Pool<Postgres>,
+}
+
+impl PostgresEventStore {
+    /// Create a new PostgresEventStore with default configuration.
+    pub async fn new<S: Into<String>>(
+        connection_string: S,
+    ) -> Result<Self, PostgresEventStoreError> {
+        Self::with_config(connection_string, PostgresConfig::default()).await
+    }
+
+    /// Create a new PostgresEventStore with custom configuration.
+    pub async fn with_config<S: Into<String>>(
+        connection_string: S,
+        config: PostgresConfig,
+    ) -> Result<Self, PostgresEventStoreError> {
+        let connection_string = connection_string.into();
+        let pool = PgPoolOptions::new()
+            .max_connections(config.max_connections)
+            .acquire_timeout(config.acquire_timeout)
+            .connect(&connection_string)
+            .await
+            .map_err(PostgresEventStoreError::ConnectionFailed)?;
+        Ok(Self { pool })
+    }
+
+    /// Create a PostgresEventStore from an existing connection pool.
+    ///
+    /// Use this when you need full control over pool configuration or want to
+    /// share a pool across multiple components.
+    pub fn from_pool(pool: Pool<Postgres>) -> Self {
+        Self { pool }
+    }
+
+    #[cfg_attr(test, mutants::skip)] // infallible: panics on failure
+    pub async fn ping(&self) {
+        query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .expect("postgres ping failed");
+    }
+
+    #[cfg_attr(test, mutants::skip)] // infallible: panics on failure
+    pub async fn migrate(&self) {
+        sqlx::migrate!("./migrations")
+            .run(&self.pool)
+            .await
+            .expect("postgres migration failed");
+    }
+}
+
+impl EventStore for PostgresEventStore {
+    #[instrument(name = "postgres.read_stream", skip(self))]
+    async fn read_stream<E: Event>(
+        &self,
+        stream_id: StreamId,
+    ) -> Result<EventStreamReader<E>, EventStoreError> {
+        info!(
+            stream = %stream_id,
+            "[postgres.read_stream] reading events from postgres"
+        );
+
+        let rows = query(
+            "SELECT event_data FROM eventcore_events WHERE stream_id = $1 ORDER BY stream_version ASC",
+        )
+        .bind(stream_id.as_ref())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| map_sqlx_error(error, "read_stream"))?;
+
+        let mut events = Vec::with_capacity(rows.len());
+        for row in rows {
+            let payload: Value = row
+                .try_get("event_data")
+                .map_err(|error| map_sqlx_error(error, "read_stream"))?;
+            let event = serde_json::from_value(payload).map_err(|error| {
+                EventStoreError::DeserializationFailed {
+                    stream_id: stream_id.clone(),
+                    detail: error.to_string(),
+                }
+            })?;
+            events.push(event);
+        }
+
+        Ok(EventStreamReader::new(events))
+    }
+
+    #[instrument(name = "postgres.append_events", skip(self, writes))]
+    async fn append_events(
+        &self,
+        writes: StreamWrites,
+    ) -> Result<EventStreamSlice, EventStoreError> {
+        let expected_versions = writes.expected_versions().clone();
+        let entries = writes.into_entries();
+
+        if entries.is_empty() {
+            return Ok(EventStreamSlice);
+        }
+
+        info!(
+            stream_count = expected_versions.len(),
+            event_count = entries.len(),
+            "[postgres.append_events] appending events to postgres"
+        );
+
+        // Build expected versions JSON for the trigger
+        let expected_versions_json: Value = expected_versions
+            .iter()
+            .map(|(stream_id, version)| {
+                (stream_id.as_ref().to_string(), json!(version.into_inner()))
+            })
+            .collect();
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| map_sqlx_error(error, "begin_transaction"))?;
+
+        // Set expected versions in session config for trigger validation
+        query("SELECT set_config('eventcore.expected_versions', $1, true)")
+            .bind(expected_versions_json.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| map_sqlx_error(error, "set_expected_versions"))?;
+
+        // Insert all events - trigger handles version assignment and validation
+        for entry in entries {
+            let StreamWriteEntry {
+                stream_id,
+                event_type,
+                event_data,
+                ..
+            } = entry;
+
+            let event_id = Uuid::now_v7();
+            query(
+                "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata)
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(event_id)
+            .bind(stream_id.as_ref())
+            .bind(event_type)
+            .bind(Json(event_data))
+            .bind(Json(json!({})))
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| map_sqlx_error(error, "append_events"))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|error| map_sqlx_error(error, "commit_transaction"))?;
+
+        Ok(EventStreamSlice)
+    }
+}
+
+fn map_sqlx_error(error: sqlx::Error, operation: &'static str) -> EventStoreError {
+    if let sqlx::Error::Database(db_error) = &error {
+        let code = db_error.code();
+        let code_str = code.as_deref();
+        // P0001: Custom error from trigger (version_conflict)
+        // 23505: Unique constraint violation (fallback for version conflict)
+        if code_str == Some("P0001") || code_str == Some("23505") {
+            warn!(
+                error = %db_error,
+                "[postgres.version_conflict] optimistic concurrency check failed"
+            );
+            return EventStoreError::VersionConflict;
+        }
+    }
+
+    EventStoreError::StoreFailure { operation }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::{Executor, postgres::PgPoolOptions};
+    use std::env;
+    #[allow(unused_imports)]
+    use tokio::test;
+    use uuid::Uuid;
+
+    fn postgres_connection_string() -> String {
+        env::var("DATABASE_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                "postgres://postgres:postgres@localhost:5433/eventcore_test".to_string()
+            })
+    }
+
+    async fn get_migrated_pool() -> Pool<Postgres> {
+        let connection_string = postgres_connection_string();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&connection_string)
+            .await
+            .expect("should connect to test database");
+
+        // Ensure migrations have run (idempotent)
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("migrations should succeed");
+
+        pool
+    }
+
+    fn unique_stream_id(prefix: &str) -> String {
+        format!("{}-{}", prefix, Uuid::now_v7())
+    }
+
+    #[tokio::test]
+    async fn trigger_assigns_sequential_versions() {
+        let pool = get_migrated_pool().await;
+        let stream_id = unique_stream_id("trigger-test");
+
+        // Set expected version via session config
+        let config_query = format!(
+            "SELECT set_config('eventcore.expected_versions', '{{\"{}\":0}}', true)",
+            stream_id
+        );
+        sqlx::query(&config_query)
+            .execute(&pool)
+            .await
+            .expect("should set expected versions");
+
+        // Insert first event
+        let result = sqlx::query(
+            "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata)
+             VALUES ($1, $2, $3, $4, $5) RETURNING stream_version",
+        )
+        .bind(Uuid::now_v7())
+        .bind(&stream_id)
+        .bind("TestEvent")
+        .bind(serde_json::json!({"n": 1}))
+        .bind(serde_json::json!({}))
+        .fetch_one(&pool)
+        .await;
+
+        match &result {
+            Ok(row) => {
+                let version: i64 = row.get("stream_version");
+                assert_eq!(version, 1, "first event should have version 1");
+            }
+            Err(e) => panic!("insert failed: {}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn map_sqlx_error_translates_unique_constraint_violations() {
+        // Given: Developer has a table with a unique constraint to trigger duplicates
+        let connection_string = postgres_connection_string();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&connection_string)
+            .await
+            .expect("postgres test database should be reachable for map_sqlx_error tests");
+        let table_name = format!("map_sqlx_error_test_{}", Uuid::now_v7().simple());
+        let create_statement = format!("CREATE TABLE {table_name} (event_id UUID PRIMARY KEY)");
+        pool.execute(create_statement.as_str())
+            .await
+            .expect("should create temporary table for unique constraint test");
+
+        let insert_statement = format!("INSERT INTO {table_name} (event_id) VALUES ($1)");
+        let event_id = Uuid::now_v7();
+        sqlx::query(insert_statement.as_str())
+            .bind(event_id)
+            .execute(&pool)
+            .await
+            .expect("initial insert should succeed");
+
+        let duplicate_error = sqlx::query(insert_statement.as_str())
+            .bind(event_id)
+            .execute(&pool)
+            .await
+            .expect_err("duplicate insert should trigger unique constraint");
+
+        let drop_statement = format!("DROP TABLE IF EXISTS {table_name}");
+        pool.execute(drop_statement.as_str())
+            .await
+            .expect("should drop temporary table after unique constraint test");
+
+        // When: Developer maps the sqlx duplicate error
+        let mapped_error = map_sqlx_error(duplicate_error, "append_events");
+
+        // Then: Developer sees version conflict error for 23505 violations
+        assert!(
+            matches!(mapped_error, EventStoreError::VersionConflict),
+            "unique constraint violations should map to version conflict"
+        );
+    }
+}

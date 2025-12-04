@@ -1,6 +1,9 @@
 use eventcore::{Event, EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
 #[derive(Debug)]
 pub struct ContractTestFailure {
     scenario: &'static str,
@@ -45,7 +48,7 @@ impl std::error::Error for ContractTestFailure {}
 
 pub type ContractTestResult = Result<(), ContractTestFailure>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractTestEvent {
     stream_id: StreamId,
 }
@@ -66,7 +69,8 @@ fn contract_stream_id(
     scenario: &'static str,
     label: &str,
 ) -> Result<StreamId, ContractTestFailure> {
-    let raw = format!("contract::{}::{}", scenario, label);
+    // Include UUID for parallel test execution against shared database
+    let raw = format!("contract::{}::{}::{}", scenario, label, Uuid::now_v7());
 
     StreamId::try_new(raw.clone()).map_err(|error| {
         ContractTestFailure::assertion(

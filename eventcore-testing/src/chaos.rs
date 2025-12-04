@@ -144,8 +144,9 @@ where
 mod tests {
     use super::*;
     use eventcore::{InMemoryEventStore, StreamVersion};
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     struct PassthroughEvent {
         stream_id: StreamId,
     }

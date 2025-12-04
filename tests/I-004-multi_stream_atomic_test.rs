@@ -14,6 +14,7 @@ use eventcore::{
     StreamVersion, StreamWrites, execute,
 };
 use nutype::nutype;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 fn test_account_id() -> StreamId {
@@ -24,10 +25,13 @@ fn test_amount(cents: u16) -> MoneyAmount {
     MoneyAmount::try_new(cents).expect("valid amount")
 }
 
-#[nutype(validate(greater = 0), derive(Debug, Clone, Copy, PartialEq, Eq))]
+#[nutype(
+    validate(greater = 0),
+    derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)
+)]
 struct MoneyAmount(u16);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum TestDomainEvents {
     Debited {
         account_id: StreamId,

@@ -64,14 +64,12 @@ jobs:
 
       - name: Run tests
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
         run: cargo nextest run --workspace --all-features
 
       - name: Run doctests
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
         run: cargo test --doc --workspace --all-features
 
   format:
@@ -109,6 +107,22 @@ jobs:
     name: Mutation
     needs: test
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: eventcore_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v6
 
@@ -126,6 +140,8 @@ jobs:
         run: cargo install cargo-mutants --locked
 
       - name: Run cargo mutants
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
         run: cargo mutants --workspace
 
       - name: Upload mutation report

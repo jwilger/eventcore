@@ -6,6 +6,7 @@ use eventcore::{
     EventStreamReader, EventStreamSlice, InMemoryEventStore, NewEvents, RetryPolicy,
     StreamDeclarations, StreamId, StreamResolver, StreamVersion, StreamWrites, execute,
 };
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 
 #[tokio::test]
@@ -245,7 +246,7 @@ impl EventStore for CountingEventStore {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum CheckoutEvent {
     OrderPaymentMethodLinked {
         order_stream: StreamId,

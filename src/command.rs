@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 use crate::errors::CommandError;
@@ -105,7 +106,7 @@ pub trait StreamResolver<State> {
 /// * `Clone` - Required for state reconstruction (apply method may need events multiple times)
 /// * `Send` - Required for async storage backends and cross-thread event handling
 /// * `'static` - Required for type erasure in storage and async trait boundaries
-pub trait Event: Clone + Send + 'static {
+pub trait Event: Clone + Send + Serialize + DeserializeOwned + 'static {
     /// Returns the stream this event belongs to.
     ///
     /// The stream ID represents the aggregate identity in Domain-Driven Design.

@@ -1,0 +1,4 @@
+[advisories]
+ignore = [
+    "RUSTSEC-2023-0071", # sqlx pulls in rsa via mysql migrator path; MySQL backend unused
+]

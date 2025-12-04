@@ -3,6 +3,7 @@ use eventcore::{
     EventStreamReader, EventStreamSlice, InMemoryEventStore, MetricsHook, NewEvents, RetryContext,
     RetryPolicy, StreamDeclarations, StreamId, StreamWrites, execute,
 };
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -12,7 +13,7 @@ fn test_stream_id() -> StreamId {
 }
 
 /// Test-specific event type
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct TestEvent {
     stream_id: StreamId,
 }

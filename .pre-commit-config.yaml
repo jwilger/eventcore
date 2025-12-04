@@ -27,6 +27,7 @@ repos:
         types: [rust]
         pass_filenames: false
         fail_fast: true
+        always_run: true
 
       - id: cargo-test-doc
         name: cargo test --doc
@@ -34,6 +35,7 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+        always_run: true
 
       - id: cargo-check
         name: cargo check
@@ -41,6 +43,7 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+        always_run: true
 
       - id: cargo-audit
         name: cargo audit
@@ -48,6 +51,7 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+        always_run: true
 
   # Conventional commits enforcement
   - repo: https://github.com/commitizen-tools/commitizen
@@ -55,22 +59,31 @@ repos:
     hooks:
       - id: commitizen
         stages: [commit-msg]
+        always_run: true
 
   # General file formatting
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
+        always_run: true
       - id: end-of-file-fixer
+        always_run: true
       - id: check-yaml
+        always_run: true
       - id: check-added-large-files
+        always_run: true
       - id: check-merge-conflict
+        always_run: true
       - id: check-toml
+        always_run: true
       - id: check-json
         exclude: '\.devcontainer/devcontainer\.json$'
+        always_run: true
       - id: pretty-format-json
         args: ["--autofix", "--indent=2"]
         exclude: '\.devcontainer/devcontainer\.json$'
+        always_run: true
 
   # Prettier formatting for markdown, HTML, JS/TS
   - repo: https://github.com/pre-commit/mirrors-prettier

@@ -3,6 +3,7 @@ use eventcore::{
     RetryPolicy, StreamDeclarations, StreamId, execute,
 };
 use nutype::nutype;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Test helper functions
@@ -14,13 +15,16 @@ fn test_amount(cents: u16) -> MoneyAmount {
     MoneyAmount::try_new(cents).expect("valid amount")
 }
 
-#[nutype(validate(greater = 0), derive(Debug, Clone, Copy, PartialEq, Eq))]
+#[nutype(
+    validate(greater = 0),
+    derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)
+)]
 struct MoneyAmount(u16);
 
 /// Test-specific domain events enum for BankAccount aggregate.
 ///
 /// The Event trait implementation extracts the stream_id from each variant.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum TestDomainEvents {
     MoneyDeposited {
         account_id: StreamId, // Aggregate identity - each event knows its stream

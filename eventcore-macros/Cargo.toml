@@ -16,3 +16,4 @@ trybuild = "1.0"
 eventcore = { path = ".." }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1.18.1", features = ["v7"] }
+serde = { version = "1.0", features = ["derive"] }

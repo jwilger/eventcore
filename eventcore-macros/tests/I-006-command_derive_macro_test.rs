@@ -3,12 +3,13 @@ use eventcore::{
     RetryPolicy, StreamDeclarations, StreamId, execute,
 };
 use eventcore_macros::Command;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Domain events expressed in the test to keep both implementations honest.
 /// They mimic the real aggregate events a developer would emit when moving
 /// money between two accounts.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum TransferEvent {
     Debited { account_id: StreamId, cents: u64 },
     Credited { account_id: StreamId, cents: u64 },
