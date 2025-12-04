@@ -748,4 +748,21 @@ mod tests {
             EventStoreError::UndeclaredStream { stream_id: ref actual } if *actual == stream_id
         ));
     }
+
+    #[test]
+    fn expected_versions_returns_registered_streams_and_versions() {
+        let stream_a = StreamId::try_new("stream-a").expect("valid stream id");
+        let stream_b = StreamId::try_new("stream-b").expect("valid stream id");
+
+        let writes = StreamWrites::new()
+            .register_stream(stream_a.clone(), StreamVersion::new(0))
+            .and_then(|w| w.register_stream(stream_b.clone(), StreamVersion::new(5)))
+            .expect("registration should succeed");
+
+        let versions = writes.expected_versions();
+
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions.get(&stream_a), Some(&StreamVersion::new(0)));
+        assert_eq!(versions.get(&stream_b), Some(&StreamVersion::new(5)));
+    }
 }
