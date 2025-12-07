@@ -1,7 +1,7 @@
 # EventCore Architecture
 
-**Document Version:** 1.4
-**Date:** 2025-11-30
+**Document Version:** 1.5
+**Date:** 2025-12-06
 **Phase:** 4 - Architecture Synthesis
 
 ## Overview
@@ -10,11 +10,11 @@ EventCore is a type-driven event sourcing library for Rust that delivers atomic 
 
 ## Architectural Principles
 
-1. **Type-Driven Development** – All externally visible APIs express domain constraints in their signatures. Domain concepts use validated newtypes (e.g., `StreamId`, `EventId`, `CorrelationId`) constructed via smart constructors, ensuring “parse, don’t validate” semantics. Phantom types and typestate patterns make illegal states unrepresentable. Total functions and structured errors replace panics.
+1. **Type-Driven Development** – All externally visible APIs express domain constraints in their signatures. Domain concepts use validated newtypes (e.g., `StreamId`, `EventId`, `CorrelationId`) constructed via smart constructors, ensuring "parse, don't validate" semantics. Phantom types and typestate patterns make illegal states unrepresentable. Total functions and structured errors replace panics.
 2. **Correctness over Throughput** – Multi-stream atomicity, optimistic concurrency detection, and immutability are non-negotiable. Performance optimizations must preserve these guarantees and therefore happen _within_ atomic transaction boundaries provided by the backing store.
 3. **Infrastructure Neutrality** – The library owns infrastructure concerns (stream management, retries, metadata, storage abstraction) and never assumes a particular business domain. Applications own their domain events, metadata schemas, and business rules.
 4. **Free-Function APIs** – Public entry points are free functions with explicit dependencies (`execute(command, store)`), keeping the API surface minimal and composable. Structs exist only when grouping configuration or results adds clarity.
-5. **Developer Ergonomics** – The `#[derive(Command)]` macro generates all infrastructure boilerplate. Developers write only domain code (state reconstruction + business logic). Automatic retries, contract-test tooling, and in-memory storage are included in the main crate to support a “working command in 30 minutes” onboarding goal.
+5. **Developer Ergonomics** – The `#[derive(Command)]` macro generates all infrastructure boilerplate. Developers write only domain code (state reconstruction + business logic). Automatic retries, contract-test tooling, and in-memory storage are included in the main crate to support a "working command in 30 minutes" onboarding goal.
 
 ## System Blueprint
 
@@ -26,6 +26,8 @@ graph TB
     Events[Event System]
     Store[Event Store Abstraction]
     Backend[Storage Backend]
+    SubTrait[Event Subscription Abstraction]
+    Projections[Projection/Read Model Builders]
 
     App -->|execute(command, store)| ExecFn
     ExecFn -->|resolve & queue streams| Cmd
@@ -33,6 +35,11 @@ graph TB
     Events -->|trait bounds| Store
     Store -->|atomic append| Backend
     Cmd -->|apply/handle| App
+
+    App -->|subscribe(query, coordinator)| SubTrait
+    SubTrait -->|futures::Stream delivery| Projections
+    SubTrait -->|coordinate assignments| Backend
+    Projections -->|checkpoint progress| SubTrait
 
     subgraph Type System
         Types[Validated Domain Types]
@@ -43,29 +50,32 @@ graph TB
     ExecFn -.->|uses| Types
     ExecFn -.->|emits| Errors
     Store -.->|preserves| Meta
+    SubTrait -.->|preserves| Meta
     Events -.->|domain types implement| Types
 
     style ExecFn fill:#e1f5ff
     style Store fill:#e1ffe1
     style Cmd fill:#ffe1e1
     style Events fill:#fff3cd
+    style SubTrait fill:#d4edda
+    style Projections fill:#cce5ff
 ```
 
 ## Event Store Abstraction
 
 ### Responsibilities
 
-The `EventStore` trait exposes two core operations:
+The `EventStore` trait exposes two core operations for the **write side** (commands):
 
 1. `read_stream` / `read_streams` – fetch all events for one or more streams, returning both events and the current stream versions.
 2. `append_events` – atomically register new streams (if needed) and append events to one or more streams while verifying expected versions.
 
-A separate `EventSubscription` trait provides long-lived projection feeds (poll or push). Subscriptions are optional; not every backend must implement them.
+The separate `EventSubscription` trait provides the **read side** (projections and read models) through long-lived event feeds. This separation reflects the fundamental distinction between modifying state (commands via EventStore) and observing state changes over time (subscriptions via EventSubscription). Not every backend must implement subscriptions; backends opt into this capability.
 
 ### Atomicity and Transactions
 
-- Multi-stream atomicity is achieved by delegating to the backend’s native transaction mechanism (PostgreSQL ACID transactions, in-memory mutexes, etc.).
-- Append operations are “all-or-nothing” across every stream referenced in a command.
+- Multi-stream atomicity is achieved by delegating to the backend's native transaction mechanism (PostgreSQL ACID transactions, in-memory mutexes, etc.).
+- Append operations are "all-or-nothing" across every stream referenced in a command.
 - Backend implementations hide their transaction mechanics; the trait merely promises atomic semantics.
 
 ### Versioning & Optimistic Concurrency
@@ -107,6 +117,136 @@ A reusable contract test suite (`eventcore_testing::event_store_contract_tests`)
 Every backend (first-party or third-party) integrates these tests into its CI pipeline to guarantee semantic compliance.
 
 These helpers are provided by the dedicated `eventcore-testing` crate. Consumers should add `eventcore-testing` under the `[dev-dependencies]` section in their Cargo.toml so the testing utilities do not inflate production release binaries. The crate will only be included in downstream release artifacts if a project explicitly elects to list it under `[dependencies]`; keeping it as a dev-dependency preserves lean release builds while still enabling rich testing and contract verification during development and CI.
+
+## Event Subscriptions & Projections
+
+### Separation of Concerns
+
+EventCore separates the write path (commands modifying state) from the read path (projections observing state changes):
+
+- **EventStore** handles commands: atomic multi-stream appends with optimistic concurrency for aggregate state modification
+- **EventSubscription** handles projections: long-lived event streams for building read models and triggering side effects
+
+This separation embodies CQRS (Command-Query Responsibility Segregation) at the architectural level. Commands and subscriptions differ fundamentally in lifecycle, semantics, and backend requirements, so conflating them would violate single responsibility.
+
+### Subscription Queries
+
+Projections query events using `SubscriptionQuery`, a composable filter chain:
+
+```rust
+// Type-safe filter composition (not magic strings)
+let query = SubscriptionQuery::all()
+    .filter_stream_prefix("account-")
+    .filter_event_type::<MoneyDeposited>();
+```
+
+The composable API provides:
+
+- **Type Safety**: Invalid query combinations caught at compile time
+- **Discoverability**: IDE autocomplete guides developers to valid filter methods
+- **Flexibility**: Multi-dimensional queries (stream patterns + event types + metadata filters)
+
+Queries remain infrastructure types distinct from `StreamId` (which represents aggregate identity). This maintains domain-first design—`StreamId` stays focused on business concepts while `SubscriptionQuery` expresses cross-cutting infrastructure queries.
+
+### Push-Based Delivery
+
+Subscriptions deliver events as `futures::Stream`, integrating naturally with Rust's async ecosystem:
+
+```rust
+let subscription: impl EventSubscription = /* ... */;
+let events: impl Stream<Item = Event> = subscription.subscribe(query).await?;
+
+// Use StreamExt combinators
+events
+    .map(|evt| build_projection(evt))
+    .take(100)
+    .collect::<Vec<_>>()
+    .await;
+```
+
+This push-based model enables:
+
+- Standard async patterns: `select!`, `join!`, `StreamExt` combinators
+- Clean testing: collect streams into vectors, assert on counts/contents
+- Natural composition: chain filters, maps, and take operations
+
+Backends implement push delivery through spawned tasks and internal buffers, keeping this complexity internal while providing ergonomic consumer APIs.
+
+### Distributed Coordination
+
+The `SubscriptionCoordinator` trait provides production-ready horizontal scaling:
+
+**Control Plane (Coordination):**
+- Assigns subscriptions to consumer processes
+- Detects failures via heartbeats and timeouts
+- Rebalances subscriptions when processes join/leave
+- Manages checkpoint persistence and resumption
+
+**Data Plane (Delivery):**
+- `EventSubscription` delivers event streams to assigned consumers
+- Consumers process events and checkpoint progress
+- Checkpoint validates ownership—failure indicates revocation during rebalancing
+
+Backends expose coordination capabilities via an associated type:
+
+```rust
+trait EventSubscription {
+    type Coordinator: SubscriptionCoordinator;
+    fn coordinator(&self) -> Option<&Self::Coordinator>;
+}
+```
+
+This design:
+
+- Makes backend capabilities explicit at compile time
+- Allows single-process applications to ignore coordination entirely
+- Enables using different backends for events vs coordination if needed
+
+### At-Least-Once Delivery
+
+Subscriptions guarantee **at-least-once delivery**:
+
+- Events may be delivered multiple times during failures, restarts, or rebalancing
+- Brief overlap between old and new owners is possible during reassignment
+- **Consumers must be idempotent**: processing the same event twice must produce the same result
+
+This delivery semantic reflects production reality—exactly-once would require distributed transactions that conflict with event sourcing's append-only model. Applications design projections to handle duplicates gracefully.
+
+### Checkpoint Management
+
+Consumers control **when** to checkpoint; coordinators control **where** and **how**:
+
+```rust
+let membership = coordinator.join("my-consumer-group").await?;
+let active: ActiveSubscription<E> = membership.assignments().next().await?;
+
+while let Some(event) = active.events.next().await {
+    update_read_model(event);
+
+    // Validates ownership, persists position
+    active.checkpoint(event.position).await?;
+    // Returns Err(Revoked) if subscription was reassigned
+}
+```
+
+The `ActiveSubscription::checkpoint()` method:
+
+1. **Validates ownership**: Ensures this consumer still owns the subscription
+2. **Persists position**: Stores checkpoint for resumption after restart
+3. **Discovers revocation**: Fails if subscription was reassigned during rebalancing
+
+This design makes ownership validation automatic—consumers cannot checkpoint without going through the coordinator. Checkpoint storage location (same database as events, separate storage, etc.) is a coordinator configuration choice.
+
+### Production Deployment
+
+EventCore supports distributed deployments without external infrastructure:
+
+- **PostgreSQL backend** uses advisory locks for coordination—zero additional services
+- **Consumer groups** distribute subscription load across multiple processes
+- **Automatic rebalancing** when processes start, stop, or crash
+- **Checkpoint resumption** ensures no events are lost across restarts
+
+This built-in coordination eliminates operational burden while providing production-grade reliability. Applications deploying to PostgreSQL gain horizontal scaling automatically.
 
 ## Event System & Metadata
 
@@ -187,7 +327,7 @@ When commands implement `StreamResolver<State>`, the executor:
 
 1. Seeds a `VecDeque<StreamId>` with statically declared streams.
 2. Maintains `scheduled` and `visited` hash sets to deduplicate work.
-3. Pops a stream ID, reads it exactly once, folds events, and records the stream’s version.
+3. Pops a stream ID, reads it exactly once, folds events, and records the stream's version.
 4. Invokes `discover_related_streams(&state)` to enqueue additional stream IDs discovered from reconstructed state.
 5. Continues until the queue is empty, ensuring both static and discovered streams participate in optimistic concurrency.
 
@@ -228,7 +368,7 @@ If Phase 5 returns a concurrency error:
 - **Validated Newtypes** – `StreamId`, `EventId`, `CorrelationId`, `Money`, etc., enforce invariants at construction time via the `nutype` crate.
 - **Phantom Types & Typestate** – `StreamWrite<StreamSet, Event>` enforces compile-time stream access control; `NewEvents` carries the same phantom to ensure only declared streams receive emissions.
 - **Total Functions** – Public APIs return `Result` instead of panicking. Error enums derive `thiserror` and support pattern matching.
-- **Trait Composition** – Narrow traits (`CommandStreams`, `CommandLogic`, `StreamResolver`) keep responsibilities focused and implementations testable.
+- **Trait Composition** – Narrow traits (`CommandStreams`, `CommandLogic`, `StreamResolver`, `EventSubscription`, `SubscriptionCoordinator`) keep responsibilities focused and implementations testable.
 
 ## Error Handling
 
@@ -240,9 +380,9 @@ If Phase 5 returns a concurrency error:
 
 ## Reference Implementations & Tooling
 
-- **InMemoryEventStore** is included in `eventcore` and used across documentation, examples, and internal tests. It supports optional chaos hooks (e.g., `ConflictOnceStore`, `CountingEventStore`) for scenario-driven testing.
-- **External Backends** (e.g., `eventcore-postgres`) implement the same traits, run the contract test suite, and may offer additional observability or operational features.
-- **Testing Utilities** – The crate exposes helpers for property-based testing, contract verification, and integration scenarios so downstream users can exercise real command flows without managing infrastructure.
+- **InMemoryEventStore** is included in `eventcore` and used across documentation, examples, and internal tests. It supports optional chaos hooks (e.g., `ConflictOnceStore`, `CountingEventStore`) for scenario-driven testing. It does not implement `EventSubscription` (single-process memory cannot support durable subscriptions).
+- **External Backends** (e.g., `eventcore-postgres`) implement the same traits, run the contract test suite, and may offer additional observability or operational features. Production backends typically implement both `EventStore` and `EventSubscription` with full coordination support.
+- **Testing Utilities** – The `eventcore-testing` crate exposes helpers for property-based testing, contract verification, and integration scenarios so downstream users can exercise real command flows without managing infrastructure.
 
 ## Putting It All Together
 
@@ -253,5 +393,6 @@ By following the flow above, applications gain:
 3. Automatic concurrency management and retry behavior that keeps business code simple.
 4. Rich metadata and observability hooks for auditing, compliance, and debugging.
 5. Pluggable storage backends validated by a shared contract-suite, ensuring every implementation honors the same semantic guarantees.
+6. Production-ready event subscriptions with distributed coordination for building read models and projections at scale.
 
-This document is the single source of truth for EventCore’s architecture; ADRs capture how we arrived here, while this blueprint describes the system as it stands today.
+This document is the single source of truth for EventCore's architecture; ADRs capture how we arrived here, while this blueprint describes the system as it stands today.
