@@ -218,34 +218,57 @@ mod tests {
     use super::*;
     use sqlx::{Executor, postgres::PgPoolOptions};
     use std::env;
+    use testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner};
+    use testcontainers_modules::postgres::Postgres as PgContainer;
     #[allow(unused_imports)]
     use tokio::test;
     use uuid::Uuid;
 
-    fn postgres_connection_string() -> String {
-        env::var("DATABASE_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| {
-                "postgres://postgres:postgres@localhost:5433/eventcore_test".to_string()
-            })
+    /// Get the Postgres version to use for tests.
+    fn postgres_version() -> String {
+        env::var("POSTGRES_VERSION").unwrap_or_else(|_| "17".to_string())
     }
 
-    async fn get_migrated_pool() -> Pool<Postgres> {
-        let connection_string = postgres_connection_string();
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&connection_string)
-            .await
-            .expect("should connect to test database");
+    /// Test fixture that manages a Postgres container for unit tests.
+    struct TestFixture {
+        pool: Pool<Postgres>,
+        #[allow(dead_code)]
+        container: ContainerAsync<PgContainer>,
+    }
 
-        // Ensure migrations have run (idempotent)
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .expect("migrations should succeed");
+    impl TestFixture {
+        async fn new() -> Self {
+            let version = postgres_version();
+            let container = PgContainer::default()
+                .with_tag(&version)
+                .start()
+                .await
+                .expect("should start postgres container");
 
-        pool
+            let host_port = container
+                .get_host_port_ipv4(5432)
+                .await
+                .expect("should get postgres port");
+
+            let connection_string = format!(
+                "postgres://postgres:postgres@127.0.0.1:{}/postgres",
+                host_port
+            );
+
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&connection_string)
+                .await
+                .expect("should connect to test database");
+
+            // Ensure migrations have run (idempotent)
+            sqlx::migrate!("./migrations")
+                .run(&pool)
+                .await
+                .expect("migrations should succeed");
+
+            Self { pool, container }
+        }
     }
 
     fn unique_stream_id(prefix: &str) -> String {
@@ -254,7 +277,8 @@ mod tests {
 
     #[tokio::test]
     async fn trigger_assigns_sequential_versions() {
-        let pool = get_migrated_pool().await;
+        let fixture = TestFixture::new().await;
+        let pool = &fixture.pool;
         let stream_id = unique_stream_id("trigger-test");
 
         // Set expected version via session config
@@ -263,7 +287,7 @@ mod tests {
             stream_id
         );
         sqlx::query(&config_query)
-            .execute(&pool)
+            .execute(pool)
             .await
             .expect("should set expected versions");
 
@@ -277,7 +301,7 @@ mod tests {
         .bind("TestEvent")
         .bind(serde_json::json!({"n": 1}))
         .bind(serde_json::json!({}))
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await;
 
         match &result {
@@ -292,12 +316,8 @@ mod tests {
     #[tokio::test]
     async fn map_sqlx_error_translates_unique_constraint_violations() {
         // Given: Developer has a table with a unique constraint to trigger duplicates
-        let connection_string = postgres_connection_string();
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&connection_string)
-            .await
-            .expect("postgres test database should be reachable for map_sqlx_error tests");
+        let fixture = TestFixture::new().await;
+        let pool = &fixture.pool;
         let table_name = format!("map_sqlx_error_test_{}", Uuid::now_v7().simple());
         let create_statement = format!("CREATE TABLE {table_name} (event_id UUID PRIMARY KEY)");
         pool.execute(create_statement.as_str())
@@ -308,13 +328,13 @@ mod tests {
         let event_id = Uuid::now_v7();
         sqlx::query(insert_statement.as_str())
             .bind(event_id)
-            .execute(&pool)
+            .execute(pool)
             .await
             .expect("initial insert should succeed");
 
         let duplicate_error = sqlx::query(insert_statement.as_str())
             .bind(event_id)
-            .execute(&pool)
+            .execute(pool)
             .await
             .expect_err("duplicate insert should trigger unique constraint");
 
