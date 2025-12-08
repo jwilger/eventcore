@@ -36,6 +36,7 @@
 mod command;
 mod errors;
 mod store;
+mod subscription;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
@@ -55,6 +56,9 @@ pub use store::{
     EventStoreError, EventStreamReader, EventStreamSlice, InMemoryEventStore, StreamId,
     StreamVersion, StreamWriteEntry, StreamWrites,
 };
+
+// Re-export subscription types (per ADR-016 subscription model)
+pub use subscription::{EventSubscription, SubscriptionError, SubscriptionQuery};
 
 /// Validates a business rule condition and returns early with
 /// `CommandError::BusinessRuleViolation` when the condition is false.

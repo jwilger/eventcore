@@ -394,10 +394,13 @@ pub struct EventStreamSlice;
 ///
 /// InMemoryEventStore uses interior mutability for concurrent access.
 /// TODO: Determine if Arc<Mutex<>> or other synchronization primitive needed.
-type StreamData = (Vec<Box<dyn std::any::Any + Send>>, StreamVersion);
+// (event, global_sequence_number)
+type PersistedEvent = (Box<dyn std::any::Any + Send>, u64);
+type StreamData = (Vec<PersistedEvent>, StreamVersion);
 
 pub struct InMemoryEventStore {
     streams: std::sync::Mutex<HashMap<StreamId, StreamData>>,
+    next_sequence: std::sync::Mutex<u64>,
 }
 
 impl InMemoryEventStore {
@@ -408,6 +411,7 @@ impl InMemoryEventStore {
     pub fn new() -> Self {
         Self {
             streams: std::sync::Mutex::new(HashMap::new()),
+            next_sequence: std::sync::Mutex::new(0),
         }
     }
 }
@@ -426,10 +430,10 @@ impl EventStore for InMemoryEventStore {
         let streams = self.streams.lock().unwrap();
         let events = streams
             .get(&stream_id)
-            .map(|(boxed_events, _version)| {
-                boxed_events
+            .map(|(persisted_events, _version)| {
+                persisted_events
                     .iter()
-                    .filter_map(|boxed| boxed.downcast_ref::<E>())
+                    .filter_map(|(boxed, _seq)| boxed.downcast_ref::<E>())
                     .cloned()
                     .collect()
             })
@@ -458,18 +462,55 @@ impl EventStore for InMemoryEventStore {
         }
 
         // All versions match - proceed with writes
+        let mut next_seq = self.next_sequence.lock().unwrap();
         for entry in writes.into_entries() {
             let StreamWriteEntry {
                 stream_id, event, ..
             } = entry;
+            let sequence = *next_seq;
+            *next_seq += 1;
+
             let (events, version) = streams
                 .entry(stream_id)
                 .or_insert_with(|| (Vec::new(), StreamVersion::new(0)));
-            events.push(event);
+            events.push((event, sequence));
             *version = version.increment();
         }
 
         Ok(EventStreamSlice)
+    }
+}
+
+impl crate::subscription::EventSubscription for InMemoryEventStore {
+    async fn subscribe<E: Event>(
+        &self,
+        _query: crate::subscription::SubscriptionQuery,
+    ) -> Result<
+        std::pin::Pin<Box<dyn futures::Stream<Item = E> + Send>>,
+        crate::subscription::SubscriptionError,
+    > {
+        // Collect all events from all streams with their sequence numbers
+        let streams = self.streams.lock().unwrap();
+        let mut all_events: Vec<(E, u64)> = Vec::new();
+
+        for (_stream_id, (events, _version)) in streams.iter() {
+            for (boxed_event, seq) in events {
+                if let Some(event) = boxed_event.downcast_ref::<E>() {
+                    all_events.push((event.clone(), *seq));
+                }
+            }
+        }
+
+        // Sort by sequence number to get temporal order
+        all_events.sort_by_key(|(_, seq)| *seq);
+
+        // Extract just the events (discard sequence numbers)
+        let ordered_events: Vec<E> = all_events.into_iter().map(|(event, _)| event).collect();
+
+        // Convert to Stream and box with explicit type
+        let stream: std::pin::Pin<Box<dyn futures::Stream<Item = E> + Send>> =
+            Box::pin(futures::stream::iter(ordered_events));
+        Ok(stream)
     }
 }
 
