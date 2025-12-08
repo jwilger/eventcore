@@ -1,31 +1,14 @@
-use std::env;
+mod common;
 
-use eventcore::{Event, EventStore, StreamId, StreamVersion, StreamWrites};
-use eventcore_postgres::PostgresEventStore;
-use serde::{Deserialize, Serialize};
+use common::{PostgresTestFixture, TestEvent, unique_stream_id};
+use eventcore::{EventStore, StreamId, StreamVersion, StreamWrites};
 use sqlx::postgres::PgPoolOptions;
-use uuid::Uuid;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TestEvent {
-    stream_id: StreamId,
-    payload: String,
-}
-
-impl Event for TestEvent {
-    fn stream_id(&self) -> &StreamId {
-        &self.stream_id
-    }
-}
-
-fn unique_stream_id(prefix: &str) -> StreamId {
-    StreamId::try_new(format!("{}-{}", prefix, Uuid::now_v7())).expect("valid stream id")
-}
 
 #[tokio::test]
 async fn developer_observes_atomic_multi_stream_commit() {
     // Given: a migrated Postgres store
-    let (store, connection_string) = make_store().await;
+    let fixture = PostgresTestFixture::new().await;
+    let store = &fixture.store;
 
     // Use unique stream IDs for parallel test execution
     let source_stream = unique_stream_id("account/source");
@@ -39,34 +22,18 @@ async fn developer_observes_atomic_multi_stream_commit() {
         .await
         .expect("postgres store should append multi-stream batch");
 
-    let committed_rows =
-        count_rows_with_transaction(&connection_string, &source_stream, &destination_stream)
-            .await
-            .expect("atomic verification should read committed rows inside a transaction");
+    let committed_rows = count_rows_with_transaction(
+        &fixture.connection_string,
+        &source_stream,
+        &destination_stream,
+    )
+    .await
+    .expect("atomic verification should read committed rows inside a transaction");
 
     assert!(
         committed_rows == 2,
         "postgres multi-stream commit should persist two rows across streams; committed_rows={committed_rows}",
     );
-}
-
-fn postgres_connection_string() -> String {
-    env::var("DATABASE_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "postgres://postgres:postgres@localhost:5433/eventcore_test".to_string())
-}
-
-async fn make_store() -> (PostgresEventStore, String) {
-    let connection_string = postgres_connection_string();
-
-    let store = PostgresEventStore::new(connection_string.clone())
-        .await
-        .expect("multi-stream test should construct postgres store");
-
-    store.migrate().await;
-
-    (store, connection_string)
 }
 
 fn build_multi_stream_writes(

@@ -1,45 +1,10 @@
-use std::{env, sync::Arc};
+mod common;
 
-use eventcore::{Event, EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
-use eventcore_postgres::PostgresEventStore;
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+use common::{PostgresTestFixture, TestEvent, unique_stream_id};
+use eventcore::{EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
 use tokio::sync::Barrier;
-use uuid::Uuid;
-
-fn postgres_connection_string() -> String {
-    env::var("DATABASE_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "postgres://postgres:postgres@localhost:5433/eventcore_test".to_string())
-}
-
-fn unique_stream_id(prefix: &str) -> StreamId {
-    StreamId::try_new(format!("{}-{}", prefix, Uuid::now_v7())).expect("valid stream id")
-}
-
-async fn make_store() -> PostgresEventStore {
-    let connection_string = postgres_connection_string();
-
-    let store = PostgresEventStore::new(connection_string.clone())
-        .await
-        .expect("concurrency test should construct postgres event store");
-
-    store.migrate().await;
-
-    store
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TestEvent {
-    stream_id: StreamId,
-    payload: String,
-}
-
-impl Event for TestEvent {
-    fn stream_id(&self) -> &StreamId {
-        &self.stream_id
-    }
-}
 
 fn build_single_stream_writes(
     stream_id: &StreamId,
@@ -61,7 +26,9 @@ fn build_single_stream_writes(
 #[tracing_test::traced_test]
 async fn developer_retries_after_postgres_version_conflict() {
     // Given: A migrated Postgres store that enforces optimistic concurrency
-    let store = make_store().await;
+    let fixture = PostgresTestFixture::new().await;
+    let store = fixture.store.clone();
+
     // Unique stream ID per test run for parallel execution
     let stream_id = unique_stream_id("account/concurrency");
 
