@@ -1,7 +1,12 @@
 use crate::command::Event;
 use futures::Stream;
+use nutype::nutype;
 use std::future::Future;
 use std::pin::Pin;
+
+/// Stream prefix for filtering subscriptions.
+#[nutype(derive(Debug, Clone, AsRef))]
+pub struct StreamPrefix(String);
 
 /// Query builder for event subscriptions.
 ///
@@ -24,8 +29,7 @@ use std::pin::Pin;
 /// ```
 #[derive(Debug, Clone)]
 pub struct SubscriptionQuery {
-    // Internal implementation deferred to green-implementer
-    _private: (),
+    stream_prefix: Option<StreamPrefix>,
 }
 
 impl SubscriptionQuery {
@@ -33,7 +37,23 @@ impl SubscriptionQuery {
     ///
     /// Returns events from all streams in EventId (UUIDv7) order.
     pub fn all() -> Self {
-        Self { _private: () }
+        Self {
+            stream_prefix: None,
+        }
+    }
+
+    /// Filter events to only those from streams matching the given prefix.
+    ///
+    /// Returns a composable query that can be chained with additional filters.
+    pub fn filter_stream_prefix(self, prefix: StreamPrefix) -> Self {
+        Self {
+            stream_prefix: Some(prefix),
+        }
+    }
+
+    /// Get the stream prefix filter, if any.
+    pub fn stream_prefix(&self) -> Option<&StreamPrefix> {
+        self.stream_prefix.as_ref()
     }
 }
 

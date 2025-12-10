@@ -484,7 +484,7 @@ impl EventStore for InMemoryEventStore {
 impl crate::subscription::EventSubscription for InMemoryEventStore {
     async fn subscribe<E: Event>(
         &self,
-        _query: crate::subscription::SubscriptionQuery,
+        query: crate::subscription::SubscriptionQuery,
     ) -> Result<
         std::pin::Pin<Box<dyn futures::Stream<Item = E> + Send>>,
         crate::subscription::SubscriptionError,
@@ -493,7 +493,14 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
         let streams = self.streams.lock().unwrap();
         let mut all_events: Vec<(E, u64)> = Vec::new();
 
-        for (_stream_id, (events, _version)) in streams.iter() {
+        for (stream_id, (events, _version)) in streams.iter() {
+            // Filter by stream prefix if specified
+            if let Some(prefix) = query.stream_prefix()
+                && !stream_id.as_ref().starts_with(prefix.as_ref())
+            {
+                continue;
+            }
+
             for (boxed_event, seq) in events {
                 if let Some(event) = boxed_event.downcast_ref::<E>() {
                     all_events.push((event.clone(), *seq));
