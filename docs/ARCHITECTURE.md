@@ -1,7 +1,7 @@
 # EventCore Architecture
 
-**Document Version:** 1.5
-**Date:** 2025-12-06
+**Document Version:** 1.6
+**Date:** 2025-12-10
 **Phase:** 4 - Architecture Synthesis
 
 ## Overview
@@ -136,7 +136,7 @@ Projections query events using `SubscriptionQuery`, a composable filter chain:
 ```rust
 // Type-safe filter composition (not magic strings)
 let query = SubscriptionQuery::all()
-    .filter_stream_prefix("account-")
+    .filter_stream_prefix("account-")  // Literal prefix filtering
     .filter_event_type::<MoneyDeposited>();
 ```
 
@@ -145,6 +145,15 @@ The composable API provides:
 - **Type Safety**: Invalid query combinations caught at compile time
 - **Discoverability**: IDE autocomplete guides developers to valid filter methods
 - **Flexibility**: Multi-dimensional queries (stream patterns + event types + metadata filters)
+
+**Literal Prefixes vs Future Pattern Matching:**
+
+`StreamPrefix` currently performs literal prefix matching. Because both `StreamId` and `StreamPrefix` prohibit glob metacharacters (`*`, `?`, `[`, `]`), future pattern matching can be added without ambiguity:
+
+- Literal filtering: `filter_stream_prefix(StreamPrefix::try_new("account-")?)` matches streams starting with "account-"
+- Future pattern matching: `filter_stream_pattern(StreamPattern::new("account-*"))` will use explicit glob syntax for wildcard matching
+
+This separation prevents confusion between literal identifiers (domain concepts) and query patterns (infrastructure features). The type system makes intent explicit—developers cannot accidentally confuse literal filtering with pattern matching.
 
 Queries remain infrastructure types distinct from `StreamId` (which represents aggregate identity). This maintains domain-first design—`StreamId` stays focused on business concepts while `SubscriptionQuery` expresses cross-cutting infrastructure queries.
 
@@ -365,7 +374,10 @@ If Phase 5 returns a concurrency error:
 
 ## Type System Patterns
 
-- **Validated Newtypes** – `StreamId`, `EventId`, `CorrelationId`, `Money`, etc., enforce invariants at construction time via the `nutype` crate.
+- **Validated Newtypes** – `StreamId`, `EventId`, `CorrelationId`, `StreamPrefix`, and other domain types enforce invariants at construction time via the `nutype` crate. Character validation prevents invalid identifiers:
+  - `StreamId` and `StreamPrefix` reject glob metacharacters (`*`, `?`, `[`, `]`) to enable future pattern matching without ambiguity
+  - Both require non-empty strings (after trimming), maximum 255 characters, with leading/trailing whitespace sanitized
+  - Future glob pattern support will use a distinct `StreamPattern` type that explicitly permits metacharacters
 - **Phantom Types & Typestate** – `StreamWrite<StreamSet, Event>` enforces compile-time stream access control; `NewEvents` carries the same phantom to ensure only declared streams receive emissions.
 - **Total Functions** – Public APIs return `Result` instead of panicking. Error enums derive `thiserror` and support pattern matching.
 - **Trait Composition** – Narrow traits (`CommandStreams`, `CommandLogic`, `StreamResolver`, `EventSubscription`, `SubscriptionCoordinator`) keep responsibilities focused and implementations testable.

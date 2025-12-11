@@ -4,8 +4,27 @@ use nutype::nutype;
 use std::future::Future;
 use std::pin::Pin;
 
+/// Validation predicate: reject glob metacharacters in StreamPrefix.
+///
+/// Per ADR-017, StreamPrefix reserves glob metacharacters (*, ?, [, ]) to enable
+/// future pattern matching without ambiguity or escaping complexity.
+fn no_glob_metacharacters(s: &str) -> bool {
+    !s.contains(['*', '?', '[', ']'])
+}
+
 /// Stream prefix for filtering subscriptions.
-#[nutype(derive(Debug, Clone, AsRef))]
+///
+/// Uses nutype for compile-time validation ensuring all stream prefixes are:
+/// - Non-empty (trimmed strings with at least 1 character)
+/// - Within reasonable length (max 255 characters)
+/// - Sanitized (leading/trailing whitespace removed)
+/// - Free of glob metacharacters (*, ?, [, ]) per ADR-017
+///
+#[nutype(
+    sanitize(trim),
+    validate(not_empty, len_char_max = 255, predicate = no_glob_metacharacters),
+    derive(Debug, Clone, AsRef)
+)]
 pub struct StreamPrefix(String);
 
 /// Query builder for event subscriptions.
@@ -92,4 +111,100 @@ pub trait EventSubscription {
         &self,
         query: SubscriptionQuery,
     ) -> impl Future<Output = Result<Pin<Box<dyn Stream<Item = E> + Send>>, SubscriptionError>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_prefix_rejects_asterisk_metacharacter() {
+        // Given/When
+        let result = StreamPrefix::try_new("account-*");
+
+        // Then
+        assert!(
+            result.is_err(),
+            "StreamPrefix should reject asterisk glob metacharacter"
+        );
+    }
+
+    #[test]
+    fn stream_prefix_rejects_question_mark_metacharacter() {
+        // Given/When
+        let result = StreamPrefix::try_new("account-?");
+
+        // Then
+        assert!(
+            result.is_err(),
+            "StreamPrefix should reject question mark glob metacharacter"
+        );
+    }
+
+    #[test]
+    fn stream_prefix_rejects_bracket_metacharacters() {
+        // Given/When
+        let result_open = StreamPrefix::try_new("account-[");
+        let result_close = StreamPrefix::try_new("account-]");
+
+        // Then
+        assert!(
+            result_open.is_err(),
+            "StreamPrefix should reject open bracket glob metacharacter"
+        );
+        assert!(
+            result_close.is_err(),
+            "StreamPrefix should reject close bracket glob metacharacter"
+        );
+    }
+
+    #[test]
+    fn stream_prefix_rejects_empty_string() {
+        // Given/When
+        let result = StreamPrefix::try_new("");
+
+        // Then
+        assert!(result.is_err(), "StreamPrefix should reject empty string");
+    }
+
+    #[test]
+    fn stream_prefix_rejects_whitespace_only() {
+        // Given/When
+        let result = StreamPrefix::try_new("   ");
+
+        // Then
+        assert!(
+            result.is_err(),
+            "StreamPrefix should reject whitespace-only string (trimmed to empty)"
+        );
+    }
+
+    #[test]
+    fn stream_prefix_rejects_string_over_255_chars() {
+        // Given
+        let too_long = "a".repeat(256);
+
+        // When
+        let result = StreamPrefix::try_new(&too_long);
+
+        // Then
+        assert!(
+            result.is_err(),
+            "StreamPrefix should reject strings over 255 characters"
+        );
+    }
+
+    #[test]
+    fn stream_prefix_trims_whitespace() {
+        // Given/When
+        let result = StreamPrefix::try_new(" account- ");
+
+        // Then
+        assert!(result.is_ok(), "StreamPrefix should accept valid string");
+        assert_eq!(
+            result.unwrap().as_ref(),
+            "account-",
+            "StreamPrefix should trim leading and trailing whitespace"
+        );
+    }
 }

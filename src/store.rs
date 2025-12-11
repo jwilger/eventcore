@@ -212,10 +212,11 @@ pub trait EventStore {
 /// - Non-empty (trimmed strings with at least 1 character)
 /// - Within reasonable length (max 255 characters)
 /// - Sanitized (leading/trailing whitespace removed)
+/// - Free of glob metacharacters (*, ?, [, ]) per ADR-017
 ///
 #[nutype(
     sanitize(trim),
-    validate(not_empty, len_char_max = 255),
+    validate(not_empty, len_char_max = 255, predicate = no_glob_metacharacters),
     derive(
         Debug,
         Clone,
@@ -230,6 +231,14 @@ pub trait EventStore {
     )
 )]
 pub struct StreamId(String);
+
+/// Validation predicate: reject glob metacharacters in StreamId.
+///
+/// Per ADR-017, StreamId reserves glob metacharacters (*, ?, [, ]) to enable
+/// future pattern matching without ambiguity or escaping complexity.
+fn no_glob_metacharacters(s: &str) -> bool {
+    !s.contains(['*', '?', '[', ']'])
+}
 
 /// Stream version domain type.
 ///
@@ -812,5 +821,51 @@ mod tests {
         assert_eq!(versions.len(), 2);
         assert_eq!(versions.get(&stream_a), Some(&StreamVersion::new(0)));
         assert_eq!(versions.get(&stream_b), Some(&StreamVersion::new(5)));
+    }
+
+    /// Unit test: StreamId rejects asterisk glob metacharacter
+    ///
+    /// Per ADR-017, StreamId must reject glob metacharacters (*, ?, [, ])
+    /// to enable future pattern matching without ambiguity or escaping complexity.
+    ///
+    /// This test verifies that StreamId::try_new() returns an error when
+    /// the asterisk metacharacter is present in the identifier.
+    #[test]
+    fn stream_id_rejects_asterisk_metacharacter() {
+        // When: Developer attempts to create StreamId with asterisk metacharacter
+        let result = StreamId::try_new("account-*");
+
+        // Then: StreamId construction fails
+        assert!(
+            result.is_err(),
+            "StreamId should reject asterisk glob metacharacter"
+        );
+    }
+
+    #[test]
+    fn stream_id_rejects_question_mark_metacharacter() {
+        // When: Developer attempts to create StreamId with question mark metacharacter
+        let result = StreamId::try_new("account-?");
+
+        // Then: StreamId construction fails
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stream_id_rejects_open_bracket_metacharacter() {
+        // When: Developer attempts to create StreamId with open bracket metacharacter
+        let result = StreamId::try_new("account-[");
+
+        // Then: StreamId construction fails
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stream_id_rejects_close_bracket_metacharacter() {
+        // When: Developer attempts to create StreamId with close bracket metacharacter
+        let result = StreamId::try_new("account-]");
+
+        // Then: StreamId construction fails
+        assert!(result.is_err());
     }
 }

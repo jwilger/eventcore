@@ -195,10 +195,13 @@ async fn filters_events_by_stream_prefix() {
         .expect("events should be appended successfully");
 
     // When: Developer subscribes with stream prefix filter for "account-"
-    let subscription = store
-        .subscribe(SubscriptionQuery::all().filter_stream_prefix(StreamPrefix::new("account-")))
-        .await
-        .expect("subscription should be created successfully");
+    let subscription =
+        store
+            .subscribe(SubscriptionQuery::all().filter_stream_prefix(
+                StreamPrefix::try_new("account-").expect("valid stream prefix"),
+            ))
+            .await
+            .expect("subscription should be created successfully");
 
     // And: Developer collects events from the subscription stream
     let events: Vec<TestEvent> = subscription.take(2).collect().await;
