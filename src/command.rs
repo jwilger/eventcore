@@ -112,6 +112,35 @@ pub trait Event: Clone + Send + Serialize + DeserializeOwned + 'static {
     /// The stream ID represents the aggregate identity in Domain-Driven Design.
     /// Each domain event knows which aggregate instance it belongs to.
     fn stream_id(&self) -> &StreamId;
+
+    /// Returns the event type name for filtering.
+    ///
+    /// This method enables filtering events by string name, which is necessary
+    /// for distinguishing enum variants that share the same TypeId. For struct
+    /// event types, return the struct name. For enum event types, return the
+    /// variant name.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Struct event type
+    /// impl Event for MoneyDeposited {
+    ///     fn event_type_name(&self) -> &'static str {
+    ///         "MoneyDeposited"
+    ///     }
+    /// }
+    ///
+    /// // Enum event type
+    /// impl Event for AccountEvent {
+    ///     fn event_type_name(&self) -> &'static str {
+    ///         match self {
+    ///             AccountEvent::Deposited { .. } => "Deposited",
+    ///             AccountEvent::Withdrawn { .. } => "Withdrawn",
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    fn event_type_name(&self) -> &'static str;
 }
 
 /// Trait defining the business logic of a command.

@@ -272,6 +272,15 @@ impl Event for CheckoutEvent {
             | CheckoutEvent::PaymentMethodCaptured { payment_stream } => payment_stream,
         }
     }
+
+    fn event_type_name(&self) -> &'static str {
+        match self {
+            CheckoutEvent::OrderPaymentMethodLinked { .. } => "OrderPaymentMethodLinked",
+            CheckoutEvent::PaymentMethodAuthorized { .. } => "PaymentMethodAuthorized",
+            CheckoutEvent::PaymentCaptured { .. } => "PaymentCaptured",
+            CheckoutEvent::PaymentMethodCaptured { .. } => "PaymentMethodCaptured",
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

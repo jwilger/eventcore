@@ -19,6 +19,73 @@ impl Event for TestEvent {
             TestEvent::ValueRecorded { stream_id, .. } => stream_id,
         }
     }
+
+    fn event_type_name(&self) -> &'static str {
+        match self {
+            TestEvent::ValueRecorded { .. } => "ValueRecorded",
+        }
+    }
+}
+
+/// Account domain event for event type filtering tests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct MoneyDeposited {
+    stream_id: StreamId,
+    amount: u32,
+}
+
+impl Event for MoneyDeposited {
+    fn stream_id(&self) -> &StreamId {
+        &self.stream_id
+    }
+
+    fn event_type_name(&self) -> &'static str {
+        "MoneyDeposited"
+    }
+}
+
+/// Account domain event for event type filtering tests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct MoneyWithdrawn {
+    stream_id: StreamId,
+    amount: u32,
+}
+
+impl Event for MoneyWithdrawn {
+    fn stream_id(&self) -> &StreamId {
+        &self.stream_id
+    }
+
+    fn event_type_name(&self) -> &'static str {
+        "MoneyWithdrawn"
+    }
+}
+
+/// Account domain events as an enum with multiple variants.
+///
+/// This demonstrates the need for event_type_name() - all variants share
+/// the same TypeId (AccountEvent), but represent different event types
+/// that should be filterable independently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum AccountEvent {
+    Deposited { stream_id: StreamId, amount: u32 },
+    Withdrawn { stream_id: StreamId, amount: u32 },
+}
+
+impl Event for AccountEvent {
+    fn stream_id(&self) -> &StreamId {
+        match self {
+            AccountEvent::Deposited { stream_id, .. } => stream_id,
+            AccountEvent::Withdrawn { stream_id, .. } => stream_id,
+        }
+    }
+
+    fn event_type_name(&self) -> &'static str {
+        match self {
+            AccountEvent::Deposited { .. } => "Deposited",
+            AccountEvent::Withdrawn { .. } => "Withdrawn",
+        }
+    }
 }
 
 /// Integration test for I-017: Subscription Foundation
@@ -229,5 +296,192 @@ async fn filters_events_by_stream_prefix() {
             value: 200
         },
         "second event should be from account-456"
+    );
+}
+
+#[tokio::test]
+async fn filters_events_by_event_type() {
+    // Given: Developer creates in-memory event store
+    let store = InMemoryEventStore::new();
+
+    // And: Developer creates stream IDs for account streams
+    let account_123 = StreamId::try_new("account-123").expect("valid stream id");
+    let account_456 = StreamId::try_new("account-456").expect("valid stream id");
+
+    // And: Developer appends events of different types to account streams
+    // Mix MoneyDeposited and MoneyWithdrawn events to verify type filtering
+    let writes = StreamWrites::new()
+        .register_stream(account_123.clone(), StreamVersion::new(0))
+        .and_then(|w| w.register_stream(account_456.clone(), StreamVersion::new(0)))
+        .and_then(|w| {
+            w.append(MoneyDeposited {
+                stream_id: account_123.clone(),
+                amount: 100,
+            })
+        })
+        .and_then(|w| {
+            w.append(MoneyWithdrawn {
+                stream_id: account_123.clone(),
+                amount: 50,
+            })
+        })
+        .and_then(|w| {
+            w.append(MoneyDeposited {
+                stream_id: account_456.clone(),
+                amount: 200,
+            })
+        })
+        .and_then(|w| {
+            w.append(MoneyWithdrawn {
+                stream_id: account_456.clone(),
+                amount: 75,
+            })
+        })
+        .and_then(|w| {
+            w.append(MoneyDeposited {
+                stream_id: account_123.clone(),
+                amount: 150,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(writes)
+        .await
+        .expect("events should be appended successfully");
+
+    // When: Developer subscribes with event type filter for MoneyDeposited
+    let subscription = store
+        .subscribe(SubscriptionQuery::all().filter_event_type_name("MoneyDeposited"))
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer collects events from the subscription stream
+    let events: Vec<MoneyDeposited> = subscription.take(3).collect().await;
+
+    // Then: Only MoneyDeposited events are delivered, MoneyWithdrawn events are filtered out
+    assert_eq!(
+        events.len(),
+        3,
+        "should deliver only 3 MoneyDeposited events"
+    );
+
+    assert_eq!(
+        events[0],
+        MoneyDeposited {
+            stream_id: account_123.clone(),
+            amount: 100
+        },
+        "first event should be account-123 deposit of 100"
+    );
+
+    assert_eq!(
+        events[1],
+        MoneyDeposited {
+            stream_id: account_456.clone(),
+            amount: 200
+        },
+        "second event should be account-456 deposit of 200"
+    );
+
+    assert_eq!(
+        events[2],
+        MoneyDeposited {
+            stream_id: account_123,
+            amount: 150
+        },
+        "third event should be account-123 deposit of 150"
+    );
+}
+
+#[tokio::test]
+async fn filters_events_by_event_type_name_for_enum_variants() {
+    // Given: Developer creates in-memory event store
+    let store = InMemoryEventStore::new();
+
+    // And: Developer creates stream IDs for account streams
+    let account_123 = StreamId::try_new("account-123").expect("valid stream id");
+    let account_456 = StreamId::try_new("account-456").expect("valid stream id");
+
+    // And: Developer appends events using enum variants (AccountEvent::Deposited, AccountEvent::Withdrawn)
+    // This demonstrates the problem: TypeId-based filtering treats all enum variants as the same type
+    let writes = StreamWrites::new()
+        .register_stream(account_123.clone(), StreamVersion::new(0))
+        .and_then(|w| w.register_stream(account_456.clone(), StreamVersion::new(0)))
+        .and_then(|w| {
+            w.append(AccountEvent::Deposited {
+                stream_id: account_123.clone(),
+                amount: 100,
+            })
+        })
+        .and_then(|w| {
+            w.append(AccountEvent::Withdrawn {
+                stream_id: account_123.clone(),
+                amount: 50,
+            })
+        })
+        .and_then(|w| {
+            w.append(AccountEvent::Deposited {
+                stream_id: account_456.clone(),
+                amount: 200,
+            })
+        })
+        .and_then(|w| {
+            w.append(AccountEvent::Withdrawn {
+                stream_id: account_456.clone(),
+                amount: 75,
+            })
+        })
+        .and_then(|w| {
+            w.append(AccountEvent::Deposited {
+                stream_id: account_123.clone(),
+                amount: 150,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(writes)
+        .await
+        .expect("events should be appended successfully");
+
+    // When: Developer subscribes with event type name filter for "Deposited" variant
+    // Uses string-based filter instead of TypeId to distinguish enum variants
+    let subscription = store
+        .subscribe::<AccountEvent>(SubscriptionQuery::all().filter_event_type_name("Deposited"))
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer collects events from the subscription stream
+    let events: Vec<AccountEvent> = subscription.take(3).collect().await;
+
+    // Then: Only Deposited variant events are delivered, Withdrawn events are filtered out
+    assert_eq!(events.len(), 3, "should deliver only 3 Deposited events");
+
+    assert_eq!(
+        events[0],
+        AccountEvent::Deposited {
+            stream_id: account_123.clone(),
+            amount: 100
+        },
+        "first event should be account-123 deposit of 100"
+    );
+
+    assert_eq!(
+        events[1],
+        AccountEvent::Deposited {
+            stream_id: account_456.clone(),
+            amount: 200
+        },
+        "second event should be account-456 deposit of 200"
+    );
+
+    assert_eq!(
+        events[2],
+        AccountEvent::Deposited {
+            stream_id: account_123,
+            amount: 150
+        },
+        "third event should be account-123 deposit of 150"
     );
 }

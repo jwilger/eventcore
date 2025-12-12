@@ -49,6 +49,7 @@ pub struct StreamPrefix(String);
 #[derive(Debug, Clone)]
 pub struct SubscriptionQuery {
     stream_prefix: Option<StreamPrefix>,
+    event_type_name: Option<String>,
 }
 
 impl SubscriptionQuery {
@@ -58,6 +59,7 @@ impl SubscriptionQuery {
     pub fn all() -> Self {
         Self {
             stream_prefix: None,
+            event_type_name: None,
         }
     }
 
@@ -67,12 +69,36 @@ impl SubscriptionQuery {
     pub fn filter_stream_prefix(self, prefix: StreamPrefix) -> Self {
         Self {
             stream_prefix: Some(prefix),
+            event_type_name: self.event_type_name,
+        }
+    }
+
+    /// Filter events to only those matching the specified event type name.
+    ///
+    /// Returns a composable query that can be chained with additional filters.
+    ///
+    /// This method accepts any type that can be converted into a String, allowing
+    /// for flexible filtering by event type name. Unlike TypeId-based filtering,
+    /// this enables filtering enum variants that share the same type.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - Event type name to filter by (e.g., "Deposited", "MoneyWithdrawn")
+    pub fn filter_event_type_name(self, name: impl Into<String>) -> Self {
+        Self {
+            stream_prefix: self.stream_prefix,
+            event_type_name: Some(name.into()),
         }
     }
 
     /// Get the stream prefix filter, if any.
     pub fn stream_prefix(&self) -> Option<&StreamPrefix> {
         self.stream_prefix.as_ref()
+    }
+
+    /// Get the event type name filter, if any.
+    pub fn event_type_name_filter(&self) -> Option<&str> {
+        self.event_type_name.as_deref()
     }
 }
 

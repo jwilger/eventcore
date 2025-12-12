@@ -63,6 +63,10 @@ impl Event for ContractTestEvent {
     fn stream_id(&self) -> &StreamId {
         &self.stream_id
     }
+
+    fn event_type_name(&self) -> &'static str {
+        "ContractTestEvent"
+    }
 }
 
 fn contract_stream_id(

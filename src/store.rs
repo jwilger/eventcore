@@ -512,6 +512,12 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
 
             for (boxed_event, seq) in events {
                 if let Some(event) = boxed_event.downcast_ref::<E>() {
+                    // Filter by event type name if specified
+                    if let Some(expected_name) = query.event_type_name_filter()
+                        && event.event_type_name() != expected_name
+                    {
+                        continue;
+                    }
                     all_events.push((event.clone(), *seq));
                 }
             }
@@ -569,6 +575,10 @@ mod tests {
     impl Event for TestEvent {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
+        }
+
+        fn event_type_name(&self) -> &'static str {
+            "TestEvent"
         }
     }
 

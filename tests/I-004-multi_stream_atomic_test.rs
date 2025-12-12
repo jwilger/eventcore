@@ -54,6 +54,14 @@ impl Event for TestDomainEvents {
             | TestDomainEvents::Audit { account_id } => account_id,
         }
     }
+
+    fn event_type_name(&self) -> &'static str {
+        match self {
+            TestDomainEvents::Debited { .. } => "Debited",
+            TestDomainEvents::Credited { .. } => "Credited",
+            TestDomainEvents::Audit { .. } => "Audit",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

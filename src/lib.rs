@@ -567,6 +567,10 @@ mod tests {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
         }
+
+        fn event_type_name(&self) -> &'static str {
+            "TestEvent"
+        }
     }
 
     /// Mock command that tracks whether handle() was called.
@@ -640,6 +644,10 @@ mod tests {
     impl Event for TestEventWithValue {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
+        }
+
+        fn event_type_name(&self) -> &'static str {
+            "TestEventWithValue"
         }
     }
 

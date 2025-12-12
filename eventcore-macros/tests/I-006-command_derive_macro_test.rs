@@ -22,6 +22,13 @@ impl Event for TransferEvent {
             | TransferEvent::Credited { account_id, .. } => account_id,
         }
     }
+
+    fn event_type_name(&self) -> &'static str {
+        match self {
+            TransferEvent::Debited { .. } => "Debited",
+            TransferEvent::Credited { .. } => "Credited",
+        }
+    }
 }
 
 /// Minimal state object rebuilt from prior events to validate the command.

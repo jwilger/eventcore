@@ -13,6 +13,10 @@ impl Event for TestEvent {
     fn stream_id(&self) -> &StreamId {
         &self.stream_id
     }
+
+    fn event_type_name(&self) -> &'static str {
+        "TestEvent"
+    }
 }
 
 #[tokio::test]
