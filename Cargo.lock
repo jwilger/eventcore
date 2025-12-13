@@ -627,6 +627,7 @@ name = "eventcore-testing"
 version = "0.1.0"
 dependencies = [
  "eventcore",
+ "futures",
  "rand 0.9.2",
  "serde",
  "tokio",

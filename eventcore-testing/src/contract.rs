@@ -1,5 +1,6 @@
 use eventcore::{
-    Event, EventStore, EventStoreError, EventTypeName, StreamId, StreamVersion, StreamWrites,
+    Event, EventStore, EventStoreError, EventSubscription, EventTypeName, StreamId, StreamVersion,
+    StreamWrites, SubscriptionQuery,
 };
 use std::fmt;
 
@@ -75,6 +76,37 @@ impl Event for ContractTestEvent {
     fn all_type_names() -> Vec<EventTypeName> {
         vec![
             "ContractTestEvent"
+                .try_into()
+                .expect("valid event type name"),
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OtherContractEvent {
+    stream_id: StreamId,
+}
+
+impl OtherContractEvent {
+    pub fn new(stream_id: StreamId) -> Self {
+        Self { stream_id }
+    }
+}
+
+impl Event for OtherContractEvent {
+    fn stream_id(&self) -> &StreamId {
+        &self.stream_id
+    }
+
+    fn event_type_name(&self) -> EventTypeName {
+        "OtherContractEvent"
+            .try_into()
+            .expect("valid event type name")
+    }
+
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec![
+            "OtherContractEvent"
                 .try_into()
                 .expect("valid event type name"),
         ]
@@ -416,6 +448,75 @@ where
     }
 }
 
+pub async fn test_subscription_filters_by_event_type<F, S>(make_store: F) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + EventSubscription + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "subscription_filters_by_event_type";
+
+    // Given: Store contains events of TWO different types across multiple streams
+    let store = make_store();
+    let stream_a = contract_stream_id(SCENARIO, "stream-a")?;
+    let stream_b = contract_stream_id(SCENARIO, "stream-b")?;
+
+    let writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &stream_a,
+        StreamVersion::new(0),
+    )?;
+    let writes = register_contract_stream(SCENARIO, writes, &stream_b, StreamVersion::new(0))?;
+
+    // Interleave ContractTestEvent and OtherContractEvent to verify type filtering
+    let contract_event = ContractTestEvent::new(stream_a.clone());
+    let other_event = OtherContractEvent::new(stream_b.clone());
+
+    let writes = builder_step(SCENARIO, "append", writes.append(contract_event))?;
+    let writes = builder_step(SCENARIO, "append", writes.append(other_event))?;
+    let writes = append_contract_event(SCENARIO, writes, &stream_a)?;
+
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+
+    // When: Subscribe with type ContractTestEvent using SubscriptionQuery::all()
+    let subscription = store
+        .subscribe::<ContractTestEvent>(SubscriptionQuery::all())
+        .await
+        .map_err(|error| {
+            ContractTestFailure::new(
+                SCENARIO,
+                format!("subscribe returned unexpected error: {}", error),
+            )
+        })?;
+
+    // Collect events manually to verify auto-filtering by E::all_type_names()
+    use futures::StreamExt;
+    let events: Vec<ContractTestEvent> = subscription.take(2).collect().await;
+
+    // Then: Only ContractTestEvent events should be delivered (OtherContractEvent filtered out)
+    if events.len() != 2 {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected exactly 2 ContractTestEvent events, observed {}",
+                events.len()
+            ),
+        ));
+    }
+
+    if events.iter().any(|e| e.stream_id() != &stream_a) {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "subscription delivered events from wrong stream (expected only stream-a)",
+        ));
+    }
+
+    Ok(())
+}
+
 #[macro_export]
 macro_rules! event_store_contract_tests {
     (suite = $suite:ident, make_store = $make_store:expr $(,)?) => {
@@ -466,3 +567,22 @@ macro_rules! event_store_contract_tests {
 }
 
 pub use event_store_contract_tests;
+
+#[macro_export]
+macro_rules! event_subscription_contract_tests {
+    (suite = $suite:ident, make_store = $make_store:expr $(,)?) => {
+        #[allow(non_snake_case)]
+        mod $suite {
+            use $crate::contract::test_subscription_filters_by_event_type;
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn subscription_filters_by_event_type_contract() {
+                test_subscription_filters_by_event_type($make_store)
+                    .await
+                    .expect("event subscription contract failed");
+            }
+        }
+    };
+}
+
+pub use event_subscription_contract_tests;
