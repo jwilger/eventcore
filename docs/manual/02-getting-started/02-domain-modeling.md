@@ -91,28 +91,41 @@ As we model, we discover rules that our commands must enforce:
 
 ### Events Stay Close to Our Model
 
-Our discovered events map directly to code:
+Our discovered events map directly to code using the `#[derive(Event)]` macro:
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use eventcore::StreamId;
+use eventcore_macros::Event;
+use serde::{Serialize, Deserialize};
+
+/// Task lifecycle events using the Event derive macro.
+/// The #[stream] attribute marks which field identifies the aggregate.
+#[derive(Event, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum TaskEvent {
     Created {
-        task_id: TaskId,
+        #[stream]
+        task_id: StreamId,
         title: TaskTitle,
         description: TaskDescription,
         creator: UserName,
         created_at: DateTime<Utc>,
     },
     Assigned {
-        task_id: TaskId,
+        #[stream]
+        task_id: StreamId,
         assignee: UserName,
         assigned_by: UserName,
         assigned_at: DateTime<Utc>,
     },
-    // ... other events
+    // ... other events with #[stream] on task_id
 }
 ```
+
+The `#[derive(Event)]` macro automatically implements the `Event` trait, generating:
+- `stream_id()` - returns the field marked with `#[stream]`
+- `event_type_name()` - returns the variant name (e.g., "Created", "Assigned")
+- `all_type_names()` - returns all variant names for subscription filtering
 
 ### Commands Declare Their Streams
 
@@ -261,21 +274,24 @@ Here's our complete domain model:
 
 ## Refining Our Event Model
 
-Based on our modeling, let's update `src/domain/events.rs`:
+Based on our modeling, let's update `src/domain/events.rs` using the `#[derive(Event)]` macro:
 
 ```rust
 use super::types::*;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use eventcore::StreamId;
+use eventcore_macros::Event;
 
-/// Events that can occur in our task management system
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Events that can occur in our task management system.
+/// Using #[derive(Event)] with #[stream] on each variant's stream field.
+#[derive(Event, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TaskEvent {
     // Task lifecycle events
     Created {
-        task_id: TaskId,
+        #[stream]
+        task_id: StreamId,
         title: TaskTitle,
         description: TaskDescription,
         creator: UserName,
@@ -284,14 +300,16 @@ pub enum TaskEvent {
 
     // Assignment events - note these affect multiple streams
     Assigned {
-        task_id: TaskId,
+        #[stream]
+        task_id: StreamId,
         assignee: UserName,
         assigned_by: UserName,
         assigned_at: DateTime<Utc>,
     },
 
     Unassigned {
-        task_id: TaskId,
+        #[stream]
+        task_id: StreamId,
         previous_assignee: UserName,
         unassigned_by: UserName,
         unassigned_at: DateTime<Utc>,
@@ -299,20 +317,23 @@ pub enum TaskEvent {
 
     // Work events
     Started {
-        task_id: TaskId,
+        #[stream]
+        task_id: StreamId,
         started_by: UserName,
         started_at: DateTime<Utc>,
     },
 
     Completed {
-        task_id: TaskId,
+        #[stream]
+        task_id: StreamId,
         completed_by: UserName,
         completed_at: DateTime<Utc>,
     },
 
     // Collaboration events
     CommentAdded {
-        task_id: TaskId,
+        #[stream]
+        task_id: StreamId,
         comment_id: Uuid,
         comment: CommentText,
         author: UserName,
@@ -321,7 +342,8 @@ pub enum TaskEvent {
 
     // Management events
     PriorityChanged {
-        task_id: TaskId,
+        #[stream]
+        task_id: StreamId,
         old_priority: Priority,
         new_priority: Priority,
         changed_by: UserName,
@@ -329,56 +351,48 @@ pub enum TaskEvent {
     },
 
     DueDateSet {
-        task_id: TaskId,
+        #[stream]
+        task_id: StreamId,
         due_date: DateTime<Utc>,
         set_by: UserName,
         set_at: DateTime<Utc>,
     },
 }
 
-/// Events specific to user streams
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Events specific to user streams.
+/// Each variant has a #[stream] field identifying the user aggregate.
+#[derive(Event, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UserEvent {
     /// Track when user is assigned a task
     TaskAssigned {
-        user_name: UserName,
+        #[stream]
+        user_id: StreamId,
         task_id: TaskId,
         assigned_at: DateTime<Utc>,
     },
 
     /// Track when user completes a task
     TaskCompleted {
-        user_name: UserName,
+        #[stream]
+        user_id: StreamId,
         task_id: TaskId,
         completed_at: DateTime<Utc>,
     },
 
     /// Track workload changes
     WorkloadUpdated {
-        user_name: UserName,
+        #[stream]
+        user_id: StreamId,
         active_tasks: u32,
         completed_today: u32,
     },
 }
-
-/// Combined event type for our system
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "event_type", rename_all = "snake_case")]
-pub enum SystemEvent {
-    Task(TaskEvent),
-    User(UserEvent),
-}
-
-// Required conversions for EventCore
-impl TryFrom<&SystemEvent> for SystemEvent {
-    type Error = std::convert::Infallible;
-
-    fn try_from(value: &SystemEvent) -> Result<Self, Self::Error> {
-        Ok(value.clone())
-    }
-}
 ```
+
+> **Note:** The `#[derive(Event)]` macro eliminates the need for manual trait implementations.
+> Each event type automatically gets `stream_id()`, `event_type_name()`, and `all_type_names()`
+> methods generated from the struct/enum definition.
 
 ## Summary
 

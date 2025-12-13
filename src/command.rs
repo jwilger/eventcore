@@ -100,7 +100,32 @@ impl StreamDeclarations {
 /// Infrastructure trait describing the streams required to execute a command.
 ///
 /// Per ADR-006, stream declarations are generated or implemented separately from
-/// the business logic so infrastructure can evolve independently. Commands
+/// the business logic so infrastructure can evolve independently.
+///
+/// # Preferred: Use `#[derive(Command)]` Macro
+///
+/// The `eventcore_macros` crate provides a `#[derive(Command)]` macro that automatically
+/// implements this trait. **Using the macro is strongly recommended** as it eliminates
+/// boilerplate and ensures correct implementation.
+///
+/// ```rust,ignore
+/// use eventcore_macros::Command;
+/// use eventcore::StreamId;
+///
+/// #[derive(Command, Clone)]
+/// struct TransferMoney {
+///     #[stream]
+///     from_account: StreamId,
+///     #[stream]
+///     to_account: StreamId,
+///     amount: u64,
+/// }
+/// // The macro generates stream_declarations() automatically
+/// ```
+///
+/// # Manual Implementation
+///
+/// Manual implementation is only needed for advanced cases. Commands
 /// typically use [`StreamDeclarations::single`] for single-stream workflows or
 /// [`StreamDeclarations::try_from_streams`] when coordinating multiple streams.
 pub trait CommandStreams {
@@ -128,6 +153,46 @@ pub trait StreamResolver<State> {
 /// Per ADR-012, domain types implement this trait to become events. The trait provides
 /// the minimal infrastructure contract: events must know their stream identity
 /// (aggregate ID) and support necessary operations for storage and async handling.
+///
+/// # Preferred: Use `#[derive(Event)]` Macro
+///
+/// The `eventcore_macros` crate provides a `#[derive(Event)]` macro that automatically
+/// implements this trait. **Using the macro is strongly recommended** as it eliminates
+/// boilerplate and ensures correct implementation.
+///
+/// ```rust,ignore
+/// use eventcore_macros::Event;
+/// use eventcore::StreamId;
+/// use serde::{Serialize, Deserialize};
+///
+/// // Struct event - macro generates all three trait methods
+/// #[derive(Event, Clone, Serialize, Deserialize)]
+/// struct MoneyDeposited {
+///     #[stream]
+///     account_id: StreamId,
+///     amount: u64,
+/// }
+///
+/// // Enum event - macro handles all variants automatically
+/// #[derive(Event, Clone, Serialize, Deserialize)]
+/// enum AccountEvent {
+///     Deposited {
+///         #[stream]
+///         account_id: StreamId,
+///         amount: u64,
+///     },
+///     Withdrawn {
+///         #[stream]
+///         account_id: StreamId,
+///         amount: u64,
+///     },
+/// }
+/// ```
+///
+/// # Manual Implementation
+///
+/// Manual implementation is only needed for advanced cases where the macro's
+/// conventions don't fit. See the method documentation below for details.
 ///
 /// # Trait Bounds
 ///

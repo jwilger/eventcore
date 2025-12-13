@@ -33,11 +33,24 @@ eventcore-postgres = "0.1"  # or your preferred adapter
 ```
 
 ```rust
-use eventcore::{prelude::*, require, emit};
-use eventcore_macros::Command;
+use eventcore::{prelude::*, require};
+use eventcore_macros::{Command, Event};
 use eventcore_postgres::PostgresEventStore;
+use serde::{Serialize, Deserialize};
 
-#[derive(Command)]
+// Events use #[derive(Event)] with #[stream] to mark aggregate identity
+#[derive(Event, Debug, Clone, Serialize, Deserialize)]
+enum BankingEvent {
+    MoneyTransferred {
+        #[stream]
+        from_account: StreamId,
+        to_account: StreamId,
+        amount: Money,
+    },
+}
+
+// Commands use #[derive(Command)] with #[stream] to declare required streams
+#[derive(Command, Clone)]
 struct TransferMoney {
     #[stream]
     from_account: StreamId,
