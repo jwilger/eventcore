@@ -1,6 +1,6 @@
 use eventcore::{
     Event, EventStore, EventSubscription, EventTypeName, InMemoryEventStore, StreamId,
-    StreamPrefix, StreamVersion, StreamWrites, SubscriptionQuery,
+    StreamPrefix, StreamVersion, StreamWrites, Subscribable, SubscriptionError, SubscriptionQuery,
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -547,5 +547,342 @@ fn enum_event_type_returns_all_variant_names() {
             "Withdrawn".try_into().expect("valid event type name")
         ],
         "enum event should return all variant names"
+    );
+}
+
+#[tokio::test]
+async fn chains_stream_combinators_for_transformation() {
+    // Given: Developer creates in-memory event store
+    let store = InMemoryEventStore::new();
+
+    // And: Developer creates account streams with events
+    let account_123 = StreamId::try_new("account-123").expect("valid stream id");
+    let account_456 = StreamId::try_new("account-456").expect("valid stream id");
+    let order_789 = StreamId::try_new("order-789").expect("valid stream id");
+
+    // And: Developer appends events with various values
+    let writes = StreamWrites::new()
+        .register_stream(account_123.clone(), StreamVersion::new(0))
+        .and_then(|w| w.register_stream(account_456.clone(), StreamVersion::new(0)))
+        .and_then(|w| w.register_stream(order_789.clone(), StreamVersion::new(0)))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: account_123.clone(),
+                value: 100,
+            })
+        })
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: account_456.clone(),
+                value: 50,
+            })
+        })
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: order_789.clone(),
+                value: 300,
+            })
+        })
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: account_123.clone(),
+                value: 200,
+            })
+        })
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: account_456.clone(),
+                value: 75,
+            })
+        })
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: order_789.clone(),
+                value: 500,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(writes)
+        .await
+        .expect("events should be appended successfully");
+
+    // When: Developer subscribes to active subscription stream
+    let subscription = store
+        .subscribe(SubscriptionQuery::all())
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer chains .map().filter().take(3) combinators
+    // Map events to their values, filter for values >= 100, take first 3 results
+    let values: Vec<u32> = subscription
+        .map(|event| match event {
+            TestEvent::ValueRecorded { value, .. } => value,
+        })
+        .filter(|value| futures::future::ready(*value >= 100))
+        .take(3)
+        .collect()
+        .await;
+
+    // Then: Standard futures combinators work
+    // And: Events can be collected into Vec
+    assert_eq!(values.len(), 3, "should collect 3 values >= 100");
+    assert_eq!(values[0], 100, "first value should be 100");
+    assert_eq!(values[1], 300, "second value should be 300");
+    assert_eq!(values[2], 200, "third value should be 200");
+}
+
+/// Simple read model for folding account balance from events.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct AccountBalance {
+    balance: u32,
+}
+
+impl AccountBalance {
+    fn apply(&mut self, event: &AccountEvent) {
+        match event {
+            AccountEvent::Deposited { amount, .. } => {
+                self.balance += amount;
+            }
+            AccountEvent::Withdrawn { amount, .. } => {
+                self.balance = self.balance.saturating_sub(*amount);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn builds_read_model_by_folding_subscription_stream() {
+    // Given: Developer creates in-memory event store
+    let store = InMemoryEventStore::new();
+
+    // And: Developer creates account stream with deposit and withdrawal events
+    let account_123 = StreamId::try_new("account-123").expect("valid stream id");
+
+    let writes = StreamWrites::new()
+        .register_stream(account_123.clone(), StreamVersion::new(0))
+        .and_then(|w| {
+            w.append(AccountEvent::Deposited {
+                stream_id: account_123.clone(),
+                amount: 100,
+            })
+        })
+        .and_then(|w| {
+            w.append(AccountEvent::Deposited {
+                stream_id: account_123.clone(),
+                amount: 50,
+            })
+        })
+        .and_then(|w| {
+            w.append(AccountEvent::Withdrawn {
+                stream_id: account_123.clone(),
+                amount: 30,
+            })
+        })
+        .and_then(|w| {
+            w.append(AccountEvent::Deposited {
+                stream_id: account_123.clone(),
+                amount: 75,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(writes)
+        .await
+        .expect("events should be appended successfully");
+
+    // When: Developer subscribes using AccountEvent enum
+    // This should automatically handle both Deposited and Withdrawn variants
+    let subscription =
+        store
+            .subscribe::<AccountEvent>(SubscriptionQuery::all().filter_stream_prefix(
+                StreamPrefix::try_new("account-").expect("valid stream prefix"),
+            ))
+            .await
+            .expect("subscription should be created successfully");
+
+    // And: Developer folds events into AccountBalance struct
+    let balance = subscription
+        .fold(AccountBalance::default(), |mut acc, event| async move {
+            acc.apply(&event);
+            acc
+        })
+        .await;
+
+    // Then: Read model reflects current state
+    // 100 (deposit) + 50 (deposit) - 30 (withdrawal) + 75 (deposit) = 195
+    assert_eq!(balance.balance, 195, "balance should be 195");
+
+    // And: Projection updates as new events arrive
+    // Developer appends more events to same stream
+    let more_writes = StreamWrites::new()
+        .register_stream(account_123.clone(), StreamVersion::new(4))
+        .and_then(|w| {
+            w.append(AccountEvent::Withdrawn {
+                stream_id: account_123.clone(),
+                amount: 45,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(more_writes)
+        .await
+        .expect("events should be appended successfully");
+
+    // When: Developer creates new subscription after new events
+    let updated_subscription =
+        store
+            .subscribe::<AccountEvent>(SubscriptionQuery::all().filter_stream_prefix(
+                StreamPrefix::try_new("account-").expect("valid stream prefix"),
+            ))
+            .await
+            .expect("subscription should be created successfully");
+
+    // And: Developer folds all events again
+    let updated_balance = updated_subscription
+        .fold(AccountBalance::default(), |mut acc, event| async move {
+            acc.apply(&event);
+            acc
+        })
+        .await;
+
+    // Then: Updated read model includes new event
+    // Previous balance 195 - 45 (new withdrawal) = 150
+    assert_eq!(
+        updated_balance.balance, 150,
+        "updated balance should be 150"
+    );
+}
+
+/// View enum that aggregates multiple disjoint event types.
+///
+/// This view type wraps MoneyDeposited and MoneyWithdrawn struct events
+/// and allows subscribing to both types in a single subscription.
+/// Unlike Event trait types, view types don't have a single stream_id
+/// because they aggregate events from different types/streams.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum AccountEventView {
+    Deposited(MoneyDeposited),
+    Withdrawn(MoneyWithdrawn),
+}
+
+impl Subscribable for AccountEventView {
+    fn subscribable_type_names() -> Vec<EventTypeName> {
+        vec![
+            "MoneyDeposited".try_into().expect("valid event type name"),
+            "MoneyWithdrawn".try_into().expect("valid event type name"),
+        ]
+    }
+
+    fn try_from_stored(type_name: &EventTypeName, data: &[u8]) -> Result<Self, SubscriptionError> {
+        match type_name.as_ref() {
+            "MoneyDeposited" => {
+                let event: MoneyDeposited = serde_json::from_slice(data)
+                    .map_err(|e| SubscriptionError::Generic(e.to_string()))?;
+                Ok(AccountEventView::Deposited(event))
+            }
+            "MoneyWithdrawn" => {
+                let event: MoneyWithdrawn = serde_json::from_slice(data)
+                    .map_err(|e| SubscriptionError::Generic(e.to_string()))?;
+                Ok(AccountEventView::Withdrawn(event))
+            }
+            _ => Err(SubscriptionError::Generic(format!(
+                "Unexpected event type: {}",
+                type_name
+            ))),
+        }
+    }
+}
+
+impl AccountBalance {
+    fn apply_view(&mut self, event: &AccountEventView) {
+        match event {
+            AccountEventView::Deposited(MoneyDeposited { amount, .. }) => {
+                self.balance += amount;
+            }
+            AccountEventView::Withdrawn(MoneyWithdrawn { amount, .. }) => {
+                self.balance = self.balance.saturating_sub(*amount);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn subscribes_to_disjoint_types_via_view_enum() {
+    // Given: Developer creates in-memory event store
+    let store = InMemoryEventStore::new();
+
+    // And: Developer creates account streams
+    let account_123 = StreamId::try_new("account-123").expect("valid stream id");
+    let account_456 = StreamId::try_new("account-456").expect("valid stream id");
+
+    // And: Developer appends events using STRUCT types (MoneyDeposited, MoneyWithdrawn)
+    // These are stored as individual event types, NOT as AccountEventView
+    let writes = StreamWrites::new()
+        .register_stream(account_123.clone(), StreamVersion::new(0))
+        .and_then(|w| w.register_stream(account_456.clone(), StreamVersion::new(0)))
+        .and_then(|w| {
+            w.append(MoneyDeposited {
+                stream_id: account_123.clone(),
+                amount: 100,
+            })
+        })
+        .and_then(|w| {
+            w.append(MoneyWithdrawn {
+                stream_id: account_123.clone(),
+                amount: 30,
+            })
+        })
+        .and_then(|w| {
+            w.append(MoneyDeposited {
+                stream_id: account_456.clone(),
+                amount: 200,
+            })
+        })
+        .and_then(|w| {
+            w.append(MoneyWithdrawn {
+                stream_id: account_456.clone(),
+                amount: 50,
+            })
+        })
+        .and_then(|w| {
+            w.append(MoneyDeposited {
+                stream_id: account_123.clone(),
+                amount: 75,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(writes)
+        .await
+        .expect("events should be appended successfully");
+
+    // When: Developer subscribes using VIEW ENUM type (AccountEventView)
+    // This should automatically receive BOTH MoneyDeposited and MoneyWithdrawn events
+    // wrapped in the appropriate enum variants
+    let subscription = store
+        .subscribe::<AccountEventView>(SubscriptionQuery::all())
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer folds events into AccountBalance read model
+    let balance = subscription
+        .fold(AccountBalance::default(), |mut acc, event| async move {
+            acc.apply_view(&event);
+            acc
+        })
+        .await;
+
+    // Then: Read model correctly aggregates BOTH event types
+    // account-123: 100 (deposit) - 30 (withdrawal) + 75 (deposit) = 145
+    // account-456: 200 (deposit) - 50 (withdrawal) = 150
+    // Total: 145 + 150 = 295
+    assert_eq!(
+        balance.balance, 295,
+        "balance should aggregate both accounts"
     );
 }

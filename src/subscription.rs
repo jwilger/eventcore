@@ -109,6 +109,56 @@ impl SubscriptionQuery {
 pub enum SubscriptionError {
     #[error("subscription error: {0}")]
     Generic(String),
+
+    #[error("failed to deserialize event: {0}")]
+    DeserializationFailed(String),
+
+    #[error("unknown event type: {0}")]
+    UnknownEventType(EventTypeName),
+}
+
+/// Trait for types that can participate in subscriptions.
+///
+/// Separate from Event trait to support view types that aggregate multiple
+/// event types. Event types automatically implement Subscribable via blanket impl.
+///
+/// View enums (e.g., AccountEventView wrapping MoneyDeposited and MoneyWithdrawn)
+/// can implement this trait to enable subscription to multiple disjoint event types
+/// as a single subscription stream.
+pub trait Subscribable: Clone + Send + 'static {
+    /// Returns the set of event type names this subscribable type can deserialize.
+    ///
+    /// For Event types, this returns the single event type name.
+    /// For view enums, this returns all wrapped event type names.
+    fn subscribable_type_names() -> Vec<EventTypeName>;
+
+    /// Attempts to deserialize stored event data into this type.
+    ///
+    /// # Parameters
+    ///
+    /// * `type_name` - The event type name from storage
+    /// * `data` - The serialized event data
+    ///
+    /// # Errors
+    ///
+    /// Returns SubscriptionError::DeserializationFailed if data cannot be deserialized.
+    /// Returns SubscriptionError::UnknownEventType if type_name is not recognized.
+    fn try_from_stored(type_name: &EventTypeName, data: &[u8]) -> Result<Self, SubscriptionError>;
+}
+
+/// Blanket implementation of Subscribable for all Event types.
+///
+/// This provides backward compatibility - existing Event types automatically
+/// work with subscriptions without requiring additional implementation.
+impl<E: Event> Subscribable for E {
+    fn subscribable_type_names() -> Vec<EventTypeName> {
+        E::all_type_names()
+    }
+
+    fn try_from_stored(_type_name: &EventTypeName, data: &[u8]) -> Result<Self, SubscriptionError> {
+        serde_json::from_slice(data)
+            .map_err(|e| SubscriptionError::DeserializationFailed(e.to_string()))
+    }
 }
 
 /// Event subscription trait for read models and projections.
@@ -128,12 +178,12 @@ pub trait EventSubscription {
     ///
     /// # Type Parameters
     ///
-    /// * `E` - Event type implementing the Event trait
+    /// * `E` - Type implementing the Subscribable trait (Event types or view enums)
     ///
     /// # Errors
     ///
     /// Returns SubscriptionError if the subscription cannot be created.
-    fn subscribe<E: Event>(
+    fn subscribe<E: Subscribable>(
         &self,
         query: SubscriptionQuery,
     ) -> impl Future<Output = Result<Pin<Box<dyn Stream<Item = E> + Send>>, SubscriptionError>> + Send;

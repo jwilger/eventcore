@@ -58,7 +58,9 @@ pub use store::{
 };
 
 // Re-export subscription types (per ADR-016 subscription model)
-pub use subscription::{EventSubscription, StreamPrefix, SubscriptionError, SubscriptionQuery};
+pub use subscription::{
+    EventSubscription, StreamPrefix, Subscribable, SubscriptionError, SubscriptionQuery,
+};
 
 /// Validates a business rule condition and returns early with
 /// `CommandError::BusinessRuleViolation` when the condition is false.

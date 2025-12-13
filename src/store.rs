@@ -24,6 +24,7 @@ pub struct StreamWriteEntry {
     pub stream_id: StreamId,
     pub event: Box<dyn std::any::Any + Send>,
     pub event_type: &'static str,
+    pub event_type_name: crate::command::EventTypeName,
     pub event_data: Value,
 }
 
@@ -93,10 +94,13 @@ impl StreamWrites {
                 detail: error.to_string(),
             })?;
 
+        let event_type_name = event.event_type_name();
+
         let entry = StreamWriteEntry {
             stream_id,
             event: Box::new(event),
             event_type: std::any::type_name::<E>(),
+            event_type_name,
             event_data,
         };
         writes.entries.push(entry);
@@ -403,8 +407,13 @@ pub struct EventStreamSlice;
 ///
 /// InMemoryEventStore uses interior mutability for concurrent access.
 /// TODO: Determine if Arc<Mutex<>> or other synchronization primitive needed.
-// (event, global_sequence_number)
-type PersistedEvent = (Box<dyn std::any::Any + Send>, u64);
+// (event, event_type_name, event_data, global_sequence_number)
+type PersistedEvent = (
+    Box<dyn std::any::Any + Send>,
+    crate::command::EventTypeName,
+    Vec<u8>,
+    u64,
+);
 type StreamData = (Vec<PersistedEvent>, StreamVersion);
 
 pub struct InMemoryEventStore {
@@ -445,7 +454,7 @@ impl EventStore for InMemoryEventStore {
             .map(|(persisted_events, _version)| {
                 persisted_events
                     .iter()
-                    .filter_map(|(boxed, _seq)| boxed.downcast_ref::<E>())
+                    .filter_map(|(boxed, _type_name, _data, _seq)| boxed.downcast_ref::<E>())
                     .cloned()
                     .collect()
             })
@@ -487,15 +496,27 @@ impl EventStore for InMemoryEventStore {
                 })?;
         for entry in writes.into_entries() {
             let StreamWriteEntry {
-                stream_id, event, ..
+                stream_id,
+                event,
+                event_type_name,
+                event_data,
+                ..
             } = entry;
             let sequence = *next_seq;
             *next_seq += 1;
 
+            // Serialize event_data to bytes for subscription deserialization
+            let event_bytes = serde_json::to_vec(&event_data).map_err(|e| {
+                EventStoreError::SerializationFailed {
+                    stream_id: stream_id.clone(),
+                    detail: e.to_string(),
+                }
+            })?;
+
             let (events, version) = streams
                 .entry(stream_id)
                 .or_insert_with(|| (Vec::new(), StreamVersion::new(0)));
-            events.push((event, sequence));
+            events.push((event, event_type_name, event_bytes, sequence));
             *version = version.increment();
         }
 
@@ -504,13 +525,16 @@ impl EventStore for InMemoryEventStore {
 }
 
 impl crate::subscription::EventSubscription for InMemoryEventStore {
-    async fn subscribe<E: Event>(
+    async fn subscribe<E: crate::subscription::Subscribable>(
         &self,
         query: crate::subscription::SubscriptionQuery,
     ) -> Result<
         std::pin::Pin<Box<dyn futures::Stream<Item = E> + Send>>,
         crate::subscription::SubscriptionError,
     > {
+        // Get the set of type names that E can deserialize
+        let subscribable_type_names = E::subscribable_type_names();
+
         // Collect all events from all streams with their sequence numbers
         let streams = self.streams.lock().map_err(|_| {
             crate::subscription::SubscriptionError::Generic("mutex poisoned".to_string())
@@ -525,15 +549,23 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
                 continue;
             }
 
-            for (boxed_event, seq) in events {
-                if let Some(event) = boxed_event.downcast_ref::<E>() {
-                    // Filter by event type name if specified
-                    if let Some(expected_name) = query.event_type_name_filter()
-                        && &event.event_type_name() != expected_name
-                    {
-                        continue;
-                    }
-                    all_events.push((event.clone(), *seq));
+            for (_boxed_event, stored_type_name, event_data, seq) in events {
+                // Check if the stored event type name matches any of the subscribable type names
+                if !subscribable_type_names.contains(stored_type_name) {
+                    continue;
+                }
+
+                // Filter by event type name if specified in query
+                if let Some(expected_name) = query.event_type_name_filter()
+                    && stored_type_name != expected_name
+                {
+                    continue;
+                }
+
+                // Use try_from_stored to deserialize the event
+                match E::try_from_stored(stored_type_name, event_data) {
+                    Ok(event) => all_events.push((event, *seq)),
+                    Err(_) => continue, // Skip events that can't be deserialized
                 }
             }
         }

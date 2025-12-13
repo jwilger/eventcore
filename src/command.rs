@@ -28,7 +28,8 @@ use crate::store::StreamId;
         Serialize,
         Deserialize,
         AsRef,
-        TryFrom
+        TryFrom,
+        Display
     )
 )]
 pub struct EventTypeName(String);
