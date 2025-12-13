@@ -62,6 +62,11 @@ pub use subscription::{
     EventSubscription, StreamPrefix, Subscribable, SubscriptionError, SubscriptionQuery,
 };
 
+// Re-export macros when the "macros" feature is enabled (default)
+// Users can disable with: eventcore = { version = "...", default-features = false }
+#[cfg(feature = "macros")]
+pub use eventcore_macros::{Command, Event};
+
 /// Validates a business rule condition and returns early with
 /// `CommandError::BusinessRuleViolation` when the condition is false.
 ///
