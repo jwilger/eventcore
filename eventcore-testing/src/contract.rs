@@ -73,6 +73,7 @@ impl Event for ContractTestEvent {
             .expect("valid event type name")
     }
 
+    #[cfg_attr(test, mutants::skip)] // test infrastructure - trait required method
     fn all_type_names() -> Vec<EventTypeName> {
         vec![
             "ContractTestEvent"
@@ -104,6 +105,7 @@ impl Event for OtherContractEvent {
             .expect("valid event type name")
     }
 
+    #[cfg_attr(test, mutants::skip)] // test infrastructure - trait required method
     fn all_type_names() -> Vec<EventTypeName> {
         vec![
             "OtherContractEvent"
