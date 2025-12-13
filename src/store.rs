@@ -24,6 +24,7 @@ pub struct StreamWriteEntry {
     pub stream_id: StreamId,
     pub event: Box<dyn std::any::Any + Send>,
     pub event_type: &'static str,
+    pub event_type_name: crate::command::EventTypeName,
     pub event_data: Value,
 }
 
@@ -93,10 +94,13 @@ impl StreamWrites {
                 detail: error.to_string(),
             })?;
 
+        let event_type_name = event.event_type_name();
+
         let entry = StreamWriteEntry {
             stream_id,
             event: Box::new(event),
             event_type: std::any::type_name::<E>(),
+            event_type_name,
             event_data,
         };
         writes.entries.push(entry);
@@ -212,10 +216,11 @@ pub trait EventStore {
 /// - Non-empty (trimmed strings with at least 1 character)
 /// - Within reasonable length (max 255 characters)
 /// - Sanitized (leading/trailing whitespace removed)
+/// - Free of glob metacharacters (*, ?, [, ]) per ADR-017
 ///
 #[nutype(
     sanitize(trim),
-    validate(not_empty, len_char_max = 255),
+    validate(not_empty, len_char_max = 255, predicate = no_glob_metacharacters),
     derive(
         Debug,
         Clone,
@@ -230,6 +235,14 @@ pub trait EventStore {
     )
 )]
 pub struct StreamId(String);
+
+/// Validation predicate: reject glob metacharacters in StreamId.
+///
+/// Per ADR-017, StreamId reserves glob metacharacters (*, ?, [, ]) to enable
+/// future pattern matching without ambiguity or escaping complexity.
+fn no_glob_metacharacters(s: &str) -> bool {
+    !s.contains(['*', '?', '[', ']'])
+}
 
 /// Stream version domain type.
 ///
@@ -394,10 +407,18 @@ pub struct EventStreamSlice;
 ///
 /// InMemoryEventStore uses interior mutability for concurrent access.
 /// TODO: Determine if Arc<Mutex<>> or other synchronization primitive needed.
-type StreamData = (Vec<Box<dyn std::any::Any + Send>>, StreamVersion);
+// (event, event_type_name, event_data, global_sequence_number)
+type PersistedEvent = (
+    Box<dyn std::any::Any + Send>,
+    crate::command::EventTypeName,
+    Vec<u8>,
+    u64,
+);
+type StreamData = (Vec<PersistedEvent>, StreamVersion);
 
 pub struct InMemoryEventStore {
     streams: std::sync::Mutex<HashMap<StreamId, StreamData>>,
+    next_sequence: std::sync::Mutex<u64>,
 }
 
 impl InMemoryEventStore {
@@ -408,6 +429,7 @@ impl InMemoryEventStore {
     pub fn new() -> Self {
         Self {
             streams: std::sync::Mutex::new(HashMap::new()),
+            next_sequence: std::sync::Mutex::new(0),
         }
     }
 }
@@ -423,13 +445,16 @@ impl EventStore for InMemoryEventStore {
         &self,
         stream_id: StreamId,
     ) -> Result<EventStreamReader<E>, EventStoreError> {
-        let streams = self.streams.lock().unwrap();
+        let streams = self
+            .streams
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure { operation: "read" })?;
         let events = streams
             .get(&stream_id)
-            .map(|(boxed_events, _version)| {
-                boxed_events
+            .map(|(persisted_events, _version)| {
+                persisted_events
                     .iter()
-                    .filter_map(|boxed| boxed.downcast_ref::<E>())
+                    .filter_map(|(boxed, _type_name, _data, _seq)| boxed.downcast_ref::<E>())
                     .cloned()
                     .collect()
             })
@@ -442,7 +467,12 @@ impl EventStore for InMemoryEventStore {
         &self,
         writes: StreamWrites,
     ) -> Result<EventStreamSlice, EventStoreError> {
-        let mut streams = self.streams.lock().unwrap();
+        let mut streams = self
+            .streams
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure {
+                operation: "append",
+            })?;
         let expected_versions = writes.expected_versions().clone();
 
         // Check all version constraints before writing any events
@@ -458,18 +488,98 @@ impl EventStore for InMemoryEventStore {
         }
 
         // All versions match - proceed with writes
+        let mut next_seq =
+            self.next_sequence
+                .lock()
+                .map_err(|_| EventStoreError::StoreFailure {
+                    operation: "append",
+                })?;
         for entry in writes.into_entries() {
             let StreamWriteEntry {
-                stream_id, event, ..
+                stream_id,
+                event,
+                event_type_name,
+                event_data,
+                ..
             } = entry;
+            let sequence = *next_seq;
+            *next_seq += 1;
+
+            // Serialize event_data to bytes for subscription deserialization
+            let event_bytes = serde_json::to_vec(&event_data).map_err(|e| {
+                EventStoreError::SerializationFailed {
+                    stream_id: stream_id.clone(),
+                    detail: e.to_string(),
+                }
+            })?;
+
             let (events, version) = streams
                 .entry(stream_id)
                 .or_insert_with(|| (Vec::new(), StreamVersion::new(0)));
-            events.push(event);
+            events.push((event, event_type_name, event_bytes, sequence));
             *version = version.increment();
         }
 
         Ok(EventStreamSlice)
+    }
+}
+
+impl crate::subscription::EventSubscription for InMemoryEventStore {
+    async fn subscribe<E: crate::subscription::Subscribable>(
+        &self,
+        query: crate::subscription::SubscriptionQuery,
+    ) -> Result<
+        std::pin::Pin<Box<dyn futures::Stream<Item = E> + Send>>,
+        crate::subscription::SubscriptionError,
+    > {
+        // Get the set of type names that E can deserialize
+        let subscribable_type_names = E::subscribable_type_names();
+
+        // Collect all events from all streams with their sequence numbers
+        let streams = self.streams.lock().map_err(|_| {
+            crate::subscription::SubscriptionError::Generic("mutex poisoned".to_string())
+        })?;
+        let mut all_events: Vec<(E, u64)> = Vec::new();
+
+        for (stream_id, (events, _version)) in streams.iter() {
+            // Filter by stream prefix if specified
+            if let Some(prefix) = query.stream_prefix()
+                && !stream_id.as_ref().starts_with(prefix.as_ref())
+            {
+                continue;
+            }
+
+            for (_boxed_event, stored_type_name, event_data, seq) in events {
+                // Check if the stored event type name matches any of the subscribable type names
+                if !subscribable_type_names.contains(stored_type_name) {
+                    continue;
+                }
+
+                // Filter by event type name if specified in query
+                if let Some(expected_name) = query.event_type_name_filter()
+                    && stored_type_name != expected_name
+                {
+                    continue;
+                }
+
+                // Use try_from_stored to deserialize the event
+                match E::try_from_stored(stored_type_name, event_data) {
+                    Ok(event) => all_events.push((event, *seq)),
+                    Err(_) => continue, // Skip events that can't be deserialized
+                }
+            }
+        }
+
+        // Sort by sequence number to get temporal order
+        all_events.sort_by_key(|(_, seq)| *seq);
+
+        // Extract just the events (discard sequence numbers)
+        let ordered_events: Vec<E> = all_events.into_iter().map(|(event, _)| event).collect();
+
+        // Convert to Stream and box with explicit type
+        let stream: std::pin::Pin<Box<dyn futures::Stream<Item = E> + Send>> =
+            Box::pin(futures::stream::iter(ordered_events));
+        Ok(stream)
     }
 }
 
@@ -500,6 +610,7 @@ impl<T: EventStore + Sync> EventStore for &T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EventTypeName;
     use serde::{Deserialize, Serialize};
 
     /// Test-specific domain event type for unit testing storage operations.
@@ -512,6 +623,14 @@ mod tests {
     impl Event for TestEvent {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
+        }
+
+        fn event_type_name(&self) -> EventTypeName {
+            "TestEvent".try_into().expect("valid event type name")
+        }
+
+        fn all_type_names() -> Vec<EventTypeName> {
+            vec!["TestEvent".try_into().expect("valid event type name")]
         }
     }
 
@@ -764,5 +883,51 @@ mod tests {
         assert_eq!(versions.len(), 2);
         assert_eq!(versions.get(&stream_a), Some(&StreamVersion::new(0)));
         assert_eq!(versions.get(&stream_b), Some(&StreamVersion::new(5)));
+    }
+
+    /// Unit test: StreamId rejects asterisk glob metacharacter
+    ///
+    /// Per ADR-017, StreamId must reject glob metacharacters (*, ?, [, ])
+    /// to enable future pattern matching without ambiguity or escaping complexity.
+    ///
+    /// This test verifies that StreamId::try_new() returns an error when
+    /// the asterisk metacharacter is present in the identifier.
+    #[test]
+    fn stream_id_rejects_asterisk_metacharacter() {
+        // When: Developer attempts to create StreamId with asterisk metacharacter
+        let result = StreamId::try_new("account-*");
+
+        // Then: StreamId construction fails
+        assert!(
+            result.is_err(),
+            "StreamId should reject asterisk glob metacharacter"
+        );
+    }
+
+    #[test]
+    fn stream_id_rejects_question_mark_metacharacter() {
+        // When: Developer attempts to create StreamId with question mark metacharacter
+        let result = StreamId::try_new("account-?");
+
+        // Then: StreamId construction fails
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stream_id_rejects_open_bracket_metacharacter() {
+        // When: Developer attempts to create StreamId with open bracket metacharacter
+        let result = StreamId::try_new("account-[");
+
+        // Then: StreamId construction fails
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stream_id_rejects_close_bracket_metacharacter() {
+        // When: Developer attempts to create StreamId with close bracket metacharacter
+        let result = StreamId::try_new("account-]");
+
+        // Then: StreamId construction fails
+        assert!(result.is_err());
     }
 }

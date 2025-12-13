@@ -1,6 +1,72 @@
-# Chapter 3.1: Commands and the Macro System
+# Chapter 3.1: Commands, Events, and the Macro System
 
-This chapter explores how EventCore's command system works, focusing on the `#[derive(Command)]` macro that eliminates boilerplate while maintaining type safety.
+This chapter explores how EventCore's macro system eliminates boilerplate while maintaining type safety. EventCore provides two key derive macros:
+
+- **`#[derive(Command)]`** - Generates `CommandStreams` trait implementation
+- **`#[derive(Event)]`** - Generates `Event` trait implementation
+
+Both macros use the `#[stream]` attribute to identify stream fields.
+
+## The Event Macro
+
+Events are domain facts - things that happened. The `#[derive(Event)]` macro implements the `Event` trait automatically:
+
+```rust
+use eventcore::StreamId;
+use eventcore_macros::Event;
+use serde::{Serialize, Deserialize};
+
+// Struct event - single event type
+#[derive(Event, Debug, Clone, Serialize, Deserialize)]
+struct MoneyDeposited {
+    #[stream]              // Marks the aggregate identity field
+    account_id: StreamId,
+    amount: u64,
+    deposited_at: DateTime<Utc>,
+}
+
+// Enum event - multiple event types sharing a stream
+#[derive(Event, Debug, Clone, Serialize, Deserialize)]
+enum AccountEvent {
+    Opened {
+        #[stream]
+        account_id: StreamId,
+        owner: String,
+    },
+    Deposited {
+        #[stream]
+        account_id: StreamId,
+        amount: u64,
+    },
+    Withdrawn {
+        #[stream]
+        account_id: StreamId,
+        amount: u64,
+    },
+}
+```
+
+### What the Event Macro Generates
+
+The macro generates the full `Event` trait implementation:
+
+```rust
+impl Event for MoneyDeposited {
+    fn stream_id(&self) -> &StreamId {
+        &self.account_id
+    }
+
+    fn event_type_name(&self) -> EventTypeName {
+        "MoneyDeposited".try_into().expect("valid event type name")
+    }
+
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["MoneyDeposited".try_into().expect("valid event type name")]
+    }
+}
+```
+
+For enums, `event_type_name()` returns the variant name and `all_type_names()` returns all variant names.
 
 ## The Command Pattern
 

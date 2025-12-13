@@ -36,6 +36,7 @@
 mod command;
 mod errors;
 mod store;
+mod subscription;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
@@ -43,8 +44,8 @@ use std::sync::Arc;
 
 // Re-export only the minimal public API needed for execute() signature
 pub use command::{
-    CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamDeclarationsError,
-    StreamResolver,
+    CommandLogic, CommandStreams, Event, EventTypeName, NewEvents, StreamDeclarations,
+    StreamDeclarationsError, StreamResolver,
 };
 pub use errors::CommandError;
 pub use store::EventStore;
@@ -55,6 +56,16 @@ pub use store::{
     EventStoreError, EventStreamReader, EventStreamSlice, InMemoryEventStore, StreamId,
     StreamVersion, StreamWriteEntry, StreamWrites,
 };
+
+// Re-export subscription types (per ADR-016 subscription model)
+pub use subscription::{
+    EventSubscription, StreamPrefix, Subscribable, SubscriptionError, SubscriptionQuery,
+};
+
+// Re-export macros when the "macros" feature is enabled (default)
+// Users can disable with: eventcore = { version = "...", default-features = false }
+#[cfg(feature = "macros")]
+pub use eventcore_macros::{Command, Event};
 
 /// Validates a business rule condition and returns early with
 /// `CommandError::BusinessRuleViolation` when the condition is false.
@@ -563,6 +574,14 @@ mod tests {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
         }
+
+        fn event_type_name(&self) -> EventTypeName {
+            "TestEvent".try_into().expect("valid event type name")
+        }
+
+        fn all_type_names() -> Vec<EventTypeName> {
+            vec!["TestEvent".try_into().expect("valid event type name")]
+        }
     }
 
     /// Mock command that tracks whether handle() was called.
@@ -637,6 +656,20 @@ mod tests {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
         }
+
+        fn event_type_name(&self) -> EventTypeName {
+            "TestEventWithValue"
+                .try_into()
+                .expect("valid event type name")
+        }
+
+        fn all_type_names() -> Vec<EventTypeName> {
+            vec![
+                "TestEventWithValue"
+                    .try_into()
+                    .expect("valid event type name"),
+            ]
+        }
     }
 
     /// Test state that accumulates values from events.
@@ -668,7 +701,10 @@ mod tests {
 
         fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
             // Capture the state that was passed to handle()
-            *self.captured_state.lock().unwrap() = Some(state);
+            *self
+                .captured_state
+                .lock()
+                .expect("mutex should not be poisoned") = Some(state);
             Ok(NewEvents::default())
         }
     }
@@ -763,7 +799,11 @@ mod tests {
             .expect("command execution to succeed");
 
         // Then: handle() received reconstructed state (not default state)
-        let final_state = captured_state.lock().unwrap().clone().unwrap();
+        let final_state = captured_state
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone()
+            .expect("state should be captured");
         assert_eq!(
             final_state.value, 50,
             "execute() must reconstruct state from existing events before calling handle()"

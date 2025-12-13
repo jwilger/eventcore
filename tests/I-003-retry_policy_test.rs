@@ -1,7 +1,7 @@
 use eventcore::{
     CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, InMemoryEventStore, MetricsHook, NewEvents, RetryContext,
-    RetryPolicy, StreamDeclarations, StreamId, StreamWrites, execute,
+    EventStreamReader, EventStreamSlice, EventTypeName, InMemoryEventStore, MetricsHook, NewEvents,
+    RetryContext, RetryPolicy, StreamDeclarations, StreamId, StreamWrites, execute,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -21,6 +21,14 @@ struct TestEvent {
 impl Event for TestEvent {
     fn stream_id(&self) -> &StreamId {
         &self.stream_id
+    }
+
+    fn event_type_name(&self) -> EventTypeName {
+        "TestEvent".try_into().expect("valid event type name")
+    }
+
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["TestEvent".try_into().expect("valid event type name")]
     }
 }
 
@@ -110,7 +118,10 @@ async fn metrics_hook_receives_correct_attempt_numbers() {
 
     impl MetricsHook for ContextCapturingHook {
         fn on_retry_attempt(&self, ctx: &RetryContext) {
-            self.contexts.lock().unwrap().push(ctx.clone());
+            self.contexts
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(ctx.clone());
         }
     }
 
@@ -138,7 +149,9 @@ async fn metrics_hook_receives_correct_attempt_numbers() {
     assert!(result.is_ok(), "command should succeed after 3 retries");
 
     // And: Metrics hook captured exactly 3 retry contexts
-    let contexts = captured_contexts.lock().unwrap();
+    let contexts = captured_contexts
+        .lock()
+        .expect("mutex should not be poisoned");
     assert_eq!(contexts.len(), 3, "should have captured 3 retry contexts");
 
     // And: First retry has attempt=1

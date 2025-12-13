@@ -1,6 +1,6 @@
 use eventcore::{
-    CommandError, CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamId,
-    require,
+    CommandError, CommandLogic, CommandStreams, Event, EventTypeName, NewEvents,
+    StreamDeclarations, StreamId, require,
 };
 use eventcore_macros::Command;
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,14 @@ struct AccountEvent {
 impl Event for AccountEvent {
     fn stream_id(&self) -> &StreamId {
         &self.stream_id
+    }
+
+    fn event_type_name(&self) -> EventTypeName {
+        "AccountEvent".try_into().expect("valid event type name")
+    }
+
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["AccountEvent".try_into().expect("valid event type name")]
     }
 }
 

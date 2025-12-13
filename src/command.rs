@@ -1,10 +1,38 @@
 use std::collections::HashSet;
 
+use nutype::nutype;
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 use crate::errors::CommandError;
 use crate::store::StreamId;
+
+/// Domain type representing an event type name.
+///
+/// Uses nutype for compile-time validation ensuring all event type names are:
+/// - Non-empty (trimmed strings with at least 1 character)
+/// - Within reasonable length (max 255 characters)
+/// - Sanitized (leading/trailing whitespace removed)
+///
+/// This type enforces the parse-don't-validate principle: once constructed,
+/// an EventTypeName is guaranteed to be valid for event filtering and type discovery.
+#[nutype(
+    sanitize(trim),
+    validate(not_empty, len_char_max = 255),
+    derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Hash,
+        Serialize,
+        Deserialize,
+        AsRef,
+        TryFrom,
+        Display
+    )
+)]
+pub struct EventTypeName(String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamDeclarations {
@@ -72,7 +100,32 @@ impl StreamDeclarations {
 /// Infrastructure trait describing the streams required to execute a command.
 ///
 /// Per ADR-006, stream declarations are generated or implemented separately from
-/// the business logic so infrastructure can evolve independently. Commands
+/// the business logic so infrastructure can evolve independently.
+///
+/// # Preferred: Use `#[derive(Command)]` Macro
+///
+/// The `eventcore_macros` crate provides a `#[derive(Command)]` macro that automatically
+/// implements this trait. **Using the macro is strongly recommended** as it eliminates
+/// boilerplate and ensures correct implementation.
+///
+/// ```rust,ignore
+/// use eventcore_macros::Command;
+/// use eventcore::StreamId;
+///
+/// #[derive(Command, Clone)]
+/// struct TransferMoney {
+///     #[stream]
+///     from_account: StreamId,
+///     #[stream]
+///     to_account: StreamId,
+///     amount: u64,
+/// }
+/// // The macro generates stream_declarations() automatically
+/// ```
+///
+/// # Manual Implementation
+///
+/// Manual implementation is only needed for advanced cases. Commands
 /// typically use [`StreamDeclarations::single`] for single-stream workflows or
 /// [`StreamDeclarations::try_from_streams`] when coordinating multiple streams.
 pub trait CommandStreams {
@@ -101,6 +154,46 @@ pub trait StreamResolver<State> {
 /// the minimal infrastructure contract: events must know their stream identity
 /// (aggregate ID) and support necessary operations for storage and async handling.
 ///
+/// # Preferred: Use `#[derive(Event)]` Macro
+///
+/// The `eventcore_macros` crate provides a `#[derive(Event)]` macro that automatically
+/// implements this trait. **Using the macro is strongly recommended** as it eliminates
+/// boilerplate and ensures correct implementation.
+///
+/// ```rust,ignore
+/// use eventcore_macros::Event;
+/// use eventcore::StreamId;
+/// use serde::{Serialize, Deserialize};
+///
+/// // Struct event - macro generates all three trait methods
+/// #[derive(Event, Clone, Serialize, Deserialize)]
+/// struct MoneyDeposited {
+///     #[stream]
+///     account_id: StreamId,
+///     amount: u64,
+/// }
+///
+/// // Enum event - macro handles all variants automatically
+/// #[derive(Event, Clone, Serialize, Deserialize)]
+/// enum AccountEvent {
+///     Deposited {
+///         #[stream]
+///         account_id: StreamId,
+///         amount: u64,
+///     },
+///     Withdrawn {
+///         #[stream]
+///         account_id: StreamId,
+///         amount: u64,
+///     },
+/// }
+/// ```
+///
+/// # Manual Implementation
+///
+/// Manual implementation is only needed for advanced cases where the macro's
+/// conventions don't fit. See the method documentation below for details.
+///
 /// # Trait Bounds
 ///
 /// * `Clone` - Required for state reconstruction (apply method may need events multiple times)
@@ -112,6 +205,64 @@ pub trait Event: Clone + Send + Serialize + DeserializeOwned + 'static {
     /// The stream ID represents the aggregate identity in Domain-Driven Design.
     /// Each domain event knows which aggregate instance it belongs to.
     fn stream_id(&self) -> &StreamId;
+
+    /// Returns the event type name for filtering.
+    ///
+    /// This method enables filtering events by type name, which is necessary
+    /// for distinguishing enum variants that share the same TypeId. For struct
+    /// event types, return the struct name. For enum event types, return the
+    /// variant name.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Struct event type
+    /// impl Event for MoneyDeposited {
+    ///     fn event_type_name(&self) -> EventTypeName {
+    ///         "MoneyDeposited".try_into().expect("valid event type name")
+    ///     }
+    /// }
+    ///
+    /// // Enum event type
+    /// impl Event for AccountEvent {
+    ///     fn event_type_name(&self) -> EventTypeName {
+    ///         match self {
+    ///             AccountEvent::Deposited { .. } => "Deposited".try_into().expect("valid event type name"),
+    ///             AccountEvent::Withdrawn { .. } => "Withdrawn".try_into().expect("valid event type name"),
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    fn event_type_name(&self) -> EventTypeName;
+
+    /// Returns all possible event type names for this Event type.
+    ///
+    /// This associated function provides compile-time discovery of all type names
+    /// that instances of this Event type can return from `event_type_name()`.
+    /// For struct event types, this returns a single-element vector containing
+    /// the struct name. For enum event types, this returns all variant names.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Struct event type
+    /// impl Event for MoneyDeposited {
+    ///     fn all_type_names() -> Vec<EventTypeName> {
+    ///         vec!["MoneyDeposited".try_into().expect("valid event type name")]
+    ///     }
+    /// }
+    ///
+    /// // Enum event type
+    /// impl Event for AccountEvent {
+    ///     fn all_type_names() -> Vec<EventTypeName> {
+    ///         vec![
+    ///             "Deposited".try_into().expect("valid event type name"),
+    ///             "Withdrawn".try_into().expect("valid event type name"),
+    ///         ]
+    ///     }
+    /// }
+    /// ```
+    fn all_type_names() -> Vec<EventTypeName>;
 }
 
 /// Trait defining the business logic of a command.

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use eventcore::{
     CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, InMemoryEventStore, NewEvents, RetryPolicy,
+    EventStreamReader, EventStreamSlice, EventTypeName, InMemoryEventStore, NewEvents, RetryPolicy,
     StreamDeclarations, StreamId, StreamResolver, StreamVersion, StreamWrites, execute,
 };
 use serde::{Deserialize, Serialize};
@@ -271,6 +271,38 @@ impl Event for CheckoutEvent {
             CheckoutEvent::PaymentMethodAuthorized { payment_stream }
             | CheckoutEvent::PaymentMethodCaptured { payment_stream } => payment_stream,
         }
+    }
+
+    fn event_type_name(&self) -> EventTypeName {
+        match self {
+            CheckoutEvent::OrderPaymentMethodLinked { .. } => "OrderPaymentMethodLinked"
+                .try_into()
+                .expect("valid event type name"),
+            CheckoutEvent::PaymentMethodAuthorized { .. } => "PaymentMethodAuthorized"
+                .try_into()
+                .expect("valid event type name"),
+            CheckoutEvent::PaymentCaptured { .. } => {
+                "PaymentCaptured".try_into().expect("valid event type name")
+            }
+            CheckoutEvent::PaymentMethodCaptured { .. } => "PaymentMethodCaptured"
+                .try_into()
+                .expect("valid event type name"),
+        }
+    }
+
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec![
+            "OrderPaymentMethodLinked"
+                .try_into()
+                .expect("valid event type name"),
+            "PaymentMethodAuthorized"
+                .try_into()
+                .expect("valid event type name"),
+            "PaymentCaptured".try_into().expect("valid event type name"),
+            "PaymentMethodCaptured"
+                .try_into()
+                .expect("valid event type name"),
+        ]
     }
 }
 

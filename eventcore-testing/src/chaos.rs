@@ -143,7 +143,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::{InMemoryEventStore, StreamVersion};
+    use eventcore::{EventTypeName, InMemoryEventStore, StreamVersion};
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +154,20 @@ mod tests {
     impl Event for PassthroughEvent {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
+        }
+
+        fn event_type_name(&self) -> EventTypeName {
+            "PassthroughEvent"
+                .try_into()
+                .expect("valid event type name")
+        }
+
+        fn all_type_names() -> Vec<EventTypeName> {
+            vec![
+                "PassthroughEvent"
+                    .try_into()
+                    .expect("valid event type name"),
+            ]
         }
     }
 

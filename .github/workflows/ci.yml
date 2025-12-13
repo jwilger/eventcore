@@ -31,21 +31,6 @@ jobs:
           - 17
           - 18
 
-    services:
-      postgres:
-        image: postgres:${{ matrix.postgres }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: eventcore_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - uses: actions/checkout@v6
 
@@ -64,12 +49,12 @@ jobs:
 
       - name: Run tests
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
+          POSTGRES_VERSION: ${{ matrix.postgres }}
         run: cargo nextest run --workspace --all-features
 
       - name: Run doctests
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
+          POSTGRES_VERSION: ${{ matrix.postgres }}
         run: cargo test --doc --workspace --all-features
 
   format:
@@ -108,21 +93,6 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: eventcore_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - uses: actions/checkout@v6
 
@@ -141,7 +111,7 @@ jobs:
 
       - name: Run cargo mutants
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/eventcore_test
+          POSTGRES_VERSION: 17
         run: cargo mutants --workspace
 
       - name: Upload mutation report

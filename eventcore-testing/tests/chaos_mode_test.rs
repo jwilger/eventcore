@@ -1,5 +1,6 @@
 use eventcore::{
-    Event, EventStore, EventStoreError, InMemoryEventStore, StreamId, StreamVersion, StreamWrites,
+    Event, EventStore, EventStoreError, EventTypeName, InMemoryEventStore, StreamId, StreamVersion,
+    StreamWrites,
 };
 use eventcore_testing::chaos::{ChaosConfig, ChaosEventStoreExt};
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,14 @@ struct TestEvent {
 impl Event for TestEvent {
     fn stream_id(&self) -> &StreamId {
         &self.stream_id
+    }
+
+    fn event_type_name(&self) -> EventTypeName {
+        "TestEvent".try_into().expect("valid event type name")
+    }
+
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["TestEvent".try_into().expect("valid event type name")]
     }
 }
 

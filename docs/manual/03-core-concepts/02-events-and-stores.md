@@ -14,6 +14,10 @@ Events should be:
 ### Event Design Principles
 
 ```rust
+use eventcore::StreamId;
+use eventcore_macros::Event;
+use serde::{Serialize, Deserialize};
+
 // ❌ Bad: Technical focus, present tense, missing context
 #[derive(Serialize, Deserialize)]
 struct UpdateUser {
@@ -22,9 +26,11 @@ struct UpdateUser {
 }
 
 // ✅ Good: Business focus, past tense, complete information
-#[derive(Serialize, Deserialize)]
+// Use #[derive(Event)] with #[stream] to mark the aggregate identity
+#[derive(Event, Debug, Clone, Serialize, Deserialize)]
 struct CustomerEmailChanged {
-    customer_id: CustomerId,
+    #[stream]
+    customer_id: StreamId,
     old_email: Email,
     new_email: Email,
     changed_by: UserId,
@@ -33,15 +39,23 @@ struct CustomerEmailChanged {
 }
 ```
 
+> **Note:** The `#[derive(Event)]` macro is the recommended way to implement the `Event` trait.
+> It automatically generates `stream_id()`, `event_type_name()`, and `all_type_names()` methods.
+
 ## Event Structure in EventCore
 
 ### Core Event Types
 
 ```rust
-/// Your domain event
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use eventcore::StreamId;
+use eventcore_macros::Event;
+use serde::{Serialize, Deserialize};
+
+/// Your domain event using the Event derive macro
+#[derive(Event, Debug, Clone, Serialize, Deserialize)]
 pub struct OrderShipped {
-    pub order_id: OrderId,
+    #[stream]
+    pub order_id: StreamId,
     pub tracking_number: TrackingNumber,
     pub carrier: Carrier,
     pub shipped_at: DateTime<Utc>,

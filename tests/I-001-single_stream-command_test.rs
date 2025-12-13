@@ -1,6 +1,6 @@
 use eventcore::{
-    CommandError, CommandLogic, CommandStreams, Event, EventStore, InMemoryEventStore, NewEvents,
-    RetryPolicy, StreamDeclarations, StreamId, execute,
+    CommandError, CommandLogic, CommandStreams, Event, EventStore, EventTypeName,
+    InMemoryEventStore, NewEvents, RetryPolicy, StreamDeclarations, StreamId, execute,
 };
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,24 @@ impl Event for TestDomainEvents {
             TestDomainEvents::MoneyDeposited { account_id, .. }
             | TestDomainEvents::MoneyWithdrawn { account_id, .. } => account_id,
         }
+    }
+
+    fn event_type_name(&self) -> EventTypeName {
+        match self {
+            TestDomainEvents::MoneyDeposited { .. } => {
+                "MoneyDeposited".try_into().expect("valid event type name")
+            }
+            TestDomainEvents::MoneyWithdrawn { .. } => {
+                "MoneyWithdrawn".try_into().expect("valid event type name")
+            }
+        }
+    }
+
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec![
+            "MoneyDeposited".try_into().expect("valid event type name"),
+            "MoneyWithdrawn".try_into().expect("valid event type name"),
+        ]
     }
 }
 
