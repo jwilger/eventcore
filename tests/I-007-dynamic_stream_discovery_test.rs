@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use eventcore::{
     CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, InMemoryEventStore, NewEvents, RetryPolicy,
+    EventStreamReader, EventStreamSlice, EventTypeName, InMemoryEventStore, NewEvents, RetryPolicy,
     StreamDeclarations, StreamId, StreamResolver, StreamVersion, StreamWrites, execute,
 };
 use serde::{Deserialize, Serialize};
@@ -273,21 +273,27 @@ impl Event for CheckoutEvent {
         }
     }
 
-    fn event_type_name(&self) -> &'static str {
+    fn event_type_name(&self) -> EventTypeName {
         match self {
-            CheckoutEvent::OrderPaymentMethodLinked { .. } => "OrderPaymentMethodLinked",
-            CheckoutEvent::PaymentMethodAuthorized { .. } => "PaymentMethodAuthorized",
-            CheckoutEvent::PaymentCaptured { .. } => "PaymentCaptured",
-            CheckoutEvent::PaymentMethodCaptured { .. } => "PaymentMethodCaptured",
+            CheckoutEvent::OrderPaymentMethodLinked { .. } => {
+                "OrderPaymentMethodLinked".try_into().unwrap()
+            }
+            CheckoutEvent::PaymentMethodAuthorized { .. } => {
+                "PaymentMethodAuthorized".try_into().unwrap()
+            }
+            CheckoutEvent::PaymentCaptured { .. } => "PaymentCaptured".try_into().unwrap(),
+            CheckoutEvent::PaymentMethodCaptured { .. } => {
+                "PaymentMethodCaptured".try_into().unwrap()
+            }
         }
     }
 
-    fn all_type_names() -> Vec<&'static str> {
+    fn all_type_names() -> Vec<EventTypeName> {
         vec![
-            "OrderPaymentMethodLinked",
-            "PaymentMethodAuthorized",
-            "PaymentCaptured",
-            "PaymentMethodCaptured",
+            "OrderPaymentMethodLinked".try_into().unwrap(),
+            "PaymentMethodAuthorized".try_into().unwrap(),
+            "PaymentCaptured".try_into().unwrap(),
+            "PaymentMethodCaptured".try_into().unwrap(),
         ]
     }
 }

@@ -1,4 +1,4 @@
-use crate::command::Event;
+use crate::command::{Event, EventTypeName};
 use futures::Stream;
 use nutype::nutype;
 use std::future::Future;
@@ -49,7 +49,7 @@ pub struct StreamPrefix(String);
 #[derive(Debug, Clone)]
 pub struct SubscriptionQuery {
     stream_prefix: Option<StreamPrefix>,
-    event_type_name: Option<String>,
+    event_type_name: Option<EventTypeName>,
 }
 
 impl SubscriptionQuery {
@@ -77,17 +77,17 @@ impl SubscriptionQuery {
     ///
     /// Returns a composable query that can be chained with additional filters.
     ///
-    /// This method accepts any type that can be converted into a String, allowing
-    /// for flexible filtering by event type name. Unlike TypeId-based filtering,
-    /// this enables filtering enum variants that share the same type.
+    /// This method accepts an EventTypeName for filtering by event type name.
+    /// Unlike TypeId-based filtering, this enables filtering enum variants that
+    /// share the same type.
     ///
     /// # Parameters
     ///
     /// * `name` - Event type name to filter by (e.g., "Deposited", "MoneyWithdrawn")
-    pub fn filter_event_type_name(self, name: impl Into<String>) -> Self {
+    pub fn filter_event_type_name(self, name: EventTypeName) -> Self {
         Self {
             stream_prefix: self.stream_prefix,
-            event_type_name: Some(name.into()),
+            event_type_name: Some(name),
         }
     }
 
@@ -97,8 +97,8 @@ impl SubscriptionQuery {
     }
 
     /// Get the event type name filter, if any.
-    pub fn event_type_name_filter(&self) -> Option<&str> {
-        self.event_type_name.as_deref()
+    pub fn event_type_name_filter(&self) -> Option<&EventTypeName> {
+        self.event_type_name.as_ref()
     }
 }
 

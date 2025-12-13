@@ -44,8 +44,8 @@ use std::sync::Arc;
 
 // Re-export only the minimal public API needed for execute() signature
 pub use command::{
-    CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamDeclarationsError,
-    StreamResolver,
+    CommandLogic, CommandStreams, Event, EventTypeName, NewEvents, StreamDeclarations,
+    StreamDeclarationsError, StreamResolver,
 };
 pub use errors::CommandError;
 pub use store::EventStore;
@@ -568,12 +568,12 @@ mod tests {
             &self.stream_id
         }
 
-        fn event_type_name(&self) -> &'static str {
-            "TestEvent"
+        fn event_type_name(&self) -> EventTypeName {
+            "TestEvent".try_into().unwrap()
         }
 
-        fn all_type_names() -> Vec<&'static str> {
-            vec!["TestEvent"]
+        fn all_type_names() -> Vec<EventTypeName> {
+            vec!["TestEvent".try_into().unwrap()]
         }
     }
 
@@ -650,12 +650,12 @@ mod tests {
             &self.stream_id
         }
 
-        fn event_type_name(&self) -> &'static str {
-            "TestEventWithValue"
+        fn event_type_name(&self) -> EventTypeName {
+            "TestEventWithValue".try_into().unwrap()
         }
 
-        fn all_type_names() -> Vec<&'static str> {
-            vec!["TestEventWithValue"]
+        fn all_type_names() -> Vec<EventTypeName> {
+            vec!["TestEventWithValue".try_into().unwrap()]
         }
     }
 

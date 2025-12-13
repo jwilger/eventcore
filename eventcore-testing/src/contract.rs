@@ -1,4 +1,6 @@
-use eventcore::{Event, EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
+use eventcore::{
+    Event, EventStore, EventStoreError, EventTypeName, StreamId, StreamVersion, StreamWrites,
+};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -64,12 +66,12 @@ impl Event for ContractTestEvent {
         &self.stream_id
     }
 
-    fn event_type_name(&self) -> &'static str {
-        "ContractTestEvent"
+    fn event_type_name(&self) -> EventTypeName {
+        "ContractTestEvent".try_into().unwrap()
     }
 
-    fn all_type_names() -> Vec<&'static str> {
-        vec!["ContractTestEvent"]
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["ContractTestEvent".try_into().unwrap()]
     }
 }
 

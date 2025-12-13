@@ -1,6 +1,6 @@
 use eventcore::{
-    CommandError, CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamId,
-    require,
+    CommandError, CommandLogic, CommandStreams, Event, EventTypeName, NewEvents,
+    StreamDeclarations, StreamId, require,
 };
 use eventcore_macros::Command;
 use serde::{Deserialize, Serialize};
@@ -15,12 +15,12 @@ impl Event for AccountEvent {
         &self.stream_id
     }
 
-    fn event_type_name(&self) -> &'static str {
-        "AccountEvent"
+    fn event_type_name(&self) -> EventTypeName {
+        "AccountEvent".try_into().unwrap()
     }
 
-    fn all_type_names() -> Vec<&'static str> {
-        vec!["AccountEvent"]
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["AccountEvent".try_into().unwrap()]
     }
 }
 

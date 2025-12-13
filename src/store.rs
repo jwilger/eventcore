@@ -514,7 +514,7 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
                 if let Some(event) = boxed_event.downcast_ref::<E>() {
                     // Filter by event type name if specified
                     if let Some(expected_name) = query.event_type_name_filter()
-                        && event.event_type_name() != expected_name
+                        && &event.event_type_name() != expected_name
                     {
                         continue;
                     }
@@ -563,6 +563,7 @@ impl<T: EventStore + Sync> EventStore for &T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EventTypeName;
     use serde::{Deserialize, Serialize};
 
     /// Test-specific domain event type for unit testing storage operations.
@@ -577,12 +578,12 @@ mod tests {
             &self.stream_id
         }
 
-        fn event_type_name(&self) -> &'static str {
-            "TestEvent"
+        fn event_type_name(&self) -> EventTypeName {
+            "TestEvent".try_into().unwrap()
         }
 
-        fn all_type_names() -> Vec<&'static str> {
-            vec!["TestEvent"]
+        fn all_type_names() -> Vec<EventTypeName> {
+            vec!["TestEvent".try_into().unwrap()]
         }
     }
 

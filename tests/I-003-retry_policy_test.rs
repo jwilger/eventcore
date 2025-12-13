@@ -1,7 +1,7 @@
 use eventcore::{
     CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, InMemoryEventStore, MetricsHook, NewEvents, RetryContext,
-    RetryPolicy, StreamDeclarations, StreamId, StreamWrites, execute,
+    EventStreamReader, EventStreamSlice, EventTypeName, InMemoryEventStore, MetricsHook, NewEvents,
+    RetryContext, RetryPolicy, StreamDeclarations, StreamId, StreamWrites, execute,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -23,12 +23,12 @@ impl Event for TestEvent {
         &self.stream_id
     }
 
-    fn event_type_name(&self) -> &'static str {
-        "TestEvent"
+    fn event_type_name(&self) -> EventTypeName {
+        "TestEvent".try_into().unwrap()
     }
 
-    fn all_type_names() -> Vec<&'static str> {
-        vec!["TestEvent"]
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["TestEvent".try_into().unwrap()]
     }
 }
 

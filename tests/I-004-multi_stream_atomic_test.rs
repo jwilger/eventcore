@@ -10,8 +10,8 @@ use std::{
 
 use eventcore::{
     CommandLogic, CommandStreams, Event, EventStore, EventStoreError, EventStreamReader,
-    EventStreamSlice, InMemoryEventStore, NewEvents, RetryPolicy, StreamDeclarations, StreamId,
-    StreamVersion, StreamWrites, execute,
+    EventStreamSlice, EventTypeName, InMemoryEventStore, NewEvents, RetryPolicy,
+    StreamDeclarations, StreamId, StreamVersion, StreamWrites, execute,
 };
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
@@ -55,16 +55,20 @@ impl Event for TestDomainEvents {
         }
     }
 
-    fn event_type_name(&self) -> &'static str {
+    fn event_type_name(&self) -> EventTypeName {
         match self {
-            TestDomainEvents::Debited { .. } => "Debited",
-            TestDomainEvents::Credited { .. } => "Credited",
-            TestDomainEvents::Audit { .. } => "Audit",
+            TestDomainEvents::Debited { .. } => "Debited".try_into().unwrap(),
+            TestDomainEvents::Credited { .. } => "Credited".try_into().unwrap(),
+            TestDomainEvents::Audit { .. } => "Audit".try_into().unwrap(),
         }
     }
 
-    fn all_type_names() -> Vec<&'static str> {
-        vec!["Debited", "Credited", "Audit"]
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec![
+            "Debited".try_into().unwrap(),
+            "Credited".try_into().unwrap(),
+            "Audit".try_into().unwrap(),
+        ]
     }
 }
 

@@ -8,7 +8,7 @@
 
 use std::env;
 
-use eventcore::{Event, StreamId};
+use eventcore::{Event, EventTypeName, StreamId};
 use eventcore_postgres::PostgresEventStore;
 use serde::{Deserialize, Serialize};
 use testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner};
@@ -94,11 +94,11 @@ impl Event for TestEvent {
         &self.stream_id
     }
 
-    fn event_type_name(&self) -> &'static str {
-        "TestEvent"
+    fn event_type_name(&self) -> EventTypeName {
+        "TestEvent".try_into().unwrap()
     }
 
-    fn all_type_names() -> Vec<&'static str> {
-        vec!["TestEvent"]
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["TestEvent".try_into().unwrap()]
     }
 }

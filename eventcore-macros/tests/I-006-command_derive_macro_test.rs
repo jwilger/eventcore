@@ -1,6 +1,6 @@
 use eventcore::{
-    CommandError, CommandLogic, CommandStreams, Event, EventStore, InMemoryEventStore, NewEvents,
-    RetryPolicy, StreamDeclarations, StreamId, execute,
+    CommandError, CommandLogic, CommandStreams, Event, EventStore, EventTypeName,
+    InMemoryEventStore, NewEvents, RetryPolicy, StreamDeclarations, StreamId, execute,
 };
 use eventcore_macros::Command;
 use serde::{Deserialize, Serialize};
@@ -23,15 +23,18 @@ impl Event for TransferEvent {
         }
     }
 
-    fn event_type_name(&self) -> &'static str {
+    fn event_type_name(&self) -> EventTypeName {
         match self {
-            TransferEvent::Debited { .. } => "Debited",
-            TransferEvent::Credited { .. } => "Credited",
+            TransferEvent::Debited { .. } => "Debited".try_into().unwrap(),
+            TransferEvent::Credited { .. } => "Credited".try_into().unwrap(),
         }
     }
 
-    fn all_type_names() -> Vec<&'static str> {
-        vec!["Debited", "Credited"]
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec![
+            "Debited".try_into().unwrap(),
+            "Credited".try_into().unwrap(),
+        ]
     }
 }
 

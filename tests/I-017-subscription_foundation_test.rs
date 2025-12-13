@@ -1,6 +1,6 @@
 use eventcore::{
-    Event, EventStore, EventSubscription, InMemoryEventStore, StreamId, StreamPrefix,
-    StreamVersion, StreamWrites, SubscriptionQuery,
+    Event, EventStore, EventSubscription, EventTypeName, InMemoryEventStore, StreamId,
+    StreamPrefix, StreamVersion, StreamWrites, SubscriptionQuery,
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -20,14 +20,14 @@ impl Event for TestEvent {
         }
     }
 
-    fn event_type_name(&self) -> &'static str {
+    fn event_type_name(&self) -> EventTypeName {
         match self {
-            TestEvent::ValueRecorded { .. } => "ValueRecorded",
+            TestEvent::ValueRecorded { .. } => "ValueRecorded".try_into().unwrap(),
         }
     }
 
-    fn all_type_names() -> Vec<&'static str> {
-        vec!["ValueRecorded"]
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["ValueRecorded".try_into().unwrap()]
     }
 }
 
@@ -43,12 +43,12 @@ impl Event for MoneyDeposited {
         &self.stream_id
     }
 
-    fn event_type_name(&self) -> &'static str {
-        "MoneyDeposited"
+    fn event_type_name(&self) -> EventTypeName {
+        "MoneyDeposited".try_into().unwrap()
     }
 
-    fn all_type_names() -> Vec<&'static str> {
-        vec!["MoneyDeposited"]
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["MoneyDeposited".try_into().unwrap()]
     }
 }
 
@@ -64,12 +64,12 @@ impl Event for MoneyWithdrawn {
         &self.stream_id
     }
 
-    fn event_type_name(&self) -> &'static str {
-        "MoneyWithdrawn"
+    fn event_type_name(&self) -> EventTypeName {
+        "MoneyWithdrawn".try_into().unwrap()
     }
 
-    fn all_type_names() -> Vec<&'static str> {
-        vec!["MoneyWithdrawn"]
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["MoneyWithdrawn".try_into().unwrap()]
     }
 }
 
@@ -92,15 +92,18 @@ impl Event for AccountEvent {
         }
     }
 
-    fn event_type_name(&self) -> &'static str {
+    fn event_type_name(&self) -> EventTypeName {
         match self {
-            AccountEvent::Deposited { .. } => "Deposited",
-            AccountEvent::Withdrawn { .. } => "Withdrawn",
+            AccountEvent::Deposited { .. } => "Deposited".try_into().unwrap(),
+            AccountEvent::Withdrawn { .. } => "Withdrawn".try_into().unwrap(),
         }
     }
 
-    fn all_type_names() -> Vec<&'static str> {
-        vec!["Deposited", "Withdrawn"]
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec![
+            "Deposited".try_into().unwrap(),
+            "Withdrawn".try_into().unwrap(),
+        ]
     }
 }
 
@@ -368,7 +371,9 @@ async fn filters_events_by_event_type() {
 
     // When: Developer subscribes with event type filter for MoneyDeposited
     let subscription = store
-        .subscribe(SubscriptionQuery::all().filter_event_type_name("MoneyDeposited"))
+        .subscribe(
+            SubscriptionQuery::all().filter_event_type_name("MoneyDeposited".try_into().unwrap()),
+        )
         .await
         .expect("subscription should be created successfully");
 
@@ -464,7 +469,9 @@ async fn filters_events_by_event_type_name_for_enum_variants() {
     // When: Developer subscribes with event type name filter for "Deposited" variant
     // Uses string-based filter instead of TypeId to distinguish enum variants
     let subscription = store
-        .subscribe::<AccountEvent>(SubscriptionQuery::all().filter_event_type_name("Deposited"))
+        .subscribe::<AccountEvent>(
+            SubscriptionQuery::all().filter_event_type_name("Deposited".try_into().unwrap()),
+        )
         .await
         .expect("subscription should be created successfully");
 
@@ -512,7 +519,7 @@ fn struct_event_type_returns_single_type_name() {
     // Then: Returns a single-element vec with the struct's type name
     assert_eq!(
         type_names,
-        vec!["MoneyDeposited"],
+        vec!["MoneyDeposited".try_into().unwrap()],
         "struct event should return its single type name"
     );
 }
@@ -527,7 +534,10 @@ fn enum_event_type_returns_all_variant_names() {
     // Then: Returns vec with all variant names
     assert_eq!(
         type_names,
-        vec!["Deposited", "Withdrawn"],
+        vec![
+            "Deposited".try_into().unwrap(),
+            "Withdrawn".try_into().unwrap()
+        ],
         "enum event should return all variant names"
     );
 }

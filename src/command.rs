@@ -1,10 +1,37 @@
 use std::collections::HashSet;
 
+use nutype::nutype;
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 use crate::errors::CommandError;
 use crate::store::StreamId;
+
+/// Domain type representing an event type name.
+///
+/// Uses nutype for compile-time validation ensuring all event type names are:
+/// - Non-empty (trimmed strings with at least 1 character)
+/// - Within reasonable length (max 255 characters)
+/// - Sanitized (leading/trailing whitespace removed)
+///
+/// This type enforces the parse-don't-validate principle: once constructed,
+/// an EventTypeName is guaranteed to be valid for event filtering and type discovery.
+#[nutype(
+    sanitize(trim),
+    validate(not_empty, len_char_max = 255),
+    derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Hash,
+        Serialize,
+        Deserialize,
+        AsRef,
+        TryFrom
+    )
+)]
+pub struct EventTypeName(String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamDeclarations {
@@ -115,7 +142,7 @@ pub trait Event: Clone + Send + Serialize + DeserializeOwned + 'static {
 
     /// Returns the event type name for filtering.
     ///
-    /// This method enables filtering events by string name, which is necessary
+    /// This method enables filtering events by type name, which is necessary
     /// for distinguishing enum variants that share the same TypeId. For struct
     /// event types, return the struct name. For enum event types, return the
     /// variant name.
@@ -125,22 +152,22 @@ pub trait Event: Clone + Send + Serialize + DeserializeOwned + 'static {
     /// ```rust,ignore
     /// // Struct event type
     /// impl Event for MoneyDeposited {
-    ///     fn event_type_name(&self) -> &'static str {
-    ///         "MoneyDeposited"
+    ///     fn event_type_name(&self) -> EventTypeName {
+    ///         "MoneyDeposited".try_into().expect("valid event type name")
     ///     }
     /// }
     ///
     /// // Enum event type
     /// impl Event for AccountEvent {
-    ///     fn event_type_name(&self) -> &'static str {
+    ///     fn event_type_name(&self) -> EventTypeName {
     ///         match self {
-    ///             AccountEvent::Deposited { .. } => "Deposited",
-    ///             AccountEvent::Withdrawn { .. } => "Withdrawn",
+    ///             AccountEvent::Deposited { .. } => "Deposited".try_into().expect("valid event type name"),
+    ///             AccountEvent::Withdrawn { .. } => "Withdrawn".try_into().expect("valid event type name"),
     ///         }
     ///     }
     /// }
     /// ```
-    fn event_type_name(&self) -> &'static str;
+    fn event_type_name(&self) -> EventTypeName;
 
     /// Returns all possible event type names for this Event type.
     ///
@@ -154,19 +181,22 @@ pub trait Event: Clone + Send + Serialize + DeserializeOwned + 'static {
     /// ```rust,ignore
     /// // Struct event type
     /// impl Event for MoneyDeposited {
-    ///     fn all_type_names() -> Vec<&'static str> {
-    ///         vec!["MoneyDeposited"]
+    ///     fn all_type_names() -> Vec<EventTypeName> {
+    ///         vec!["MoneyDeposited".try_into().expect("valid event type name")]
     ///     }
     /// }
     ///
     /// // Enum event type
     /// impl Event for AccountEvent {
-    ///     fn all_type_names() -> Vec<&'static str> {
-    ///         vec!["Deposited", "Withdrawn"]
+    ///     fn all_type_names() -> Vec<EventTypeName> {
+    ///         vec![
+    ///             "Deposited".try_into().expect("valid event type name"),
+    ///             "Withdrawn".try_into().expect("valid event type name"),
+    ///         ]
     ///     }
     /// }
     /// ```
-    fn all_type_names() -> Vec<&'static str>;
+    fn all_type_names() -> Vec<EventTypeName>;
 }
 
 /// Trait defining the business logic of a command.
