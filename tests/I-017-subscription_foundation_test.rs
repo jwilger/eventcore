@@ -22,12 +22,14 @@ impl Event for TestEvent {
 
     fn event_type_name(&self) -> EventTypeName {
         match self {
-            TestEvent::ValueRecorded { .. } => "ValueRecorded".try_into().unwrap(),
+            TestEvent::ValueRecorded { .. } => {
+                "ValueRecorded".try_into().expect("valid event type name")
+            }
         }
     }
 
     fn all_type_names() -> Vec<EventTypeName> {
-        vec!["ValueRecorded".try_into().unwrap()]
+        vec!["ValueRecorded".try_into().expect("valid event type name")]
     }
 }
 
@@ -44,11 +46,11 @@ impl Event for MoneyDeposited {
     }
 
     fn event_type_name(&self) -> EventTypeName {
-        "MoneyDeposited".try_into().unwrap()
+        "MoneyDeposited".try_into().expect("valid event type name")
     }
 
     fn all_type_names() -> Vec<EventTypeName> {
-        vec!["MoneyDeposited".try_into().unwrap()]
+        vec!["MoneyDeposited".try_into().expect("valid event type name")]
     }
 }
 
@@ -65,11 +67,11 @@ impl Event for MoneyWithdrawn {
     }
 
     fn event_type_name(&self) -> EventTypeName {
-        "MoneyWithdrawn".try_into().unwrap()
+        "MoneyWithdrawn".try_into().expect("valid event type name")
     }
 
     fn all_type_names() -> Vec<EventTypeName> {
-        vec!["MoneyWithdrawn".try_into().unwrap()]
+        vec!["MoneyWithdrawn".try_into().expect("valid event type name")]
     }
 }
 
@@ -94,15 +96,19 @@ impl Event for AccountEvent {
 
     fn event_type_name(&self) -> EventTypeName {
         match self {
-            AccountEvent::Deposited { .. } => "Deposited".try_into().unwrap(),
-            AccountEvent::Withdrawn { .. } => "Withdrawn".try_into().unwrap(),
+            AccountEvent::Deposited { .. } => {
+                "Deposited".try_into().expect("valid event type name")
+            }
+            AccountEvent::Withdrawn { .. } => {
+                "Withdrawn".try_into().expect("valid event type name")
+            }
         }
     }
 
     fn all_type_names() -> Vec<EventTypeName> {
         vec![
-            "Deposited".try_into().unwrap(),
-            "Withdrawn".try_into().unwrap(),
+            "Deposited".try_into().expect("valid event type name"),
+            "Withdrawn".try_into().expect("valid event type name"),
         ]
     }
 }
@@ -370,12 +376,13 @@ async fn filters_events_by_event_type() {
         .expect("events should be appended successfully");
 
     // When: Developer subscribes with event type filter for MoneyDeposited
-    let subscription = store
-        .subscribe(
-            SubscriptionQuery::all().filter_event_type_name("MoneyDeposited".try_into().unwrap()),
-        )
-        .await
-        .expect("subscription should be created successfully");
+    let subscription =
+        store
+            .subscribe(SubscriptionQuery::all().filter_event_type_name(
+                "MoneyDeposited".try_into().expect("valid event type name"),
+            ))
+            .await
+            .expect("subscription should be created successfully");
 
     // And: Developer collects events from the subscription stream
     let events: Vec<MoneyDeposited> = subscription.take(3).collect().await;
@@ -470,7 +477,8 @@ async fn filters_events_by_event_type_name_for_enum_variants() {
     // Uses string-based filter instead of TypeId to distinguish enum variants
     let subscription = store
         .subscribe::<AccountEvent>(
-            SubscriptionQuery::all().filter_event_type_name("Deposited".try_into().unwrap()),
+            SubscriptionQuery::all()
+                .filter_event_type_name("Deposited".try_into().expect("valid event type name")),
         )
         .await
         .expect("subscription should be created successfully");
@@ -519,7 +527,7 @@ fn struct_event_type_returns_single_type_name() {
     // Then: Returns a single-element vec with the struct's type name
     assert_eq!(
         type_names,
-        vec!["MoneyDeposited".try_into().unwrap()],
+        vec!["MoneyDeposited".try_into().expect("valid event type name")],
         "struct event should return its single type name"
     );
 }
@@ -535,8 +543,8 @@ fn enum_event_type_returns_all_variant_names() {
     assert_eq!(
         type_names,
         vec![
-            "Deposited".try_into().unwrap(),
-            "Withdrawn".try_into().unwrap()
+            "Deposited".try_into().expect("valid event type name"),
+            "Withdrawn".try_into().expect("valid event type name")
         ],
         "enum event should return all variant names"
     );

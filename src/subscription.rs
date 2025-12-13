@@ -228,7 +228,7 @@ mod tests {
         // Then
         assert!(result.is_ok(), "StreamPrefix should accept valid string");
         assert_eq!(
-            result.unwrap().as_ref(),
+            result.expect("valid stream prefix").as_ref(),
             "account-",
             "StreamPrefix should trim leading and trailing whitespace"
         );

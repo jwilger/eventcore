@@ -275,25 +275,33 @@ impl Event for CheckoutEvent {
 
     fn event_type_name(&self) -> EventTypeName {
         match self {
-            CheckoutEvent::OrderPaymentMethodLinked { .. } => {
-                "OrderPaymentMethodLinked".try_into().unwrap()
+            CheckoutEvent::OrderPaymentMethodLinked { .. } => "OrderPaymentMethodLinked"
+                .try_into()
+                .expect("valid event type name"),
+            CheckoutEvent::PaymentMethodAuthorized { .. } => "PaymentMethodAuthorized"
+                .try_into()
+                .expect("valid event type name"),
+            CheckoutEvent::PaymentCaptured { .. } => {
+                "PaymentCaptured".try_into().expect("valid event type name")
             }
-            CheckoutEvent::PaymentMethodAuthorized { .. } => {
-                "PaymentMethodAuthorized".try_into().unwrap()
-            }
-            CheckoutEvent::PaymentCaptured { .. } => "PaymentCaptured".try_into().unwrap(),
-            CheckoutEvent::PaymentMethodCaptured { .. } => {
-                "PaymentMethodCaptured".try_into().unwrap()
-            }
+            CheckoutEvent::PaymentMethodCaptured { .. } => "PaymentMethodCaptured"
+                .try_into()
+                .expect("valid event type name"),
         }
     }
 
     fn all_type_names() -> Vec<EventTypeName> {
         vec![
-            "OrderPaymentMethodLinked".try_into().unwrap(),
-            "PaymentMethodAuthorized".try_into().unwrap(),
-            "PaymentCaptured".try_into().unwrap(),
-            "PaymentMethodCaptured".try_into().unwrap(),
+            "OrderPaymentMethodLinked"
+                .try_into()
+                .expect("valid event type name"),
+            "PaymentMethodAuthorized"
+                .try_into()
+                .expect("valid event type name"),
+            "PaymentCaptured".try_into().expect("valid event type name"),
+            "PaymentMethodCaptured"
+                .try_into()
+                .expect("valid event type name"),
         ]
     }
 }

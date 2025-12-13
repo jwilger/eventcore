@@ -67,11 +67,17 @@ impl Event for ContractTestEvent {
     }
 
     fn event_type_name(&self) -> EventTypeName {
-        "ContractTestEvent".try_into().unwrap()
+        "ContractTestEvent"
+            .try_into()
+            .expect("valid event type name")
     }
 
     fn all_type_names() -> Vec<EventTypeName> {
-        vec!["ContractTestEvent".try_into().unwrap()]
+        vec![
+            "ContractTestEvent"
+                .try_into()
+                .expect("valid event type name"),
+        ]
     }
 }
 

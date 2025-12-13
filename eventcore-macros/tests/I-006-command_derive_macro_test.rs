@@ -25,15 +25,15 @@ impl Event for TransferEvent {
 
     fn event_type_name(&self) -> EventTypeName {
         match self {
-            TransferEvent::Debited { .. } => "Debited".try_into().unwrap(),
-            TransferEvent::Credited { .. } => "Credited".try_into().unwrap(),
+            TransferEvent::Debited { .. } => "Debited".try_into().expect("valid event type name"),
+            TransferEvent::Credited { .. } => "Credited".try_into().expect("valid event type name"),
         }
     }
 
     fn all_type_names() -> Vec<EventTypeName> {
         vec![
-            "Debited".try_into().unwrap(),
-            "Credited".try_into().unwrap(),
+            "Debited".try_into().expect("valid event type name"),
+            "Credited".try_into().expect("valid event type name"),
         ]
     }
 }

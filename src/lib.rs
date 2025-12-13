@@ -569,11 +569,11 @@ mod tests {
         }
 
         fn event_type_name(&self) -> EventTypeName {
-            "TestEvent".try_into().unwrap()
+            "TestEvent".try_into().expect("valid event type name")
         }
 
         fn all_type_names() -> Vec<EventTypeName> {
-            vec!["TestEvent".try_into().unwrap()]
+            vec!["TestEvent".try_into().expect("valid event type name")]
         }
     }
 
@@ -651,11 +651,17 @@ mod tests {
         }
 
         fn event_type_name(&self) -> EventTypeName {
-            "TestEventWithValue".try_into().unwrap()
+            "TestEventWithValue"
+                .try_into()
+                .expect("valid event type name")
         }
 
         fn all_type_names() -> Vec<EventTypeName> {
-            vec!["TestEventWithValue".try_into().unwrap()]
+            vec![
+                "TestEventWithValue"
+                    .try_into()
+                    .expect("valid event type name"),
+            ]
         }
     }
 
@@ -688,7 +694,10 @@ mod tests {
 
         fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
             // Capture the state that was passed to handle()
-            *self.captured_state.lock().unwrap() = Some(state);
+            *self
+                .captured_state
+                .lock()
+                .expect("mutex should not be poisoned") = Some(state);
             Ok(NewEvents::default())
         }
     }
@@ -783,7 +792,11 @@ mod tests {
             .expect("command execution to succeed");
 
         // Then: handle() received reconstructed state (not default state)
-        let final_state = captured_state.lock().unwrap().clone().unwrap();
+        let final_state = captured_state
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone()
+            .expect("state should be captured");
         assert_eq!(
             final_state.value, 50,
             "execute() must reconstruct state from existing events before calling handle()"

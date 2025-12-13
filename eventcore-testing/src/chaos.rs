@@ -157,11 +157,17 @@ mod tests {
         }
 
         fn event_type_name(&self) -> EventTypeName {
-            "PassthroughEvent".try_into().unwrap()
+            "PassthroughEvent"
+                .try_into()
+                .expect("valid event type name")
         }
 
         fn all_type_names() -> Vec<EventTypeName> {
-            vec!["PassthroughEvent".try_into().unwrap()]
+            vec![
+                "PassthroughEvent"
+                    .try_into()
+                    .expect("valid event type name"),
+            ]
         }
     }
 

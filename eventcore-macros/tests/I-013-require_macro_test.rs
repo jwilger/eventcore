@@ -16,11 +16,11 @@ impl Event for AccountEvent {
     }
 
     fn event_type_name(&self) -> EventTypeName {
-        "AccountEvent".try_into().unwrap()
+        "AccountEvent".try_into().expect("valid event type name")
     }
 
     fn all_type_names() -> Vec<EventTypeName> {
-        vec!["AccountEvent".try_into().unwrap()]
+        vec!["AccountEvent".try_into().expect("valid event type name")]
     }
 }
 

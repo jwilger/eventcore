@@ -57,17 +57,21 @@ impl Event for TestDomainEvents {
 
     fn event_type_name(&self) -> EventTypeName {
         match self {
-            TestDomainEvents::Debited { .. } => "Debited".try_into().unwrap(),
-            TestDomainEvents::Credited { .. } => "Credited".try_into().unwrap(),
-            TestDomainEvents::Audit { .. } => "Audit".try_into().unwrap(),
+            TestDomainEvents::Debited { .. } => {
+                "Debited".try_into().expect("valid event type name")
+            }
+            TestDomainEvents::Credited { .. } => {
+                "Credited".try_into().expect("valid event type name")
+            }
+            TestDomainEvents::Audit { .. } => "Audit".try_into().expect("valid event type name"),
         }
     }
 
     fn all_type_names() -> Vec<EventTypeName> {
         vec![
-            "Debited".try_into().unwrap(),
-            "Credited".try_into().unwrap(),
-            "Audit".try_into().unwrap(),
+            "Debited".try_into().expect("valid event type name"),
+            "Credited".try_into().expect("valid event type name"),
+            "Audit".try_into().expect("valid event type name"),
         ]
     }
 }
@@ -386,7 +390,7 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
 
     let expected = TransferAcceptanceResult {
         succeeded: true,
-        attempts: Some(NonZeroU32::new(1).unwrap()),
+        attempts: Some(NonZeroU32::new(1).expect("valid non-zero u32")),
         from_account: account_snapshot(
             &from_account,
             vec![
@@ -469,7 +473,7 @@ async fn transfer_retries_after_destination_conflict() {
 
     let expected = TransferAcceptanceResult {
         succeeded: true,
-        attempts: Some(NonZeroU32::new(2).unwrap()),
+        attempts: Some(NonZeroU32::new(2).expect("valid non-zero u32")),
         from_account: account_snapshot(
             &from_account,
             vec![

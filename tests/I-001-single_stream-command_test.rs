@@ -46,15 +46,19 @@ impl Event for TestDomainEvents {
 
     fn event_type_name(&self) -> EventTypeName {
         match self {
-            TestDomainEvents::MoneyDeposited { .. } => "MoneyDeposited".try_into().unwrap(),
-            TestDomainEvents::MoneyWithdrawn { .. } => "MoneyWithdrawn".try_into().unwrap(),
+            TestDomainEvents::MoneyDeposited { .. } => {
+                "MoneyDeposited".try_into().expect("valid event type name")
+            }
+            TestDomainEvents::MoneyWithdrawn { .. } => {
+                "MoneyWithdrawn".try_into().expect("valid event type name")
+            }
         }
     }
 
     fn all_type_names() -> Vec<EventTypeName> {
         vec![
-            "MoneyDeposited".try_into().unwrap(),
-            "MoneyWithdrawn".try_into().unwrap(),
+            "MoneyDeposited".try_into().expect("valid event type name"),
+            "MoneyWithdrawn".try_into().expect("valid event type name"),
         ]
     }
 }

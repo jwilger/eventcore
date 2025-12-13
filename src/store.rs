@@ -436,7 +436,10 @@ impl EventStore for InMemoryEventStore {
         &self,
         stream_id: StreamId,
     ) -> Result<EventStreamReader<E>, EventStoreError> {
-        let streams = self.streams.lock().unwrap();
+        let streams = self
+            .streams
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure { operation: "read" })?;
         let events = streams
             .get(&stream_id)
             .map(|(persisted_events, _version)| {
@@ -455,7 +458,12 @@ impl EventStore for InMemoryEventStore {
         &self,
         writes: StreamWrites,
     ) -> Result<EventStreamSlice, EventStoreError> {
-        let mut streams = self.streams.lock().unwrap();
+        let mut streams = self
+            .streams
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure {
+                operation: "append",
+            })?;
         let expected_versions = writes.expected_versions().clone();
 
         // Check all version constraints before writing any events
@@ -471,7 +479,12 @@ impl EventStore for InMemoryEventStore {
         }
 
         // All versions match - proceed with writes
-        let mut next_seq = self.next_sequence.lock().unwrap();
+        let mut next_seq =
+            self.next_sequence
+                .lock()
+                .map_err(|_| EventStoreError::StoreFailure {
+                    operation: "append",
+                })?;
         for entry in writes.into_entries() {
             let StreamWriteEntry {
                 stream_id, event, ..
@@ -499,7 +512,9 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
         crate::subscription::SubscriptionError,
     > {
         // Collect all events from all streams with their sequence numbers
-        let streams = self.streams.lock().unwrap();
+        let streams = self.streams.lock().map_err(|_| {
+            crate::subscription::SubscriptionError::Generic("mutex poisoned".to_string())
+        })?;
         let mut all_events: Vec<(E, u64)> = Vec::new();
 
         for (stream_id, (events, _version)) in streams.iter() {
@@ -579,11 +594,11 @@ mod tests {
         }
 
         fn event_type_name(&self) -> EventTypeName {
-            "TestEvent".try_into().unwrap()
+            "TestEvent".try_into().expect("valid event type name")
         }
 
         fn all_type_names() -> Vec<EventTypeName> {
-            vec!["TestEvent".try_into().unwrap()]
+            vec!["TestEvent".try_into().expect("valid event type name")]
         }
     }
 
