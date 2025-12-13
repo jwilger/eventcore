@@ -62,6 +62,10 @@ impl Event for TestDomainEvents {
             TestDomainEvents::Audit { .. } => "Audit",
         }
     }
+
+    fn all_type_names() -> Vec<&'static str> {
+        vec!["Debited", "Credited", "Audit"]
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

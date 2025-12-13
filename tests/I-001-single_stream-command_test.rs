@@ -50,6 +50,10 @@ impl Event for TestDomainEvents {
             TestDomainEvents::MoneyWithdrawn { .. } => "MoneyWithdrawn",
         }
     }
+
+    fn all_type_names() -> Vec<&'static str> {
+        vec!["MoneyDeposited", "MoneyWithdrawn"]
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

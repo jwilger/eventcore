@@ -17,6 +17,10 @@ impl Event for TestEvent {
     fn event_type_name(&self) -> &'static str {
         "TestEvent"
     }
+
+    fn all_type_names() -> Vec<&'static str> {
+        vec!["TestEvent"]
+    }
 }
 
 #[tokio::test]

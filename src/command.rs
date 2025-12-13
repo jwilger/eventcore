@@ -141,6 +141,32 @@ pub trait Event: Clone + Send + Serialize + DeserializeOwned + 'static {
     /// }
     /// ```
     fn event_type_name(&self) -> &'static str;
+
+    /// Returns all possible event type names for this Event type.
+    ///
+    /// This associated function provides compile-time discovery of all type names
+    /// that instances of this Event type can return from `event_type_name()`.
+    /// For struct event types, this returns a single-element vector containing
+    /// the struct name. For enum event types, this returns all variant names.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Struct event type
+    /// impl Event for MoneyDeposited {
+    ///     fn all_type_names() -> Vec<&'static str> {
+    ///         vec!["MoneyDeposited"]
+    ///     }
+    /// }
+    ///
+    /// // Enum event type
+    /// impl Event for AccountEvent {
+    ///     fn all_type_names() -> Vec<&'static str> {
+    ///         vec!["Deposited", "Withdrawn"]
+    ///     }
+    /// }
+    /// ```
+    fn all_type_names() -> Vec<&'static str>;
 }
 
 /// Trait defining the business logic of a command.

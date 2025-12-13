@@ -18,6 +18,10 @@ impl Event for AccountEvent {
     fn event_type_name(&self) -> &'static str {
         "AccountEvent"
     }
+
+    fn all_type_names() -> Vec<&'static str> {
+        vec!["AccountEvent"]
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

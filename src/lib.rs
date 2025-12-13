@@ -571,6 +571,10 @@ mod tests {
         fn event_type_name(&self) -> &'static str {
             "TestEvent"
         }
+
+        fn all_type_names() -> Vec<&'static str> {
+            vec!["TestEvent"]
+        }
     }
 
     /// Mock command that tracks whether handle() was called.
@@ -648,6 +652,10 @@ mod tests {
 
         fn event_type_name(&self) -> &'static str {
             "TestEventWithValue"
+        }
+
+        fn all_type_names() -> Vec<&'static str> {
+            vec!["TestEventWithValue"]
         }
     }
 

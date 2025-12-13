@@ -580,6 +580,10 @@ mod tests {
         fn event_type_name(&self) -> &'static str {
             "TestEvent"
         }
+
+        fn all_type_names() -> Vec<&'static str> {
+            vec!["TestEvent"]
+        }
     }
 
     /// Unit test: Verify InMemoryEventStore can append and retrieve a single event

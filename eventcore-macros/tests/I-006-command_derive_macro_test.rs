@@ -29,6 +29,10 @@ impl Event for TransferEvent {
             TransferEvent::Credited { .. } => "Credited",
         }
     }
+
+    fn all_type_names() -> Vec<&'static str> {
+        vec!["Debited", "Credited"]
+    }
 }
 
 /// Minimal state object rebuilt from prior events to validate the command.

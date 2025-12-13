@@ -67,6 +67,10 @@ impl Event for ContractTestEvent {
     fn event_type_name(&self) -> &'static str {
         "ContractTestEvent"
     }
+
+    fn all_type_names() -> Vec<&'static str> {
+        vec!["ContractTestEvent"]
+    }
 }
 
 fn contract_stream_id(

@@ -281,6 +281,15 @@ impl Event for CheckoutEvent {
             CheckoutEvent::PaymentMethodCaptured { .. } => "PaymentMethodCaptured",
         }
     }
+
+    fn all_type_names() -> Vec<&'static str> {
+        vec![
+            "OrderPaymentMethodLinked",
+            "PaymentMethodAuthorized",
+            "PaymentCaptured",
+            "PaymentMethodCaptured",
+        ]
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

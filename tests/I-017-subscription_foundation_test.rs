@@ -25,6 +25,10 @@ impl Event for TestEvent {
             TestEvent::ValueRecorded { .. } => "ValueRecorded",
         }
     }
+
+    fn all_type_names() -> Vec<&'static str> {
+        vec!["ValueRecorded"]
+    }
 }
 
 /// Account domain event for event type filtering tests.
@@ -42,6 +46,10 @@ impl Event for MoneyDeposited {
     fn event_type_name(&self) -> &'static str {
         "MoneyDeposited"
     }
+
+    fn all_type_names() -> Vec<&'static str> {
+        vec!["MoneyDeposited"]
+    }
 }
 
 /// Account domain event for event type filtering tests.
@@ -58,6 +66,10 @@ impl Event for MoneyWithdrawn {
 
     fn event_type_name(&self) -> &'static str {
         "MoneyWithdrawn"
+    }
+
+    fn all_type_names() -> Vec<&'static str> {
+        vec!["MoneyWithdrawn"]
     }
 }
 
@@ -85,6 +97,10 @@ impl Event for AccountEvent {
             AccountEvent::Deposited { .. } => "Deposited",
             AccountEvent::Withdrawn { .. } => "Withdrawn",
         }
+    }
+
+    fn all_type_names() -> Vec<&'static str> {
+        vec!["Deposited", "Withdrawn"]
     }
 }
 
@@ -483,5 +499,35 @@ async fn filters_events_by_event_type_name_for_enum_variants() {
             amount: 150
         },
         "third event should be account-123 deposit of 150"
+    );
+}
+
+#[test]
+fn struct_event_type_returns_single_type_name() {
+    // Given: Developer uses a struct event type (MoneyDeposited)
+
+    // When: Developer calls all_type_names() associated function
+    let type_names = MoneyDeposited::all_type_names();
+
+    // Then: Returns a single-element vec with the struct's type name
+    assert_eq!(
+        type_names,
+        vec!["MoneyDeposited"],
+        "struct event should return its single type name"
+    );
+}
+
+#[test]
+fn enum_event_type_returns_all_variant_names() {
+    // Given: Developer uses an enum event type (AccountEvent) with variants
+
+    // When: Developer calls all_type_names() associated function
+    let type_names = AccountEvent::all_type_names();
+
+    // Then: Returns vec with all variant names
+    assert_eq!(
+        type_names,
+        vec!["Deposited", "Withdrawn"],
+        "enum event should return all variant names"
     );
 }
