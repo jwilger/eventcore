@@ -1,6 +1,6 @@
 # EventCore Architecture
 
-**Document Version:** 1.7
+**Document Version:** 1.8
 **Date:** 2025-12-14
 **Phase:** 4 - Architecture Synthesis
 
@@ -221,23 +221,87 @@ Subscriptions guarantee **at-least-once delivery**:
 
 This delivery semantic reflects production reality—exactly-once would require distributed transactions that conflict with event sourcing's append-only model. Applications design projections to handle duplicates gracefully.
 
-### Subscription Error Handling
+### Projector Trait for Read Model Construction
 
-When projection handlers fail to process events, applications need flexible control over recovery strategies. Unlike command execution where the library automatically retries transient failures (version conflicts), subscription errors require application-specific handling because the same error may demand different responses depending on projection semantics.
+Building read model projections from event streams is a common, critical operation. Developers need a clear place to put projection logic, handle errors, and hook into lifecycle events. The `Projector` trait encapsulates these concerns in a single cohesive abstraction:
 
-**Error Handling Strategies:**
+```rust
+pub trait Projector: Send + 'static {
+    /// The event type this projector handles
+    type Event: Subscribable;
 
-Applications configure error handling through failure callbacks that receive rich context (event, error, attempt count, stream position) and return one of three strategies:
+    /// Error type for projection failures
+    type Error: std::error::Error + Send;
 
-- **Fatal (Default)**: Stop processing and crash the subscription—ensures operators discover problems immediately, prevents silent projection drift
+    /// Process a single event, updating read model state
+    fn project(&mut self, event: Self::Event) -> Result<(), Self::Error>;
+
+    /// Handle projection failures (default: Fatal)
+    fn on_error(&mut self, ctx: FailureContext<Self::Event, Self::Error>) -> FailureStrategy {
+        FailureStrategy::Fatal
+    }
+
+    /// Called after successful projection (default: no-op)
+    fn after_update(&mut self, event: &Self::Event) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+```
+
+This trait-based approach provides:
+
+- **Clear Error Handling Home**: The `on_error` callback is THE place to decide recovery strategy—no ambiguity about where this logic belongs
+- **Rich Failure Context**: Event, error, attempt count, and stream position available in the callback without manual threading
+- **Lifecycle Hooks**: `after_update` provides a clean extension point for notifications, metrics, or side effects
+- **Discoverable API**: IDE autocomplete shows available callbacks, reducing learning curve
+
+**Failure Context:**
+
+When projection fails, `on_error` receives rich context:
+
+```rust
+pub struct FailureContext<E, Err> {
+    pub event: E,              // The event that failed
+    pub error: Err,            // The error from project()
+    pub attempt: u32,          // Attempt count (1 = first attempt)
+    pub position: StreamPosition,  // For checkpoint tracking
+}
+```
+
+**Failure Strategies:**
+
+The `on_error` callback returns one of three strategies:
+
+- **Fatal (Default)**: Stop projection immediately—ensures operators discover problems, prevents silent projection drift
 - **Skip**: Log the error and continue to next event—tolerates gaps, suitable for caches, dashboards, or non-critical projections
-- **Retry**: Retry the same event with exponential backoff—handles transient failures (external API timeouts) without losing events
+- **Retry**: Retry with optional delay—handles transient failures (external API timeouts) without losing events
 
 Fatal is the default because silent data loss is more dangerous than a crashed projection. Applications that want resilience must consciously opt into Skip or Retry, documenting their tolerance for gaps or delayed processing.
 
+**Running Projectors:**
+
+The `run_projector` helper connects projectors to subscriptions:
+
+```rust
+pub async fn run_projector<P, S>(
+    projector: P,
+    subscription: S,
+    config: ProjectorConfig,
+) -> Result<(), ProjectorError>
+where
+    P: Projector,
+    S: Stream<Item = Result<P::Event, SubscriptionError>>,
+```
+
+Configuration controls retry behavior:
+
+- **Max Retries**: Hard limit before escalating to Fatal (prevents infinite loops on permanent failures)
+- **Backoff Policy**: Exponential backoff with configurable base delay and multiplier
+- **Jitter**: Optional randomization to prevent thundering herd during recovery
+
 **Ordering Preservation:**
 
-All error handling strategies preserve temporal ordering—events are never processed out of order:
+All failure strategies preserve temporal ordering—events are never processed out of order:
 
 - **Fatal**: Stops the stream, no further events delivered
 - **Skip**: Skips the current event, continues to next in order (creates gap, not reorder)
@@ -245,26 +309,16 @@ All error handling strategies preserve temporal ordering—events are never proc
 
 This is a hard constraint. Projections depend on temporal ordering for correctness (financial ledgers, state machines, aggregate queries). At-least-once delivery allows duplicate events (handled via idempotency), but reordering would corrupt projections in ways idempotency cannot fix.
 
-**Retry Configuration:**
+**Raw Stream Access:**
 
-When using Retry strategy, applications configure:
+The low-level `Stream<Item = Result<E, SubscriptionError>>` remains available for advanced use cases:
 
-- **Max Attempts**: Hard limit before escalating to Fatal (prevents infinite loops on permanent failures)
-- **Backoff Policy**: Exponential backoff with configurable base delay and multiplier
-- **Jitter**: Optional randomization to prevent thundering herd during recovery
-- **Timeout**: Per-attempt timeout for slow operations
+- Complex stream transformations (joining multiple subscriptions)
+- Custom batching strategies
+- Integration with external streaming systems
+- One-off scripts and migrations
 
-This configuration mirrors command retry (automatic OCC handling) but applies to application-initiated retry of projection failures.
-
-**Separation of Concerns:**
-
-Error handling is configured when consuming the subscription stream, not at subscription creation:
-
-- `SubscriptionQuery` describes event selection (stream filters, event types)
-- Error handling middleware wraps the stream at consumption time
-- Same subscription can be consumed by different handlers with different error tolerance
-
-This maintains the clean separation established by `EventSubscription`—the trait delivers events, application code processes them with chosen error handling.
+Providing both levels (trait-based and raw stream) serves different needs without forcing one pattern.
 
 ### Checkpoint Management
 
