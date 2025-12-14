@@ -1,7 +1,7 @@
 # EventCore Architecture
 
-**Document Version:** 1.6
-**Date:** 2025-12-10
+**Document Version:** 1.7
+**Date:** 2025-12-14
 **Phase:** 4 - Architecture Synthesis
 
 ## Overview
@@ -220,6 +220,51 @@ Subscriptions guarantee **at-least-once delivery**:
 - **Consumers must be idempotent**: processing the same event twice must produce the same result
 
 This delivery semantic reflects production reality—exactly-once would require distributed transactions that conflict with event sourcing's append-only model. Applications design projections to handle duplicates gracefully.
+
+### Subscription Error Handling
+
+When projection handlers fail to process events, applications need flexible control over recovery strategies. Unlike command execution where the library automatically retries transient failures (version conflicts), subscription errors require application-specific handling because the same error may demand different responses depending on projection semantics.
+
+**Error Handling Strategies:**
+
+Applications configure error handling through failure callbacks that receive rich context (event, error, attempt count, stream position) and return one of three strategies:
+
+- **Fatal (Default)**: Stop processing and crash the subscription—ensures operators discover problems immediately, prevents silent projection drift
+- **Skip**: Log the error and continue to next event—tolerates gaps, suitable for caches, dashboards, or non-critical projections
+- **Retry**: Retry the same event with exponential backoff—handles transient failures (external API timeouts) without losing events
+
+Fatal is the default because silent data loss is more dangerous than a crashed projection. Applications that want resilience must consciously opt into Skip or Retry, documenting their tolerance for gaps or delayed processing.
+
+**Ordering Preservation:**
+
+All error handling strategies preserve temporal ordering—events are never processed out of order:
+
+- **Fatal**: Stops the stream, no further events delivered
+- **Skip**: Skips the current event, continues to next in order (creates gap, not reorder)
+- **Retry**: Blocks subsequent events until current event succeeds or exhausts retries
+
+This is a hard constraint. Projections depend on temporal ordering for correctness (financial ledgers, state machines, aggregate queries). At-least-once delivery allows duplicate events (handled via idempotency), but reordering would corrupt projections in ways idempotency cannot fix.
+
+**Retry Configuration:**
+
+When using Retry strategy, applications configure:
+
+- **Max Attempts**: Hard limit before escalating to Fatal (prevents infinite loops on permanent failures)
+- **Backoff Policy**: Exponential backoff with configurable base delay and multiplier
+- **Jitter**: Optional randomization to prevent thundering herd during recovery
+- **Timeout**: Per-attempt timeout for slow operations
+
+This configuration mirrors command retry (automatic OCC handling) but applies to application-initiated retry of projection failures.
+
+**Separation of Concerns:**
+
+Error handling is configured when consuming the subscription stream, not at subscription creation:
+
+- `SubscriptionQuery` describes event selection (stream filters, event types)
+- Error handling middleware wraps the stream at consumption time
+- Same subscription can be consumed by different handlers with different error tolerance
+
+This maintains the clean separation established by `EventSubscription`—the trait delivers events, application code processes them with chosen error handling.
 
 ### Checkpoint Management
 
