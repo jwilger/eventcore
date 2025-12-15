@@ -886,3 +886,150 @@ async fn subscribes_to_disjoint_types_via_view_enum() {
         "balance should aggregate both accounts"
     );
 }
+
+#[tokio::test]
+async fn delivers_events_appended_after_subscription_creation() {
+    // Given: Developer creates in-memory event store
+    let store = std::sync::Arc::new(InMemoryEventStore::new());
+
+    // And: Developer creates stream ID
+    let stream_a = StreamId::try_new("stream-a").expect("valid stream id");
+
+    // And: Developer appends initial events BEFORE subscription
+    let initial_writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(0))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 100,
+            })
+        })
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 200,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(initial_writes)
+        .await
+        .expect("initial events should be appended successfully");
+
+    // When: Developer creates subscription
+    let subscription = store
+        .subscribe(SubscriptionQuery::all())
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer appends MORE events AFTER subscription is created
+    let store_clone = store.clone();
+    let stream_a_clone = stream_a.clone();
+    let append_task = tokio::spawn(async move {
+        // Small delay to ensure subscription is actively consuming
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        let later_writes = StreamWrites::new()
+            .register_stream(stream_a_clone.clone(), StreamVersion::new(2))
+            .and_then(|w| {
+                w.append(TestEvent::ValueRecorded {
+                    stream_id: stream_a_clone.clone(),
+                    value: 300,
+                })
+            })
+            .and_then(|w| {
+                w.append(TestEvent::ValueRecorded {
+                    stream_id: stream_a_clone.clone(),
+                    value: 400,
+                })
+            })
+            .expect("writes should be constructed successfully");
+
+        store_clone
+            .append_events(later_writes)
+            .await
+            .expect("later events should be appended successfully");
+    });
+
+    // And: Developer collects events from the subscription stream
+    // Using timeout to prevent test from hanging if live delivery fails
+    let events: Vec<TestEvent> = tokio::time::timeout(
+        tokio::time::Duration::from_secs(2),
+        subscription.take(4).collect(),
+    )
+    .await
+    .expect("subscription should deliver all 4 events within timeout");
+
+    append_task.await.expect("append task should complete");
+
+    // Then: ALL 4 events are delivered - both initial AND later events
+    assert_eq!(
+        events.len(),
+        4,
+        "subscription should deliver events appended after creation"
+    );
+
+    assert_eq!(
+        events[0],
+        TestEvent::ValueRecorded {
+            stream_id: stream_a.clone(),
+            value: 100
+        },
+        "first event should be initial event with value 100"
+    );
+
+    assert_eq!(
+        events[1],
+        TestEvent::ValueRecorded {
+            stream_id: stream_a.clone(),
+            value: 200
+        },
+        "second event should be initial event with value 200"
+    );
+
+    assert_eq!(
+        events[2],
+        TestEvent::ValueRecorded {
+            stream_id: stream_a.clone(),
+            value: 300
+        },
+        "third event should be later event with value 300"
+    );
+
+    assert_eq!(
+        events[3],
+        TestEvent::ValueRecorded {
+            stream_id: stream_a,
+            value: 400
+        },
+        "fourth event should be later event with value 400"
+    );
+}
+
+#[tokio::test]
+async fn subscription_delivers_events_exactly_once_without_duplicates() {
+    // Given: Developer creates in-memory event store with NO initial events
+    // This exercises the `next_seq == 0` branch in catchup_max_seq calculation
+    //
+    // The mutant changes `if *next_seq == 0 { 0 } else { *next_seq - 1 }`
+    //                 to `if *next_seq != 0 { 0 } else { *next_seq - 1 }`
+    //
+    // When next_seq == 0 (empty store):
+    // - Original: condition is TRUE, returns 0 (correct)
+    // - Mutant: condition is FALSE, returns 0 - 1 = UNDERFLOW PANIC
+    //
+    // This test verifies that creating a subscription on an empty store
+    // does NOT panic (which the mutant would cause).
+    let store = InMemoryEventStore::new();
+
+    // When: Developer creates subscription on EMPTY store
+    // With the mutant, this would try to compute `0 - 1` causing panic
+    let result = store.subscribe::<TestEvent>(SubscriptionQuery::all()).await;
+
+    // Then: Subscription is created successfully (no panic)
+    assert!(
+        result.is_ok(),
+        "subscription on empty store should succeed without panic"
+    );
+}

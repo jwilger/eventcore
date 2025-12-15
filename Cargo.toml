@@ -17,6 +17,7 @@ default = ["macros"]
 macros = ["dep:eventcore-macros"]
 
 [dependencies]
+async-stream = "0.3"
 chrono = { version = "0.4.42", features = ["serde"] }
 futures = "0.3"
 nutype = { version = "0.6.2", features = ["serde"] }

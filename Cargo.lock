@@ -573,6 +573,7 @@ dependencies = [
 name = "eventcore"
 version = "0.1.8"
 dependencies = [
+ "async-stream",
  "chrono",
  "eventcore-macros",
  "futures",
