@@ -582,7 +582,11 @@ where
 
     // Collect events manually to verify auto-filtering by E::all_type_names()
     use futures::StreamExt;
-    let events: Vec<ContractTestEvent> = subscription.take(2).collect().await;
+    let events: Vec<ContractTestEvent> = subscription
+        .take(2)
+        .map(|result| result.expect("event should deserialize"))
+        .collect()
+        .await;
 
     // Then: Only ContractTestEvent events should be delivered (OtherContractEvent filtered out)
     if events.len() != 2 {

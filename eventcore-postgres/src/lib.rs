@@ -1,4 +1,3 @@
-use std::pin::Pin;
 use std::time::Duration;
 
 use eventcore::{
@@ -6,7 +5,6 @@ use eventcore::{
     EventTypeName, StreamId, StreamWriteEntry, StreamWrites, Subscribable, SubscriptionError,
     SubscriptionQuery,
 };
-use futures::Stream;
 use serde_json::{Value, json};
 use sqlx::types::Json;
 use sqlx::{Pool, Postgres, Row, postgres::PgPoolOptions, query};
@@ -243,7 +241,7 @@ impl EventSubscription for PostgresEventStore {
     async fn subscribe<E: Subscribable>(
         &self,
         query: SubscriptionQuery,
-    ) -> Result<Pin<Box<dyn Stream<Item = E> + Send>>, SubscriptionError> {
+    ) -> Result<eventcore::SubscriptionStream<E>, SubscriptionError> {
         // Get the set of type names that E can deserialize
         let subscribable_type_names = E::subscribable_type_names();
 
@@ -259,7 +257,7 @@ impl EventSubscription for PostgresEventStore {
                 .map_err(|e| SubscriptionError::Generic(e.to_string()))?;
 
         // PHASE 2: Read historical events from Postgres
-        let mut all_events: Vec<(E, i64)> = Vec::new();
+        let mut all_events: Vec<(Result<E, SubscriptionError>, i64)> = Vec::new();
 
         // Build query based on filters
         let rows = if let Some(prefix) = query.stream_prefix() {
@@ -313,13 +311,14 @@ impl EventSubscription for PostgresEventStore {
 
             // Use try_from_stored to deserialize the event
             match E::try_from_stored(&stored_event_type_name, &event_bytes) {
-                Ok(event) => all_events.push((event, global_sequence)),
-                Err(_) => continue, // Skip events that can't be deserialized
+                Ok(event) => all_events.push((Ok(event), global_sequence)),
+                Err(e) => all_events.push((Err(e), global_sequence)),
             }
         }
 
         // Extract just the events (sorted by global_sequence from query)
-        let historical_events: Vec<E> = all_events.into_iter().map(|(event, _)| event).collect();
+        let historical_events: Vec<Result<E, SubscriptionError>> =
+            all_events.into_iter().map(|(result, _)| result).collect();
 
         // Clone query for use in async stream
         let query_clone = query.clone();
@@ -328,8 +327,8 @@ impl EventSubscription for PostgresEventStore {
         // PHASE 3: Create combined stream - historical events first, then live events
         let stream = async_stream::stream! {
             // Yield all historical events first (catch-up phase)
-            for event in historical_events {
-                yield event;
+            for result in historical_events {
+                yield result;
             }
 
             // Then yield live events from broadcast channel
@@ -366,10 +365,8 @@ impl EventSubscription for PostgresEventStore {
                             continue;
                         }
 
-                        // Deserialize and yield the event
-                        if let Ok(event) = E::try_from_stored(&broadcast_event.event_type_name, &broadcast_event.event_data) {
-                            yield event;
-                        }
+                        // Deserialize and yield the event (or error)
+                        yield E::try_from_stored(&broadcast_event.event_type_name, &broadcast_event.event_data);
                     }
                     Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
                         // Subscriber fell behind - continue receiving (at-least-once semantics)

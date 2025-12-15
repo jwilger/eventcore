@@ -60,6 +60,7 @@ pub use store::{
 // Re-export subscription types (per ADR-016 subscription model)
 pub use subscription::{
     EventSubscription, StreamPrefix, Subscribable, SubscriptionError, SubscriptionQuery,
+    SubscriptionStream,
 };
 
 // Re-export macros when the "macros" feature is enabled (default)

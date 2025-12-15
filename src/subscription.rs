@@ -4,6 +4,12 @@ use nutype::nutype;
 use std::future::Future;
 use std::pin::Pin;
 
+/// A subscription stream that yields events or errors.
+///
+/// This is a boxed, pinned Stream that yields `Result<E, SubscriptionError>` items,
+/// allowing consumers to handle deserialization failures gracefully.
+pub type SubscriptionStream<E> = Pin<Box<dyn Stream<Item = Result<E, SubscriptionError>> + Send>>;
+
 /// Validation predicate: reject glob metacharacters in StreamPrefix.
 ///
 /// Per ADR-017, StreamPrefix reserves glob metacharacters (*, ?, [, ]) to enable
@@ -172,7 +178,7 @@ impl<E: Event> Subscribable for E {
 pub trait EventSubscription {
     /// Subscribe to events matching the given query.
     ///
-    /// Returns a futures::Stream that yields events in EventId (UUIDv7) order.
+    /// Returns a `SubscriptionStream<E>` that yields events in EventId (UUIDv7) order.
     /// The stream delivers events with at-least-once semantics - consumers
     /// must be idempotent.
     ///
@@ -186,7 +192,7 @@ pub trait EventSubscription {
     fn subscribe<E: Subscribable>(
         &self,
         query: SubscriptionQuery,
-    ) -> impl Future<Output = Result<Pin<Box<dyn Stream<Item = E> + Send>>, SubscriptionError>> + Send;
+    ) -> impl Future<Output = Result<SubscriptionStream<E>, SubscriptionError>> + Send;
 }
 
 #[cfg(test)]

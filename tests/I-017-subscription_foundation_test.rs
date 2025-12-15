@@ -184,7 +184,11 @@ async fn subscribes_to_all_events_in_temporal_order() {
         .expect("subscription should be created successfully");
 
     // And: Developer collects events from the subscription stream
-    let events: Vec<TestEvent> = subscription.take(6).collect().await;
+    let events: Vec<TestEvent> = subscription
+        .take(6)
+        .map(|r| r.expect("event should deserialize"))
+        .collect()
+        .await;
 
     // Then: All 6 events are delivered in EventId (UUIDv7) order
     // Since UUIDv7 is time-ordered and events were appended sequentially,
@@ -296,7 +300,11 @@ async fn filters_events_by_stream_prefix() {
             .expect("subscription should be created successfully");
 
     // And: Developer collects events from the subscription stream
-    let events: Vec<TestEvent> = subscription.take(2).collect().await;
+    let events: Vec<TestEvent> = subscription
+        .take(2)
+        .map(|r| r.expect("event should deserialize"))
+        .collect()
+        .await;
 
     // Then: Only events from streams starting with "account-" are delivered
     assert_eq!(
@@ -385,7 +393,11 @@ async fn filters_events_by_event_type() {
             .expect("subscription should be created successfully");
 
     // And: Developer collects events from the subscription stream
-    let events: Vec<MoneyDeposited> = subscription.take(3).collect().await;
+    let events: Vec<MoneyDeposited> = subscription
+        .take(3)
+        .map(|r| r.expect("event should deserialize"))
+        .collect()
+        .await;
 
     // Then: Only MoneyDeposited events are delivered, MoneyWithdrawn events are filtered out
     assert_eq!(
@@ -484,7 +496,11 @@ async fn filters_events_by_event_type_name_for_enum_variants() {
         .expect("subscription should be created successfully");
 
     // And: Developer collects events from the subscription stream
-    let events: Vec<AccountEvent> = subscription.take(3).collect().await;
+    let events: Vec<AccountEvent> = subscription
+        .take(3)
+        .map(|r| r.expect("event should deserialize"))
+        .collect()
+        .await;
 
     // Then: Only Deposited variant events are delivered, Withdrawn events are filtered out
     assert_eq!(events.len(), 3, "should deliver only 3 Deposited events");
@@ -617,6 +633,7 @@ async fn chains_stream_combinators_for_transformation() {
     // And: Developer chains .map().filter().take(3) combinators
     // Map events to their values, filter for values >= 100, take first 3 results
     let values: Vec<u32> = subscription
+        .map(|r| r.expect("event should deserialize"))
         .map(|event| match event {
             TestEvent::ValueRecorded { value, .. } => value,
         })
@@ -705,6 +722,7 @@ async fn builds_read_model_by_folding_subscription_stream() {
 
     // And: Developer folds events into AccountBalance struct
     let balance = subscription
+        .map(|r| r.expect("event should deserialize"))
         .fold(AccountBalance::default(), |mut acc, event| async move {
             acc.apply(&event);
             acc
@@ -743,6 +761,7 @@ async fn builds_read_model_by_folding_subscription_stream() {
 
     // And: Developer folds all events again
     let updated_balance = updated_subscription
+        .map(|r| r.expect("event should deserialize"))
         .fold(AccountBalance::default(), |mut acc, event| async move {
             acc.apply(&event);
             acc
@@ -871,6 +890,7 @@ async fn subscribes_to_disjoint_types_via_view_enum() {
 
     // And: Developer folds events into AccountBalance read model
     let balance = subscription
+        .map(|r| r.expect("event should deserialize"))
         .fold(AccountBalance::default(), |mut acc, event| async move {
             acc.apply_view(&event);
             acc
@@ -956,7 +976,10 @@ async fn delivers_events_appended_after_subscription_creation() {
     // Using timeout to prevent test from hanging if live delivery fails
     let events: Vec<TestEvent> = tokio::time::timeout(
         tokio::time::Duration::from_secs(2),
-        subscription.take(4).collect(),
+        subscription
+            .take(4)
+            .map(|r| r.expect("event should deserialize"))
+            .collect(),
     )
     .await
     .expect("subscription should deliver all 4 events within timeout");
@@ -1031,5 +1054,481 @@ async fn subscription_delivers_events_exactly_once_without_duplicates() {
     assert!(
         result.is_ok(),
         "subscription on empty store should succeed without panic"
+    );
+}
+
+#[tokio::test]
+async fn subscription_stream_yields_result_items_for_error_propagation() {
+    // Given: Developer creates in-memory event store
+    let store = InMemoryEventStore::new();
+
+    // And: Developer creates stream ID and appends events
+    let stream_a = StreamId::try_new("stream-a").expect("valid stream id");
+
+    let writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(0))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 100,
+            })
+        })
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 200,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(writes)
+        .await
+        .expect("events should be appended successfully");
+
+    // When: Developer subscribes to all events with explicit type parameter
+    let subscription = store
+        .subscribe::<TestEvent>(SubscriptionQuery::all())
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer collects events, explicitly handling Result items
+    // The Stream should yield Result<E, SubscriptionError> to enable proper
+    // error propagation for deserialization failures
+    let results: Vec<Result<TestEvent, SubscriptionError>> = subscription.take(2).collect().await;
+
+    // Then: Events are delivered as Ok(event)
+    assert_eq!(results.len(), 2, "should deliver 2 result items");
+    assert!(
+        results[0].is_ok(),
+        "first item should be Ok containing event"
+    );
+    assert_eq!(
+        results[0].as_ref().expect("first result is Ok"),
+        &TestEvent::ValueRecorded {
+            stream_id: stream_a.clone(),
+            value: 100
+        },
+        "first event should have value 100"
+    );
+}
+
+/// Event type for storage - has incompatible schema with ReadEvent.
+///
+/// Both StoredEvent and ReadEvent use the SAME event_type_name "SchemaEvent"
+/// but have different field structures. This simulates schema evolution
+/// where stored data cannot be deserialized into the current type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct StoredEvent {
+    stream_id: StreamId,
+    /// Field that exists in stored version but not in read version
+    old_field: String,
+}
+
+impl Event for StoredEvent {
+    fn stream_id(&self) -> &StreamId {
+        &self.stream_id
+    }
+
+    fn event_type_name(&self) -> EventTypeName {
+        // Uses SAME type name as ReadEvent - intentionally creating schema mismatch
+        "SchemaEvent".try_into().expect("valid event type name")
+    }
+
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["SchemaEvent".try_into().expect("valid event type name")]
+    }
+}
+
+/// Event type for reading - has incompatible schema with StoredEvent.
+///
+/// Uses the SAME event_type_name as StoredEvent, but expects different fields.
+/// When subscription tries to deserialize StoredEvent data as ReadEvent, it fails.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ReadEvent {
+    stream_id: StreamId,
+    /// Field that exists in read version but not in stored version
+    new_field: u32,
+}
+
+impl Event for ReadEvent {
+    fn stream_id(&self) -> &StreamId {
+        &self.stream_id
+    }
+
+    fn event_type_name(&self) -> EventTypeName {
+        // Uses SAME type name as StoredEvent - intentionally creating schema mismatch
+        "SchemaEvent".try_into().expect("valid event type name")
+    }
+
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec!["SchemaEvent".try_into().expect("valid event type name")]
+    }
+}
+
+#[tokio::test]
+async fn subscription_yields_deserialization_error_for_incompatible_schema() {
+    // Given: Developer creates in-memory event store
+    let store = InMemoryEventStore::new();
+
+    // And: Developer creates stream ID
+    let stream_a = StreamId::try_new("stream-a").expect("valid stream id");
+
+    // And: Developer appends events using StoredEvent type
+    // StoredEvent has event_type_name "SchemaEvent" with field {old_field: String}
+    let writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(0))
+        .and_then(|w| {
+            w.append(StoredEvent {
+                stream_id: stream_a.clone(),
+                old_field: "some data".to_string(),
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(writes)
+        .await
+        .expect("events should be appended successfully");
+
+    // When: Developer subscribes using ReadEvent type
+    // ReadEvent ALSO has event_type_name "SchemaEvent" (matching stored data)
+    // BUT expects field {new_field: u32} which is incompatible with stored schema
+    let subscription = store
+        .subscribe::<ReadEvent>(SubscriptionQuery::all())
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer collects items from the subscription stream
+    let results: Vec<Result<ReadEvent, SubscriptionError>> = subscription.take(1).collect().await;
+
+    // Then: Subscription yields 1 item (the event with matching type_name)
+    assert_eq!(
+        results.len(),
+        1,
+        "subscription should yield 1 item for event with matching type_name"
+    );
+
+    // And: The item is Err because the stored schema is incompatible with ReadEvent
+    // StoredEvent has {old_field: String}, ReadEvent expects {new_field: u32}
+    assert!(
+        results[0].is_err(),
+        "item should be Err(SubscriptionError) because schema is incompatible"
+    );
+}
+
+/// View type that accepts ValueRecorded and SchemaEvent type names.
+///
+/// Used to test mixed success/error scenarios where some events
+/// deserialize correctly and others fail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum MixedEventView {
+    Value(TestEvent),
+}
+
+impl Subscribable for MixedEventView {
+    fn subscribable_type_names() -> Vec<EventTypeName> {
+        vec![
+            "ValueRecorded".try_into().expect("valid event type name"),
+            "SchemaEvent".try_into().expect("valid event type name"),
+        ]
+    }
+
+    fn try_from_stored(type_name: &EventTypeName, data: &[u8]) -> Result<Self, SubscriptionError> {
+        match type_name.as_ref() {
+            "ValueRecorded" => {
+                let event: TestEvent = serde_json::from_slice(data)
+                    .map_err(|e| SubscriptionError::DeserializationFailed(e.to_string()))?;
+                Ok(MixedEventView::Value(event))
+            }
+            "SchemaEvent" => {
+                // Attempt to deserialize as TestEvent, which will fail for StoredEvent data
+                // StoredEvent has {old_field: String}, we're trying to deserialize as TestEvent
+                let _event: TestEvent = serde_json::from_slice(data)
+                    .map_err(|e| SubscriptionError::DeserializationFailed(e.to_string()))?;
+                // This line won't be reached due to schema mismatch
+                Err(SubscriptionError::Generic("unexpected success".to_string()))
+            }
+            _ => Err(SubscriptionError::UnknownEventType(type_name.clone())),
+        }
+    }
+}
+
+#[tokio::test]
+async fn subscription_yields_mixed_success_and_error_items_in_order() {
+    // Given: Developer creates in-memory event store
+    let store = InMemoryEventStore::new();
+
+    // And: Developer creates stream ID
+    let stream_a = StreamId::try_new("stream-a").expect("valid stream id");
+
+    // And: Developer appends events with MIXED types - some compatible, some incompatible
+    // Event 1: TestEvent (compatible with MixedEventView subscription)
+    // Event 2: StoredEvent (incompatible schema - same type name "SchemaEvent" but wrong fields)
+    // Event 3: TestEvent (compatible with MixedEventView subscription)
+    let writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(0))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 100,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(writes)
+        .await
+        .expect("first event should be appended successfully");
+
+    // Append StoredEvent separately (different event type)
+    let writes2 = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(1))
+        .and_then(|w| {
+            w.append(StoredEvent {
+                stream_id: stream_a.clone(),
+                old_field: "incompatible data".to_string(),
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(writes2)
+        .await
+        .expect("second event should be appended successfully");
+
+    // Append another TestEvent
+    let writes3 = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(2))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 200,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(writes3)
+        .await
+        .expect("third event should be appended successfully");
+
+    // When: Developer creates a view type that accepts BOTH TestEvent and SchemaEvent type names
+    // This allows us to receive both compatible and incompatible events in a single subscription
+    let subscription = store
+        .subscribe::<MixedEventView>(SubscriptionQuery::all())
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer collects ALL items from the subscription stream (both Ok and Err)
+    let results: Vec<Result<MixedEventView, SubscriptionError>> =
+        subscription.take(3).collect().await;
+
+    // Then: Stream yields BOTH Ok and Err items in temporal order
+    assert_eq!(
+        results.len(),
+        3,
+        "subscription should deliver all 3 items (2 Ok, 1 Err)"
+    );
+
+    // First item should be Ok (TestEvent with value 100)
+    assert!(
+        results[0].is_ok(),
+        "first item should be Ok (compatible TestEvent)"
+    );
+
+    // Second item should be Err (StoredEvent cannot be deserialized as MixedEventView)
+    assert!(
+        results[1].is_err(),
+        "second item should be Err (incompatible schema)"
+    );
+
+    // Third item should be Ok (TestEvent with value 200)
+    assert!(
+        results[2].is_ok(),
+        "third item should be Ok (compatible TestEvent)"
+    );
+}
+
+#[tokio::test]
+async fn consumer_can_filter_errors_and_continue_processing() {
+    // Given: Developer creates in-memory event store with mixed compatible/incompatible events
+    let store = InMemoryEventStore::new();
+    let stream_a = StreamId::try_new("stream-a").expect("valid stream id");
+
+    // And: Developer appends 5 events: TestEvent (ok), StoredEvent (err), TestEvent (ok),
+    //      StoredEvent (err), TestEvent (ok)
+    let writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(0))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 100,
+            })
+        })
+        .expect("writes should be constructed successfully");
+    store.append_events(writes).await.expect("append ok");
+
+    let writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(1))
+        .and_then(|w| {
+            w.append(StoredEvent {
+                stream_id: stream_a.clone(),
+                old_field: "err1".to_string(),
+            })
+        })
+        .expect("writes should be constructed successfully");
+    store.append_events(writes).await.expect("append ok");
+
+    let writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(2))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 200,
+            })
+        })
+        .expect("writes should be constructed successfully");
+    store.append_events(writes).await.expect("append ok");
+
+    let writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(3))
+        .and_then(|w| {
+            w.append(StoredEvent {
+                stream_id: stream_a.clone(),
+                old_field: "err2".to_string(),
+            })
+        })
+        .expect("writes should be constructed successfully");
+    store.append_events(writes).await.expect("append ok");
+
+    let writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(4))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 300,
+            })
+        })
+        .expect("writes should be constructed successfully");
+    store.append_events(writes).await.expect("append ok");
+
+    // When: Developer subscribes and uses filter_map to skip errors
+    let subscription = store
+        .subscribe::<MixedEventView>(SubscriptionQuery::all())
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer uses filter_map to extract only successful events
+    // This demonstrates the ergonomic API pattern for error-tolerant consumers
+    let successful_events: Vec<MixedEventView> = subscription
+        .filter_map(|result| futures::future::ready(result.ok()))
+        .collect()
+        .await;
+
+    // Then: Only the 3 successful TestEvent items are collected
+    assert_eq!(
+        successful_events.len(),
+        3,
+        "filter_map should yield only successful events"
+    );
+
+    // And: Values are in correct temporal order (100, 200, 300)
+    assert!(
+        matches!(
+            &successful_events[0],
+            MixedEventView::Value(TestEvent::ValueRecorded { value: 100, .. })
+        ),
+        "first successful event should have value 100"
+    );
+    assert!(
+        matches!(
+            &successful_events[1],
+            MixedEventView::Value(TestEvent::ValueRecorded { value: 200, .. })
+        ),
+        "second successful event should have value 200"
+    );
+    assert!(
+        matches!(
+            &successful_events[2],
+            MixedEventView::Value(TestEvent::ValueRecorded { value: 300, .. })
+        ),
+        "third successful event should have value 300"
+    );
+}
+
+#[tokio::test]
+async fn consumer_can_partition_results_for_error_reporting() {
+    // Given: Developer creates in-memory event store with mixed compatible/incompatible events
+    let store = InMemoryEventStore::new();
+    let stream_a = StreamId::try_new("stream-a").expect("valid stream id");
+
+    // And: Developer appends 3 events: TestEvent (ok), StoredEvent (err), TestEvent (ok)
+    let writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(0))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 100,
+            })
+        })
+        .expect("writes should be constructed successfully");
+    store.append_events(writes).await.expect("append ok");
+
+    let writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(1))
+        .and_then(|w| {
+            w.append(StoredEvent {
+                stream_id: stream_a.clone(),
+                old_field: "problematic data".to_string(),
+            })
+        })
+        .expect("writes should be constructed successfully");
+    store.append_events(writes).await.expect("append ok");
+
+    let writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(2))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 200,
+            })
+        })
+        .expect("writes should be constructed successfully");
+    store.append_events(writes).await.expect("append ok");
+
+    // When: Developer subscribes and collects all results
+    let subscription = store
+        .subscribe::<MixedEventView>(SubscriptionQuery::all())
+        .await
+        .expect("subscription should be created successfully");
+
+    let all_results: Vec<Result<MixedEventView, SubscriptionError>> =
+        subscription.take(3).collect().await;
+
+    // And: Developer partitions results into successes and errors for reporting
+    // This demonstrates the ergonomic API pattern for error-reporting consumers
+    let (successes, errors): (Vec<_>, Vec<_>) = all_results.into_iter().partition(Result::is_ok);
+
+    let successful_events: Vec<MixedEventView> =
+        successes.into_iter().map(|r| r.expect("is_ok")).collect();
+    let error_items: Vec<SubscriptionError> =
+        errors.into_iter().map(|r| r.expect_err("is_err")).collect();
+
+    // Then: Developer can process successes
+    assert_eq!(
+        successful_events.len(),
+        2,
+        "should have 2 successful events"
+    );
+
+    // And: Developer can log/report errors
+    assert_eq!(error_items.len(), 1, "should have 1 error");
+
+    // And: Error contains useful information for debugging
+    let error = &error_items[0];
+    assert!(
+        matches!(error, SubscriptionError::DeserializationFailed(_)),
+        "error should be DeserializationFailed variant"
     );
 }

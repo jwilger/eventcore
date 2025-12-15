@@ -565,10 +565,8 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
     async fn subscribe<E: crate::subscription::Subscribable>(
         &self,
         query: crate::subscription::SubscriptionQuery,
-    ) -> Result<
-        std::pin::Pin<Box<dyn futures::Stream<Item = E> + Send>>,
-        crate::subscription::SubscriptionError,
-    > {
+    ) -> Result<crate::subscription::SubscriptionStream<E>, crate::subscription::SubscriptionError>
+    {
         // Get the set of type names that E can deserialize
         let subscribable_type_names = E::subscribable_type_names();
 
@@ -588,7 +586,8 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
         let streams = self.streams.lock().map_err(|_| {
             crate::subscription::SubscriptionError::Generic("mutex poisoned".to_string())
         })?;
-        let mut all_events: Vec<(E, u64)> = Vec::new();
+        let mut all_events: Vec<(Result<E, crate::subscription::SubscriptionError>, u64)> =
+            Vec::new();
 
         for (stream_id, (events, _version)) in streams.iter() {
             // Filter by stream prefix if specified
@@ -613,8 +612,8 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
 
                 // Use try_from_stored to deserialize the event
                 match E::try_from_stored(stored_type_name, event_data) {
-                    Ok(event) => all_events.push((event, *seq)),
-                    Err(_) => continue, // Skip events that can't be deserialized
+                    Ok(event) => all_events.push((Ok(event), *seq)),
+                    Err(e) => all_events.push((Err(e), *seq)),
                 }
             }
         }
@@ -624,7 +623,8 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
         all_events.sort_by_key(|(_, seq)| *seq);
 
         // Extract just the events (discard sequence numbers)
-        let historical_events: Vec<E> = all_events.into_iter().map(|(event, _)| event).collect();
+        let historical_events: Vec<Result<E, crate::subscription::SubscriptionError>> =
+            all_events.into_iter().map(|(result, _)| result).collect();
 
         // Clone query for use in async stream
         let query_clone = query.clone();
@@ -633,8 +633,8 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
         // PHASE 2: Create combined stream - historical events first, then live events
         let stream = async_stream::stream! {
             // Yield all historical events first (catch-up phase)
-            for event in historical_events {
-                yield event;
+            for result in historical_events {
+                yield result;
             }
 
             // Then yield live events from broadcast channel
@@ -673,10 +673,8 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
                             continue;
                         }
 
-                        // Deserialize and yield the event
-                        if let Ok(event) = E::try_from_stored(&broadcast_event.event_type_name, &broadcast_event.event_data) {
-                            yield event;
-                        }
+                        // Deserialize and yield the event (or error)
+                        yield E::try_from_stored(&broadcast_event.event_type_name, &broadcast_event.event_data);
                     }
                     Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
                         // Subscriber fell behind - continue receiving (at-least-once semantics)
