@@ -605,6 +605,27 @@ where
     Ok(())
 }
 
+/// Generates ALL contract tests for EventStore implementations.
+///
+/// This macro generates tests verifying both `EventStore` and `EventSubscription` traits.
+/// When new contract tests are added to the suite, all invocations of this macro
+/// automatically include them - no manual updates required.
+///
+/// # Requirements
+///
+/// The store type must implement both `EventStore` and `EventSubscription` traits.
+/// Subscription support is mandatory for all EventStore implementations.
+///
+/// # Usage
+///
+/// ```ignore
+/// event_store_contract_tests! {
+///     suite = my_store,
+///     make_store = MyEventStore::new,
+/// }
+/// ```
+///
+/// This generates a single test module containing all contract tests.
 #[macro_export]
 macro_rules! event_store_contract_tests {
     (suite = $suite:ident, make_store = $make_store:expr $(,)?) => {
@@ -613,8 +634,11 @@ macro_rules! event_store_contract_tests {
             use $crate::contract::{
                 test_basic_read_write, test_concurrent_version_conflicts,
                 test_conflict_preserves_atomicity, test_missing_stream_reads,
-                test_stream_isolation,
+                test_stream_isolation, test_subscription_delivers_live_events,
+                test_subscription_filters_by_event_type,
             };
+
+            // EventStore contract tests
 
             #[tokio::test(flavor = "multi_thread")]
             async fn basic_read_write_contract() {
@@ -650,20 +674,8 @@ macro_rules! event_store_contract_tests {
                     .await
                     .expect("event store contract failed");
             }
-        }
-    };
-}
 
-pub use event_store_contract_tests;
-
-#[macro_export]
-macro_rules! event_subscription_contract_tests {
-    (suite = $suite:ident, make_store = $make_store:expr $(,)?) => {
-        #[allow(non_snake_case)]
-        mod $suite {
-            use $crate::contract::{
-                test_subscription_delivers_live_events, test_subscription_filters_by_event_type,
-            };
+            // EventSubscription contract tests
 
             #[tokio::test(flavor = "multi_thread")]
             async fn subscription_filters_by_event_type_contract() {
@@ -682,4 +694,4 @@ macro_rules! event_subscription_contract_tests {
     };
 }
 
-pub use event_subscription_contract_tests;
+pub use event_store_contract_tests;

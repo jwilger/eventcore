@@ -3,19 +3,17 @@
 
 //! EventStore contract suite entry point for reusable backend verification.
 //!
-//! This integration demonstrates how to invoke the `event_store_contract_tests!` macro so
-//! any EventStore implementation can plug into the shared behavioral specification.
+//! This integration demonstrates how to invoke the `event_store_contract_tests!`
+//! macro so any EventStore implementation can plug into the shared behavioral specification.
+//!
+//! When new contract tests are added to the suite, all invocations of this macro
+//! automatically include them - no manual updates required.
 
-use eventcore_testing::contract::{event_store_contract_tests, event_subscription_contract_tests};
+use eventcore_testing::contract::event_store_contract_tests;
 
-/// Runs the standard EventStore contract suite against the in-memory store implementation.
+/// Runs the complete EventStore contract suite against the in-memory store implementation.
+/// This includes all EventStore and EventSubscription contract tests.
 event_store_contract_tests! {
     suite = in_memory,
-    make_store = eventcore::InMemoryEventStore::new,
-}
-
-/// Runs the EventSubscription contract suite against the in-memory store implementation.
-event_subscription_contract_tests! {
-    suite = in_memory_subscription,
     make_store = eventcore::InMemoryEventStore::new,
 }
