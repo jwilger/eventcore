@@ -450,6 +450,92 @@ where
     }
 }
 
+pub async fn test_subscription_delivers_live_events<F, S>(make_store: F) -> ContractTestResult
+where
+    F: Fn() -> std::sync::Arc<S> + Send + Sync + Clone + 'static,
+    S: EventStore + EventSubscription + Send + Sync + 'static,
+{
+    use futures::StreamExt;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    const SCENARIO: &str = "subscription_delivers_live_events";
+
+    // Given: Store with some initial (historical) events
+    let store: Arc<S> = make_store();
+    let stream_a = contract_stream_id(SCENARIO, "stream-a")?;
+
+    let writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &stream_a,
+        StreamVersion::new(0),
+    )?;
+    let writes = append_contract_event(SCENARIO, writes, &stream_a)?;
+    let writes = append_contract_event(SCENARIO, writes, &stream_a)?;
+
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+
+    // When: Create subscription THEN append more events
+    let subscription = store
+        .subscribe::<ContractTestEvent>(SubscriptionQuery::all())
+        .await
+        .map_err(|error| {
+            ContractTestFailure::new(
+                SCENARIO,
+                format!("subscribe returned unexpected error: {}", error),
+            )
+        })?;
+
+    // Spawn task to append MORE events AFTER subscription is created
+    let store_clone = Arc::clone(&store);
+    let stream_a_clone = stream_a.clone();
+    let _append_task = tokio::spawn(async move {
+        // Small delay to ensure subscription is consuming
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let writes = register_contract_stream(
+            SCENARIO,
+            StreamWrites::new(),
+            &stream_a_clone,
+            StreamVersion::new(2),
+        )
+        .expect("register_stream");
+        let writes = append_contract_event(SCENARIO, writes, &stream_a_clone).expect("append");
+        let writes = append_contract_event(SCENARIO, writes, &stream_a_clone).expect("append");
+
+        let _ = store_clone.append_events(writes).await;
+    });
+
+    // Collect events with timeout to prevent hanging
+    let timeout_duration = Duration::from_secs(2);
+    let events_result =
+        tokio::time::timeout(timeout_duration, subscription.take(4).collect::<Vec<_>>()).await;
+
+    // Then: All 4 events (2 historical + 2 live) should be delivered
+    let events = events_result.map_err(|_| {
+        ContractTestFailure::assertion(
+            SCENARIO,
+            "timeout waiting for live events - subscription may not deliver events appended after creation",
+        )
+    })?;
+
+    if events.len() != 4 {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected 4 events (2 historical + 2 live), observed {}",
+                events.len()
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 pub async fn test_subscription_filters_by_event_type<F, S>(make_store: F) -> ContractTestResult
 where
     F: Fn() -> S + Send + Sync + Clone + 'static,
@@ -575,11 +661,20 @@ macro_rules! event_subscription_contract_tests {
     (suite = $suite:ident, make_store = $make_store:expr $(,)?) => {
         #[allow(non_snake_case)]
         mod $suite {
-            use $crate::contract::test_subscription_filters_by_event_type;
+            use $crate::contract::{
+                test_subscription_delivers_live_events, test_subscription_filters_by_event_type,
+            };
 
             #[tokio::test(flavor = "multi_thread")]
             async fn subscription_filters_by_event_type_contract() {
                 test_subscription_filters_by_event_type($make_store)
+                    .await
+                    .expect("event subscription contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn subscription_delivers_live_events_contract() {
+                test_subscription_delivers_live_events(|| std::sync::Arc::new($make_store()))
                     .await
                     .expect("event subscription contract failed");
             }
