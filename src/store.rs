@@ -708,7 +708,7 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
             // If idle_timeout is None, stream waits indefinitely for new events
             loop {
                 let recv_result = if let Some(timeout_duration) = idle_timeout {
-                    // With timeout: use tokio::time::timeout
+                    // #[mutants::skip] - timeout mutations cause test hangs
                     tokio::time::timeout(timeout_duration, broadcast_rx.recv())
                         .await
                         .ok()
