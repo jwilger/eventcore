@@ -153,6 +153,58 @@ impl StreamResolver<CheckoutState> for ProcessPayment {
 
 The executor deduplicates IDs returned by `discover_related_streams`, reads each stream exactly once, and includes every visited stream in the same optimistic concurrency check as the statically declared streams.
 
+### Event Subscriptions for Read Models
+
+Build projections and read models by subscribing to event streams:
+
+```rust
+use eventcore::{EventSubscription, SubscriptionQuery, StreamPrefix};
+use futures::StreamExt;
+
+// Subscribe to all events from account streams
+let query = SubscriptionQuery::all()
+    .filter_stream_prefix(StreamPrefix::try_new("account-")?);
+
+let subscription = store.subscribe::<AccountEvent>(query).await?;
+
+// Fold events into a read model
+let balance = subscription
+    .map(|result| result.expect("event should deserialize"))
+    .fold(AccountBalance::default(), |mut acc, event| async move {
+        acc.apply(&event);
+        acc
+    })
+    .await;
+```
+
+**Key features:**
+- **Composable queries**: Chain filters for stream prefix and event type
+- **Type-safe**: Generic over your event types with automatic deserialization
+- **Error handling**: Stream yields `Result<E, SubscriptionError>` for graceful error handling
+- **Live updates**: Subscriptions deliver both historical and new events
+
+Filter by event type for focused projections:
+
+```rust
+// Subscribe only to MoneyDeposited events
+let query = SubscriptionQuery::all()
+    .filter_event_type_name("MoneyDeposited".try_into()?);
+
+let deposits = store.subscribe::<MoneyDeposited>(query).await?;
+```
+
+Use standard `StreamExt` combinators for transformations:
+
+```rust
+let high_value_deposits: Vec<Money> = subscription
+    .filter_map(|r| futures::future::ready(r.ok()))  // Skip errors
+    .filter(|e| futures::future::ready(e.amount >= 1000))
+    .map(|e| e.amount)
+    .take(10)
+    .collect()
+    .await;
+```
+
 ### Built-in Concurrency Control
 
 Optimistic locking prevents conflicts automatically. Just execute your commands - version checking and retries are handled transparently.

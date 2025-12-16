@@ -405,8 +405,25 @@ pub struct EventStreamSlice;
 ///
 /// # Thread Safety
 ///
-/// InMemoryEventStore uses interior mutability for concurrent access.
-/// TODO: Determine if Arc<Mutex<>> or other synchronization primitive needed.
+/// InMemoryEventStore uses interior mutability with `std::sync::Mutex` for concurrent
+/// access. Multiple threads can safely read and write to the same store instance.
+///
+/// # Subscription Limitations
+///
+/// The subscription implementation has several limitations suitable for testing but
+/// **not production use**:
+///
+/// - **Non-persistent**: All events are lost when the store is dropped.
+/// - **Single-process only**: No cross-process subscription coordination or checkpointing.
+/// - **Bounded broadcast buffer**: Uses a 1024-event broadcast channel. Slow subscribers
+///   may miss events if they fall behind (at-least-once semantics with potential gaps).
+/// - **50ms inactivity timeout**: Live subscriptions terminate after 50ms without new events.
+///   This allows `fold()` operations to complete but means long-running subscriptions need
+///   external keep-alive mechanisms or continuous event flow.
+/// - **No durability**: Restarts lose all subscription state and event history.
+///
+/// For production use, use [`PostgresEventStore`](crate::eventcore_postgres::PostgresEventStore)
+/// which provides persistent storage, durable subscriptions, and proper checkpoint management.
 // (event, event_type_name, event_data, global_sequence_number)
 type PersistedEvent = (
     Box<dyn std::any::Any + Send>,
@@ -562,11 +579,21 @@ impl EventStore for InMemoryEventStore {
 }
 
 impl crate::subscription::EventSubscription for InMemoryEventStore {
+    #[tracing::instrument(
+        name = "subscribe",
+        skip(self),
+        fields(
+            stream_prefix = query.stream_prefix().map(|p| p.as_ref()).unwrap_or(""),
+            event_type_filter = query.event_type_name_filter().map(|n| n.as_ref()).unwrap_or("")
+        )
+    )]
     async fn subscribe<E: crate::subscription::Subscribable>(
         &self,
         query: crate::subscription::SubscriptionQuery,
     ) -> Result<crate::subscription::SubscriptionStream<E>, crate::subscription::SubscriptionError>
     {
+        tracing::info!("creating subscription");
+
         // Get the set of type names that E can deserialize
         let subscribable_type_names = E::subscribable_type_names();
 
@@ -1043,5 +1070,41 @@ mod tests {
 
         // Then: StreamId construction fails
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn subscribe_emits_tracing_span() {
+        use crate::EventTypeName;
+        use crate::subscription::{EventSubscription, StreamPrefix, SubscriptionQuery};
+
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+        struct DummyEvent {
+            id: String,
+        }
+
+        impl Event for DummyEvent {
+            fn stream_id(&self) -> &StreamId {
+                unimplemented!()
+            }
+            fn event_type_name(&self) -> EventTypeName {
+                "DummyEvent".try_into().expect("valid")
+            }
+            fn all_type_names() -> Vec<EventTypeName> {
+                vec!["DummyEvent".try_into().expect("valid")]
+            }
+        }
+
+        let store = InMemoryEventStore::new();
+        let query = SubscriptionQuery::all()
+            .filter_stream_prefix(StreamPrefix::try_new("account-").expect("valid"));
+
+        let _subscription = store
+            .subscribe::<DummyEvent>(query)
+            .await
+            .expect("subscription should work");
+
+        // Check if we can see the span
+        assert!(logs_contain("subscribe"), "should emit subscribe span");
     }
 }

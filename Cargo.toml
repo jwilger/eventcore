@@ -36,5 +36,5 @@ eventcore-macros = { path = "eventcore-macros", optional = true }
 futures = "0.3"
 # tracing-mock is only available as beta (official tokio-rs crate); used for testing structured tracing output
 tracing-mock = "0.1.0-beta.3"
-tracing-test = "0.2.5"
+tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
 uuid = { version = "1.18.1", features = ["v7"] }
