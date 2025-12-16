@@ -1,6 +1,6 @@
 use eventcore::{
-    Event, EventStore, EventStoreError, EventSubscription, EventTypeName, StreamId, StreamVersion,
-    StreamWrites, SubscriptionQuery,
+    Event, EventStore, EventStoreError, EventSubscription, EventTypeName, StreamId, StreamPrefix,
+    StreamVersion, StreamWrites, SubscriptionQuery,
 };
 use std::fmt;
 
@@ -111,6 +111,44 @@ impl Event for OtherContractEvent {
             "OtherContractEvent"
                 .try_into()
                 .expect("valid event type name"),
+        ]
+    }
+}
+
+/// Account domain events as an enum with multiple variants.
+///
+/// Used to test explicit `filter_event_type_name()` filtering, which is needed
+/// to distinguish between enum variants that share the same Rust type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ContractAccountEvent {
+    Deposited { stream_id: StreamId, amount: u32 },
+    Withdrawn { stream_id: StreamId, amount: u32 },
+}
+
+impl Event for ContractAccountEvent {
+    fn stream_id(&self) -> &StreamId {
+        match self {
+            ContractAccountEvent::Deposited { stream_id, .. } => stream_id,
+            ContractAccountEvent::Withdrawn { stream_id, .. } => stream_id,
+        }
+    }
+
+    fn event_type_name(&self) -> EventTypeName {
+        match self {
+            ContractAccountEvent::Deposited { .. } => {
+                "Deposited".try_into().expect("valid event type name")
+            }
+            ContractAccountEvent::Withdrawn { .. } => {
+                "Withdrawn".try_into().expect("valid event type name")
+            }
+        }
+    }
+
+    #[cfg_attr(test, mutants::skip)] // test infrastructure - trait required method
+    fn all_type_names() -> Vec<EventTypeName> {
+        vec![
+            "Deposited".try_into().expect("valid event type name"),
+            "Withdrawn".try_into().expect("valid event type name"),
         ]
     }
 }
@@ -545,8 +583,21 @@ where
 
     // Given: Store contains events of TWO different types across multiple streams
     let store = make_store();
-    let stream_a = contract_stream_id(SCENARIO, "stream-a")?;
-    let stream_b = contract_stream_id(SCENARIO, "stream-b")?;
+
+    // Generate a unique prefix for this test run to avoid pollution from parallel tests
+    let test_run_id = Uuid::now_v7();
+    let test_prefix = format!("contract::{}::{}::", SCENARIO, test_run_id);
+
+    // Create stream IDs with the shared test-run prefix
+    let stream_a_raw = format!("{}stream-a", test_prefix);
+    let stream_b_raw = format!("{}stream-b", test_prefix);
+
+    let stream_a = StreamId::try_new(stream_a_raw).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("unable to construct stream_a: {}", e))
+    })?;
+    let stream_b = StreamId::try_new(stream_b_raw).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("unable to construct stream_b: {}", e))
+    })?;
 
     let writes = register_contract_stream(
         SCENARIO,
@@ -569,9 +620,19 @@ where
         .await
         .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
 
-    // When: Subscribe with type ContractTestEvent using SubscriptionQuery::all()
+    // When: Subscribe with type ContractTestEvent, filtering by this test's unique prefix
+    // This ensures parallel tests don't pollute results while still testing type filtering
+    let stream_prefix = StreamPrefix::try_new(&test_prefix).map_err(|e| {
+        ContractTestFailure::assertion(
+            SCENARIO,
+            format!("unable to construct stream prefix: {}", e),
+        )
+    })?;
+
     let subscription = store
-        .subscribe::<ContractTestEvent>(SubscriptionQuery::all())
+        .subscribe::<ContractTestEvent>(
+            SubscriptionQuery::all().filter_stream_prefix(stream_prefix),
+        )
         .await
         .map_err(|error| {
             ContractTestFailure::new(
@@ -609,6 +670,152 @@ where
     Ok(())
 }
 
+/// Tests explicit `filter_event_type_name()` filtering on enum variants.
+///
+/// This catches the mutant at `eventcore-postgres/src/lib.rs:303` where
+/// `!= expected_name` could be changed to `== expected_name` without detection.
+/// The existing `test_subscription_filters_by_event_type` only tests type-based
+/// filtering via `subscribable_type_names`, not explicit `filter_event_type_name()`.
+pub async fn test_subscription_filters_by_explicit_event_type_name<F, S>(
+    make_store: F,
+) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + EventSubscription + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "subscription_filters_by_explicit_event_type_name";
+
+    // Given: Store contains events of an ENUM type with multiple variants
+    let store = make_store();
+
+    // Generate a unique prefix for this test run to avoid pollution from parallel tests
+    let test_run_id = Uuid::now_v7();
+    let test_prefix = format!("contract::{}::{}::", SCENARIO, test_run_id);
+
+    // Create stream ID with the test-run prefix
+    let stream_raw = format!("{}account", test_prefix);
+    let stream_id = StreamId::try_new(stream_raw).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("unable to construct stream_id: {}", e))
+    })?;
+
+    // Append interleaved Deposited and Withdrawn events
+    let writes = StreamWrites::new()
+        .register_stream(stream_id.clone(), StreamVersion::new(0))
+        .map_err(|e| ContractTestFailure::builder_error(SCENARIO, "register_stream", e))?;
+
+    let writes = writes
+        .append(ContractAccountEvent::Deposited {
+            stream_id: stream_id.clone(),
+            amount: 100,
+        })
+        .map_err(|e| ContractTestFailure::builder_error(SCENARIO, "append", e))?;
+
+    let writes = writes
+        .append(ContractAccountEvent::Withdrawn {
+            stream_id: stream_id.clone(),
+            amount: 50,
+        })
+        .map_err(|e| ContractTestFailure::builder_error(SCENARIO, "append", e))?;
+
+    let writes = writes
+        .append(ContractAccountEvent::Deposited {
+            stream_id: stream_id.clone(),
+            amount: 200,
+        })
+        .map_err(|e| ContractTestFailure::builder_error(SCENARIO, "append", e))?;
+
+    let writes = writes
+        .append(ContractAccountEvent::Withdrawn {
+            stream_id: stream_id.clone(),
+            amount: 75,
+        })
+        .map_err(|e| ContractTestFailure::builder_error(SCENARIO, "append", e))?;
+
+    let writes = writes
+        .append(ContractAccountEvent::Deposited {
+            stream_id: stream_id.clone(),
+            amount: 300,
+        })
+        .map_err(|e| ContractTestFailure::builder_error(SCENARIO, "append", e))?;
+
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|e| ContractTestFailure::store_error(SCENARIO, "append_events", e))?;
+
+    // When: Subscribe with explicit filter_event_type_name("Deposited")
+    let stream_prefix = StreamPrefix::try_new(&test_prefix).map_err(|e| {
+        ContractTestFailure::assertion(
+            SCENARIO,
+            format!("unable to construct stream prefix: {}", e),
+        )
+    })?;
+
+    let deposited_type_name: EventTypeName = "Deposited".try_into().expect("valid event type name");
+
+    let subscription = store
+        .subscribe::<ContractAccountEvent>(
+            SubscriptionQuery::all()
+                .filter_stream_prefix(stream_prefix)
+                .filter_event_type_name(deposited_type_name),
+        )
+        .await
+        .map_err(|error| {
+            ContractTestFailure::new(
+                SCENARIO,
+                format!("subscribe returned unexpected error: {}", error),
+            )
+        })?;
+
+    // Collect events
+    use futures::StreamExt;
+    let events: Vec<ContractAccountEvent> = subscription
+        .take(3)
+        .map(|r| r.expect("event should deserialize"))
+        .collect()
+        .await;
+
+    // Then: Only Deposited events should be delivered (Withdrawn filtered out)
+    if events.len() != 3 {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected exactly 3 Deposited events, observed {}",
+                events.len()
+            ),
+        ));
+    }
+
+    // Verify all events are Deposited variant with correct amounts
+    let expected_amounts = [100, 200, 300];
+    for (i, event) in events.iter().enumerate() {
+        match event {
+            ContractAccountEvent::Deposited { amount, .. } => {
+                if *amount != expected_amounts[i] {
+                    return Err(ContractTestFailure::assertion(
+                        SCENARIO,
+                        format!(
+                            "event {} expected amount {}, observed {}",
+                            i, expected_amounts[i], amount
+                        ),
+                    ));
+                }
+            }
+            ContractAccountEvent::Withdrawn { .. } => {
+                return Err(ContractTestFailure::assertion(
+                    SCENARIO,
+                    format!(
+                        "event {} was Withdrawn but expected Deposited (filter_event_type_name failed)",
+                        i
+                    ),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Generates ALL contract tests for EventStore implementations.
 ///
 /// This macro generates tests verifying both `EventStore` and `EventSubscription` traits.
@@ -640,6 +847,7 @@ macro_rules! event_store_contract_tests {
                 test_conflict_preserves_atomicity, test_missing_stream_reads,
                 test_stream_isolation, test_subscription_delivers_live_events,
                 test_subscription_filters_by_event_type,
+                test_subscription_filters_by_explicit_event_type_name,
             };
 
             // EventStore contract tests
@@ -691,6 +899,13 @@ macro_rules! event_store_contract_tests {
             #[tokio::test(flavor = "multi_thread")]
             async fn subscription_delivers_live_events_contract() {
                 test_subscription_delivers_live_events(|| std::sync::Arc::new($make_store()))
+                    .await
+                    .expect("event subscription contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn subscription_filters_by_explicit_event_type_name_contract() {
+                test_subscription_filters_by_explicit_event_type_name($make_store)
                     .await
                     .expect("event subscription contract failed");
             }
