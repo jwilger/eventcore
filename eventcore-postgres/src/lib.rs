@@ -241,6 +241,20 @@ impl EventStore for PostgresEventStore {
     }
 }
 
+/// Calculate the timeout duration for subscription polling.
+/// Skipped from mutation testing as timeout mutations cause test hangs.
+#[cfg_attr(test, mutants::skip)]
+fn subscription_timeout_duration(idle_timeout: Option<Duration>) -> Duration {
+    idle_timeout.unwrap_or(Duration::from_millis(50))
+}
+
+/// Determine if subscription should terminate after empty poll.
+/// Skipped from mutation testing as timeout mutations cause test hangs.
+#[cfg_attr(test, mutants::skip)]
+fn should_terminate_on_empty_poll(idle_timeout: Option<Duration>, rows_empty: bool) -> bool {
+    idle_timeout.is_some() && rows_empty
+}
+
 impl EventSubscription for PostgresEventStore {
     async fn subscribe<E: Subscribable>(
         &self,
@@ -356,8 +370,7 @@ impl EventSubscription for PostgresEventStore {
                 // Determine timeout duration:
                 // - If idle_timeout is set, use it (stream will terminate if no events)
                 // - Otherwise use 50ms for polling (stream never terminates due to timeout)
-                // #[mutants::skip] - timeout mutations cause test hangs
-                let timeout_duration = idle_timeout.unwrap_or(tokio::time::Duration::from_millis(50));
+                let timeout_duration = subscription_timeout_duration(idle_timeout);
 
                 // Try to receive from broadcast with timeout
                 match tokio::time::timeout(
@@ -429,8 +442,7 @@ impl EventSubscription for PostgresEventStore {
 
                         match poll_result {
                             Ok(rows) => {
-                                // #[mutants::skip] - mutations here cause test hangs
-                                if idle_timeout.is_some() && rows.is_empty() {
+                                if should_terminate_on_empty_poll(idle_timeout, rows.is_empty()) {
                                     break;
                                 }
 

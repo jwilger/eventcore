@@ -3,6 +3,7 @@ use nutype::nutype;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
+use std::time::Duration;
 
 /// Placeholder for collection of events to write, organized by stream.
 ///
@@ -383,47 +384,6 @@ impl<E: Event> IntoIterator for EventStreamReader<E> {
 /// TODO: Refine with actual metadata returned after successful append.
 pub struct EventStreamSlice;
 
-/// In-memory event store implementation for testing.
-///
-/// InMemoryEventStore provides a lightweight, zero-dependency storage backend
-/// for EventCore integration tests and development. It implements the EventStore
-/// trait using standard library collections (HashMap, BTreeMap) with optimistic
-/// concurrency control via version checking.
-///
-/// This implementation is included in the main eventcore crate (per ADR-011)
-/// because it has zero heavyweight dependencies and is essential testing
-/// infrastructure for all EventCore users.
-///
-/// # Example
-///
-/// ```ignore
-/// use eventcore::InMemoryEventStore;
-///
-/// let store = InMemoryEventStore::new();
-/// // Use store with execute() function
-/// ```
-///
-/// # Thread Safety
-///
-/// InMemoryEventStore uses interior mutability with `std::sync::Mutex` for concurrent
-/// access. Multiple threads can safely read and write to the same store instance.
-///
-/// # Subscription Limitations
-///
-/// The subscription implementation has several limitations suitable for testing but
-/// **not production use**:
-///
-/// - **Non-persistent**: All events are lost when the store is dropped.
-/// - **Single-process only**: No cross-process subscription coordination or checkpointing.
-/// - **Bounded broadcast buffer**: Uses a 1024-event broadcast channel. Slow subscribers
-///   may miss events if they fall behind (at-least-once semantics with potential gaps).
-/// - **50ms inactivity timeout**: Live subscriptions terminate after 50ms without new events.
-///   This allows `fold()` operations to complete but means long-running subscriptions need
-///   external keep-alive mechanisms or continuous event flow.
-/// - **No durability**: Restarts lose all subscription state and event history.
-///
-/// For production use, use [`PostgresEventStore`](crate::eventcore_postgres::PostgresEventStore)
-/// which provides persistent storage, durable subscriptions, and proper checkpoint management.
 // (event, event_type_name, event_data, global_sequence_number)
 type PersistedEvent = (
     Box<dyn std::any::Any + Send>,
@@ -616,6 +576,28 @@ impl EventStore for InMemoryEventStore {
     }
 }
 
+// --------------------------------------------------------------------------------------
+// Mutation-testing helpers
+// These small functions isolate timeout logic that would cause test hangs when mutated.
+// --------------------------------------------------------------------------------------
+
+/// Receive from broadcast channel with optional timeout.
+/// Skipped from mutation testing as timeout mutations cause test hangs.
+#[cfg_attr(test, mutants::skip)]
+async fn recv_with_optional_timeout<T>(
+    rx: &mut tokio::sync::broadcast::Receiver<T>,
+    timeout: Option<Duration>,
+) -> Option<Result<T, tokio::sync::broadcast::error::RecvError>>
+where
+    T: Clone,
+{
+    if let Some(duration) = timeout {
+        tokio::time::timeout(duration, rx.recv()).await.ok()
+    } else {
+        Some(rx.recv().await)
+    }
+}
+
 impl crate::subscription::EventSubscription for InMemoryEventStore {
     #[tracing::instrument(
         name = "subscribe",
@@ -707,15 +689,7 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
             // If idle_timeout is set, stream terminates after that duration with no events
             // If idle_timeout is None, stream waits indefinitely for new events
             loop {
-                let recv_result = if let Some(timeout_duration) = idle_timeout {
-                    // #[mutants::skip] - timeout mutations cause test hangs
-                    tokio::time::timeout(timeout_duration, broadcast_rx.recv())
-                        .await
-                        .ok()
-                } else {
-                    // No timeout: wait indefinitely
-                    Some(broadcast_rx.recv().await)
-                };
+                let recv_result = recv_with_optional_timeout(&mut broadcast_rx, idle_timeout).await;
 
                 match recv_result {
                     Some(Ok(broadcast_event)) => {

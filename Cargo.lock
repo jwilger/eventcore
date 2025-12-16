@@ -577,6 +577,7 @@ dependencies = [
  "chrono",
  "eventcore-macros",
  "futures",
+ "mutants",
  "nutype",
  "rand 0.9.2",
  "serde",
