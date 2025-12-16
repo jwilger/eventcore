@@ -331,6 +331,9 @@ impl EventSubscription for PostgresEventStore {
         // Clone pool for use in async stream (for polling)
         let pool_clone = self.pool.clone();
 
+        // Get idle_timeout from query
+        let idle_timeout = query.idle_timeout();
+
         // PHASE 3: Create combined stream - historical events first, then live events
         let stream = async_stream::stream! {
             // Yield all historical events first (catch-up phase)
@@ -342,13 +345,18 @@ impl EventSubscription for PostgresEventStore {
             let mut last_delivered_seq = catchup_max_seq;
 
             // Then yield live events from broadcast channel OR by polling the database
-            // Stream only terminates when broadcast channel closes or subscriber drops
+            // Stream terminates when:
+            // - Channel closes
+            // - idle_timeout is set AND both broadcast timeout and DB poll return no events
             loop {
-                // Try to receive from broadcast with a short timeout
-                // This allows fast delivery for same-instance events while also
-                // checking the database for cross-instance events
+                // Determine timeout duration:
+                // - If idle_timeout is set, use it (stream will terminate if no events)
+                // - Otherwise use 50ms for polling (stream never terminates due to timeout)
+                let timeout_duration = idle_timeout.unwrap_or(tokio::time::Duration::from_millis(50));
+
+                // Try to receive from broadcast with timeout
                 match tokio::time::timeout(
-                    tokio::time::Duration::from_millis(50),
+                    timeout_duration,
                     broadcast_rx.recv()
                 ).await {
                     Ok(Ok(broadcast_event)) => {
@@ -416,6 +424,11 @@ impl EventSubscription for PostgresEventStore {
 
                         match poll_result {
                             Ok(rows) => {
+                                // If idle_timeout is set and no new events found, terminate stream
+                                if idle_timeout.is_some() && rows.is_empty() {
+                                    break;
+                                }
+
                                 for row in rows {
                                     let stored_type_name: String = row.get("event_type");
                                     let event_data: Value = row.get("event_data");

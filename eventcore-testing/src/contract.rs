@@ -670,6 +670,105 @@ where
     Ok(())
 }
 
+/// Tests that subscriptions respect the idle_timeout configuration.
+///
+/// When a subscription is created with `with_idle_timeout(Duration)`, the stream
+/// should terminate after that duration of inactivity (no new events). This test
+/// verifies that implementations honor this configuration rather than ignoring it.
+///
+/// # Expected Results
+///
+/// - InMemoryEventStore: PASS (respects idle_timeout)
+/// - PostgresEventStore: Should FAIL if it ignores idle_timeout and hangs forever
+pub async fn test_subscription_respects_idle_timeout<F, S>(make_store: F) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + EventSubscription + Send + Sync + 'static,
+{
+    use futures::StreamExt;
+    use std::time::Duration;
+
+    const SCENARIO: &str = "subscription_respects_idle_timeout";
+
+    // Given: Store with one event
+    let store = make_store();
+
+    // Generate a unique prefix for this test run to avoid pollution from parallel tests
+    let test_run_id = Uuid::now_v7();
+    let test_prefix = format!("contract::{}::{}::", SCENARIO, test_run_id);
+
+    let stream_raw = format!("{}stream", test_prefix);
+    let stream_id = StreamId::try_new(stream_raw).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("unable to construct stream_id: {}", e))
+    })?;
+
+    let writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &stream_id,
+        StreamVersion::new(0),
+    )?;
+    let writes = append_contract_event(SCENARIO, writes, &stream_id)?;
+
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+
+    // When: Create subscription WITH idle_timeout configured
+    let stream_prefix = StreamPrefix::try_new(&test_prefix).map_err(|e| {
+        ContractTestFailure::assertion(
+            SCENARIO,
+            format!("unable to construct stream prefix: {}", e),
+        )
+    })?;
+
+    let subscription = store
+        .subscribe::<ContractTestEvent>(
+            SubscriptionQuery::all()
+                .filter_stream_prefix(stream_prefix)
+                .with_idle_timeout(Duration::from_millis(100)),
+        )
+        .await
+        .map_err(|error| {
+            ContractTestFailure::new(
+                SCENARIO,
+                format!("subscribe returned unexpected error: {}", error),
+            )
+        })?;
+
+    // Collect ALL events from the stream (should terminate after idle_timeout)
+    // Use an outer timeout to catch implementations that ignore idle_timeout and hang
+    let outer_timeout = Duration::from_secs(2);
+    let events_result = tokio::time::timeout(
+        outer_timeout,
+        subscription
+            .map(|r| r.expect("event should deserialize"))
+            .collect::<Vec<_>>(),
+    )
+    .await;
+
+    // Then: Stream should terminate (not hang) and deliver exactly 1 event
+    let events = events_result.map_err(|_| {
+        ContractTestFailure::assertion(
+            SCENARIO,
+            "timeout waiting for subscription to terminate - implementation may ignore idle_timeout",
+        )
+    })?;
+
+    if events.len() != 1 {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected exactly 1 event before idle timeout, observed {}",
+                events.len()
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Tests explicit `filter_event_type_name()` filtering on enum variants.
 ///
 /// This catches the mutant at `eventcore-postgres/src/lib.rs:303` where
@@ -848,6 +947,7 @@ macro_rules! event_store_contract_tests {
                 test_stream_isolation, test_subscription_delivers_live_events,
                 test_subscription_filters_by_event_type,
                 test_subscription_filters_by_explicit_event_type_name,
+                test_subscription_respects_idle_timeout,
             };
 
             // EventStore contract tests
@@ -906,6 +1006,13 @@ macro_rules! event_store_contract_tests {
             #[tokio::test(flavor = "multi_thread")]
             async fn subscription_filters_by_explicit_event_type_name_contract() {
                 test_subscription_filters_by_explicit_event_type_name($make_store)
+                    .await
+                    .expect("event subscription contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn subscription_respects_idle_timeout_contract() {
+                test_subscription_respects_idle_timeout($make_store)
                     .await
                     .expect("event subscription contract failed");
             }
