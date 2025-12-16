@@ -5,19 +5,10 @@ on:
     types: [opened, synchronize]
     # Optional: Only run on specific file changes
     # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    #   - "src/**/*.rs"
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,21 +28,100 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
+            Review PR #${{ github.event.pull_request.number }} in ${{ github.repository }}.
 
-            Please review this pull request and provide feedback on:
-            - Code quality and best practices
-            - Potential bugs or issues
-            - Performance considerations
-            - Security concerns
-            - Test coverage
+            ## Review Philosophy - BE BRIEF AND USEFUL
 
-            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+            1. **No excessive praise** - Skip the "excellent work" and "well-architected" fluff.
+               Only mention something positive if it's genuinely surprising or educational.
 
-            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
+            2. **Focus on problems** - Your main job is finding issues that need fixing:
+               - Bugs, logic errors, edge cases
+               - Security vulnerabilities
+               - Performance problems
+               - Breaking changes
+               - Missing error handling
 
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+            3. **Be direct** - State what's wrong and why. No soft language.
+
+            4. **Skip the obvious** - Don't comment on things that are fine.
+
+            ## Review Process
+
+            **Step 1: Check for previous reviews**
+            ```bash
+            gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews
+            ```
+            If you previously requested changes, check if they've been addressed.
+
+            **Step 2: Get the diff**
+            ```bash
+            gh pr diff ${{ github.event.pull_request.number }}
+            ```
+
+            **Step 3: For specific code issues, use INLINE comments**
+
+            Create a review with inline comments using JSON input:
+            ```bash
+            echo '{
+              "body": "Brief summary (2-3 sentences max)",
+              "event": "REQUEST_CHANGES",
+              "comments": [
+                {"path": "src/file.rs", "line": 42, "body": "Specific issue here"},
+                {"path": "src/other.rs", "line": 10, "body": "Another issue"}
+              ]
+            }' | gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+                 --method POST --input -
+            ```
+
+            Use `"event": "APPROVE"` if no blocking issues.
+            Use `"event": "REQUEST_CHANGES"` if there are issues to fix.
+            Use `"event": "COMMENT"` for non-blocking suggestions.
+
+            **Step 4: Resolve addressed review threads**
+
+            If previous review comments have been addressed, actually RESOLVE them (not just reply).
+
+            First, get unresolved review threads with their node IDs:
+            ```bash
+            gh api graphql -f query='
+              query {
+                repository(owner: "${{ github.repository_owner }}", name: "${{ github.event.repository.name }}") {
+                  pullRequest(number: ${{ github.event.pull_request.number }}) {
+                    reviewThreads(first: 100) {
+                      nodes {
+                        id
+                        isResolved
+                        comments(first: 1) {
+                          nodes { body path line }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            '
+            ```
+
+            For each unresolved thread that has been addressed, resolve it:
+            ```bash
+            gh api graphql -f query='
+              mutation {
+                resolveReviewThread(input: {threadId: "THREAD_NODE_ID_HERE"}) {
+                  thread { isResolved }
+                }
+              }
+            '
+            ```
+
+            ## Output Format
+
+            Your review summary should be 2-5 sentences MAX. Put details in inline comments.
+
+            Bad: "This is an excellent PR with strong architectural decisions..."
+            Good: "Two issues: null check missing in handler.rs:45, potential panic in parser.rs:102."
+
+            If the code is fine, just approve with a one-line summary.
+
+          claude_args: '--allowed-tools "Bash(gh api:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Read,Glob,Grep"'
 
