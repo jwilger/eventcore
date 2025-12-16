@@ -260,14 +260,16 @@ impl EventSubscription for PostgresEventStore {
         let mut all_events: Vec<(Result<E, SubscriptionError>, i64)> = Vec::new();
 
         // Build query based on filters
+        // Bound by catchup_max_seq to prevent race condition with concurrent appends
         let rows = if let Some(prefix) = query.stream_prefix() {
             sqlx::query(
                 "SELECT stream_id, event_type, event_data, global_sequence
                  FROM eventcore_events
-                 WHERE stream_id LIKE $1 || '%'
+                 WHERE stream_id LIKE $1 || '%' AND global_sequence <= $2
                  ORDER BY global_sequence ASC",
             )
             .bind(prefix.as_ref())
+            .bind(catchup_max_seq)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| SubscriptionError::Generic(e.to_string()))?
@@ -275,8 +277,10 @@ impl EventSubscription for PostgresEventStore {
             sqlx::query(
                 "SELECT stream_id, event_type, event_data, global_sequence
                  FROM eventcore_events
+                 WHERE global_sequence <= $1
                  ORDER BY global_sequence ASC",
             )
+            .bind(catchup_max_seq)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| SubscriptionError::Generic(e.to_string()))?
@@ -324,6 +328,9 @@ impl EventSubscription for PostgresEventStore {
         let query_clone = query.clone();
         let subscribable_type_names_clone = subscribable_type_names.clone();
 
+        // Clone pool for use in async stream (for polling)
+        let pool_clone = self.pool.clone();
+
         // PHASE 3: Create combined stream - historical events first, then live events
         let stream = async_stream::stream! {
             // Yield all historical events first (catch-up phase)
@@ -331,18 +338,22 @@ impl EventSubscription for PostgresEventStore {
                 yield result;
             }
 
-            // Then yield live events from broadcast channel
+            // Track the highest delivered sequence for polling
+            let mut last_delivered_seq = catchup_max_seq;
+
+            // Then yield live events from broadcast channel OR by polling the database
+            // Stream only terminates when broadcast channel closes or subscriber drops
             loop {
-                // Wait for broadcast events with a short timeout
-                // This allows tests that expect finite streams (fold) to complete
-                // while still supporting live subscription for tests that expect it (take)
+                // Try to receive from broadcast with a short timeout
+                // This allows fast delivery for same-instance events while also
+                // checking the database for cross-instance events
                 match tokio::time::timeout(
                     tokio::time::Duration::from_millis(50),
                     broadcast_rx.recv()
                 ).await {
                     Ok(Ok(broadcast_event)) => {
-                        // Skip events we already delivered in catch-up phase
-                        if broadcast_event.sequence <= catchup_max_seq {
+                        // Skip events we already delivered
+                        if broadcast_event.sequence <= last_delivered_seq {
                             continue;
                         }
 
@@ -365,21 +376,90 @@ impl EventSubscription for PostgresEventStore {
                             continue;
                         }
 
-                        // Deserialize and yield the event (or error)
+                        last_delivered_seq = broadcast_event.sequence;
                         yield E::try_from_stored(&broadcast_event.event_type_name, &broadcast_event.event_data);
                     }
                     Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
-                        // Subscriber fell behind - continue receiving (at-least-once semantics)
+                        // Subscriber fell behind - continue receiving
                         continue;
                     }
                     Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                         // Channel closed - end stream
                         break;
                     }
-                    Err(_elapsed) => {
-                        // Timeout - no new events within window, end stream
-                        // This allows fold() operations to complete
-                        break;
+                    Err(_timeout) => {
+                        // No broadcast event within timeout - poll database for cross-instance events
+                        let poll_result = if let Some(prefix) = query_clone.stream_prefix() {
+                            sqlx::query(
+                                "SELECT stream_id, event_type, event_data, global_sequence
+                                 FROM eventcore_events
+                                 WHERE stream_id LIKE $1 || '%' AND global_sequence > $2
+                                 ORDER BY global_sequence ASC
+                                 LIMIT 100",
+                            )
+                            .bind(prefix.as_ref())
+                            .bind(last_delivered_seq)
+                            .fetch_all(&pool_clone)
+                            .await
+                        } else {
+                            sqlx::query(
+                                "SELECT stream_id, event_type, event_data, global_sequence
+                                 FROM eventcore_events
+                                 WHERE global_sequence > $1
+                                 ORDER BY global_sequence ASC
+                                 LIMIT 100",
+                            )
+                            .bind(last_delivered_seq)
+                            .fetch_all(&pool_clone)
+                            .await
+                        };
+
+                        match poll_result {
+                            Ok(rows) => {
+                                for row in rows {
+                                    let stored_type_name: String = row.get("event_type");
+                                    let event_data: Value = row.get("event_data");
+                                    let global_sequence: i64 = row.get("global_sequence");
+
+                                    // Convert string to EventTypeName for comparison
+                                    let stored_event_type_name = match EventTypeName::try_from(stored_type_name.as_str()) {
+                                        Ok(name) => name,
+                                        Err(_) => continue, // Skip events with invalid type names
+                                    };
+
+                                    // Check if event type is in subscribable types
+                                    if !subscribable_type_names_clone.contains(&stored_event_type_name) {
+                                        last_delivered_seq = global_sequence;
+                                        continue;
+                                    }
+
+                                    // Apply event type name filter
+                                    if let Some(expected_name) = query_clone.event_type_name_filter()
+                                        && &stored_event_type_name != expected_name
+                                    {
+                                        last_delivered_seq = global_sequence;
+                                        continue;
+                                    }
+
+                                    // Serialize event_data to bytes for deserialization
+                                    let event_bytes = match serde_json::to_vec(&event_data) {
+                                        Ok(bytes) => bytes,
+                                        Err(e) => {
+                                            yield Err(SubscriptionError::DeserializationFailed(e.to_string()));
+                                            last_delivered_seq = global_sequence;
+                                            continue;
+                                        }
+                                    };
+
+                                    last_delivered_seq = global_sequence;
+                                    yield E::try_from_stored(&stored_event_type_name, &event_bytes);
+                                }
+                            }
+                            Err(_) => {
+                                // Database error during poll - continue trying
+                                continue;
+                            }
+                        }
                     }
                 }
             }
@@ -544,6 +624,230 @@ mod tests {
         assert!(
             matches!(mapped_error, EventStoreError::VersionConflict),
             "unique constraint violations should map to version conflict"
+        );
+    }
+
+    /// Test event for subscription tests.
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    struct SubscriptionTestEvent {
+        stream_id: eventcore::StreamId,
+        payload: String,
+    }
+
+    impl eventcore::Event for SubscriptionTestEvent {
+        fn stream_id(&self) -> &eventcore::StreamId {
+            &self.stream_id
+        }
+
+        fn event_type_name(&self) -> eventcore::EventTypeName {
+            "SubscriptionTestEvent"
+                .try_into()
+                .expect("valid event type name")
+        }
+
+        fn all_type_names() -> Vec<eventcore::EventTypeName> {
+            vec![
+                "SubscriptionTestEvent"
+                    .try_into()
+                    .expect("valid event type name"),
+            ]
+        }
+    }
+
+    /// Live subscriptions should continue delivering events regardless of
+    /// how much time passes between events. A true live subscription only
+    /// terminates when the channel closes or the subscriber drops.
+    #[tokio::test]
+    async fn subscription_continues_delivering_events_after_inactivity_gap() {
+        // Given: Developer creates PostgresEventStore
+        let fixture = TestFixture::new().await;
+        let store = PostgresEventStore::from_pool(fixture.pool.clone());
+
+        // And: Developer creates unique stream ID
+        let stream_id = eventcore::StreamId::try_new(unique_stream_id("timeout-test"))
+            .expect("valid stream id");
+
+        // And: Developer appends initial event
+        let initial_writes = eventcore::StreamWrites::new()
+            .register_stream(stream_id.clone(), eventcore::StreamVersion::new(0))
+            .and_then(|w| {
+                w.append(SubscriptionTestEvent {
+                    stream_id: stream_id.clone(),
+                    payload: "first".to_string(),
+                })
+            })
+            .expect("writes should be constructed");
+
+        store
+            .append_events(initial_writes)
+            .await
+            .expect("initial event appended");
+
+        // When: Developer creates subscription
+        let subscription = store
+            .subscribe::<SubscriptionTestEvent>(eventcore::SubscriptionQuery::all())
+            .await
+            .expect("subscription created");
+
+        // And: Developer appends second event after a 100ms delay
+        let store_clone = PostgresEventStore::from_pool(fixture.pool.clone());
+        let stream_id_clone = stream_id.clone();
+        let append_handle = tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+            let later_writes = eventcore::StreamWrites::new()
+                .register_stream(stream_id_clone.clone(), eventcore::StreamVersion::new(1))
+                .and_then(|w| {
+                    w.append(SubscriptionTestEvent {
+                        stream_id: stream_id_clone.clone(),
+                        payload: "second".to_string(),
+                    })
+                })
+                .expect("writes constructed");
+
+            store_clone
+                .append_events(later_writes)
+                .await
+                .expect("second event appended");
+        });
+
+        // And: Developer collects events from subscription
+        use futures::StreamExt;
+        let result: Result<Vec<SubscriptionTestEvent>, _> = tokio::time::timeout(
+            tokio::time::Duration::from_secs(2),
+            subscription
+                .take(2)
+                .map(|r| r.expect("event should deserialize"))
+                .collect(),
+        )
+        .await;
+
+        append_handle.await.expect("append task completed");
+
+        // Then: Subscription delivers both events including the one after the gap
+        assert!(
+            result.is_ok(),
+            "subscription should deliver events arriving after periods of inactivity"
+        );
+
+        let events = result.expect("collected events");
+        assert_eq!(
+            events.len(),
+            2,
+            "subscription should deliver all events regardless of timing gaps"
+        );
+    }
+
+    /// Subscriptions provide at-least-once delivery, but should make a best
+    /// effort to avoid duplicate deliveries. The historical event query should
+    /// be bounded by the captured max sequence to minimize duplicates when
+    /// events are appended concurrently with subscription setup.
+    #[tokio::test]
+    async fn subscription_avoids_duplicate_delivery_during_concurrent_appends() {
+        // Given: Developer creates PostgresEventStore
+        let fixture = TestFixture::new().await;
+        let store = std::sync::Arc::new(PostgresEventStore::from_pool(fixture.pool.clone()));
+
+        // And: Developer creates unique stream ID
+        let stream_id =
+            eventcore::StreamId::try_new(unique_stream_id("dedup-test")).expect("valid stream id");
+
+        // And: Developer appends initial events before subscription
+        let initial_writes = eventcore::StreamWrites::new()
+            .register_stream(stream_id.clone(), eventcore::StreamVersion::new(0))
+            .and_then(|w| {
+                w.append(SubscriptionTestEvent {
+                    stream_id: stream_id.clone(),
+                    payload: "event-1".to_string(),
+                })
+            })
+            .and_then(|w| {
+                w.append(SubscriptionTestEvent {
+                    stream_id: stream_id.clone(),
+                    payload: "event-2".to_string(),
+                })
+            })
+            .expect("writes should be constructed");
+
+        store
+            .append_events(initial_writes)
+            .await
+            .expect("initial events appended");
+
+        // When: Developer creates subscription
+        let subscription = store
+            .subscribe::<SubscriptionTestEvent>(eventcore::SubscriptionQuery::all())
+            .await
+            .expect("subscription created");
+
+        // And: Developer appends more events immediately after subscription creation
+        let store_clone = store.clone();
+        let stream_id_clone = stream_id.clone();
+        let append_handle = tokio::spawn(async move {
+            let later_writes = eventcore::StreamWrites::new()
+                .register_stream(stream_id_clone.clone(), eventcore::StreamVersion::new(2))
+                .and_then(|w| {
+                    w.append(SubscriptionTestEvent {
+                        stream_id: stream_id_clone.clone(),
+                        payload: "event-3".to_string(),
+                    })
+                })
+                .and_then(|w| {
+                    w.append(SubscriptionTestEvent {
+                        stream_id: stream_id_clone.clone(),
+                        payload: "event-4".to_string(),
+                    })
+                })
+                .expect("writes constructed");
+
+            store_clone
+                .append_events(later_writes)
+                .await
+                .expect("later events appended");
+        });
+
+        // And: Developer collects events from subscription
+        use futures::StreamExt;
+        let events: Vec<SubscriptionTestEvent> = tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            subscription
+                .take(4)
+                .map(|r| r.expect("event should deserialize"))
+                .collect(),
+        )
+        .await
+        .expect("should collect 4 events within timeout");
+
+        append_handle.await.expect("append task completed");
+
+        // Then: Events should not be duplicated (best effort)
+        let payloads: Vec<&str> = events.iter().map(|e| e.payload.as_str()).collect();
+
+        assert_eq!(
+            payloads.iter().filter(|&&p| p == "event-1").count(),
+            1,
+            "event-1 should not be duplicated"
+        );
+        assert_eq!(
+            payloads.iter().filter(|&&p| p == "event-2").count(),
+            1,
+            "event-2 should not be duplicated"
+        );
+        assert_eq!(
+            payloads.iter().filter(|&&p| p == "event-3").count(),
+            1,
+            "event-3 should not be duplicated"
+        );
+        assert_eq!(
+            payloads.iter().filter(|&&p| p == "event-4").count(),
+            1,
+            "event-4 should not be duplicated"
+        );
+
+        assert_eq!(
+            events.len(),
+            4,
+            "should deliver 4 events without duplicates"
         );
     }
 }

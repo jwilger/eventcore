@@ -696,6 +696,7 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
         let subscribable_type_names_clone = subscribable_type_names.clone();
 
         // PHASE 2: Create combined stream - historical events first, then live events
+        let idle_timeout = query.idle_timeout();
         let stream = async_stream::stream! {
             // Yield all historical events first (catch-up phase)
             for result in historical_events {
@@ -703,17 +704,21 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
             }
 
             // Then yield live events from broadcast channel
-            // Use tokio::time::timeout to implement a short wait for live events
-            // This allows tests that expect finite streams (fold) to complete
-            // while still supporting live subscription for tests that expect it (take)
+            // If idle_timeout is set, stream terminates after that duration with no events
+            // If idle_timeout is None, stream waits indefinitely for new events
             loop {
-                // Wait for broadcast events with a short timeout
-                // This allows in-flight events to arrive while not blocking forever
-                match tokio::time::timeout(
-                    tokio::time::Duration::from_millis(50),
-                    broadcast_rx.recv()
-                ).await {
-                    Ok(Ok(broadcast_event)) => {
+                let recv_result = if let Some(timeout_duration) = idle_timeout {
+                    // With timeout: use tokio::time::timeout
+                    tokio::time::timeout(timeout_duration, broadcast_rx.recv())
+                        .await
+                        .ok()
+                } else {
+                    // No timeout: wait indefinitely
+                    Some(broadcast_rx.recv().await)
+                };
+
+                match recv_result {
+                    Some(Ok(broadcast_event)) => {
                         // Skip events we already delivered in catch-up phase
                         if broadcast_event.sequence <= catchup_max_seq {
                             continue;
@@ -741,17 +746,16 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
                         // Deserialize and yield the event (or error)
                         yield E::try_from_stored(&broadcast_event.event_type_name, &broadcast_event.event_data);
                     }
-                    Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                    Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
                         // Subscriber fell behind - continue receiving (at-least-once semantics)
                         continue;
                     }
-                    Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    Some(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                         // Channel closed - end stream
                         break;
                     }
-                    Err(_elapsed) => {
-                        // Timeout - no new events within window, end stream
-                        // This allows fold() operations to complete
+                    None => {
+                        // Timeout expired (only happens when idle_timeout is Some)
                         break;
                     }
                 }

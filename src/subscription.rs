@@ -56,6 +56,7 @@ pub struct StreamPrefix(String);
 pub struct SubscriptionQuery {
     stream_prefix: Option<StreamPrefix>,
     event_type_name: Option<EventTypeName>,
+    idle_timeout: Option<std::time::Duration>,
 }
 
 impl SubscriptionQuery {
@@ -66,6 +67,7 @@ impl SubscriptionQuery {
         Self {
             stream_prefix: None,
             event_type_name: None,
+            idle_timeout: None,
         }
     }
 
@@ -76,6 +78,7 @@ impl SubscriptionQuery {
         Self {
             stream_prefix: Some(prefix),
             event_type_name: self.event_type_name,
+            idle_timeout: self.idle_timeout,
         }
     }
 
@@ -94,6 +97,7 @@ impl SubscriptionQuery {
         Self {
             stream_prefix: self.stream_prefix,
             event_type_name: Some(name),
+            idle_timeout: self.idle_timeout,
         }
     }
 
@@ -105,6 +109,21 @@ impl SubscriptionQuery {
     /// Get the event type name filter, if any.
     pub fn event_type_name_filter(&self) -> Option<&EventTypeName> {
         self.event_type_name.as_ref()
+    }
+
+    /// Get the idle timeout, if any.
+    pub fn idle_timeout(&self) -> Option<std::time::Duration> {
+        self.idle_timeout
+    }
+
+    /// Set idle timeout - stream terminates after this duration with no events.
+    /// Default is None (infinite stream).
+    pub fn with_idle_timeout(self, timeout: std::time::Duration) -> Self {
+        Self {
+            stream_prefix: self.stream_prefix,
+            event_type_name: self.event_type_name,
+            idle_timeout: Some(timeout),
+        }
     }
 }
 

@@ -713,13 +713,16 @@ async fn builds_read_model_by_folding_subscription_stream() {
 
     // When: Developer subscribes using AccountEvent enum
     // This should automatically handle both Deposited and Withdrawn variants
-    let subscription =
-        store
-            .subscribe::<AccountEvent>(SubscriptionQuery::all().filter_stream_prefix(
-                StreamPrefix::try_new("account-").expect("valid stream prefix"),
-            ))
-            .await
-            .expect("subscription should be created successfully");
+    let subscription = store
+        .subscribe::<AccountEvent>(
+            SubscriptionQuery::all()
+                .filter_stream_prefix(
+                    StreamPrefix::try_new("account-").expect("valid stream prefix"),
+                )
+                .with_idle_timeout(std::time::Duration::from_millis(50)),
+        )
+        .await
+        .expect("subscription should be created successfully");
 
     // And: Developer folds events into AccountBalance struct
     let balance = subscription
@@ -752,13 +755,16 @@ async fn builds_read_model_by_folding_subscription_stream() {
         .expect("events should be appended successfully");
 
     // When: Developer creates new subscription after new events
-    let updated_subscription =
-        store
-            .subscribe::<AccountEvent>(SubscriptionQuery::all().filter_stream_prefix(
-                StreamPrefix::try_new("account-").expect("valid stream prefix"),
-            ))
-            .await
-            .expect("subscription should be created successfully");
+    let updated_subscription = store
+        .subscribe::<AccountEvent>(
+            SubscriptionQuery::all()
+                .filter_stream_prefix(
+                    StreamPrefix::try_new("account-").expect("valid stream prefix"),
+                )
+                .with_idle_timeout(std::time::Duration::from_millis(50)),
+        )
+        .await
+        .expect("subscription should be created successfully");
 
     // And: Developer folds all events again
     let updated_balance = updated_subscription
@@ -885,7 +891,9 @@ async fn subscribes_to_disjoint_types_via_view_enum() {
     // This should automatically receive BOTH MoneyDeposited and MoneyWithdrawn events
     // wrapped in the appropriate enum variants
     let subscription = store
-        .subscribe::<AccountEventView>(SubscriptionQuery::all())
+        .subscribe::<AccountEventView>(
+            SubscriptionQuery::all().with_idle_timeout(std::time::Duration::from_millis(50)),
+        )
         .await
         .expect("subscription should be created successfully");
 
@@ -1416,7 +1424,9 @@ async fn consumer_can_filter_errors_and_continue_processing() {
 
     // When: Developer subscribes and uses filter_map to skip errors
     let subscription = store
-        .subscribe::<MixedEventView>(SubscriptionQuery::all())
+        .subscribe::<MixedEventView>(
+            SubscriptionQuery::all().with_idle_timeout(std::time::Duration::from_millis(50)),
+        )
         .await
         .expect("subscription should be created successfully");
 
@@ -1613,5 +1623,108 @@ async fn subscription_returns_empty_stream_when_store_is_empty() {
     assert!(
         events.is_empty(),
         "subscription on empty store should return empty stream"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn subscription_without_idle_timeout_waits_indefinitely_for_events() {
+    // Given: Developer creates in-memory event store
+    let store = std::sync::Arc::new(InMemoryEventStore::new());
+
+    // And: Developer creates stream ID
+    let stream_a = StreamId::try_new("stream-a").expect("valid stream id");
+
+    // And: Developer appends ONE initial event
+    let initial_writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(0))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 100,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(initial_writes)
+        .await
+        .expect("initial event should be appended successfully");
+
+    // When: Developer creates subscription with NO idle timeout (default behavior)
+    // The subscription should wait indefinitely for more events
+    let subscription = store
+        .subscribe(SubscriptionQuery::all())
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer spawns a task to collect events
+    let collect_task = tokio::spawn(async move {
+        subscription
+            .take(2)
+            .map(|r| r.expect("event should deserialize"))
+            .collect::<Vec<TestEvent>>()
+            .await
+    });
+
+    // Yield to let the collect task start and process the first event
+    tokio::task::yield_now().await;
+
+    // And: Time advances WAY past any reasonable timeout - 200 years!
+    // If the subscription truly waits indefinitely, it should still be waiting
+    // after this massive time jump. With fake time, this is instant.
+    // This simulates 200 years of inactivity with no new events.
+    let two_hundred_years = tokio::time::Duration::from_secs(200 * 365 * 24 * 60 * 60);
+    tokio::time::advance(two_hundred_years).await;
+
+    // Yield again to let any timeout-based logic execute
+    tokio::task::yield_now().await;
+
+    // And: Developer appends a second event AFTER 200 years of "waiting"
+    let later_writes = StreamWrites::new()
+        .register_stream(stream_a.clone(), StreamVersion::new(1))
+        .and_then(|w| {
+            w.append(TestEvent::ValueRecorded {
+                stream_id: stream_a.clone(),
+                value: 200,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(later_writes)
+        .await
+        .expect("later event should be appended successfully");
+
+    // Yield to let the event be delivered
+    tokio::task::yield_now().await;
+
+    // Then: The subscription should have received BOTH events
+    // With default behavior (no timeout), the stream should NOT terminate
+    // after ANY amount of inactivity - it should wait indefinitely for more events
+    let events = collect_task.await.expect("collect task should complete");
+
+    assert_eq!(
+        events.len(),
+        2,
+        "subscription without idle timeout should wait for second event (got {} events)",
+        events.len()
+    );
+
+    assert_eq!(
+        events[0],
+        TestEvent::ValueRecorded {
+            stream_id: stream_a.clone(),
+            value: 100
+        },
+        "first event should be initial event with value 100"
+    );
+
+    assert_eq!(
+        events[1],
+        TestEvent::ValueRecorded {
+            stream_id: stream_a,
+            value: 200
+        },
+        "second event should be later event with value 200"
     );
 }
