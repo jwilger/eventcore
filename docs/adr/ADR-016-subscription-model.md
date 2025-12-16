@@ -157,7 +157,7 @@ Checkpoints could be opaque strings (backend-specific format) or a typed value. 
 2. **Type reuse**: Consistency across the API reduces cognitive load
 3. **No parsing overhead**: Backends don't serialize/deserialize; they use the value directly
 
-For global subscriptions (`SubscriptionQuery::all()`), `StreamVersion` represents global position (based on UUIDv7 event ordering). This maintains type uniformity while supporting different query semantics.
+For global subscriptions (`SubscriptionQuery::all()`), `StreamVersion` represents global position (based on monotonic sequence number ordering assigned at append time). This maintains type uniformity while supporting different query semantics.
 
 **Trade-offs Accepted:**
 

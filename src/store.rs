@@ -444,6 +444,44 @@ struct BroadcastEvent {
     sequence: u64,
 }
 
+/// In-memory event store for development and testing.
+///
+/// `InMemoryEventStore` implements both [`EventStore`] and [`EventSubscription`] traits,
+/// providing a complete event sourcing backend that requires no external infrastructure.
+///
+/// # Intended Use
+///
+/// This store is designed for:
+/// - **Development**: Rapid iteration without database setup
+/// - **Testing**: Unit and integration tests with deterministic behavior
+/// - **Prototyping**: Exploring event sourcing patterns before committing to infrastructure
+///
+/// For production workloads, use [`PostgresEventStore`] from the `eventcore-postgres` crate,
+/// which provides durability, concurrent access across processes, and better performance
+/// at scale.
+///
+/// # Performance Characteristics
+///
+/// - **Memory-bound**: All events are held in memory; large event volumes will exhaust RAM
+/// - **Lock contention**: Uses `std::sync::Mutex` for thread safety; high concurrency may
+///   experience contention during append or subscription operations
+/// - **Subscription catch-up**: Historical events are loaded into memory before streaming;
+///   for large event stores, this causes latency on subscription creation
+/// - **Broadcast buffer**: Live subscription events use a bounded channel (1024 events);
+///   slow consumers may miss events if the buffer overflows
+///
+/// # Subscription Behavior
+///
+/// Subscriptions created via [`EventSubscription::subscribe`] deliver:
+/// 1. **Historical events**: All matching events that exist at subscription creation time
+/// 2. **Live events**: New events appended after subscription creation (via broadcast channel)
+///
+/// Events are delivered in temporal order based on monotonic sequence numbers assigned
+/// at append time, ensuring consistent ordering across streams.
+///
+/// [`EventStore`]: crate::EventStore
+/// [`EventSubscription`]: crate::subscription::EventSubscription
+/// [`PostgresEventStore`]: https://docs.rs/eventcore-postgres
 pub struct InMemoryEventStore {
     streams: std::sync::Mutex<HashMap<StreamId, StreamData>>,
     next_sequence: std::sync::Mutex<u64>,

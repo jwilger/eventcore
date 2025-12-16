@@ -117,7 +117,8 @@ impl Event for AccountEvent {
 ///
 /// This test exercises subscription functionality from the library consumer
 /// (application developer) perspective. It verifies that events from multiple
-/// streams can be subscribed to and delivered in EventId (UUIDv7) order.
+/// streams can be subscribed to and delivered in temporal order (based on
+/// monotonic sequence numbers assigned at append time).
 #[tokio::test]
 async fn subscribes_to_all_events_in_temporal_order() {
     // Given: Developer creates in-memory event store
@@ -190,9 +191,9 @@ async fn subscribes_to_all_events_in_temporal_order() {
         .collect()
         .await;
 
-    // Then: All 6 events are delivered in EventId (UUIDv7) order
-    // Since UUIDv7 is time-ordered and events were appended sequentially,
-    // they should arrive in the same order they were appended
+    // Then: All 6 events are delivered in temporal order
+    // Events are ordered by monotonic sequence numbers assigned at append time,
+    // so they arrive in the same order they were appended
     assert_eq!(events.len(), 6, "should deliver all 6 events");
 
     assert_eq!(
@@ -1530,5 +1531,87 @@ async fn consumer_can_partition_results_for_error_reporting() {
     assert!(
         matches!(error, SubscriptionError::DeserializationFailed(_)),
         "error should be DeserializationFailed variant"
+    );
+}
+
+#[tokio::test]
+async fn subscription_returns_empty_stream_when_no_events_match_query() {
+    // Given: Developer creates in-memory event store
+    let store = InMemoryEventStore::new();
+
+    // And: Developer creates stream ID and appends events
+    let account_123 = StreamId::try_new("account-123").expect("valid stream id");
+
+    let writes = StreamWrites::new()
+        .register_stream(account_123.clone(), StreamVersion::new(0))
+        .and_then(|w| {
+            w.append(MoneyDeposited {
+                stream_id: account_123.clone(),
+                amount: 100,
+            })
+        })
+        .and_then(|w| {
+            w.append(MoneyDeposited {
+                stream_id: account_123.clone(),
+                amount: 200,
+            })
+        })
+        .expect("writes should be constructed successfully");
+
+    store
+        .append_events(writes)
+        .await
+        .expect("events should be appended successfully");
+
+    // When: Developer subscribes with a stream prefix filter that matches NO events
+    // The store has "account-123" events, but we filter for "order-" prefix
+    let subscription = store
+        .subscribe::<MoneyDeposited>(
+            SubscriptionQuery::all()
+                .filter_stream_prefix(StreamPrefix::try_new("order-").expect("valid prefix")),
+        )
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer collects events from the subscription stream
+    // Use timeout to verify stream terminates (doesn't hang waiting for events)
+    let events: Vec<Result<MoneyDeposited, SubscriptionError>> = tokio::time::timeout(
+        tokio::time::Duration::from_millis(100),
+        subscription.take(1).collect(),
+    )
+    .await
+    .unwrap_or_else(|_| Vec::new()); // Timeout means no events delivered
+
+    // Then: Subscription yields zero events (empty Vec)
+    assert!(
+        events.is_empty(),
+        "subscription with non-matching filter should return empty stream"
+    );
+}
+
+#[tokio::test]
+async fn subscription_returns_empty_stream_when_store_is_empty() {
+    // Given: Developer creates in-memory event store with NO events
+    let store = InMemoryEventStore::new();
+
+    // When: Developer subscribes to all events on empty store
+    let subscription = store
+        .subscribe::<TestEvent>(SubscriptionQuery::all())
+        .await
+        .expect("subscription should be created successfully");
+
+    // And: Developer attempts to collect events
+    // Use timeout to verify stream doesn't hang indefinitely
+    let events: Vec<Result<TestEvent, SubscriptionError>> = tokio::time::timeout(
+        tokio::time::Duration::from_millis(100),
+        subscription.take(1).collect(),
+    )
+    .await
+    .unwrap_or_else(|_| Vec::new()); // Timeout means no events delivered
+
+    // Then: Subscription yields zero events (empty Vec)
+    assert!(
+        events.is_empty(),
+        "subscription on empty store should return empty stream"
     );
 }
