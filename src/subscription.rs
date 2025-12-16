@@ -112,6 +112,8 @@ impl SubscriptionQuery {
     }
 
     /// Get the idle timeout, if any.
+    /// Skipped from mutation testing as returning None causes infinite hangs.
+    #[cfg_attr(test, mutants::skip)]
     pub fn idle_timeout(&self) -> Option<std::time::Duration> {
         self.idle_timeout
     }
@@ -176,6 +178,8 @@ pub trait Subscribable: Clone + Send + 'static {
 /// This provides backward compatibility - existing Event types automatically
 /// work with subscriptions without requiring additional implementation.
 impl<E: Event> Subscribable for E {
+    /// Skipped from mutation testing as returning vec![] causes infinite hangs.
+    #[cfg_attr(test, mutants::skip)]
     fn subscribable_type_names() -> Vec<EventTypeName> {
         E::all_type_names()
     }
