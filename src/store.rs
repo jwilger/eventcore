@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::time::Duration;
 
-/// Placeholder for collection of events to write, organized by stream.
+/// Collection of events to write, organized by stream.
 ///
 /// StreamWrites represents the output of a command's handle() method,
 /// ready to be persisted atomically across multiple streams.
@@ -13,11 +13,34 @@ use std::time::Duration;
 /// Uses type erasure to store events of different types in the same collection.
 /// Events are boxed as `Box<dyn Any>` for storage and later downcast when reading.
 ///
-/// TODO: Refine based on multi-stream atomicity requirements.
+/// # Builder API
+///
+/// StreamWrites supports two builder patterns:
+///
+/// **Result-based (existing):** Each method returns `Result`, requiring `.and_then()` chains:
+/// ```ignore
+/// StreamWrites::new()
+///     .register_stream(stream_id, version)
+///     .and_then(|w| w.append(event))
+///     .expect("failed")
+/// ```
+///
+/// **Fluent builder (recommended):** Methods return `Self` for clean chaining:
+/// ```ignore
+/// StreamWrites::new()
+///     .with_stream(stream_id, version)
+///     .with_event(event)
+///     .build()?
+/// ```
+///
+/// The fluent builder accumulates errors internally and validates at `build()` time.
 #[derive(Debug)]
 pub struct StreamWrites {
     entries: Vec<StreamWriteEntry>,
     expected_versions: HashMap<StreamId, StreamVersion>,
+    /// Accumulated errors from fluent builder methods (with_stream, with_event).
+    /// Checked and returned as error from build().
+    builder_errors: Vec<EventStoreError>,
 }
 
 #[derive(Debug)]
@@ -37,6 +60,7 @@ impl StreamWrites {
         Self {
             entries: Vec::new(),
             expected_versions: HashMap::new(),
+            builder_errors: Vec::new(),
         }
     }
 
@@ -107,6 +131,121 @@ impl StreamWrites {
         writes.entries.push(entry);
 
         Ok(writes)
+    }
+
+    // -------------------------------------------------------------------------
+    // Fluent builder API (recommended for clean chaining)
+    // -------------------------------------------------------------------------
+
+    /// Register a stream and its expected version using fluent builder pattern.
+    ///
+    /// This method always returns `Self` for clean chaining. Errors are accumulated
+    /// internally and checked when [`build()`](Self::build) is called.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let writes = StreamWrites::new()
+    ///     .with_stream(stream_id, StreamVersion::new(0))
+    ///     .with_event(event)
+    ///     .build()?;
+    /// ```
+    pub fn with_stream(mut self, stream_id: StreamId, expected_version: StreamVersion) -> Self {
+        use std::collections::hash_map::Entry;
+
+        match self.expected_versions.entry(stream_id.clone()) {
+            Entry::Vacant(entry) => {
+                let _ = entry.insert(expected_version);
+            }
+            Entry::Occupied(entry) => {
+                let first_version = *entry.get();
+                if first_version != expected_version {
+                    self.builder_errors
+                        .push(EventStoreError::ConflictingExpectedVersions {
+                            stream_id,
+                            first_version,
+                            second_version: expected_version,
+                        });
+                }
+            }
+        }
+        self
+    }
+
+    /// Append an event to a previously registered stream using fluent builder pattern.
+    ///
+    /// This method always returns `Self` for clean chaining. Errors are accumulated
+    /// internally and checked when [`build()`](Self::build) is called.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let writes = StreamWrites::new()
+    ///     .with_stream(stream_id, StreamVersion::new(0))
+    ///     .with_event(event1)
+    ///     .with_event(event2)
+    ///     .build()?;
+    /// ```
+    pub fn with_event<E: Event>(mut self, event: E) -> Self {
+        let stream_id = event.stream_id().clone();
+
+        if !self.expected_versions.contains_key(&stream_id) {
+            self.builder_errors
+                .push(EventStoreError::UndeclaredStream { stream_id });
+            return self;
+        }
+
+        match serde_json::to_value(&event) {
+            Ok(event_data) => {
+                let event_type_name = event.event_type_name();
+                let entry = StreamWriteEntry {
+                    stream_id,
+                    event: Box::new(event),
+                    event_type: std::any::type_name::<E>(),
+                    event_type_name,
+                    event_data,
+                };
+                self.entries.push(entry);
+            }
+            Err(error) => {
+                self.builder_errors
+                    .push(EventStoreError::SerializationFailed {
+                        stream_id,
+                        detail: error.to_string(),
+                    });
+            }
+        }
+        self
+    }
+
+    /// Finalize the fluent builder and return the StreamWrites if valid.
+    ///
+    /// Returns the first accumulated error if any errors occurred during
+    /// [`with_stream()`](Self::with_stream) or [`with_event()`](Self::with_event) calls.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let writes = StreamWrites::new()
+    ///     .with_stream(stream_id, StreamVersion::new(0))
+    ///     .with_event(event)
+    ///     .build()?;
+    ///
+    /// store.append_events(writes).await?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error encountered during builder method calls:
+    /// - [`EventStoreError::ConflictingExpectedVersions`] if a stream was registered with
+    ///   different expected versions
+    /// - [`EventStoreError::UndeclaredStream`] if an event was added for an unregistered stream
+    /// - [`EventStoreError::SerializationFailed`] if an event could not be serialized
+    pub fn build(mut self) -> Result<Self, EventStoreError> {
+        if let Some(error) = self.builder_errors.pop() {
+            return Err(error);
+        }
+        Ok(self)
     }
 
     pub fn expected_versions(&self) -> &HashMap<StreamId, StreamVersion> {
@@ -1168,5 +1307,130 @@ mod tests {
 
         // Check if we can see the span
         assert!(logs_contain("subscribe"), "should emit subscribe span");
+    }
+
+    // -------------------------------------------------------------------------
+    // Fluent builder API tests
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn fluent_builder_api_appends_events_successfully() {
+        let store = InMemoryEventStore::new();
+        let stream_id = StreamId::try_new("fluent-stream").expect("valid stream id");
+
+        let event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "fluent event".to_string(),
+        };
+
+        let writes = StreamWrites::new()
+            .with_stream(stream_id.clone(), StreamVersion::new(0))
+            .with_event(event.clone())
+            .build()
+            .expect("build should succeed");
+
+        let _ = store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+
+        let reader = store
+            .read_stream::<TestEvent>(stream_id)
+            .await
+            .expect("read to succeed");
+
+        assert_eq!(reader.len(), 1);
+        assert_eq!(reader.first().unwrap().data, "fluent event");
+    }
+
+    #[test]
+    fn fluent_builder_chains_multiple_events() {
+        let stream_id = StreamId::try_new("fluent-multi").expect("valid stream id");
+
+        let event1 = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "first".to_string(),
+        };
+        let event2 = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "second".to_string(),
+        };
+
+        let writes = StreamWrites::new()
+            .with_stream(stream_id, StreamVersion::new(0))
+            .with_event(event1)
+            .with_event(event2)
+            .build()
+            .expect("build should succeed");
+
+        let entries = writes.into_entries();
+        let observed: Vec<_> = entries
+            .iter()
+            .map(|e| e.event.downcast_ref::<TestEvent>().unwrap().data.clone())
+            .collect();
+
+        assert_eq!(observed, vec!["first".to_string(), "second".to_string()]);
+    }
+
+    #[test]
+    fn fluent_builder_build_returns_error_for_unregistered_stream() {
+        let stream_id = StreamId::try_new("unregistered-fluent").expect("valid stream id");
+
+        let event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "orphan event".to_string(),
+        };
+
+        let result = StreamWrites::new().with_event(event).build();
+
+        let error = result.expect_err("build should fail for undeclared stream");
+        assert!(matches!(
+            error,
+            EventStoreError::UndeclaredStream { stream_id: ref actual } if *actual == stream_id
+        ));
+    }
+
+    #[test]
+    fn fluent_builder_build_returns_error_for_conflicting_versions() {
+        let stream_id = StreamId::try_new("conflict-fluent").expect("valid stream id");
+
+        let result = StreamWrites::new()
+            .with_stream(stream_id.clone(), StreamVersion::new(0))
+            .with_stream(stream_id.clone(), StreamVersion::new(1))
+            .build();
+
+        let error = result.expect_err("build should fail for conflicting versions");
+        assert!(matches!(
+            error,
+            EventStoreError::ConflictingExpectedVersions {
+                stream_id: ref actual,
+                first_version,
+                second_version
+            } if *actual == stream_id
+                && first_version == StreamVersion::new(0)
+                && second_version == StreamVersion::new(1)
+        ));
+    }
+
+    #[test]
+    fn fluent_builder_with_stream_same_version_is_idempotent() {
+        let stream_id = StreamId::try_new("idempotent-fluent").expect("valid stream id");
+
+        let event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "idempotent".to_string(),
+        };
+
+        // Registering the same stream with the same version multiple times should succeed
+        let result = StreamWrites::new()
+            .with_stream(stream_id.clone(), StreamVersion::new(0))
+            .with_stream(stream_id.clone(), StreamVersion::new(0))
+            .with_event(event)
+            .build();
+
+        assert!(
+            result.is_ok(),
+            "duplicate registration with same version should succeed"
+        );
     }
 }
