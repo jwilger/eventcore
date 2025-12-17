@@ -383,7 +383,14 @@ fn process_subscription_row<E: Subscribable>(
     // Convert string to EventTypeName
     let stored_event_type_name = match EventTypeName::try_from(stored_type_name.as_str()) {
         Ok(name) => name,
-        Err(_) => return SubscriptionRowResult::Skip(global_sequence),
+        Err(_) => {
+            tracing::warn!(
+                event_type = %stored_type_name,
+                global_sequence = global_sequence,
+                "skipping event with invalid EventTypeName"
+            );
+            return SubscriptionRowResult::Skip(global_sequence);
+        }
     };
 
     // Check if event type is subscribable
@@ -535,8 +542,12 @@ impl EventSubscription for PostgresEventStore {
                         last_delivered_seq = broadcast_event.sequence;
                         yield E::try_from_stored(&broadcast_event.event_type_name, &broadcast_event.event_data);
                     }
-                    Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                    Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped))) => {
                         // Subscriber fell behind - continue receiving
+                        tracing::warn!(
+                            skipped_events = skipped,
+                            "broadcast receiver lagged behind, events may be lost"
+                        );
                         continue;
                     }
                     Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {

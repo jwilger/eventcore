@@ -960,8 +960,12 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
                         // Deserialize and yield the event (or error)
                         yield E::try_from_stored(&broadcast_event.event_type_name, &broadcast_event.event_data);
                     }
-                    Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                    Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped))) => {
                         // Subscriber fell behind - continue receiving (at-least-once semantics)
+                        tracing::warn!(
+                            skipped_events = skipped,
+                            "broadcast receiver lagged behind, events may be lost"
+                        );
                         continue;
                     }
                     Some(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
