@@ -100,7 +100,7 @@ impl SubscriptionQuery {
     }
 
     /// Get the event type name filter, if any.
-    pub fn event_type_name_filter(&self) -> Option<&EventTypeName> {
+    pub fn event_type_name(&self) -> Option<&EventTypeName> {
         self.event_type_name.as_ref()
     }
 

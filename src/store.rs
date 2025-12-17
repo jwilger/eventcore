@@ -829,7 +829,7 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
         skip(self),
         fields(
             stream_prefix = query.stream_prefix().map(|p| p.as_ref()).unwrap_or(""),
-            event_type_filter = query.event_type_name_filter().map(|n| n.as_ref()).unwrap_or("")
+            event_type_filter = query.event_type_name().map(|n| n.as_ref()).unwrap_or("")
         )
     )]
     async fn subscribe<E: crate::subscription::Subscribable>(
@@ -877,7 +877,7 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
                 }
 
                 // Filter by event type name if specified in query
-                if should_skip_event_type_filter(stored_type_name, query.event_type_name_filter()) {
+                if should_skip_event_type_filter(stored_type_name, query.event_type_name()) {
                     continue;
                 }
 
@@ -936,7 +936,7 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
                         }
 
                         // Apply event type name filter
-                        if should_skip_event_type_filter(&broadcast_event.event_type_name, query_clone.event_type_name_filter()) {
+                        if should_skip_event_type_filter(&broadcast_event.event_type_name, query_clone.event_type_name()) {
                             continue;
                         }
 

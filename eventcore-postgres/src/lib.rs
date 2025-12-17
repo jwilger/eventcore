@@ -405,7 +405,7 @@ impl EventSubscription for PostgresEventStore {
             match process_subscription_row::<E>(
                 &row,
                 &subscribable_type_names,
-                query.event_type_name_filter(),
+                query.event_type_name(),
             ) {
                 SubscriptionRowResult::Success(event, seq) => {
                     all_events.push((Ok(event), seq));
@@ -479,7 +479,7 @@ impl EventSubscription for PostgresEventStore {
                         }
 
                         // Apply event type name filter
-                        if should_skip_event_type_filter(&broadcast_event.event_type_name, query_clone.event_type_name_filter()) {
+                        if should_skip_event_type_filter(&broadcast_event.event_type_name, query_clone.event_type_name()) {
                             continue;
                         }
 
@@ -528,7 +528,7 @@ impl EventSubscription for PostgresEventStore {
                                 }
 
                                 for row in rows {
-                                    match process_subscription_row::<E>(&row, &subscribable_type_names_clone, query_clone.event_type_name_filter()) {
+                                    match process_subscription_row::<E>(&row, &subscribable_type_names_clone, query_clone.event_type_name()) {
                                         SubscriptionRowResult::Success(event, seq) => {
                                             last_delivered_seq = seq;
                                             yield Ok(event);
