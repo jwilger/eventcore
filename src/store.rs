@@ -708,8 +708,18 @@ impl EventStore for InMemoryEventStore {
 }
 
 // --------------------------------------------------------------------------------------
-// Mutation-testing helpers
-// These small functions isolate timeout logic that would cause test hangs when mutated.
+// Mutation-testing helpers (mutants::skip)
+//
+// These small functions isolate logic that causes test hangs or panics when mutated.
+// Mutation testing tools (cargo-mutants) try operations like:
+// - Flipping boolean conditions (== to !=, true to false)
+// - Replacing arithmetic operators (+1 to -1, etc.)
+// - Replacing return values with defaults
+//
+// When these mutations apply to timeout logic, filter conditions, or sequence math,
+// the resulting code either hangs indefinitely (timeout never fires, filters never match)
+// or panics (arithmetic overflow). By isolating this logic into small, skipped functions,
+// we prevent false mutation test failures while keeping the core subscription logic testable.
 // --------------------------------------------------------------------------------------
 
 /// Receive from broadcast channel with optional timeout.
@@ -739,7 +749,42 @@ fn increment_and_get_sequence(next_seq: &mut u64) -> u64 {
 }
 
 /// Calculate the maximum sequence number for catchup deduplication.
-/// Skipped from mutation testing as arithmetic mutations cause hangs or panics.
+///
+/// # Purpose
+///
+/// Prevents duplicate event delivery during the catch-up to live transition in subscriptions.
+/// When a subscription starts, it must read historical events AND receive live events from
+/// the broadcast channel. Without deduplication, events appended during the historical read
+/// could be delivered twice (once from storage, once from broadcast).
+///
+/// # Strategy
+///
+/// The `subscribe()` method uses this function as follows:
+/// 1. Subscribe to the broadcast channel FIRST (before reading historical events)
+/// 2. Capture `catchup_max_seq` = highest sequence number currently in the store
+/// 3. Read historical events from storage
+/// 4. When processing live events from broadcast, skip any with `sequence <= catchup_max_seq`
+///
+/// This ordering is critical: subscribing to broadcast BEFORE reading historical ensures
+/// no events are lost. Any event appended after we subscribe will appear on the broadcast
+/// channel. Events appended before we captured `catchup_max_seq` are in the historical read.
+/// Events in the overlap (appended after subscribe but before historical read completes)
+/// are deduplicated by the sequence check.
+///
+/// # Edge Case: Empty Store
+///
+/// When `next_seq == 0`, the store contains no events yet. Returning 0 here means:
+/// - Historical read finds nothing (correct)
+/// - Live events with sequence 0 pass the `> catchup_max_seq` check (correct - first event)
+///
+/// If we returned `-1` (or underflowed), the first event (sequence 0) would be incorrectly
+/// skipped when it arrives via broadcast.
+///
+/// # Mutation Testing
+///
+/// Skipped from mutation testing because:
+/// - Mutating `== 0` to `!= 0` causes arithmetic overflow panic when `next_seq == 0`
+/// - Mutating `- 1` to `+ 1` or `* 1` breaks deduplication boundary, causing duplicates or gaps
 #[cfg_attr(test, mutants::skip)]
 fn calculate_catchup_max_seq(next_seq: u64) -> u64 {
     if next_seq == 0 { 0 } else { next_seq - 1 }
