@@ -4,6 +4,21 @@
 
 accepted
 
+## Implementation Status
+
+**Implemented:**
+- `EventSubscription` trait with `subscribe()` method returning `Stream<Item = Result<E, SubscriptionError>>`
+- `Subscribable` trait for subscription type filtering (ADR-020)
+- `SubscriptionQuery` with `filter_stream_prefix()` and `filter_event_type_name()` filters
+- `InMemoryEventStore` and `PostgresEventStore` implementations
+- Push-based `futures::Stream` delivery
+
+**Not Yet Implemented:**
+- `SubscriptionCoordinator` trait (see eventcore-018)
+- `ActiveSubscription` with checkpoint management
+- Consumer group coordination and rebalancing
+- Glob pattern matching for stream prefixes (see eventcore-ihm)
+
 ## Context
 
 EventCore deferred subscription design in ADR-002, establishing only the EventStore trait for atomic read/append operations. Now, as library users begin building read models and projections, the absence of subscription capabilities blocks the read side of CQRS.

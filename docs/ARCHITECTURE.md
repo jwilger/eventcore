@@ -135,9 +135,11 @@ Projections query events using `SubscriptionQuery`, a composable filter chain:
 
 ```rust
 // Type-safe filter composition (not magic strings)
+let prefix = StreamPrefix::new("account-").unwrap();
+let type_name = EventTypeName::new("MoneyDeposited").unwrap();
 let query = SubscriptionQuery::all()
-    .filter_stream_prefix("account-")  // Literal prefix filtering
-    .filter_event_type::<MoneyDeposited>();
+    .filter_stream_prefix(prefix)       // Literal prefix filtering
+    .filter_event_type_name(type_name); // Event type name filtering
 ```
 
 The composable API provides:
@@ -183,6 +185,8 @@ Backends implement push delivery through spawned tasks and internal buffers, kee
 
 ### Distributed Coordination
 
+> **Status: Planned** – The `SubscriptionCoordinator` trait is designed but not yet implemented. See [eventcore-018](https://github.com/jwilger/eventcore/issues/eventcore-018) for tracking. Single-process subscriptions via `EventSubscription` are available now.
+
 The `SubscriptionCoordinator` trait provides production-ready horizontal scaling:
 
 **Control Plane (Coordination):**
@@ -222,6 +226,8 @@ Subscriptions guarantee **at-least-once delivery**:
 This delivery semantic reflects production reality—exactly-once would require distributed transactions that conflict with event sourcing's append-only model. Applications design projections to handle duplicates gracefully.
 
 ### Projector Trait for Read Model Construction
+
+> **Status: Planned** – This trait is designed but not yet implemented. See [eventcore-4tk](https://github.com/jwilger/eventcore/issues/eventcore-4tk) for tracking. The raw `Stream` API is available now for building projections.
 
 Building read model projections from event streams is a common, critical operation. Developers need a clear place to put projection logic, handle errors, and hook into lifecycle events. The `Projector` trait encapsulates these concerns in a single cohesive abstraction:
 
@@ -321,6 +327,8 @@ The low-level `Stream<Item = Result<E, SubscriptionError>>` remains available fo
 Providing both levels (trait-based and raw stream) serves different needs without forcing one pattern.
 
 ### Checkpoint Management
+
+> **Status: Planned** – Checkpoint management is part of the distributed subscription coordination feature. See [eventcore-018](https://github.com/jwilger/eventcore/issues/eventcore-018) for tracking. Single-process subscriptions are available now without checkpointing.
 
 Consumers control **when** to checkpoint; coordinators control **where** and **how**:
 
@@ -491,7 +499,7 @@ If Phase 5 returns a concurrency error:
 
 ## Reference Implementations & Tooling
 
-- **InMemoryEventStore** is included in `eventcore` and used across documentation, examples, and internal tests. It supports optional chaos hooks (e.g., `ConflictOnceStore`, `CountingEventStore`) for scenario-driven testing. It does not implement `EventSubscription` (single-process memory cannot support durable subscriptions).
+- **InMemoryEventStore** is included in `eventcore` and used across documentation, examples, and internal tests. It supports optional chaos hooks (e.g., `ConflictOnceStore`, `CountingEventStore`) for scenario-driven testing. It implements `EventSubscription` for development and testing purposes, though subscriptions are non-persistent, single-process only, and terminate after a configurable idle timeout (for use with `fold()` operations).
 - **External Backends** (e.g., `eventcore-postgres`) implement the same traits, run the contract test suite, and may offer additional observability or operational features. Production backends typically implement both `EventStore` and `EventSubscription` with full coordination support.
 - **Testing Utilities** – The `eventcore-testing` crate exposes helpers for property-based testing, contract verification, and integration scenarios so downstream users can exercise real command flows without managing infrastructure.
 

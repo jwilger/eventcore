@@ -35,15 +35,18 @@ pub struct StreamPrefix(String);
 /// # Examples
 ///
 /// ```rust,ignore
-/// use eventcore::SubscriptionQuery;
+/// use eventcore::{SubscriptionQuery, StreamPrefix, EventTypeName};
 ///
 /// // Subscribe to all events
 /// let query = SubscriptionQuery::all();
 ///
-/// // Composable filters (future)
-/// let query = SubscriptionQuery::all()
-///     .filter_stream_prefix("account-")
-///     .filter_event_type::<MoneyDeposited>();
+/// // Filter by stream prefix
+/// let prefix = StreamPrefix::new("account-").unwrap();
+/// let query = SubscriptionQuery::all().filter_stream_prefix(prefix);
+///
+/// // Filter by event type name
+/// let type_name = EventTypeName::new("MoneyDeposited").unwrap();
+/// let query = SubscriptionQuery::all().filter_event_type_name(type_name);
 /// ```
 #[derive(Debug, Clone)]
 pub struct SubscriptionQuery {

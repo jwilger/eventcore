@@ -4,6 +4,17 @@
 
 accepted
 
+## Implementation Status
+
+**Not Yet Implemented** – The `Projector` trait described in this ADR is designed but not yet implemented. See eventcore-4tk for tracking.
+
+**Currently Available:**
+- Raw `Stream<Item = Result<E, SubscriptionError>>` API for building projections
+- Manual error handling via `StreamExt` combinators (`.filter_map()`, `.take_while()`)
+- `Subscribable` trait for view enum support
+
+The trait-based `Projector` pattern will be implemented in a future release as described below.
+
 ## Context
 
 ADR-018 established a middleware-based approach to subscription error handling: applications would wrap `Stream<Item = Result<E, SubscriptionError>>` with adapters like `SkipErrors` and `RetryWithBackoff`. While this approach offers maximum flexibility and composability, practical analysis reveals significant ergonomic and safety concerns.
