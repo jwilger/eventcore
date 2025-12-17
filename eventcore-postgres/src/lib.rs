@@ -248,6 +248,56 @@ fn subscription_timeout_duration(idle_timeout: Option<Duration>) -> Duration {
     idle_timeout.unwrap_or(Duration::from_millis(50))
 }
 
+/// Query mode for subscription SQL generation.
+#[derive(Debug, Clone, Copy)]
+enum SubscriptionQueryMode {
+    /// Catchup mode: fetch historical events (global_sequence <= boundary)
+    Catchup,
+    /// Polling mode: fetch new events (global_sequence > boundary) with LIMIT
+    Polling,
+}
+
+/// Build subscription query SQL based on mode and prefix filter.
+///
+/// Returns the appropriate SQL string for querying eventcore_events.
+/// Parameter binding differs based on has_prefix:
+/// - With prefix: $1 = prefix, $2 = sequence boundary
+/// - Without prefix: $1 = sequence boundary
+///
+/// Skipped from mutation testing as SQL string mutations don't affect behavior
+/// (would cause runtime errors caught by integration tests).
+#[cfg_attr(test, mutants::skip)]
+fn build_subscription_query_sql(mode: SubscriptionQueryMode, has_prefix: bool) -> &'static str {
+    match (mode, has_prefix) {
+        (SubscriptionQueryMode::Catchup, true) => {
+            "SELECT stream_id, event_type, event_data, global_sequence
+             FROM eventcore_events
+             WHERE stream_id LIKE $1 || '%' AND global_sequence <= $2
+             ORDER BY global_sequence ASC"
+        }
+        (SubscriptionQueryMode::Catchup, false) => {
+            "SELECT stream_id, event_type, event_data, global_sequence
+             FROM eventcore_events
+             WHERE global_sequence <= $1
+             ORDER BY global_sequence ASC"
+        }
+        (SubscriptionQueryMode::Polling, true) => {
+            "SELECT stream_id, event_type, event_data, global_sequence
+             FROM eventcore_events
+             WHERE stream_id LIKE $1 || '%' AND global_sequence > $2
+             ORDER BY global_sequence ASC
+             LIMIT 100"
+        }
+        (SubscriptionQueryMode::Polling, false) => {
+            "SELECT stream_id, event_type, event_data, global_sequence
+             FROM eventcore_events
+             WHERE global_sequence > $1
+             ORDER BY global_sequence ASC
+             LIMIT 100"
+        }
+    }
+}
+
 /// Determine if subscription should terminate after empty poll.
 /// Skipped from mutation testing as timeout mutations cause test hangs.
 #[cfg_attr(test, mutants::skip)]
@@ -376,29 +426,21 @@ impl EventSubscription for PostgresEventStore {
 
         // Build query based on filters
         // Bound by catchup_max_seq to prevent race condition with concurrent appends
+        let has_prefix = query.stream_prefix().is_some();
+        let sql = build_subscription_query_sql(SubscriptionQueryMode::Catchup, has_prefix);
         let rows = if let Some(prefix) = query.stream_prefix() {
-            sqlx::query(
-                "SELECT stream_id, event_type, event_data, global_sequence
-                 FROM eventcore_events
-                 WHERE stream_id LIKE $1 || '%' AND global_sequence <= $2
-                 ORDER BY global_sequence ASC",
-            )
-            .bind(prefix.as_ref())
-            .bind(catchup_max_seq)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| SubscriptionError::Generic(e.to_string()))?
+            sqlx::query(sql)
+                .bind(prefix.as_ref())
+                .bind(catchup_max_seq)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| SubscriptionError::Generic(e.to_string()))?
         } else {
-            sqlx::query(
-                "SELECT stream_id, event_type, event_data, global_sequence
-                 FROM eventcore_events
-                 WHERE global_sequence <= $1
-                 ORDER BY global_sequence ASC",
-            )
-            .bind(catchup_max_seq)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| SubscriptionError::Generic(e.to_string()))?
+            sqlx::query(sql)
+                .bind(catchup_max_seq)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| SubscriptionError::Generic(e.to_string()))?
         };
 
         for row in rows {
@@ -496,29 +538,19 @@ impl EventSubscription for PostgresEventStore {
                     }
                     Err(_timeout) => {
                         // No broadcast event within timeout - poll database for cross-instance events
+                        let poll_has_prefix = query_clone.stream_prefix().is_some();
+                        let poll_sql = build_subscription_query_sql(SubscriptionQueryMode::Polling, poll_has_prefix);
                         let poll_result = if let Some(prefix) = query_clone.stream_prefix() {
-                            sqlx::query(
-                                "SELECT stream_id, event_type, event_data, global_sequence
-                                 FROM eventcore_events
-                                 WHERE stream_id LIKE $1 || '%' AND global_sequence > $2
-                                 ORDER BY global_sequence ASC
-                                 LIMIT 100",
-                            )
-                            .bind(prefix.as_ref())
-                            .bind(last_delivered_seq)
-                            .fetch_all(&pool_clone)
-                            .await
+                            sqlx::query(poll_sql)
+                                .bind(prefix.as_ref())
+                                .bind(last_delivered_seq)
+                                .fetch_all(&pool_clone)
+                                .await
                         } else {
-                            sqlx::query(
-                                "SELECT stream_id, event_type, event_data, global_sequence
-                                 FROM eventcore_events
-                                 WHERE global_sequence > $1
-                                 ORDER BY global_sequence ASC
-                                 LIMIT 100",
-                            )
-                            .bind(last_delivered_seq)
-                            .fetch_all(&pool_clone)
-                            .await
+                            sqlx::query(poll_sql)
+                                .bind(last_delivered_seq)
+                                .fetch_all(&pool_clone)
+                                .await
                         };
 
                         match poll_result {
