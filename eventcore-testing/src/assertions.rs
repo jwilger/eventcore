@@ -6,6 +6,10 @@ pub enum CollectionError {
     /// Timeout expired before collecting the expected number of events.
     #[error("timeout waiting for {expected} events, received {received}")]
     Timeout { expected: usize, received: usize },
+
+    /// A subscription error occurred during collection.
+    #[error("subscription error during collection: {0}")]
+    SubscriptionError(#[from] eventcore::SubscriptionError),
 }
 
 /// Collect events from a subscription stream with a timeout.
@@ -19,16 +23,22 @@ pub async fn collect_subscription_events<E>(
 where
     E: Send + 'static,
 {
-    let collect_future = subscription
-        .take(count)
-        .map(|result| result.expect("subscription error during collection"))
-        .collect::<Vec<E>>();
+    let mut events = Vec::with_capacity(count);
+    let mut stream = subscription.take(count);
+
+    let collect_future = async {
+        while let Some(result) = stream.next().await {
+            events.push(result?);
+        }
+        Ok::<_, CollectionError>(())
+    };
 
     match tokio::time::timeout(timeout, collect_future).await {
-        Ok(events) => Ok(events),
+        Ok(Ok(())) => Ok(events),
+        Ok(Err(e)) => Err(e),
         Err(_) => Err(CollectionError::Timeout {
             expected: count,
-            received: 0,
+            received: events.len(),
         }),
     }
 }
@@ -42,23 +52,24 @@ pub async fn partition_subscription_results<E>(
 where
     E: Send + 'static,
 {
-    let collect_future = subscription.take(count).collect::<Vec<_>>();
+    let mut events = Vec::new();
+    let mut errors = Vec::new();
+    let mut stream = subscription.take(count);
+
+    let collect_future = async {
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(event) => events.push(event),
+                Err(err) => errors.push(err),
+            }
+        }
+    };
 
     match tokio::time::timeout(timeout, collect_future).await {
-        Ok(results) => {
-            let mut events = Vec::new();
-            let mut errors = Vec::new();
-            for result in results {
-                match result {
-                    Ok(event) => events.push(event),
-                    Err(err) => errors.push(err),
-                }
-            }
-            Ok((events, errors))
-        }
+        Ok(()) => Ok((events, errors)),
         Err(_) => Err(CollectionError::Timeout {
             expected: count,
-            received: 0,
+            received: events.len() + errors.len(),
         }),
     }
 }
