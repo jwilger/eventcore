@@ -698,9 +698,16 @@ impl EventStore for InMemoryEventStore {
             broadcast_events = events_to_broadcast;
         } // Release locks before broadcasting
 
-        // Broadcast events to live subscribers (ignore send errors - no receivers is OK)
+        // Broadcast events to live subscribers
+        // Send errors are normal when no receivers exist, but we log them at debug level
+        // for observability in case of unexpected channel issues
         for event in broadcast_events {
-            let _ = self.broadcast_tx.send(event);
+            if let Err(e) = self.broadcast_tx.send(event) {
+                tracing::debug!(
+                    error = %e,
+                    "broadcast send failed (likely no active subscribers)"
+                );
+            }
         }
 
         Ok(EventStreamSlice)

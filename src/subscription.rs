@@ -22,7 +22,7 @@ pub type SubscriptionStream<E> = Pin<Box<dyn Stream<Item = Result<E, Subscriptio
 #[nutype(
     sanitize(trim),
     validate(not_empty, len_char_max = 255, predicate = no_glob_metacharacters),
-    derive(Debug, Clone, AsRef)
+    derive(Debug, Clone, AsRef, PartialEq, Eq, Display)
 )]
 pub struct StreamPrefix(String);
 
@@ -148,6 +148,46 @@ pub enum SubscriptionError {
 /// View enums (e.g., AccountEventView wrapping MoneyDeposited and MoneyWithdrawn)
 /// can implement this trait to enable subscription to multiple disjoint event types
 /// as a single subscription stream.
+///
+/// # Example: View Enum Implementation
+///
+/// ```rust,ignore
+/// use eventcore::{Subscribable, SubscriptionError, EventTypeName};
+///
+/// // View enum aggregating multiple event types
+/// #[derive(Clone, Debug)]
+/// enum AccountEventView {
+///     Deposited(MoneyDeposited),
+///     Withdrawn(MoneyWithdrawn),
+/// }
+///
+/// impl Subscribable for AccountEventView {
+///     fn subscribable_type_names() -> Vec<EventTypeName> {
+///         vec![
+///             EventTypeName::new("MoneyDeposited").unwrap(),
+///             EventTypeName::new("MoneyWithdrawn").unwrap(),
+///         ]
+///     }
+///
+///     fn try_from_stored(
+///         type_name: &EventTypeName,
+///         data: &[u8],
+///     ) -> Result<Self, SubscriptionError> {
+///         match type_name.as_ref() {
+///             "MoneyDeposited" => serde_json::from_slice(data)
+///                 .map(AccountEventView::Deposited)
+///                 .map_err(|e| SubscriptionError::DeserializationFailed(e.to_string())),
+///             "MoneyWithdrawn" => serde_json::from_slice(data)
+///                 .map(AccountEventView::Withdrawn)
+///                 .map_err(|e| SubscriptionError::DeserializationFailed(e.to_string())),
+///             _ => Err(SubscriptionError::UnknownEventType(type_name.clone())),
+///         }
+///     }
+/// }
+///
+/// // Usage: subscribe to view type
+/// let subscription = store.subscribe::<AccountEventView>(query).await?;
+/// ```
 pub trait Subscribable: Clone + Send + 'static {
     /// Returns the set of event type names this subscribable type can deserialize.
     ///
