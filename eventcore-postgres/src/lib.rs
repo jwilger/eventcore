@@ -288,6 +288,70 @@ fn should_skip_event_type_filter(
     }
 }
 
+/// Result of processing a subscription row from the database.
+///
+/// This enum captures all possible outcomes when processing a row from the
+/// eventcore_events table for subscription delivery. Callers decide how to
+/// handle each variant (e.g., collect into Vec vs yield directly).
+enum SubscriptionRowResult<E: Subscribable> {
+    /// Event was successfully deserialized
+    Success(E, i64),
+    /// Event deserialization failed (yields error to subscriber)
+    DeserializationError(SubscriptionError, i64),
+    /// Event should be skipped (filtered out or invalid type name)
+    Skip(i64),
+    /// Serialization of event_data to bytes failed
+    SerializationError(String, i64),
+}
+
+/// Process a database row into a subscription event result.
+///
+/// Extracts event data from the row, validates the type name, applies filters,
+/// and attempts deserialization. Returns a SubscriptionRowResult indicating
+/// the outcome.
+///
+/// This helper is used in both historical event collection and database polling
+/// to eliminate duplication of the row-to-event conversion logic.
+fn process_subscription_row<E: Subscribable>(
+    row: &sqlx::postgres::PgRow,
+    subscribable_type_names: &[EventTypeName],
+    event_type_filter: Option<&EventTypeName>,
+) -> SubscriptionRowResult<E> {
+    use sqlx::Row;
+
+    let stored_type_name: String = row.get("event_type");
+    let event_data: serde_json::Value = row.get("event_data");
+    let global_sequence: i64 = row.get("global_sequence");
+
+    // Convert string to EventTypeName
+    let stored_event_type_name = match EventTypeName::try_from(stored_type_name.as_str()) {
+        Ok(name) => name,
+        Err(_) => return SubscriptionRowResult::Skip(global_sequence),
+    };
+
+    // Check if event type is subscribable
+    if should_skip_event_type(&stored_event_type_name, subscribable_type_names) {
+        return SubscriptionRowResult::Skip(global_sequence);
+    }
+
+    // Check event type name filter
+    if should_skip_event_type_filter(&stored_event_type_name, event_type_filter) {
+        return SubscriptionRowResult::Skip(global_sequence);
+    }
+
+    // Serialize event_data to bytes for deserialization
+    let event_bytes = match serde_json::to_vec(&event_data) {
+        Ok(bytes) => bytes,
+        Err(e) => return SubscriptionRowResult::SerializationError(e.to_string(), global_sequence),
+    };
+
+    // Deserialize the event
+    match E::try_from_stored(&stored_event_type_name, &event_bytes) {
+        Ok(event) => SubscriptionRowResult::Success(event, global_sequence),
+        Err(e) => SubscriptionRowResult::DeserializationError(e, global_sequence),
+    }
+}
+
 impl EventSubscription for PostgresEventStore {
     async fn subscribe<E: Subscribable>(
         &self,
@@ -338,37 +402,21 @@ impl EventSubscription for PostgresEventStore {
         };
 
         for row in rows {
-            let stored_type_name: String = row.get("event_type");
-            let event_data: Value = row.get("event_data");
-            let global_sequence: i64 = row.get("global_sequence");
-
-            // Convert string to EventTypeName for comparison
-            let stored_event_type_name = match EventTypeName::try_from(stored_type_name.as_str()) {
-                Ok(name) => name,
-                Err(_) => continue, // Skip events with invalid type names
-            };
-
-            // Check if the stored event type name matches any of the subscribable type names
-            if should_skip_event_type(&stored_event_type_name, &subscribable_type_names) {
-                continue;
-            }
-
-            // Filter by event type name if specified in query
-            if should_skip_event_type_filter(
-                &stored_event_type_name,
+            match process_subscription_row::<E>(
+                &row,
+                &subscribable_type_names,
                 query.event_type_name_filter(),
             ) {
-                continue;
-            }
-
-            // Serialize event_data to bytes for deserialization
-            let event_bytes = serde_json::to_vec(&event_data)
-                .map_err(|e| SubscriptionError::DeserializationFailed(e.to_string()))?;
-
-            // Use try_from_stored to deserialize the event
-            match E::try_from_stored(&stored_event_type_name, &event_bytes) {
-                Ok(event) => all_events.push((Ok(event), global_sequence)),
-                Err(e) => all_events.push((Err(e), global_sequence)),
+                SubscriptionRowResult::Success(event, seq) => {
+                    all_events.push((Ok(event), seq));
+                }
+                SubscriptionRowResult::DeserializationError(e, seq) => {
+                    all_events.push((Err(e), seq));
+                }
+                SubscriptionRowResult::Skip(_) => continue,
+                SubscriptionRowResult::SerializationError(e, _) => {
+                    return Err(SubscriptionError::DeserializationFailed(e));
+                }
             }
         }
 
@@ -480,40 +528,24 @@ impl EventSubscription for PostgresEventStore {
                                 }
 
                                 for row in rows {
-                                    let stored_type_name: String = row.get("event_type");
-                                    let event_data: Value = row.get("event_data");
-                                    let global_sequence: i64 = row.get("global_sequence");
-
-                                    // Convert string to EventTypeName for comparison
-                                    let stored_event_type_name = match EventTypeName::try_from(stored_type_name.as_str()) {
-                                        Ok(name) => name,
-                                        Err(_) => continue, // Skip events with invalid type names
-                                    };
-
-                                    // Check if event type is in subscribable types
-                                    if should_skip_event_type(&stored_event_type_name, &subscribable_type_names_clone) {
-                                        last_delivered_seq = global_sequence;
-                                        continue;
-                                    }
-
-                                    // Apply event type name filter
-                                    if should_skip_event_type_filter(&stored_event_type_name, query_clone.event_type_name_filter()) {
-                                        last_delivered_seq = global_sequence;
-                                        continue;
-                                    }
-
-                                    // Serialize event_data to bytes for deserialization
-                                    let event_bytes = match serde_json::to_vec(&event_data) {
-                                        Ok(bytes) => bytes,
-                                        Err(e) => {
-                                            yield Err(SubscriptionError::DeserializationFailed(e.to_string()));
-                                            last_delivered_seq = global_sequence;
+                                    match process_subscription_row::<E>(&row, &subscribable_type_names_clone, query_clone.event_type_name_filter()) {
+                                        SubscriptionRowResult::Success(event, seq) => {
+                                            last_delivered_seq = seq;
+                                            yield Ok(event);
+                                        }
+                                        SubscriptionRowResult::DeserializationError(e, seq) => {
+                                            last_delivered_seq = seq;
+                                            yield Err(e);
+                                        }
+                                        SubscriptionRowResult::Skip(seq) => {
+                                            last_delivered_seq = seq;
                                             continue;
                                         }
-                                    };
-
-                                    last_delivered_seq = global_sequence;
-                                    yield E::try_from_stored(&stored_event_type_name, &event_bytes);
+                                        SubscriptionRowResult::SerializationError(e, seq) => {
+                                            last_delivered_seq = seq;
+                                            yield Err(SubscriptionError::DeserializationFailed(e));
+                                        }
+                                    }
                                 }
                             }
                             Err(_) => {
