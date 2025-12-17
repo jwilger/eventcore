@@ -631,6 +631,11 @@ fn map_sqlx_error(error: sqlx::Error, operation: &'static str) -> EventStoreErro
         }
     }
 
+    tracing::error!(
+        error = %error,
+        operation = operation,
+        "database operation failed"
+    );
     EventStoreError::StoreFailure { operation }
 }
 
