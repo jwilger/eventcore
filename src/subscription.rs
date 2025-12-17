@@ -1,4 +1,5 @@
 use crate::command::{Event, EventTypeName};
+use crate::validation::no_glob_metacharacters;
 use futures::Stream;
 use nutype::nutype;
 use std::future::Future;
@@ -9,14 +10,6 @@ use std::pin::Pin;
 /// This is a boxed, pinned Stream that yields `Result<E, SubscriptionError>` items,
 /// allowing consumers to handle deserialization failures gracefully.
 pub type SubscriptionStream<E> = Pin<Box<dyn Stream<Item = Result<E, SubscriptionError>> + Send>>;
-
-/// Validation predicate: reject glob metacharacters in StreamPrefix.
-///
-/// Per ADR-017, StreamPrefix reserves glob metacharacters (*, ?, [, ]) to enable
-/// future pattern matching without ambiguity or escaping complexity.
-fn no_glob_metacharacters(s: &str) -> bool {
-    !s.contains(['*', '?', '[', ']'])
-}
 
 /// Stream prefix for filtering subscriptions.
 ///

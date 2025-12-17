@@ -37,6 +37,7 @@ mod command;
 mod errors;
 mod store;
 mod subscription;
+mod validation;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;

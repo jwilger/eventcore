@@ -1,4 +1,5 @@
 use crate::Event;
+use crate::validation::no_glob_metacharacters;
 use nutype::nutype;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -375,14 +376,6 @@ pub trait EventStore {
     )
 )]
 pub struct StreamId(String);
-
-/// Validation predicate: reject glob metacharacters in StreamId.
-///
-/// Per ADR-017, StreamId reserves glob metacharacters (*, ?, [, ]) to enable
-/// future pattern matching without ambiguity or escaping complexity.
-fn no_glob_metacharacters(s: &str) -> bool {
-    !s.contains(['*', '?', '[', ']'])
-}
 
 /// Stream version domain type.
 ///
