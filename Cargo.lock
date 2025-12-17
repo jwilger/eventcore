@@ -576,6 +576,7 @@ dependencies = [
  "async-stream",
  "chrono",
  "eventcore-macros",
+ "eventcore-testing",
  "futures",
  "mutants",
  "nutype",
@@ -634,6 +635,7 @@ dependencies = [
  "mutants",
  "rand 0.9.2",
  "serde",
+ "thiserror",
  "tokio",
  "uuid",
 ]

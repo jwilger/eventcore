@@ -2,8 +2,10 @@ use eventcore::{
     Event, EventStore, EventSubscription, EventTypeName, InMemoryEventStore, StreamId,
     StreamPrefix, StreamVersion, StreamWrites, Subscribable, SubscriptionError, SubscriptionQuery,
 };
+use eventcore_testing::collect_subscription_events;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// Test-specific domain events for subscription testing.
 ///
@@ -185,11 +187,10 @@ async fn subscribes_to_all_events_in_temporal_order() {
         .expect("subscription should be created successfully");
 
     // And: Developer collects events from the subscription stream
-    let events: Vec<TestEvent> = subscription
-        .take(6)
-        .map(|r| r.expect("event should deserialize"))
-        .collect()
-        .await;
+    let events: Vec<TestEvent> =
+        collect_subscription_events(subscription, 6, Duration::from_secs(2))
+            .await
+            .expect("subscription should deliver all events within timeout");
 
     // Then: All 6 events are delivered in temporal order
     // Events are ordered by monotonic sequence numbers assigned at append time,
@@ -301,11 +302,10 @@ async fn filters_events_by_stream_prefix() {
             .expect("subscription should be created successfully");
 
     // And: Developer collects events from the subscription stream
-    let events: Vec<TestEvent> = subscription
-        .take(2)
-        .map(|r| r.expect("event should deserialize"))
-        .collect()
-        .await;
+    let events: Vec<TestEvent> =
+        collect_subscription_events(subscription, 2, Duration::from_secs(2))
+            .await
+            .expect("subscription should deliver all events within timeout");
 
     // Then: Only events from streams starting with "account-" are delivered
     assert_eq!(
@@ -394,11 +394,10 @@ async fn filters_events_by_event_type() {
             .expect("subscription should be created successfully");
 
     // And: Developer collects events from the subscription stream
-    let events: Vec<MoneyDeposited> = subscription
-        .take(3)
-        .map(|r| r.expect("event should deserialize"))
-        .collect()
-        .await;
+    let events: Vec<MoneyDeposited> =
+        collect_subscription_events(subscription, 3, Duration::from_secs(2))
+            .await
+            .expect("subscription should deliver all events within timeout");
 
     // Then: Only MoneyDeposited events are delivered, MoneyWithdrawn events are filtered out
     assert_eq!(
@@ -497,11 +496,10 @@ async fn filters_events_by_event_type_name_for_enum_variants() {
         .expect("subscription should be created successfully");
 
     // And: Developer collects events from the subscription stream
-    let events: Vec<AccountEvent> = subscription
-        .take(3)
-        .map(|r| r.expect("event should deserialize"))
-        .collect()
-        .await;
+    let events: Vec<AccountEvent> =
+        collect_subscription_events(subscription, 3, Duration::from_secs(2))
+            .await
+            .expect("subscription should deliver all events within timeout");
 
     // Then: Only Deposited variant events are delivered, Withdrawn events are filtered out
     assert_eq!(events.len(), 3, "should deliver only 3 Deposited events");
@@ -983,15 +981,10 @@ async fn delivers_events_appended_after_subscription_creation() {
 
     // And: Developer collects events from the subscription stream
     // Using timeout to prevent test from hanging if live delivery fails
-    let events: Vec<TestEvent> = tokio::time::timeout(
-        tokio::time::Duration::from_secs(2),
-        subscription
-            .take(4)
-            .map(|r| r.expect("event should deserialize"))
-            .collect(),
-    )
-    .await
-    .expect("subscription should deliver all 4 events within timeout");
+    let events: Vec<TestEvent> =
+        collect_subscription_events(subscription, 4, Duration::from_secs(2))
+            .await
+            .expect("subscription should deliver all 4 events within timeout");
 
     append_task.await.expect("append task should complete");
 

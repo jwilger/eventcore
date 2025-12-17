@@ -34,8 +34,10 @@
     unused_variables
 )]
 
+pub mod assertions;
 pub mod chaos;
 pub mod contract;
 
+pub use assertions::*;
 pub use chaos::*;
 pub use contract::*;
