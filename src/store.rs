@@ -856,7 +856,7 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
         // Capture current max sequence number for deduplication at transition
         let catchup_max_seq = {
             let next_seq = self.next_sequence.lock().map_err(|_| {
-                crate::subscription::SubscriptionError::Generic(
+                crate::subscription::SubscriptionError::InternalState(
                     "subscribe failed: next_sequence mutex was poisoned by a prior panic; \
                      the InMemoryStore instance is in an inconsistent state and should be \
                      replaced with a new instance"
@@ -868,7 +868,7 @@ impl crate::subscription::EventSubscription for InMemoryEventStore {
 
         // Collect historical events from all streams with their sequence numbers
         let streams = self.streams.lock().map_err(|_| {
-            crate::subscription::SubscriptionError::Generic(
+            crate::subscription::SubscriptionError::InternalState(
                 "subscribe failed: streams mutex was poisoned by a prior panic; \
                  the InMemoryStore instance is in an inconsistent state and should be \
                  replaced with a new instance"

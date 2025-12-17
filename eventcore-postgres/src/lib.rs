@@ -433,7 +433,7 @@ impl EventSubscription for PostgresEventStore {
             sqlx::query_scalar("SELECT COALESCE(MAX(global_sequence), 0) FROM eventcore_events")
                 .fetch_one(&self.pool)
                 .await
-                .map_err(|e| SubscriptionError::Generic(e.to_string()))?;
+                .map_err(|e| SubscriptionError::Database(e.to_string()))?;
 
         // PHASE 2: Read historical events from Postgres
         let mut all_events: Vec<(Result<E, SubscriptionError>, i64)> = Vec::new();
@@ -448,13 +448,13 @@ impl EventSubscription for PostgresEventStore {
                 .bind(catchup_max_seq)
                 .fetch_all(&self.pool)
                 .await
-                .map_err(|e| SubscriptionError::Generic(e.to_string()))?
+                .map_err(|e| SubscriptionError::Database(e.to_string()))?
         } else {
             sqlx::query(sql)
                 .bind(catchup_max_seq)
                 .fetch_all(&self.pool)
                 .await
-                .map_err(|e| SubscriptionError::Generic(e.to_string()))?
+                .map_err(|e| SubscriptionError::Database(e.to_string()))?
         };
 
         for row in rows {

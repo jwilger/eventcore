@@ -130,12 +130,23 @@ impl SubscriptionQuery {
 /// Represents failures during subscription creation or event delivery.
 #[derive(Debug, thiserror::Error)]
 pub enum SubscriptionError {
+    /// Generic error for unexpected failures.
     #[error("subscription error: {0}")]
     Generic(String),
 
+    /// Database-related error (connection, query, etc.).
+    #[error("database error: {0}")]
+    Database(String),
+
+    /// Internal state error (e.g., mutex poisoned).
+    #[error("internal state error: {0}")]
+    InternalState(String),
+
+    /// Failed to deserialize event data.
     #[error("failed to deserialize event: {0}")]
     DeserializationFailed(String),
 
+    /// Event type is not recognized by the subscriber.
     #[error("unknown event type: {0}")]
     UnknownEventType(EventTypeName),
 }
