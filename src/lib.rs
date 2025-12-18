@@ -56,6 +56,11 @@ pub use store::{
     StreamVersion, StreamWriteEntry, StreamWrites,
 };
 
+// Re-export Command derive macro when the "macros" feature is enabled (default)
+// Users can disable with: eventcore = { version = "...", default-features = false }
+#[cfg(feature = "macros")]
+pub use eventcore_macros::Command;
+
 /// Validates a business rule condition and returns early with
 /// `CommandError::BusinessRuleViolation` when the condition is false.
 ///

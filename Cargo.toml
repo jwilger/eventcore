@@ -12,6 +12,10 @@ members = [
 [lints.rust]
 warnings = "deny"
 
+[features]
+default = ["macros"]
+macros = ["dep:eventcore-macros"]
+
 [dependencies]
 chrono = { version = "0.4.42", features = ["serde"] }
 nutype = { version = "0.6.2", features = ["serde"] }
@@ -23,8 +27,10 @@ tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "sync", "
 tracing = "0.1.43"
 uuid = { version = "1.18.1", features = ["serde", "v1", "v7"] }
 
+# Optional dependency for derive macros (enabled by default)
+eventcore-macros = { path = "eventcore-macros", optional = true }
+
 [dev-dependencies]
-eventcore-macros = { path = "eventcore-macros" }
 # tracing-mock is only available as beta (official tokio-rs crate); used for testing structured tracing output
 tracing-mock = "0.1.0-beta.3"
 tracing-test = "0.2.5"
