@@ -7,7 +7,7 @@ This project uses the marvin-sdlc methodology (TDD, Event Sourcing, ADR, Story P
 - **Mutation testing threshold**: 80% (default, can override)
 - **Event model location**: `docs/event_model/`
 - **Architecture docs**: `docs/architecture/`
-- **ADRs**: `docs/architecture/decisions/`
+- **ADRs**: `docs/adr/`
 
 ## Project-Specific Overrides
 
