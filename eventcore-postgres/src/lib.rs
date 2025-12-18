@@ -24,6 +24,8 @@ pub struct PostgresConfig {
     pub max_connections: u32,
     /// Timeout for acquiring a connection from the pool (default: 30 seconds)
     pub acquire_timeout: Duration,
+    /// Idle timeout for connections in the pool (default: 10 minutes)
+    pub idle_timeout: Duration,
 }
 
 impl Default for PostgresConfig {
@@ -31,6 +33,7 @@ impl Default for PostgresConfig {
         Self {
             max_connections: 10,
             acquire_timeout: Duration::from_secs(30),
+            idle_timeout: Duration::from_secs(600), // 10 minutes
         }
     }
 }
@@ -57,6 +60,7 @@ impl PostgresEventStore {
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)
             .acquire_timeout(config.acquire_timeout)
+            .idle_timeout(config.idle_timeout)
             .connect(&connection_string)
             .await
             .map_err(PostgresEventStoreError::ConnectionFailed)?;
