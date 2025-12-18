@@ -423,7 +423,10 @@ impl EventStore for InMemoryEventStore {
         &self,
         stream_id: StreamId,
     ) -> Result<EventStreamReader<E>, EventStoreError> {
-        let streams = self.streams.lock().unwrap();
+        let streams = self
+            .streams
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure { operation: "read" })?;
         let events = streams
             .get(&stream_id)
             .map(|(boxed_events, _version)| {
@@ -442,7 +445,12 @@ impl EventStore for InMemoryEventStore {
         &self,
         writes: StreamWrites,
     ) -> Result<EventStreamSlice, EventStoreError> {
-        let mut streams = self.streams.lock().unwrap();
+        let mut streams = self
+            .streams
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure {
+                operation: "append",
+            })?;
         let expected_versions = writes.expected_versions().clone();
 
         // Check all version constraints before writing any events
