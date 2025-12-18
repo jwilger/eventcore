@@ -768,19 +768,9 @@ mod tests {
         assert_eq!(versions.get(&stream_b), Some(&StreamVersion::new(5)));
     }
 
-    /// Unit test: StreamId rejects asterisk glob metacharacter
-    ///
-    /// Per ADR-017, StreamId must reject glob metacharacters (*, ?, [, ])
-    /// to enable future pattern matching without ambiguity or escaping complexity.
-    ///
-    /// This test verifies that StreamId::try_new() returns an error when
-    /// the asterisk metacharacter is present in the identifier.
     #[test]
     fn stream_id_rejects_asterisk_metacharacter() {
-        // When: Developer attempts to create StreamId with asterisk metacharacter
         let result = StreamId::try_new("account-*");
-
-        // Then: StreamId construction fails
         assert!(
             result.is_err(),
             "StreamId should reject asterisk glob metacharacter"
@@ -789,28 +779,28 @@ mod tests {
 
     #[test]
     fn stream_id_rejects_question_mark_metacharacter() {
-        // When: Developer attempts to create StreamId with question mark metacharacter
         let result = StreamId::try_new("account-?");
-
-        // Then: StreamId construction fails
-        assert!(result.is_err());
+        assert!(
+            result.is_err(),
+            "StreamId should reject question mark glob metacharacter"
+        );
     }
 
     #[test]
     fn stream_id_rejects_open_bracket_metacharacter() {
-        // When: Developer attempts to create StreamId with open bracket metacharacter
         let result = StreamId::try_new("account-[");
-
-        // Then: StreamId construction fails
-        assert!(result.is_err());
+        assert!(
+            result.is_err(),
+            "StreamId should reject open bracket glob metacharacter"
+        );
     }
 
     #[test]
     fn stream_id_rejects_close_bracket_metacharacter() {
-        // When: Developer attempts to create StreamId with close bracket metacharacter
         let result = StreamId::try_new("account-]");
-
-        // Then: StreamId construction fails
-        assert!(result.is_err());
+        assert!(
+            result.is_err(),
+            "StreamId should reject close bracket glob metacharacter"
+        );
     }
 }
