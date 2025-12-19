@@ -227,57 +227,137 @@ mod tests {
     use super::*;
     use sqlx::{Executor, postgres::PgPoolOptions};
     use std::env;
-    use testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner};
+    use std::sync::OnceLock;
+    use testcontainers::{Container, ImageExt, ReuseDirective, runners::SyncRunner};
     use testcontainers_modules::postgres::Postgres as PgContainer;
     #[allow(unused_imports)]
     use tokio::test;
     use uuid::Uuid;
+
+    /// Container name for the shared reusable Postgres instance.
+    const CONTAINER_NAME: &str = "eventcore-test-postgres";
+
+    /// Shared container and connection string for all unit tests.
+    /// The container persists between test runs for faster iteration.
+    static SHARED_CONTAINER: OnceLock<SharedPostgres> = OnceLock::new();
+
+    struct SharedPostgres {
+        connection_string: String,
+        #[allow(dead_code)]
+        container: Container<PgContainer>,
+    }
 
     /// Get the Postgres version to use for tests.
     fn postgres_version() -> String {
         env::var("POSTGRES_VERSION").unwrap_or_else(|_| "17".to_string())
     }
 
-    /// Test fixture that manages a Postgres container for unit tests.
-    struct TestFixture {
-        pool: Pool<Postgres>,
-        #[allow(dead_code)]
-        container: ContainerAsync<PgContainer>,
+    /// Start a reusable container with retry logic for cross-process races.
+    ///
+    /// When nextest runs test binaries in parallel, multiple processes may try to
+    /// create the same named container simultaneously. This retries on "name already
+    /// in use" errors, allowing the other process to finish creation.
+    fn start_container_with_retry() -> Container<PgContainer> {
+        let version = postgres_version();
+        let max_retries = 10;
+        let retry_delay = std::time::Duration::from_millis(500);
+
+        for attempt in 0..max_retries {
+            match PgContainer::default()
+                .with_tag(&version)
+                .with_container_name(CONTAINER_NAME)
+                .with_reuse(ReuseDirective::Always)
+                .start()
+            {
+                Ok(container) => return container,
+                Err(e) => {
+                    let error_str = e.to_string();
+                    if error_str.contains("already in use") && attempt < max_retries - 1 {
+                        // Another process is creating the container, wait and retry
+                        std::thread::sleep(retry_delay);
+                        continue;
+                    }
+                    panic!("should start postgres container: {}", e);
+                }
+            }
+        }
+        panic!(
+            "failed to start postgres container after {} retries",
+            max_retries
+        );
     }
 
-    impl TestFixture {
-        async fn new() -> Self {
-            let version = postgres_version();
-            let container = PgContainer::default()
-                .with_tag(&version)
-                .start()
-                .await
-                .expect("should start postgres container");
+    fn get_shared_postgres() -> &'static SharedPostgres {
+        SHARED_CONTAINER.get_or_init(|| {
+            // Run container setup in a separate thread to avoid tokio runtime conflicts
+            std::thread::spawn(|| {
+                let container = start_container_with_retry();
 
-            let host_port = container
-                .get_host_port_ipv4(5432)
-                .await
-                .expect("should get postgres port");
+                let host_port = container
+                    .get_host_port_ipv4(5432)
+                    .expect("should get postgres port");
 
-            let connection_string = format!(
-                "postgres://postgres:postgres@127.0.0.1:{}/postgres",
-                host_port
-            );
+                let connection_string = format!(
+                    "postgres://postgres:postgres@127.0.0.1:{}/postgres",
+                    host_port
+                );
 
-            let pool = PgPoolOptions::new()
-                .max_connections(1)
-                .connect(&connection_string)
-                .await
-                .expect("should connect to test database");
+                // Run migrations using a temporary runtime
+                // Retry connection in case postgres is still starting up
+                let rt = tokio::runtime::Runtime::new()
+                    .expect("should create tokio runtime for migrations");
+                rt.block_on(async {
+                    let max_conn_retries = 30;
+                    let conn_retry_delay = std::time::Duration::from_millis(500);
+                    let mut pool = None;
 
-            // Ensure migrations have run (idempotent)
-            sqlx::migrate!("./migrations")
-                .run(&pool)
-                .await
-                .expect("migrations should succeed");
+                    for attempt in 0..max_conn_retries {
+                        match PgPoolOptions::new()
+                            .max_connections(1)
+                            .connect(&connection_string)
+                            .await
+                        {
+                            Ok(p) => {
+                                pool = Some(p);
+                                break;
+                            }
+                            Err(e) => {
+                                if attempt < max_conn_retries - 1 {
+                                    tokio::time::sleep(conn_retry_delay).await;
+                                    continue;
+                                }
+                                panic!(
+                                    "should connect to test database after {} retries: {}",
+                                    max_conn_retries, e
+                                );
+                            }
+                        }
+                    }
 
-            Self { pool, container }
-        }
+                    let pool = pool.expect("pool should be set");
+                    sqlx::migrate!("./migrations")
+                        .run(&pool)
+                        .await
+                        .expect("migrations should succeed");
+                });
+
+                SharedPostgres {
+                    connection_string,
+                    container,
+                }
+            })
+            .join()
+            .expect("container setup thread should complete")
+        })
+    }
+
+    async fn get_test_pool() -> Pool<Postgres> {
+        let shared = get_shared_postgres();
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&shared.connection_string)
+            .await
+            .expect("should connect to shared postgres container")
     }
 
     fn unique_stream_id(prefix: &str) -> String {
@@ -286,8 +366,7 @@ mod tests {
 
     #[tokio::test]
     async fn trigger_assigns_sequential_versions() {
-        let fixture = TestFixture::new().await;
-        let pool = &fixture.pool;
+        let pool = get_test_pool().await;
         let stream_id = unique_stream_id("trigger-test");
 
         // Set expected version via session config
@@ -296,7 +375,7 @@ mod tests {
             stream_id
         );
         sqlx::query(&config_query)
-            .execute(pool)
+            .execute(&pool)
             .await
             .expect("should set expected versions");
 
@@ -310,7 +389,7 @@ mod tests {
         .bind("TestEvent")
         .bind(serde_json::json!({"n": 1}))
         .bind(serde_json::json!({}))
-        .fetch_one(pool)
+        .fetch_one(&pool)
         .await;
 
         match &result {
@@ -325,8 +404,7 @@ mod tests {
     #[tokio::test]
     async fn map_sqlx_error_translates_unique_constraint_violations() {
         // Given: Developer has a table with a unique constraint to trigger duplicates
-        let fixture = TestFixture::new().await;
-        let pool = &fixture.pool;
+        let pool = get_test_pool().await;
         let table_name = format!("map_sqlx_error_test_{}", Uuid::now_v7().simple());
         let create_statement = format!("CREATE TABLE {table_name} (event_id UUID PRIMARY KEY)");
         pool.execute(create_statement.as_str())
@@ -337,13 +415,13 @@ mod tests {
         let event_id = Uuid::now_v7();
         sqlx::query(insert_statement.as_str())
             .bind(event_id)
-            .execute(pool)
+            .execute(&pool)
             .await
             .expect("initial insert should succeed");
 
         let duplicate_error = sqlx::query(insert_statement.as_str())
             .bind(event_id)
-            .execute(pool)
+            .execute(&pool)
             .await
             .expect_err("duplicate insert should trigger unique constraint");
 
