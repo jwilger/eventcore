@@ -36,6 +36,7 @@
 mod command;
 mod errors;
 mod store;
+mod validation;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
@@ -52,7 +53,7 @@ pub use store::EventStore;
 // Re-export InMemoryEventStore for library consumers (per ADR-011)
 // Re-export EventStore trait helper types for trait implementations (per ADR-010 compiler-driven evolution)
 pub use store::{
-    EventStoreError, EventStreamReader, EventStreamSlice, InMemoryEventStore, StreamId,
+    EventStoreError, EventStreamReader, EventStreamSlice, InMemoryEventStore, Operation, StreamId,
     StreamVersion, StreamWriteEntry, StreamWrites,
 };
 

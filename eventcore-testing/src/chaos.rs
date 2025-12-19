@@ -1,7 +1,8 @@
 use std::{future::Future, sync::Mutex};
 
 use eventcore::{
-    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamId, StreamWrites,
+    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
+    StreamWrites,
 };
 use rand::{Rng, SeedableRng, random, rngs::StdRng};
 
@@ -99,7 +100,7 @@ where
         async move {
             if should_fail {
                 return Err(EventStoreError::StoreFailure {
-                    operation: "read_stream",
+                    operation: Operation::ReadStream,
                 });
             }
 
@@ -122,7 +123,7 @@ where
 
             if should_fail {
                 return Err(EventStoreError::StoreFailure {
-                    operation: "append_events",
+                    operation: Operation::AppendEvents,
                 });
             }
 
