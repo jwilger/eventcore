@@ -1,5 +1,6 @@
 use eventcore::{
-    Event, EventStore, EventStoreError, InMemoryEventStore, StreamId, StreamVersion, StreamWrites,
+    Event, EventStore, EventStoreError, InMemoryEventStore, Operation, StreamId, StreamVersion,
+    StreamWrites,
 };
 use eventcore_testing::chaos::{ChaosConfig, ChaosEventStoreExt};
 use serde::{Deserialize, Serialize};
@@ -34,7 +35,7 @@ async fn chaos_mode_can_force_read_failure() {
     assert_eq!(
         error,
         EventStoreError::StoreFailure {
-            operation: "read_stream",
+            operation: Operation::ReadStream,
         }
     );
 }

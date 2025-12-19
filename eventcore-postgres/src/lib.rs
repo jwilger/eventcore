@@ -1,14 +1,14 @@
 use std::time::Duration;
 
 use eventcore::{
-    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamId,
+    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
     StreamWriteEntry, StreamWrites,
 };
 use serde_json::{Value, json};
 use sqlx::types::Json;
 use sqlx::{Pool, Postgres, Row, postgres::PgPoolOptions, query};
 use thiserror::Error;
-use tracing::{info, instrument, warn};
+use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -24,6 +24,8 @@ pub struct PostgresConfig {
     pub max_connections: u32,
     /// Timeout for acquiring a connection from the pool (default: 30 seconds)
     pub acquire_timeout: Duration,
+    /// Idle timeout for connections in the pool (default: 10 minutes)
+    pub idle_timeout: Duration,
 }
 
 impl Default for PostgresConfig {
@@ -31,6 +33,7 @@ impl Default for PostgresConfig {
         Self {
             max_connections: 10,
             acquire_timeout: Duration::from_secs(30),
+            idle_timeout: Duration::from_secs(600), // 10 minutes
         }
     }
 }
@@ -57,6 +60,7 @@ impl PostgresEventStore {
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)
             .acquire_timeout(config.acquire_timeout)
+            .idle_timeout(config.idle_timeout)
             .connect(&connection_string)
             .await
             .map_err(PostgresEventStoreError::ConnectionFailed)?;
@@ -105,13 +109,13 @@ impl EventStore for PostgresEventStore {
         .bind(stream_id.as_ref())
         .fetch_all(&self.pool)
         .await
-        .map_err(|error| map_sqlx_error(error, "read_stream"))?;
+        .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
 
         let mut events = Vec::with_capacity(rows.len());
         for row in rows {
             let payload: Value = row
                 .try_get("event_data")
-                .map_err(|error| map_sqlx_error(error, "read_stream"))?;
+                .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
             let event = serde_json::from_value(payload).map_err(|error| {
                 EventStoreError::DeserializationFailed {
                     stream_id: stream_id.clone(),
@@ -154,14 +158,14 @@ impl EventStore for PostgresEventStore {
             .pool
             .begin()
             .await
-            .map_err(|error| map_sqlx_error(error, "begin_transaction"))?;
+            .map_err(|error| map_sqlx_error(error, Operation::BeginTransaction))?;
 
         // Set expected versions in session config for trigger validation
         query("SELECT set_config('eventcore.expected_versions', $1, true)")
             .bind(expected_versions_json.to_string())
             .execute(&mut *tx)
             .await
-            .map_err(|error| map_sqlx_error(error, "set_expected_versions"))?;
+            .map_err(|error| map_sqlx_error(error, Operation::SetExpectedVersions))?;
 
         // Insert all events - trigger handles version assignment and validation
         for entry in entries {
@@ -184,18 +188,18 @@ impl EventStore for PostgresEventStore {
             .bind(Json(json!({})))
             .execute(&mut *tx)
             .await
-            .map_err(|error| map_sqlx_error(error, "append_events"))?;
+            .map_err(|error| map_sqlx_error(error, Operation::AppendEvents))?;
         }
 
         tx.commit()
             .await
-            .map_err(|error| map_sqlx_error(error, "commit_transaction"))?;
+            .map_err(|error| map_sqlx_error(error, Operation::CommitTransaction))?;
 
         Ok(EventStreamSlice)
     }
 }
 
-fn map_sqlx_error(error: sqlx::Error, operation: &'static str) -> EventStoreError {
+fn map_sqlx_error(error: sqlx::Error, operation: Operation) -> EventStoreError {
     if let sqlx::Error::Database(db_error) = &error {
         let code = db_error.code();
         let code_str = code.as_deref();
@@ -210,6 +214,11 @@ fn map_sqlx_error(error: sqlx::Error, operation: &'static str) -> EventStoreErro
         }
     }
 
+    error!(
+        error = %error,
+        operation = %operation,
+        "[postgres.database_error] database operation failed"
+    );
     EventStoreError::StoreFailure { operation }
 }
 
@@ -344,7 +353,7 @@ mod tests {
             .expect("should drop temporary table after unique constraint test");
 
         // When: Developer maps the sqlx duplicate error
-        let mapped_error = map_sqlx_error(duplicate_error, "append_events");
+        let mapped_error = map_sqlx_error(duplicate_error, Operation::AppendEvents);
 
         // Then: Developer sees version conflict error for 23505 violations
         assert!(

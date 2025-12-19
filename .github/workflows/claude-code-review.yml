@@ -54,6 +54,10 @@ jobs:
             ```
             If you previously requested changes, check if they've been addressed.
 
+            If you previously reviewed this PR, the current review should focus
+            on changes since your last review. There is no need to repeat findings from
+            previous reviews.
+
             **Step 2: Get the diff**
             ```bash
             gh pr diff ${{ github.event.pull_request.number }}
@@ -116,7 +120,7 @@ jobs:
 
             ## Output Format
 
-            Your review summary should be 2-5 sentences MAX. Put details in inline comments.
+            Your review summary should be concise and actionable. Put details in inline comments.
 
             Bad: "This is an excellent PR with strong architectural decisions..."
             Good: "Two issues: null check missing in handler.rs:45, potential panic in parser.rs:102."

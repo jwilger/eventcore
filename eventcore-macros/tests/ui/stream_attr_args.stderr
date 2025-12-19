@@ -1,5 +1,5 @@
 error: EventCore: #[stream] does not accept parameters
- --> tests/ui/stream_attr_args.rs:8:5
+ --> tests/ui/stream_attr_args.rs:7:5
   |
-8 |     #[stream(invalid)]
+7 |     #[stream(invalid)]
   |     ^^^^^^^^^^^^^^^^^^

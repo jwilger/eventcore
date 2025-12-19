@@ -1,5 +1,5 @@
 error: EventCore: #[derive(Command)] requires at least one #[stream] StreamId field; add #[stream] to your StreamId member
- --> tests/ui/missing_stream_attribute.rs:7:8
+ --> tests/ui/missing_stream_attribute.rs:6:8
   |
-7 | struct MissingStreamAttribute {
+6 | struct MissingStreamAttribute {
   |        ^^^^^^^^^^^^^^^^^^^^^^
