@@ -1,7 +1,6 @@
 // trybuild compile-fail fixture: #[stream] rejects arguments.
 // Exercised via tests/trybuild.rs.
-use eventcore::StreamId;
-use eventcore_macros::Command;
+use eventcore::{Command, StreamId};
 
 #[derive(Command)]
 struct StreamAttributeArgs {

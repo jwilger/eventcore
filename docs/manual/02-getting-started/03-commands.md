@@ -21,7 +21,7 @@ Let's implement task creation:
 use crate::domain::{events::*, types::*};
 use chrono::Utc;
 use eventcore::{prelude::*, CommandLogic, StreamDeclarations};
-use eventcore_macros::Command;
+use eventcore::Command;
 
 /// Command to create a new task
 #[derive(Command, Clone)]
@@ -122,7 +122,7 @@ Task assignment affects both the task and the user:
 use crate::domain::{events::*, types::*};
 use chrono::Utc;
 use eventcore::{prelude::*, CommandLogic, StreamDeclarations};
-use eventcore_macros::Command;
+use eventcore::Command;
 
 /// Command to assign a task to a user
 /// This is a multi-stream command affecting both task and user streams
@@ -290,7 +290,7 @@ impl CommandLogic for AssignTask {
 use crate::domain::{events::*, types::*};
 use chrono::Utc;
 use eventcore::{prelude::*, CommandLogic, StreamDeclarations};
-use eventcore_macros::Command;
+use eventcore::Command;
 
 /// Command to complete a task
 #[derive(Command, Clone)]

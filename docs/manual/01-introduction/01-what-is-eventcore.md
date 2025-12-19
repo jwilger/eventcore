@@ -131,7 +131,7 @@ EventCore tracks stream versions to detect conflicts:
 
 ```rust
 use eventcore::prelude::*;
-use eventcore_macros::Command;
+use eventcore::Command;
 
 #[derive(Command, Clone)]
 struct TransferMoney {

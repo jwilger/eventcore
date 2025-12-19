@@ -1,8 +1,7 @@
 use eventcore::{
-    CommandError, CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamId,
-    require,
+    Command, CommandError, CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations,
+    StreamId, require,
 };
-use eventcore_macros::Command;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

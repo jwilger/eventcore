@@ -1,5 +1,4 @@
-use eventcore::{CommandStreams, StreamId};
-use eventcore_macros::Command;
+use eventcore::{Command, CommandStreams, StreamId};
 
 // Compile-time coverage for #[derive(Command)] lives in tests/trybuild.rs via the
 // trybuild harness (https://docs.rs/trybuild). Those UI fixtures deliberately

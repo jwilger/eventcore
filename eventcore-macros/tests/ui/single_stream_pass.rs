@@ -2,8 +2,7 @@
 // Exercised via tests/trybuild.rs.
 extern crate eventcore;
 
-use eventcore::StreamId;
-use eventcore_macros::Command;
+use eventcore::{Command, StreamId};
 
 #[derive(Command)]
 struct PingCommand {
