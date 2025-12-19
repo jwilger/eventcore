@@ -206,17 +206,6 @@ cargo test              # Standard test runner
 cargo bench             # Performance benchmarks
 ```
 
-## Performance
-
-Based on current testing with PostgreSQL backend:
-
-- **Single-stream commands**: 86 ops/sec (stable, reliable performance)
-- **Multi-stream commands**: Full atomicity operational (estimated 25-50 ops/sec)
-- **Batch event writes**: 9,000+ events/sec (excellent bulk throughput)
-- **Latency**: P95 ~14ms (database-backed operations)
-
-_Note: Performance optimized for correctness and multi-stream atomicity. See [Performance Report](docs/development-archive/benchmarks/performance-report.md) for detailed benchmarks and system specifications._
-
 ## Contributing
 
 EventCore follows strict type-driven development. See [CLAUDE.md](CLAUDE.md) for our development philosophy.
