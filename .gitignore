@@ -81,3 +81,5 @@ website/src/logo.png
 # Mutation testing output
 mutants.out/
 mutants.out.old/
+
+.serena/

@@ -1,4 +1,5 @@
 use crate::Event;
+use crate::validation::no_glob_metacharacters;
 use nutype::nutype;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -212,10 +213,11 @@ pub trait EventStore {
 /// - Non-empty (trimmed strings with at least 1 character)
 /// - Within reasonable length (max 255 characters)
 /// - Sanitized (leading/trailing whitespace removed)
+/// - Free of glob metacharacters (*, ?, [, ]) per ADR-017
 ///
 #[nutype(
     sanitize(trim),
-    validate(not_empty, len_char_max = 255),
+    validate(not_empty, len_char_max = 255, predicate = no_glob_metacharacters),
     derive(
         Debug,
         Clone,
@@ -772,5 +774,41 @@ mod tests {
         assert_eq!(versions.len(), 2);
         assert_eq!(versions.get(&stream_a), Some(&StreamVersion::new(0)));
         assert_eq!(versions.get(&stream_b), Some(&StreamVersion::new(5)));
+    }
+
+    #[test]
+    fn stream_id_rejects_asterisk_metacharacter() {
+        let result = StreamId::try_new("account-*");
+        assert!(
+            result.is_err(),
+            "StreamId should reject asterisk glob metacharacter"
+        );
+    }
+
+    #[test]
+    fn stream_id_rejects_question_mark_metacharacter() {
+        let result = StreamId::try_new("account-?");
+        assert!(
+            result.is_err(),
+            "StreamId should reject question mark glob metacharacter"
+        );
+    }
+
+    #[test]
+    fn stream_id_rejects_open_bracket_metacharacter() {
+        let result = StreamId::try_new("account-[");
+        assert!(
+            result.is_err(),
+            "StreamId should reject open bracket glob metacharacter"
+        );
+    }
+
+    #[test]
+    fn stream_id_rejects_close_bracket_metacharacter() {
+        let result = StreamId::try_new("account-]");
+        assert!(
+            result.is_err(),
+            "StreamId should reject close bracket glob metacharacter"
+        );
     }
 }
