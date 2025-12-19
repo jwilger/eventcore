@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use sqlx::types::Json;
 use sqlx::{Pool, Postgres, Row, postgres::PgPoolOptions, query};
 use thiserror::Error;
-use tracing::{info, instrument, warn};
+use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -210,6 +210,11 @@ fn map_sqlx_error(error: sqlx::Error, operation: &'static str) -> EventStoreErro
         }
     }
 
+    error!(
+        error = %error,
+        operation = operation,
+        "[postgres.database_error] database operation failed"
+    );
     EventStoreError::StoreFailure { operation }
 }
 
