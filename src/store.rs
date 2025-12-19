@@ -258,6 +258,36 @@ impl StreamVersion {
     }
 }
 
+/// Identifies the event store operation that failed.
+///
+/// Used by `EventStoreError::StoreFailure` to provide strongly-typed
+/// identification of which operation encountered an infrastructure failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    /// Reading events from a stream.
+    ReadStream,
+    /// Appending events to streams.
+    AppendEvents,
+    /// Beginning a database transaction.
+    BeginTransaction,
+    /// Setting expected versions for optimistic concurrency control.
+    SetExpectedVersions,
+    /// Committing a database transaction.
+    CommitTransaction,
+}
+
+impl std::fmt::Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Operation::ReadStream => write!(f, "read_stream"),
+            Operation::AppendEvents => write!(f, "append_events"),
+            Operation::BeginTransaction => write!(f, "begin_transaction"),
+            Operation::SetExpectedVersions => write!(f, "set_expected_versions"),
+            Operation::CommitTransaction => write!(f, "commit_transaction"),
+        }
+    }
+}
+
 /// Error type returned by event store operations.
 ///
 /// EventStoreError represents failures during read or append operations.
@@ -290,7 +320,7 @@ pub enum EventStoreError {
 
     /// Represents infrastructure failures surfaced by the backing store (e.g., connection drops).
     #[error("{operation} operation failed")]
-    StoreFailure { operation: &'static str },
+    StoreFailure { operation: Operation },
 
     /// Version conflict during optimistic concurrency control.
     ///
@@ -425,7 +455,12 @@ impl EventStore for InMemoryEventStore {
         &self,
         stream_id: StreamId,
     ) -> Result<EventStreamReader<E>, EventStoreError> {
-        let streams = self.streams.lock().unwrap();
+        let streams = self
+            .streams
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure {
+                operation: Operation::ReadStream,
+            })?;
         let events = streams
             .get(&stream_id)
             .map(|(boxed_events, _version)| {
@@ -444,7 +479,12 @@ impl EventStore for InMemoryEventStore {
         &self,
         writes: StreamWrites,
     ) -> Result<EventStreamSlice, EventStoreError> {
-        let mut streams = self.streams.lock().unwrap();
+        let mut streams = self
+            .streams
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure {
+                operation: Operation::AppendEvents,
+            })?;
         let expected_versions = writes.expected_versions().clone();
 
         // Check all version constraints before writing any events
