@@ -15,19 +15,41 @@ pub(crate) fn no_glob_metacharacters(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
+    /// Property: Any string without glob metacharacters passes validation.
+    ///
+    /// This generates arbitrary strings that explicitly exclude the four
+    /// glob metacharacters (*, ?, [, ]) and verifies they all pass.
     #[test]
     fn strings_without_metacharacters_pass_validation() {
-        assert!(no_glob_metacharacters("account-123"));
-        assert!(no_glob_metacharacters("tenant/account/456"));
-        assert!(no_glob_metacharacters("order-2024-12-10-001"));
+        proptest!(|(s in "[^*?\\[\\]]*")| {
+            prop_assert!(
+                no_glob_metacharacters(&s),
+                "String without metacharacters should pass: {:?}",
+                s
+            );
+        });
     }
 
+    /// Property: Any string containing at least one glob metacharacter fails validation.
+    ///
+    /// This uses a strategy that places a metacharacter at an arbitrary position
+    /// (including first and last) within a string of safe characters.
     #[test]
     fn strings_with_metacharacters_fail_validation() {
-        assert!(!no_glob_metacharacters("account-*"));
-        assert!(!no_glob_metacharacters("account-?"));
-        assert!(!no_glob_metacharacters("account-["));
-        assert!(!no_glob_metacharacters("account-]"));
+        let safe_chars = "[^*?\\[\\]]*";
+        let metachar = prop_oneof![Just('*'), Just('?'), Just('['), Just(']')];
+
+        let strategy = (safe_chars, metachar, safe_chars)
+            .prop_map(|(prefix, mc, suffix)| format!("{}{}{}", prefix, mc, suffix));
+
+        proptest!(|(s in strategy)| {
+            prop_assert!(
+                !no_glob_metacharacters(&s),
+                "String with metacharacter should fail: {:?}",
+                s
+            );
+        });
     }
 }

@@ -656,6 +656,7 @@ name = "eventcore-types"
 version = "0.1.0"
 dependencies = [
  "nutype",
+ "proptest",
  "serde",
  "serde_json",
  "thiserror",
