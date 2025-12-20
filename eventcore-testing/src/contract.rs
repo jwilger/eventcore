@@ -1,4 +1,4 @@
-use eventcore::{Event, EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
+use eventcore_types::{Event, EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};

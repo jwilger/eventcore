@@ -1,6 +1,6 @@
 use std::{future::Future, sync::Mutex};
 
-use eventcore::{
+use eventcore_types::{
     Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
     StreamWrites,
 };

@@ -1,7 +1,7 @@
 mod common;
 
 use common::{PostgresTestFixture, TestEvent, unique_stream_id};
-use eventcore::{EventStore, StreamId, StreamVersion, StreamWrites};
+use eventcore_types::{EventStore, StreamId, StreamVersion, StreamWrites};
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::test]

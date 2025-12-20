@@ -590,6 +590,8 @@ version = "0.1.8"
 dependencies = [
  "chrono",
  "eventcore-macros",
+ "eventcore-postgres",
+ "eventcore-types",
  "nutype",
  "proptest",
  "rand 0.9.2",
@@ -621,8 +623,8 @@ dependencies = [
 name = "eventcore-postgres"
 version = "0.1.0"
 dependencies = [
- "eventcore",
  "eventcore-testing",
+ "eventcore-types",
  "futures",
  "mutants",
  "serde",
@@ -642,10 +644,21 @@ name = "eventcore-testing"
 version = "0.1.0"
 dependencies = [
  "eventcore",
+ "eventcore-types",
  "rand 0.9.2",
  "serde",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "eventcore-types"
+version = "0.1.0"
+dependencies = [
+ "nutype",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

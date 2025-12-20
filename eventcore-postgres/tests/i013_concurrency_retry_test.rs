@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 
 use common::{PostgresTestFixture, TestEvent, unique_stream_id};
-use eventcore::{EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
+use eventcore_types::{EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
 use tokio::sync::Barrier;
 
 fn build_single_stream_writes(

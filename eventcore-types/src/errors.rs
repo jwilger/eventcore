@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::store::EventStoreError;
+
 /// Error type for command execution failures.
 ///
 /// Represents all possible failure modes during command execution.
@@ -29,7 +31,7 @@ pub enum CommandError {
     /// constraint violations, etc.). The error classification determines
     /// whether retry is appropriate.
     #[error("event store error: {0}")]
-    EventStoreError(crate::store::EventStoreError),
+    EventStoreError(EventStoreError),
 
     /// Invalid command state detected during execution.
     ///

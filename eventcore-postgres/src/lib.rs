@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use eventcore::{
+use eventcore_types::{
     Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
     StreamWriteEntry, StreamWrites,
 };

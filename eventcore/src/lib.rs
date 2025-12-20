@@ -33,34 +33,31 @@
     unused_variables
 )]
 
-mod command;
-mod errors;
 mod store;
-mod validation;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-// Re-export only the minimal public API needed for execute() signature
-pub use command::{
-    CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamDeclarationsError,
-    StreamResolver,
+// Re-export all types from eventcore-types for backward compatibility
+pub use eventcore_types::{
+    CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
+    EventStreamReader, EventStreamSlice, NewEvents, Operation, StreamDeclarations,
+    StreamDeclarationsError, StreamId, StreamResolver, StreamVersion, StreamWriteEntry,
+    StreamWrites,
 };
-pub use errors::CommandError;
-pub use store::EventStore;
 
-// Re-export InMemoryEventStore for library consumers (per ADR-011)
-// Re-export EventStore trait helper types for trait implementations (per ADR-010 compiler-driven evolution)
-pub use store::{
-    EventStoreError, EventStreamReader, EventStreamSlice, InMemoryEventStore, Operation, StreamId,
-    StreamVersion, StreamWriteEntry, StreamWrites,
-};
+// Re-export InMemoryEventStore from local store module
+pub use store::InMemoryEventStore;
 
 // Re-export Command derive macro when the "macros" feature is enabled (default)
 // Users can disable with: eventcore = { version = "...", default-features = false }
 #[cfg(feature = "macros")]
 pub use eventcore_macros::Command;
+
+// Re-export PostgreSQL backend when the "postgres" feature is enabled
+#[cfg(feature = "postgres")]
+pub use eventcore_postgres as postgres;
 
 /// Validates a business rule condition and returns early with
 /// `CommandError::BusinessRuleViolation` when the condition is false.
