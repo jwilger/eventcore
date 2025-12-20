@@ -28,8 +28,7 @@ Traditional event sourcing forces you into rigid aggregate boundaries. EventCore
 ```toml
 # Cargo.toml (EXAMPLE - not yet available on crates.io)
 [dependencies]
-eventcore = "0.1"                # includes macros by default
-eventcore-postgres = "0.1"       # PostgreSQL adapter (separate crate)
+eventcore = { version = "0.1", features = ["postgres"] }  # includes macros by default
 ```
 
 ```rust
@@ -147,8 +146,9 @@ Optimistic locking prevents conflicts automatically. Just execute your commands 
 ## Architecture
 
 ```
-eventcore/              # Core library - traits, types, and macros
-eventcore-postgres/     # PostgreSQL adapter
+eventcore/              # Core library - re-exports types, macros, and optional adapters
+eventcore-types/        # Shared vocabulary - traits and types (StreamId, Event, EventStore)
+eventcore-postgres/     # PostgreSQL adapter (enabled via feature flag)
 eventcore-macros/       # Derive macros (re-exported by eventcore)
 eventcore-testing/      # Contract test suite for backends
 ```
@@ -158,10 +158,14 @@ eventcore-testing/      # Contract test suite for backends
 | Feature | Default | Description |
 |---------|---------|-------------|
 | `macros` | Yes | Re-exports `#[derive(Command)]` from `eventcore-macros` |
+| `postgres` | No | Re-exports `PostgresEventStore` from `eventcore-postgres` |
 
 ```toml
 # Default (includes macros)
 eventcore = "0.1"
+
+# With PostgreSQL adapter
+eventcore = { version = "0.1", features = ["postgres"] }
 
 # Without macros (rare - for minimal builds)
 eventcore = { version = "0.1", default-features = false }
