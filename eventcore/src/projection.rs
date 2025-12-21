@@ -4,7 +4,51 @@
 //! - `LocalCoordinator`: Single-process coordination for projector leadership
 //! - `ProjectionRunner`: Orchestrates projector execution with event polling
 
-use crate::{Event, EventReader, Projector};
+use crate::{Event, EventReader, Projector, StreamPosition};
+
+/// In-memory checkpoint store for tracking projection progress.
+///
+/// `InMemoryCheckpointStore` stores checkpoint positions in memory. It is
+/// primarily useful for testing and single-process deployments where
+/// persistence across restarts is not required.
+///
+/// For production deployments requiring durability, use a persistent
+/// checkpoint store implementation.
+///
+/// # Example
+///
+/// ```ignore
+/// let checkpoint_store = InMemoryCheckpointStore::new();
+/// let runner = ProjectionRunner::new(projector, coordinator, &store)
+///     .with_checkpoint_store(checkpoint_store);
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryCheckpointStore {
+    checkpoints:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, StreamPosition>>>,
+}
+
+impl InMemoryCheckpointStore {
+    /// Create a new in-memory checkpoint store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Load checkpoint for the given projector name.
+    pub fn load(&self, projector_name: &str) -> Option<StreamPosition> {
+        self.checkpoints
+            .lock()
+            .ok()
+            .and_then(|guard| guard.get(projector_name).copied())
+    }
+
+    /// Save checkpoint for the given projector name.
+    pub fn save(&self, projector_name: &str, position: StreamPosition) {
+        if let Ok(mut guard) = self.checkpoints.lock() {
+            let _ = guard.insert(projector_name.to_string(), position);
+        }
+    }
+}
 
 /// Single-process coordinator for projector leadership.
 ///
@@ -79,6 +123,7 @@ where
     projector: P,
     _coordinator: C,
     store: S,
+    checkpoint_store: Option<InMemoryCheckpointStore>,
 }
 
 impl<P, C, S> ProjectionRunner<P, C, S>
@@ -104,7 +149,27 @@ where
             projector,
             _coordinator: coordinator,
             store,
+            checkpoint_store: None,
         }
+    }
+
+    /// Configure a checkpoint store for resumable processing.
+    ///
+    /// When a checkpoint store is configured, the runner will:
+    /// - Load the last checkpoint position on startup
+    /// - Only process events after the checkpoint position
+    /// - Save checkpoint positions after successful event processing
+    ///
+    /// # Parameters
+    ///
+    /// - `_checkpoint_store`: The checkpoint store for saving/loading positions
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    pub fn with_checkpoint_store(mut self, checkpoint_store: InMemoryCheckpointStore) -> Self {
+        self.checkpoint_store = Some(checkpoint_store);
+        self
     }
 
     /// Run the projection, processing events until completion.
@@ -128,19 +193,39 @@ where
     /// - Event store operations fail
     /// - The projector returns a fatal error
     pub async fn run(mut self) -> Result<(), ProjectionError> {
-        // Read all events from the store
-        let events: Vec<(P::Event, _)> = self
-            .store
-            .read_all()
-            .await
-            .map_err(|_| ProjectionError::Failed("failed to read events".to_string()))?;
+        // Load checkpoint if checkpoint store is configured
+        let last_checkpoint = self
+            .checkpoint_store
+            .as_ref()
+            .and_then(|cs| cs.load(self.projector.name()));
+
+        // Read events from the store (either all or after checkpoint)
+        let events: Vec<(P::Event, _)> = match last_checkpoint {
+            Some(checkpoint) => self
+                .store
+                .read_after(checkpoint)
+                .await
+                .map_err(|_| ProjectionError::Failed("failed to read events".to_string()))?,
+            None => self
+                .store
+                .read_all()
+                .await
+                .map_err(|_| ProjectionError::Failed("failed to read events".to_string()))?,
+        };
 
         // Apply each event to the projector
         let mut ctx = P::Context::default();
+        let mut last_position = last_checkpoint;
         for (event, position) in events {
             self.projector
                 .apply(event, position, &mut ctx)
                 .map_err(|_| ProjectionError::Failed("projector apply failed".to_string()))?;
+            last_position = Some(position);
+        }
+
+        // Save checkpoint if checkpoint store is configured
+        if let (Some(cs), Some(position)) = (&self.checkpoint_store, last_position) {
+            cs.save(self.projector.name(), position);
         }
 
         Ok(())

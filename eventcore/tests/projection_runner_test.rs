@@ -11,8 +11,8 @@
 //! - And developer can get a working projection with minimal code
 
 use eventcore::{
-    Event, EventStore, InMemoryEventStore, LocalCoordinator, ProjectionRunner, Projector, StreamId,
-    StreamPosition, StreamVersion, StreamWrites,
+    Event, EventStore, InMemoryCheckpointStore, InMemoryEventStore, LocalCoordinator,
+    ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -113,4 +113,111 @@ async fn minimal_projector_processes_events_with_sensible_defaults() {
 
     // Then: Both events were processed
     assert_eq!(event_count.load(Ordering::SeqCst), 2);
+}
+
+/// Integration test for eventcore-dvp: Projection Runner with Checkpoint Resumption
+///
+/// Scenario: Developer projector resumes from checkpoint after restart
+/// - Given projector previously processed events up to position 42
+/// - And projector stored checkpoint at position 42
+/// - When projector restarts and calls runner.run()
+/// - Then runner polls for events after position 42
+/// - And previously processed events are not reprocessed
+#[tokio::test]
+async fn projector_resumes_from_checkpoint_after_restart() {
+    // Given: Developer has an event store with 5 events
+    let store = InMemoryEventStore::new();
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    // Seed 5 events into the store
+    for i in 0..5 {
+        let event = CounterIncremented {
+            counter_id: counter_id.clone(),
+        };
+        let writes = StreamWrites::new()
+            .register_stream(counter_id.clone(), StreamVersion::new(i))
+            .expect("register stream")
+            .append(event)
+            .expect("append event");
+        store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+    }
+
+    // And: A shared checkpoint store that persists across "restarts"
+    // InMemoryCheckpointStore implements CheckpointStore trait
+    let checkpoint_store = InMemoryCheckpointStore::new();
+
+    // And: A projector that tracks which events it processes
+    let processed_events = Arc::new(std::sync::Mutex::new(Vec::<StreamPosition>::new()));
+    let projector = TrackingProjector::new(processed_events.clone());
+
+    // When: Developer runs the projector the first time with checkpoint store
+    let coordinator = LocalCoordinator::new();
+    let runner = ProjectionRunner::new(projector, coordinator, &store)
+        .with_checkpoint_store(checkpoint_store.clone());
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), runner.run())
+        .await
+        .expect("runner should complete within timeout")
+        .expect("runner should succeed");
+
+    // Then: All 5 events were processed
+    assert_eq!(processed_events.lock().unwrap().len(), 5);
+
+    // Clear the tracking to simulate a fresh projector instance
+    processed_events.lock().unwrap().clear();
+
+    // When: Developer "restarts" - creates a new projector instance and runs again
+    // The checkpoint store persists across restarts
+    let restarted_projector = TrackingProjector::new(processed_events.clone());
+    let coordinator2 = LocalCoordinator::new();
+
+    // Use the same checkpoint store - it remembers where we left off
+    let runner2 = ProjectionRunner::new(restarted_projector, coordinator2, &store)
+        .with_checkpoint_store(checkpoint_store);
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), runner2.run())
+        .await
+        .expect("runner should complete within timeout")
+        .expect("runner should succeed");
+
+    // Then: No events were reprocessed (since no new events were added)
+    assert_eq!(
+        processed_events.lock().unwrap().len(),
+        0,
+        "previously processed events should not be reprocessed after restart"
+    );
+}
+
+/// Projector that tracks which events it processes (by position).
+struct TrackingProjector {
+    processed: Arc<std::sync::Mutex<Vec<StreamPosition>>>,
+}
+
+impl TrackingProjector {
+    fn new(processed: Arc<std::sync::Mutex<Vec<StreamPosition>>>) -> Self {
+        Self { processed }
+    }
+}
+
+impl Projector for TrackingProjector {
+    type Event = CounterIncremented;
+    type Error = std::convert::Infallible;
+    type Context = ();
+
+    fn apply(
+        &mut self,
+        _event: Self::Event,
+        position: StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        self.processed.lock().unwrap().push(position);
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "tracking-projector"
+    }
 }

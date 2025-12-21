@@ -143,6 +143,24 @@ pub trait EventReader {
     fn read_all<E: crate::Event>(
         &self,
     ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send;
+
+    /// Read events after the given position in global order.
+    ///
+    /// Returns a vector of tuples containing the event and its global position.
+    /// Only events with position > after_position are returned.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `E`: The event type to deserialize events as
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Vec<(E, StreamPosition)>)`: Events with their positions
+    /// - `Err(Self::Error)`: If the read operation fails
+    fn read_after<E: crate::Event>(
+        &self,
+        after_position: StreamPosition,
+    ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send;
 }
 
 /// Blanket implementation allowing EventReader trait to work with references.
@@ -151,5 +169,12 @@ impl<T: EventReader + Sync> EventReader for &T {
 
     async fn read_all<E: crate::Event>(&self) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
         (*self).read_all().await
+    }
+
+    async fn read_after<E: crate::Event>(
+        &self,
+        after_position: StreamPosition,
+    ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
+        (*self).read_after(after_position).await
     }
 }

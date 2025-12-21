@@ -168,6 +168,34 @@ impl EventReader for InMemoryEventStore {
 
         Ok(events)
     }
+
+    async fn read_after<E: Event>(
+        &self,
+        after_position: StreamPosition,
+    ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
+        let data = self
+            .data
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure {
+                operation: Operation::ReadStream,
+            })?;
+
+        let after_idx = after_position.into_inner() as usize;
+
+        let events: Vec<(E, StreamPosition)> = data
+            .global_log
+            .iter()
+            .enumerate()
+            .skip(after_idx + 1)
+            .filter_map(|(idx, (_event_type, event_data))| {
+                serde_json::from_value::<E>(event_data.clone())
+                    .ok()
+                    .map(|e| (e, StreamPosition::new(idx as u64)))
+            })
+            .collect();
+
+        Ok(events)
+    }
 }
 
 #[cfg(test)]
