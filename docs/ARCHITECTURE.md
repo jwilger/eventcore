@@ -1,6 +1,6 @@
 # EventCore Architecture
 
-**Document Version:** 2.1
+**Document Version:** 2.3
 **Date:** 2025-12-20
 **Phase:** 4 - Architecture Synthesis
 
@@ -45,11 +45,11 @@ eventcore/                    (workspace root, virtual manifest)
 
 | Crate | Purpose | Dependencies |
 |-------|---------|--------------|
-| `eventcore-types` | Shared vocabulary: traits (`EventStore`, `Event`, `CommandLogic`) and types (`StreamId`, `StreamWrites`, errors) | Minimal |
-| `eventcore` | Main entry point: `execute()`, `InMemoryEventStore`, retry logic, re-exports from `eventcore-types` | `eventcore-types`, optionally `eventcore-postgres` via feature |
+| `eventcore-types` | Shared vocabulary: traits (`EventStore`, `Event`, `CommandLogic`, `ProjectorCoordinator`) and types (`StreamId`, `StreamWrites`, errors) | Minimal |
+| `eventcore` | Main entry point: `execute()`, `InMemoryEventStore`, `LocalCoordinator`, retry logic, re-exports from `eventcore-types` | `eventcore-types`, optionally `eventcore-postgres` via feature |
 | `eventcore-macros` | Procedural macros: `#[derive(Command)]`, `require!` | syn, quote, proc-macro2 |
-| `eventcore-postgres` | PostgreSQL backend implementing `EventStore` and `EventReader` | `eventcore-types`, sqlx |
-| `eventcore-testing` | Contract tests, chaos harness, test fixtures (dev-dependency) | `eventcore-types` |
+| `eventcore-postgres` | PostgreSQL backend implementing `EventStore`, `EventReader`, and `ProjectorCoordinator` | `eventcore-types`, sqlx |
+| `eventcore-testing` | Contract tests (storage, reader, coordinator), chaos harness, test fixtures (dev-dependency) | `eventcore-types` |
 
 ### Feature Flag Ergonomics
 
@@ -425,10 +425,12 @@ This design eliminates the coordination problems of separate checkpoint manageme
 
 ### Projection Execution Loop
 
-The projector execution follows a simple pattern:
+The projector execution follows a simple pattern with required coordination:
 
-```
-loop {
+```rust
+guard = coordinator.acquire(projector.name())
+while guard.is_valid() {
+    guard.heartbeat()
     events = poll_events_after(checkpoint)
     for event in events {
         apply_event_in_transaction(event)
@@ -436,7 +438,46 @@ loop {
     }
     sleep_if_no_events()
 }
+// guard dropped - leadership released
 ```
+
+The coordinator is a required parameter to the projection runner, ensuring that distributed deployments cannot accidentally run uncoordinated projectors.
+
+### Projector Configuration
+
+The projection runner accepts per-projector configuration for three distinct concerns. Each concern has different units, different defaults, and different operational meaning - they are orthogonal and should not be conflated.
+
+#### Poll Configuration (Infrastructure Level)
+
+Configuration for the polling loop itself:
+
+- **poll_interval** - Duration between successful polls that returned events (default: 100ms)
+- **empty_poll_backoff** - Duration to wait when poll returns no events (default: 1 second, configurable backoff strategy)
+- **poll_failure_backoff** - Backoff strategy when `read_events_after()` fails (default: exponential, 100ms base, 30s max)
+- **max_consecutive_poll_failures** - After this many failures, projector gives up and exits (default: 10, or "infinite" for never give up)
+
+These parameters control how the projector interacts with the event store when there are no events to process or when infrastructure is degraded. Poll failures are about the polling mechanism itself (database connection errors, network timeouts, transient unavailability during failover), not about processing any particular event.
+
+A projector that cannot reach the event store indefinitely is not useful. At some point, it should exit and let the orchestration layer (Kubernetes, systemd) restart it. "Infinite" mode is available for projectors in environments without orchestration.
+
+#### Event Retry Configuration (Application Level)
+
+See the Error Handling Strategies section for event retry configuration details.
+
+#### Heartbeat Configuration (Coordination Level)
+
+See the Heartbeat and Liveness Detection section under Projector Coordination for heartbeat configuration details.
+
+#### Per-Projector Tuning
+
+Different projectors have different characteristics:
+
+- A real-time notification projector needs sub-second poll intervals and tight liveness detection
+- A daily reporting projector might poll every minute with relaxed heartbeat intervals
+- A projector doing expensive external API calls needs longer event retry delays
+- A projector updating critical financial data prioritizes correctness over speed
+
+Per-projector configuration lets each projector match its operational profile rather than forcing all projectors to the lowest common denominator. Configuration uses builder pattern with sensible defaults - most projectors work with zero configuration.
 
 ### Error Handling Strategies
 
@@ -446,9 +487,20 @@ Three strategies are available for projection failures:
 
 - **Skip** - Log the error and continue to next event. Use for non-critical projections that can tolerate gaps (caches, dashboards, notifications).
 
-- **Retry** - Retry with optional delay for transient failures. Configurable max attempts and backoff policy.
+- **Retry** - Retry with configurable backoff for transient failures.
 
 The default Fatal behavior ensures applications fail fast rather than silently drift. Skip and Retry require explicit opt-in, documenting the application's tolerance for gaps or retries.
+
+#### Event Retry Configuration
+
+When `on_error()` returns `FailureStrategy::Retry`, the retry behavior is controlled by event retry configuration:
+
+- **max_retry_attempts** - Maximum retries before escalating to Fatal (default: 3)
+- **retry_delay** - Initial delay between retries (default: 100ms)
+- **retry_backoff_multiplier** - Multiplier for subsequent retry delays (default: 2.0)
+- **max_retry_delay** - Cap on retry delay (default: 5 seconds)
+
+The `on_error()` callback decides WHETHER to retry; the configuration controls HOW retries behave. This separation lets projector implementations focus on failure classification while operational concerns like retry timing are tuned per deployment.
 
 ### Ordering Preservation
 
@@ -459,6 +511,82 @@ All error handling strategies preserve temporal ordering:
 - **Retry**: Retries current event, blocks subsequent events
 
 This is a hard constraint: events are never processed out of order.
+
+### Projector Coordination for Distributed Deployments
+
+Production systems typically run multiple application instances for availability and load distribution. The `ProjectorCoordinator` trait ensures correct operation by providing leader election for projectors.
+
+```rust
+pub trait ProjectorCoordinator: Send + Sync + 'static {
+    type Guard: CoordinatorGuard;
+
+    /// Attempt to acquire leadership for the named projector.
+    /// Returns a guard that releases leadership when dropped.
+    async fn acquire(&self, projector_name: &str) -> Result<Self::Guard, CoordinationError>;
+}
+
+pub trait CoordinatorGuard: Send + 'static {
+    /// Check if leadership is still held (including heartbeat validity).
+    fn is_valid(&self) -> bool;
+
+    /// Renew leadership by updating heartbeat.
+    fn heartbeat(&self) -> Result<(), CoordinationError>;
+}
+```
+
+Key design principles:
+
+- **Required Parameter**: The projection runner requires a coordinator. This makes coordination failures compile-time errors rather than production incidents. Single-process deployments use an explicit `LocalCoordinator` rather than having "no coordination" as an invisible default.
+
+- **RAII Guard Pattern**: Leadership acquisition returns a guard that releases leadership when dropped. This ensures crash safety: if the process terminates unexpectedly, leadership is released automatically (via database connection close, process termination, etc.).
+
+- **Leadership Validity Checking**: Guards must be checkable for continued validity. Leadership can be lost unexpectedly due to network partitions or database failover. The projection loop exits gracefully when leadership is lost rather than corrupting state.
+
+- **Backend-Specific Implementations**:
+  - PostgreSQL uses session-scoped advisory locks (released automatically on disconnect)
+  - In-memory uses process-local mutexes (for testing and single-process deployments)
+  - Future backends use their natural primitives
+
+#### LocalCoordinator for Single-Process
+
+A coordinator implementation that always grants leadership immediately. Usage is explicit, making "I am running single-process and accept the risks" a deliberate choice:
+
+```rust
+let coordinator = LocalCoordinator::new();
+run_projector(projector, event_reader, coordinator).await;
+```
+
+#### Why Leader Election, Not Partition Assignment
+
+Sequential processing (a hard constraint for ordering preservation) eliminates the need for partition assignment. The question is not "which instance processes which subset of events" but rather "which single instance processes events for this projector."
+
+For users who need Kafka-style partition-based scaling, an escape hatch exists: create a single-threaded projector that pushes events onto a Kafka (or similar) log, then let that external system handle partitioning and parallel consumption. EventCore handles the leader-elected, sequential projection to the external system; that external system provides the partition assignment semantics.
+
+#### Heartbeat and Liveness Detection
+
+Heartbeat configuration is part of ProjectorCoordinator because liveness is a coordination concern, not a projection concern:
+
+- **heartbeat_interval** - How often the leader must renew leadership (default: 5 seconds)
+- **heartbeat_timeout** - How long before missed heartbeat causes leadership loss (default: 15 seconds, must be > heartbeat_interval)
+
+The projection runner calls `guard.heartbeat()` periodically. The coordinator implementation decides what that means (e.g., updating a timestamp in the checkpoint table, renewing an advisory lock with timeout). Guard validity (`guard.is_valid()`) returns false if heartbeat has been missed, causing the projection loop to exit gracefully.
+
+Heartbeat timeout should be 2-3x the heartbeat interval to tolerate transient delays (network jitter, GC pauses) while still detecting truly hung projectors. A hung projector (infinite loop, deadlock, network partition with connection alive) would otherwise block failover indefinitely since the advisory lock remains held.
+
+Backend implementations use their natural primitives:
+- PostgreSQL can use `pg_advisory_lock` with timeout, or update a timestamp column
+- In-memory can use tokio timeout on mutex
+- External coordinators (etcd, Consul) have built-in TTL mechanisms
+
+#### Contract Tests for Coordinators
+
+Per the contract testing pattern, coordinators have contract tests verifying:
+
+- Mutual exclusion (only one leader at a time)
+- Crash-safe release (leadership released when connection drops)
+- Blocking/non-blocking acquisition semantics
+- Guard validity detection after leadership loss
+- Heartbeat timeout enforcement
 
 ## Type System Patterns
 
@@ -492,6 +620,7 @@ Narrow traits keep responsibilities focused:
 - `EventStore` - Storage operations (implemented by backends)
 - `EventReader` - Event polling for projections
 - `Projector` - Read model construction
+- `ProjectorCoordinator` - Leader election for distributed deployments
 
 ## Error Handling
 
@@ -504,6 +633,8 @@ Narrow traits keep responsibilities focused:
 - **ValidationError** - Raised by newtype constructors and automatically bubbled up through `CommandError`.
 
 - **SubscriptionError** - Covers projection failures (deserialization, unknown event types).
+
+- **CoordinationError** - Represents coordination failures (leadership acquisition failure, lost leadership, backend communication errors).
 
 ### Retry Classification
 
@@ -524,20 +655,22 @@ Errors carry diagnostic information:
 
 ## Reference Implementations and Tooling
 
-### InMemoryEventStore
+### InMemoryEventStore and LocalCoordinator
 
-Included in `eventcore` with zero third-party dependencies. Supports:
+Included in `eventcore` with zero third-party dependencies:
 
+- **InMemoryEventStore**: Full EventStore and EventReader implementation for testing and development
+- **LocalCoordinator**: Process-local mutex-based coordination for single-instance deployments
 - Optional chaos hooks (ConflictOnceStore, CountingEventStore)
-- EventReader implementation for projection testing
-- Full contract test compliance
+- Full contract test compliance for both storage and coordination
 
 ### External Backends
 
 Production backends (e.g., `eventcore-postgres`) implement the same traits:
 
 - Full EventStore and EventReader support
-- Contract test suite integration in CI
+- ProjectorCoordinator implementation using backend-native primitives
+- Contract test suite integration in CI (storage, reader, and coordinator)
 - Additional observability and operational features
 
 ### Testing Utilities
@@ -546,6 +679,7 @@ The `eventcore-testing` crate provides:
 
 - Contract test suite for EventStore implementations
 - Projector contract tests for EventReader implementations
+- Coordinator contract tests for ProjectorCoordinator implementations
 - Property-based testing helpers
 - Integration scenario utilities
 
@@ -564,11 +698,13 @@ graph TB
         ES[EventStore Trait]
         ER[EventReader Trait]
         PT[Projector Trait]
+        PC[ProjectorCoordinator Trait]
     end
 
     subgraph Storage Backend
         PG[PostgreSQL / InMemory]
         Schema[Event Schema]
+        Locks[Advisory Locks / Mutex]
     end
 
     Cmd --> Exec
@@ -577,7 +713,9 @@ graph TB
 
     Proj --> PT
     PT --> ER
+    PT --> PC
     ER --> PG
+    PC --> Locks
 
     Domain --> Cmd
     Domain --> Proj
@@ -585,6 +723,7 @@ graph TB
     style Exec fill:#e1f5ff
     style ES fill:#e1ffe1
     style ER fill:#f5e1ff
+    style PC fill:#ffe1f5
 ```
 
 ### Single-Process Deployment
@@ -593,15 +732,16 @@ For simpler deployments:
 
 - InMemoryEventStore for development and testing
 - Single projector instance per projection type
-- No coordination infrastructure required
+- LocalCoordinator for explicit single-process opt-in
 
 ### Production Deployment
 
 For production systems:
 
 - PostgreSQL backend with ACID guarantees
-- Multiple projector instances can partition event space
-- Contract tests verify backend compliance
+- PostgreSQL advisory locks for projector coordination (via `PostgresCoordinator`)
+- Multiple application instances for availability - projectors automatically elect leaders
+- Contract tests verify backend and coordinator compliance
 - Observability via structured logging and metrics
 
 ### Dependency Configuration
@@ -662,8 +802,10 @@ EventCore provides a cohesive architecture for event-sourced applications:
 2. **Deterministic, atomic execution** of complex multi-stream business operations
 3. **Automatic concurrency management** and retry behavior that keeps business code simple
 4. **Poll-based projections** with integrated checkpoint management for correct read models
-5. **Rich metadata and observability** hooks for auditing, compliance, and debugging
-6. **Pluggable storage backends** validated by a shared contract suite
-7. **Feature flag ergonomics** for adapter configuration matching Rust ecosystem patterns
+5. **Distributed deployment support** via ProjectorCoordinator for leader election with heartbeat-based liveness detection
+6. **Per-projector configuration** with three orthogonal concerns: poll (infrastructure), event retry (application), and heartbeat (coordination)
+7. **Rich metadata and observability** hooks for auditing, compliance, and debugging
+8. **Pluggable storage backends** validated by a shared contract suite
+9. **Feature flag ergonomics** for adapter configuration matching Rust ecosystem patterns
 
 This document is the single source of truth for EventCore's architecture and serves as the working reference for all implementation work.
