@@ -51,6 +51,7 @@
 
 mod command;
 mod errors;
+mod projection;
 mod store;
 mod validation;
 
@@ -59,6 +60,7 @@ pub use command::{
     StreamResolver,
 };
 pub use errors::CommandError;
+pub use projection::{EventReader, Projector, StreamPosition};
 pub use store::{
     EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
     StreamVersion, StreamWriteEntry, StreamWrites,

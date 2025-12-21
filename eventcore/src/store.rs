@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
-    StreamVersion, StreamWriteEntry, StreamWrites,
+    Event, EventReader, EventStore, EventStoreError, EventStreamReader, EventStreamSlice,
+    Operation, StreamId, StreamPosition, StreamVersion, StreamWriteEntry, StreamWrites,
 };
 
 /// In-memory event store implementation for testing.
@@ -37,8 +37,15 @@ use crate::{
 /// InMemoryEventStore uses interior mutability for concurrent access.
 type StreamData = (Vec<Box<dyn std::any::Any + Send>>, StreamVersion);
 
+/// Internal storage combining per-stream data with global event ordering.
+struct StoreData {
+    streams: HashMap<StreamId, StreamData>,
+    /// Global log stores (event_type, event_data_json) for EventReader
+    global_log: Vec<(String, serde_json::Value)>,
+}
+
 pub struct InMemoryEventStore {
-    streams: std::sync::Mutex<HashMap<StreamId, StreamData>>,
+    data: std::sync::Mutex<StoreData>,
 }
 
 impl InMemoryEventStore {
@@ -48,7 +55,10 @@ impl InMemoryEventStore {
     /// All streams start at version 0 (no events).
     pub fn new() -> Self {
         Self {
-            streams: std::sync::Mutex::new(HashMap::new()),
+            data: std::sync::Mutex::new(StoreData {
+                streams: HashMap::new(),
+                global_log: Vec::new(),
+            }),
         }
     }
 }
@@ -64,13 +74,14 @@ impl EventStore for InMemoryEventStore {
         &self,
         stream_id: StreamId,
     ) -> Result<EventStreamReader<E>, EventStoreError> {
-        let streams = self
-            .streams
+        let data = self
+            .data
             .lock()
             .map_err(|_| EventStoreError::StoreFailure {
                 operation: Operation::ReadStream,
             })?;
-        let events = streams
+        let events = data
+            .streams
             .get(&stream_id)
             .map(|(boxed_events, _version)| {
                 boxed_events
@@ -88,8 +99,8 @@ impl EventStore for InMemoryEventStore {
         &self,
         writes: StreamWrites,
     ) -> Result<EventStreamSlice, EventStoreError> {
-        let mut streams = self
-            .streams
+        let mut data = self
+            .data
             .lock()
             .map_err(|_| EventStoreError::StoreFailure {
                 operation: Operation::AppendEvents,
@@ -98,7 +109,8 @@ impl EventStore for InMemoryEventStore {
 
         // Check all version constraints before writing any events
         for (stream_id, expected_version) in &expected_versions {
-            let current_version = streams
+            let current_version = data
+                .streams
                 .get(stream_id)
                 .map(|(_events, version)| *version)
                 .unwrap_or_else(|| StreamVersion::new(0));
@@ -111,9 +123,17 @@ impl EventStore for InMemoryEventStore {
         // All versions match - proceed with writes
         for entry in writes.into_entries() {
             let StreamWriteEntry {
-                stream_id, event, ..
+                stream_id,
+                event,
+                event_type,
+                event_data,
             } = entry;
-            let (events, version) = streams
+
+            // Store in global log for EventReader
+            data.global_log.push((event_type.to_string(), event_data));
+
+            let (events, version) = data
+                .streams
                 .entry(stream_id)
                 .or_insert_with(|| (Vec::new(), StreamVersion::new(0)));
             events.push(event);
@@ -121,6 +141,32 @@ impl EventStore for InMemoryEventStore {
         }
 
         Ok(EventStreamSlice)
+    }
+}
+
+impl EventReader for InMemoryEventStore {
+    type Error = EventStoreError;
+
+    async fn read_all<E: Event>(&self) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
+        let data = self
+            .data
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure {
+                operation: Operation::ReadStream,
+            })?;
+
+        let events: Vec<(E, StreamPosition)> = data
+            .global_log
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, (_event_type, event_data))| {
+                serde_json::from_value::<E>(event_data.clone())
+                    .ok()
+                    .map(|e| (e, StreamPosition::new(idx as u64)))
+            })
+            .collect();
+
+        Ok(events)
     }
 }
 
