@@ -568,4 +568,134 @@ mod tests {
             "StreamId should reject close bracket glob metacharacter"
         );
     }
+
+    #[test]
+    fn into_entries_returns_appended_events() {
+        let stream_id = StreamId::try_new("into-entries-test").expect("valid stream id");
+        let event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "test-data".to_string(),
+        };
+
+        let writes = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(0))
+            .and_then(|w| w.append(event))
+            .expect("append should succeed");
+
+        let entries = writes.into_entries();
+
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn stream_version_increment_adds_one() {
+        let v0 = StreamVersion::new(5);
+
+        let v1 = v0.increment();
+
+        assert_eq!(v1, StreamVersion::new(6));
+    }
+
+    #[test]
+    fn event_stream_reader_len_returns_event_count() {
+        let stream_id = StreamId::try_new("reader-len-test").expect("valid stream id");
+        let events = vec![
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "first".to_string(),
+            },
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "second".to_string(),
+            },
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "third".to_string(),
+            },
+        ];
+
+        let reader = EventStreamReader::new(events);
+
+        assert_eq!(reader.len(), 3);
+    }
+
+    #[test]
+    fn event_stream_reader_is_empty_returns_true_for_empty() {
+        let reader: EventStreamReader<TestEvent> = EventStreamReader::new(vec![]);
+
+        assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn event_stream_reader_is_empty_returns_false_for_nonempty() {
+        let stream_id = StreamId::try_new("reader-nonempty-test").expect("valid stream id");
+        let events = vec![TestEvent {
+            stream_id: stream_id.clone(),
+            data: "event".to_string(),
+        }];
+
+        let reader = EventStreamReader::new(events);
+
+        assert!(!reader.is_empty());
+    }
+
+    #[test]
+    fn event_stream_reader_first_returns_first_event() {
+        let stream_id = StreamId::try_new("reader-first-test").expect("valid stream id");
+        let first_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "first".to_string(),
+        };
+        let events = vec![
+            first_event.clone(),
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "second".to_string(),
+            },
+        ];
+
+        let reader = EventStreamReader::new(events);
+
+        assert_eq!(reader.first(), Some(&first_event));
+    }
+
+    #[test]
+    fn event_stream_reader_iter_yields_all_events() {
+        let stream_id = StreamId::try_new("reader-iter-test").expect("valid stream id");
+        let events = vec![
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "first".to_string(),
+            },
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "second".to_string(),
+            },
+        ];
+
+        let reader = EventStreamReader::new(events.clone());
+        let collected: Vec<&TestEvent> = reader.iter().collect();
+
+        assert_eq!(collected, events.iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn event_stream_reader_into_iter_yields_all_events() {
+        let stream_id = StreamId::try_new("reader-into-iter-test").expect("valid stream id");
+        let events = vec![
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "first".to_string(),
+            },
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "second".to_string(),
+            },
+        ];
+
+        let reader = EventStreamReader::new(events.clone());
+        let collected: Vec<TestEvent> = reader.into_iter().collect();
+
+        assert_eq!(collected, events);
+    }
 }

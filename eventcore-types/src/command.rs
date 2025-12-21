@@ -329,4 +329,17 @@ mod tests {
 
         assert_eq!(observed, (1, false, 2, false, true, true));
     }
+
+    #[test]
+    fn iter_yields_declared_streams() {
+        let primary = stream("accounts::primary");
+        let secondary = stream("audit::shadow");
+        let declarations =
+            StreamDeclarations::try_from_streams(vec![primary.clone(), secondary.clone()])
+                .expect("multi-stream declaration should succeed");
+
+        let collected: Vec<&StreamId> = declarations.iter().collect();
+
+        assert_eq!(collected, vec![&primary, &secondary]);
+    }
 }
