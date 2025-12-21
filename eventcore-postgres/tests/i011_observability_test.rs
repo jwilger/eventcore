@@ -1,7 +1,7 @@
 mod common;
 
 use common::{PostgresTestFixture, TestEvent, unique_stream_id};
-use eventcore::{EventStore, StreamVersion, StreamWrites};
+use eventcore_types::{EventStore, StreamVersion, StreamWrites};
 
 #[tokio::test]
 #[tracing_test::traced_test]

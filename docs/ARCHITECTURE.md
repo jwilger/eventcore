@@ -1,7 +1,7 @@
 # EventCore Architecture
 
-**Document Version:** 2.0
-**Date:** 2025-12-18
+**Document Version:** 2.1
+**Date:** 2025-12-20
 **Phase:** 4 - Architecture Synthesis
 
 ## Overview
@@ -21,6 +21,72 @@ The architecture follows a clear separation between infrastructure concerns (han
 4. **Free-Function APIs** - Public entry points are free functions with explicit dependencies (`execute(command, store)`), keeping the API surface minimal and composable. Structs exist only when grouping configuration or results adds clarity.
 
 5. **Developer Ergonomics** - The `#[derive(Command)]` macro generates all infrastructure boilerplate. Developers write only domain code (state reconstruction + business logic). Automatic retries, contract-test tooling, and in-memory storage support a "working command in 30 minutes" onboarding goal.
+
+## Crate Organization
+
+EventCore uses a multi-crate workspace designed for feature flag ergonomics while maintaining clean dependency boundaries.
+
+### Workspace Structure
+
+```
+eventcore/                    (workspace root, virtual manifest)
+  eventcore/                  (main crate - implementation + feature flags)
+    Cargo.toml
+    src/lib.rs               (execute(), InMemoryEventStore, retry logic, re-exports)
+  eventcore-types/           (shared vocabulary - traits and types)
+    Cargo.toml
+    src/                     (EventStore trait, Event trait, StreamId, etc.)
+  eventcore-macros/          (all macros: #[derive(Command)], require!)
+  eventcore-postgres/        (PostgreSQL backend, depends on eventcore-types)
+  eventcore-testing/         (dev-dependency testing utilities)
+```
+
+### Crate Responsibilities
+
+| Crate | Purpose | Dependencies |
+|-------|---------|--------------|
+| `eventcore-types` | Shared vocabulary: traits (`EventStore`, `Event`, `CommandLogic`) and types (`StreamId`, `StreamWrites`, errors) | Minimal |
+| `eventcore` | Main entry point: `execute()`, `InMemoryEventStore`, retry logic, re-exports from `eventcore-types` | `eventcore-types`, optionally `eventcore-postgres` via feature |
+| `eventcore-macros` | Procedural macros: `#[derive(Command)]`, `require!` | syn, quote, proc-macro2 |
+| `eventcore-postgres` | PostgreSQL backend implementing `EventStore` and `EventReader` | `eventcore-types`, sqlx |
+| `eventcore-testing` | Contract tests, chaos harness, test fixtures (dev-dependency) | `eventcore-types` |
+
+### Feature Flag Ergonomics
+
+Users enable storage adapters via feature flags on the main crate:
+
+```toml
+[dependencies]
+eventcore = { version = "0.1", features = ["postgres"] }
+```
+
+The main crate re-exports enabled adapters:
+
+```rust
+pub use eventcore_types::*;
+
+#[cfg(feature = "macros")]
+pub use eventcore_macros::Command;
+
+#[cfg(feature = "postgres")]
+pub use eventcore_postgres as postgres;
+```
+
+This pattern matches the Rust ecosystem norm (tokio, sqlx, reqwest) while keeping heavy dependencies isolated in separate crates.
+
+### Dependency Flow
+
+```
+eventcore-types  <--  eventcore-postgres
+       ^                    |
+       |                    | (via feature flag)
+       +---  eventcore  <---+
+                ^
+                |
+       eventcore-macros (feature gated)
+```
+
+The `eventcore-types` crate breaks potential circular dependencies by providing the shared vocabulary that both `eventcore` and adapter crates depend on.
 
 ## System Blueprint
 
@@ -164,6 +230,10 @@ Events carry type identity through the `EventTypeName` mechanism:
 - Each event type has a string name (e.g., "MoneyDeposited")
 - The Event trait provides `event_type_name()` and `all_type_names()` methods
 - Type names enable filtering, routing, and cross-language interoperability
+
+### StreamId Character Restrictions
+
+StreamId values cannot contain glob metacharacters (`*`, `?`, `[`, `]`) to enable unambiguous future pattern matching in subscription queries. Valid identifiers include UUIDs, hierarchical paths (`tenant/account/123`), and composite keys (`order-2024-12-10-001`).
 
 ### Metadata Pipeline
 
@@ -534,6 +604,25 @@ For production systems:
 - Contract tests verify backend compliance
 - Observability via structured logging and metrics
 
+### Dependency Configuration
+
+Users configure storage backends via feature flags:
+
+```toml
+# Development/testing (default)
+[dependencies]
+eventcore = "0.1"
+
+# Production with PostgreSQL
+[dependencies]
+eventcore = { version = "0.1", features = ["postgres"] }
+
+# With macros (default, can be disabled)
+eventcore = { version = "0.1", default-features = false }
+```
+
+Third-party adapter implementations depend on `eventcore-types` rather than the full `eventcore` crate, keeping their dependency footprint minimal.
+
 ## Quality Attributes
 
 ### Correctness
@@ -563,6 +652,7 @@ For production systems:
 - Custom projections via Projector trait
 - Application-defined event metadata
 - Optional StreamResolver for dynamic discovery
+- Adapter crates depend only on `eventcore-types`, enabling independent development
 
 ## Summary
 
@@ -574,5 +664,6 @@ EventCore provides a cohesive architecture for event-sourced applications:
 4. **Poll-based projections** with integrated checkpoint management for correct read models
 5. **Rich metadata and observability** hooks for auditing, compliance, and debugging
 6. **Pluggable storage backends** validated by a shared contract suite
+7. **Feature flag ergonomics** for adapter configuration matching Rust ecosystem patterns
 
 This document is the single source of truth for EventCore's architecture and serves as the working reference for all implementation work.

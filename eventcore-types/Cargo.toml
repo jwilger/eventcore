@@ -1,0 +1,18 @@
+[package]
+name = "eventcore-types"
+version = "0.1.0"
+edition = "2024"
+description = "Shared vocabulary types and traits for EventCore event sourcing library"
+license = "MIT"
+
+[lints.rust]
+warnings = "deny"
+
+[dependencies]
+nutype = { version = "0.6.2", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0.17"
+
+[dev-dependencies]
+proptest = "1.9.0"

@@ -1,4 +1,4 @@
-use crate::Event;
+use crate::command::Event;
 use crate::validation::no_glob_metacharacters;
 use nutype::nutype;
 use serde_json::Value;
@@ -402,119 +402,6 @@ impl<E: Event> IntoIterator for EventStreamReader<E> {
 /// TODO: Refine with actual metadata returned after successful append.
 pub struct EventStreamSlice;
 
-/// In-memory event store implementation for testing.
-///
-/// InMemoryEventStore provides a lightweight, zero-dependency storage backend
-/// for EventCore integration tests and development. It implements the EventStore
-/// trait using standard library collections (HashMap, BTreeMap) with optimistic
-/// concurrency control via version checking.
-///
-/// This implementation is included in the main eventcore crate (per ADR-011)
-/// because it has zero heavyweight dependencies and is essential testing
-/// infrastructure for all EventCore users.
-///
-/// # Example
-///
-/// ```ignore
-/// use eventcore::InMemoryEventStore;
-///
-/// let store = InMemoryEventStore::new();
-/// // Use store with execute() function
-/// ```
-///
-/// # Thread Safety
-///
-/// InMemoryEventStore uses interior mutability for concurrent access.
-/// TODO: Determine if Arc<Mutex<>> or other synchronization primitive needed.
-type StreamData = (Vec<Box<dyn std::any::Any + Send>>, StreamVersion);
-
-pub struct InMemoryEventStore {
-    streams: std::sync::Mutex<HashMap<StreamId, StreamData>>,
-}
-
-impl InMemoryEventStore {
-    /// Create a new in-memory event store.
-    ///
-    /// Returns an empty event store ready for command execution.
-    /// All streams start at version 0 (no events).
-    pub fn new() -> Self {
-        Self {
-            streams: std::sync::Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-impl Default for InMemoryEventStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EventStore for InMemoryEventStore {
-    async fn read_stream<E: Event>(
-        &self,
-        stream_id: StreamId,
-    ) -> Result<EventStreamReader<E>, EventStoreError> {
-        let streams = self
-            .streams
-            .lock()
-            .map_err(|_| EventStoreError::StoreFailure {
-                operation: Operation::ReadStream,
-            })?;
-        let events = streams
-            .get(&stream_id)
-            .map(|(boxed_events, _version)| {
-                boxed_events
-                    .iter()
-                    .filter_map(|boxed| boxed.downcast_ref::<E>())
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Ok(EventStreamReader::new(events))
-    }
-
-    async fn append_events(
-        &self,
-        writes: StreamWrites,
-    ) -> Result<EventStreamSlice, EventStoreError> {
-        let mut streams = self
-            .streams
-            .lock()
-            .map_err(|_| EventStoreError::StoreFailure {
-                operation: Operation::AppendEvents,
-            })?;
-        let expected_versions = writes.expected_versions().clone();
-
-        // Check all version constraints before writing any events
-        for (stream_id, expected_version) in &expected_versions {
-            let current_version = streams
-                .get(stream_id)
-                .map(|(_events, version)| *version)
-                .unwrap_or_else(|| StreamVersion::new(0));
-
-            if current_version != *expected_version {
-                return Err(EventStoreError::VersionConflict);
-            }
-        }
-
-        // All versions match - proceed with writes
-        for entry in writes.into_entries() {
-            let StreamWriteEntry {
-                stream_id, event, ..
-            } = entry;
-            let (events, version) = streams
-                .entry(stream_id)
-                .or_insert_with(|| (Vec::new(), StreamVersion::new(0)));
-            events.push(event);
-            *version = version.increment();
-        }
-
-        Ok(EventStreamSlice)
-    }
-}
-
 /// Blanket implementation allowing EventStore trait to work with references.
 ///
 /// This enables passing both owned and borrowed event stores to execute():
@@ -555,138 +442,6 @@ mod tests {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
         }
-    }
-
-    /// Unit test: Verify InMemoryEventStore can append and retrieve a single event
-    ///
-    /// This test verifies the fundamental event storage capability:
-    /// - Append an event to a stream
-    /// - Read the stream back
-    /// - Verify the event is retrievable with correct data
-    ///
-    /// This is a unit test drilling down from the failing integration test
-    /// test_deposit_command_event_data_is_retrievable. We're testing the
-    /// storage layer in isolation before testing the full command execution flow.
-    #[tokio::test]
-    async fn test_append_and_read_single_event() {
-        // Given: An in-memory event store
-        let store = InMemoryEventStore::new();
-
-        // And: A stream ID
-        let stream_id = StreamId::try_new("test-stream-123".to_string()).expect("valid stream id");
-
-        // And: A domain event to store
-        let event = TestEvent {
-            stream_id: stream_id.clone(),
-            data: "test event data".to_string(),
-        };
-
-        // And: A collection of writes containing the event (expected version 0 for empty stream)
-        let writes = StreamWrites::new()
-            .register_stream(stream_id.clone(), StreamVersion::new(0))
-            .and_then(|writes| writes.append(event.clone()))
-            .expect("append should succeed");
-
-        // When: We append the event to the store
-        let _ = store
-            .append_events(writes)
-            .await
-            .expect("append to succeed");
-
-        let reader = store
-            .read_stream::<TestEvent>(stream_id)
-            .await
-            .expect("read to succeed");
-
-        let observed = (
-            reader.is_empty(),
-            reader.len(),
-            reader.iter().next().is_none(),
-        );
-
-        assert_eq!(observed, (false, 1usize, false));
-    }
-
-    #[tokio::test]
-    async fn event_stream_reader_is_empty_reflects_stream_population() {
-        let store = InMemoryEventStore::new();
-        let stream_id =
-            StreamId::try_new("is-empty-observation".to_string()).expect("valid stream id");
-
-        let initial_reader = store
-            .read_stream::<TestEvent>(stream_id.clone())
-            .await
-            .expect("initial read to succeed");
-
-        let event = TestEvent {
-            stream_id: stream_id.clone(),
-            data: "populated event".to_string(),
-        };
-
-        let writes = StreamWrites::new()
-            .register_stream(stream_id.clone(), StreamVersion::new(0))
-            .and_then(|writes| writes.append(event))
-            .expect("append should succeed");
-
-        let _ = store
-            .append_events(writes)
-            .await
-            .expect("append to succeed");
-
-        let populated_reader = store
-            .read_stream::<TestEvent>(stream_id)
-            .await
-            .expect("populated read to succeed");
-
-        let observed = (
-            initial_reader.is_empty(),
-            initial_reader.len(),
-            populated_reader.is_empty(),
-            populated_reader.len(),
-        );
-
-        assert_eq!(observed, (true, 0usize, false, 1usize));
-    }
-
-    #[tokio::test]
-    async fn read_stream_iterates_through_events_in_order() {
-        let store = InMemoryEventStore::new();
-        let stream_id = StreamId::try_new("ordered-stream".to_string()).expect("valid stream id");
-
-        let first_event = TestEvent {
-            stream_id: stream_id.clone(),
-            data: "first".to_string(),
-        };
-
-        let second_event = TestEvent {
-            stream_id: stream_id.clone(),
-            data: "second".to_string(),
-        };
-
-        let writes = StreamWrites::new()
-            .register_stream(stream_id.clone(), StreamVersion::new(0))
-            .and_then(|writes| writes.append(first_event))
-            .and_then(|writes| writes.append(second_event))
-            .expect("append chain should succeed");
-
-        let _ = store
-            .append_events(writes)
-            .await
-            .expect("append to succeed");
-
-        let reader = store
-            .read_stream::<TestEvent>(stream_id)
-            .await
-            .expect("read to succeed");
-
-        let collected: Vec<String> = reader.iter().map(|event| event.data.clone()).collect();
-
-        let observed = (reader.is_empty(), collected);
-
-        assert_eq!(
-            observed,
-            (false, vec!["first".to_string(), "second".to_string()])
-        );
     }
 
     #[test]
@@ -738,36 +493,6 @@ mod tests {
         assert_eq!(
             message,
             "conflicting expected versions for stream duplicate-stream-conflict: first=0, second=1"
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_writes_registers_stream_before_appending_multiple_events() {
-        let store = InMemoryEventStore::new();
-        let stream_id =
-            StreamId::try_new("registered-stream".to_string()).expect("valid stream id");
-
-        let first_event = TestEvent {
-            stream_id: stream_id.clone(),
-            data: "first-registered-event".to_string(),
-        };
-
-        let second_event = TestEvent {
-            stream_id: stream_id.clone(),
-            data: "second-registered-event".to_string(),
-        };
-
-        let writes = StreamWrites::new()
-            .register_stream(stream_id.clone(), StreamVersion::new(0))
-            .and_then(|writes| writes.append(first_event))
-            .and_then(|writes| writes.append(second_event))
-            .expect("registered stream should accept events");
-
-        let result = store.append_events(writes).await;
-
-        assert!(
-            result.is_ok(),
-            "append should succeed when stream registered before events"
         );
     }
 
@@ -842,5 +567,135 @@ mod tests {
             result.is_err(),
             "StreamId should reject close bracket glob metacharacter"
         );
+    }
+
+    #[test]
+    fn into_entries_returns_appended_events() {
+        let stream_id = StreamId::try_new("into-entries-test").expect("valid stream id");
+        let event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "test-data".to_string(),
+        };
+
+        let writes = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(0))
+            .and_then(|w| w.append(event))
+            .expect("append should succeed");
+
+        let entries = writes.into_entries();
+
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn stream_version_increment_adds_one() {
+        let v0 = StreamVersion::new(5);
+
+        let v1 = v0.increment();
+
+        assert_eq!(v1, StreamVersion::new(6));
+    }
+
+    #[test]
+    fn event_stream_reader_len_returns_event_count() {
+        let stream_id = StreamId::try_new("reader-len-test").expect("valid stream id");
+        let events = vec![
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "first".to_string(),
+            },
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "second".to_string(),
+            },
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "third".to_string(),
+            },
+        ];
+
+        let reader = EventStreamReader::new(events);
+
+        assert_eq!(reader.len(), 3);
+    }
+
+    #[test]
+    fn event_stream_reader_is_empty_returns_true_for_empty() {
+        let reader: EventStreamReader<TestEvent> = EventStreamReader::new(vec![]);
+
+        assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn event_stream_reader_is_empty_returns_false_for_nonempty() {
+        let stream_id = StreamId::try_new("reader-nonempty-test").expect("valid stream id");
+        let events = vec![TestEvent {
+            stream_id: stream_id.clone(),
+            data: "event".to_string(),
+        }];
+
+        let reader = EventStreamReader::new(events);
+
+        assert!(!reader.is_empty());
+    }
+
+    #[test]
+    fn event_stream_reader_first_returns_first_event() {
+        let stream_id = StreamId::try_new("reader-first-test").expect("valid stream id");
+        let first_event = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "first".to_string(),
+        };
+        let events = vec![
+            first_event.clone(),
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "second".to_string(),
+            },
+        ];
+
+        let reader = EventStreamReader::new(events);
+
+        assert_eq!(reader.first(), Some(&first_event));
+    }
+
+    #[test]
+    fn event_stream_reader_iter_yields_all_events() {
+        let stream_id = StreamId::try_new("reader-iter-test").expect("valid stream id");
+        let events = vec![
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "first".to_string(),
+            },
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "second".to_string(),
+            },
+        ];
+
+        let reader = EventStreamReader::new(events.clone());
+        let collected: Vec<&TestEvent> = reader.iter().collect();
+
+        assert_eq!(collected, events.iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn event_stream_reader_into_iter_yields_all_events() {
+        let stream_id = StreamId::try_new("reader-into-iter-test").expect("valid stream id");
+        let events = vec![
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "first".to_string(),
+            },
+            TestEvent {
+                stream_id: stream_id.clone(),
+                data: "second".to_string(),
+            },
+        ];
+
+        let reader = EventStreamReader::new(events.clone());
+        let collected: Vec<TestEvent> = reader.into_iter().collect();
+
+        assert_eq!(collected, events);
     }
 }

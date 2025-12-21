@@ -10,8 +10,8 @@
 use std::env;
 use std::sync::OnceLock;
 
-use eventcore::{Event, StreamId};
 use eventcore_postgres::PostgresEventStore;
+use eventcore_types::{Event, StreamId};
 use serde::{Deserialize, Serialize};
 use testcontainers::{Container, ImageExt, ReuseDirective, runners::SyncRunner};
 use testcontainers_modules::postgres::Postgres;
