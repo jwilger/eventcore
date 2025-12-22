@@ -1,0 +1,10 @@
+# Cargo-mutants configuration
+#
+# Skip trivial blanket implementations that just forward to underlying impls.
+# These cannot be meaningfully tested in isolation.
+
+exclude_re = [
+    # Skip blanket impl for EventReader on references - trivial forwarding only
+    "impl EventReader for &T.*::read_all",
+    "impl EventReader for &T.*::read_after",
+]

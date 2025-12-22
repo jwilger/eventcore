@@ -39,12 +39,19 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+mod projection;
+
 // Re-export all types from eventcore-types for backward compatibility
 pub use eventcore_types::{
-    CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, NewEvents, Operation, StreamDeclarations,
-    StreamDeclarationsError, StreamId, StreamResolver, StreamVersion, StreamWriteEntry,
-    StreamWrites,
+    CommandError, CommandLogic, CommandStreams, Event, EventReader, EventStore, EventStoreError,
+    EventStreamReader, EventStreamSlice, FailureContext, FailureStrategy, NewEvents, Operation,
+    Projector, StreamDeclarations, StreamDeclarationsError, StreamId, StreamPosition,
+    StreamResolver, StreamVersion, StreamWriteEntry, StreamWrites,
+};
+
+// Re-export projection runtime components
+pub use projection::{
+    CoordinatorGuard, InMemoryCheckpointStore, LocalCoordinator, PollMode, ProjectionRunner,
 };
 
 // Re-export InMemoryEventStore from local store module
