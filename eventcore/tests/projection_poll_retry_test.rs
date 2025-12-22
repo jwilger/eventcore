@@ -444,3 +444,76 @@ async fn batch_mode_exits_after_single_poll() {
     // And: Event was successfully applied
     assert_eq!(apply_count.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn custom_retry_configuration_is_respected() {
+    // Given: Store with one event
+    let store = Arc::new(InMemoryEventStore::new());
+    let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
+    let event = TestEvent {
+        stream_id: stream_id.clone(),
+    };
+    let writes = StreamWrites::new()
+        .register_stream(stream_id.clone(), StreamVersion::new(0))
+        .expect("register stream")
+        .append(event)
+        .expect("append event");
+    store.append_events(writes).await.expect("append succeeds");
+
+    // And: Mock reader that fails 3 times (will exceed custom max_retries of 2)
+    let poll_count = Arc::new(AtomicUsize::new(0));
+    let poll_times_handle = Arc::new(Mutex::new(Vec::new()));
+    let reader = FailNTimesReader {
+        store,
+        failures_remaining: Arc::new(AtomicUsize::new(3)),
+        poll_count: poll_count.clone(),
+        poll_times: poll_times_handle.clone(),
+    };
+
+    // And: Projector that tracks apply calls
+    let apply_count = Arc::new(AtomicUsize::new(0));
+    let projector = ApplyCounterProjector {
+        apply_count: apply_count.clone(),
+    };
+
+    // When: Runner with custom retry config (max_retries=2, base_delay=5ms)
+    let coordinator = LocalCoordinator::new();
+    let runner = ProjectionRunner::new(projector, coordinator, reader)
+        .with_poll_mode(PollMode::Batch)
+        .with_max_retries(2)
+        .with_base_delay_ms(5);
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), runner.run())
+        .await
+        .expect("Batch mode should complete, not loop forever");
+
+    // Then: Runner returns error after custom max_retries (2)
+    assert!(result.is_err(), "Expected error after 2 retries");
+
+    // And: Database was polled exactly 3 times (initial + 2 retries)
+    assert_eq!(poll_count.load(Ordering::SeqCst), 3);
+
+    // And: Event was never applied (never got past read errors)
+    assert_eq!(apply_count.load(Ordering::SeqCst), 0);
+
+    // And: Verify custom base_delay was used (5ms, 10ms delays)
+    let poll_times = poll_times_handle.lock().unwrap();
+    assert_eq!(poll_times.len(), 3);
+
+    let delay_1 = poll_times[1].duration_since(poll_times[0]).as_millis();
+    let delay_2 = poll_times[2].duration_since(poll_times[1]).as_millis();
+
+    // First delay: 5ms * 2^0 = 5ms (allow 3-12ms for timing variance)
+    assert!(
+        (3..=12).contains(&delay_1),
+        "First delay should be ~5ms, got {}ms",
+        delay_1
+    );
+
+    // Second delay: 5ms * 2^1 = 10ms (allow 6-18ms for timing variance)
+    assert!(
+        (6..=18).contains(&delay_2),
+        "Second delay should be ~10ms, got {}ms",
+        delay_2
+    );
+}
