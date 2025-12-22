@@ -338,18 +338,20 @@ where
                         break events;
                     }
                     Ok(Err(_)) | Err(_) => {
-                        // Database error or panic - check retry limit
-                        consecutive_failures += 1;
-
-                        if consecutive_failures > MAX_RETRIES {
-                            // Exceeded max retries - propagate error
+                        // Database error or panic - check if retries exhausted
+                        if consecutive_failures >= MAX_RETRIES {
+                            // Already failed MAX_RETRIES times, no more retries allowed
                             return Err(ProjectionError::Failed(
                                 "failed to read events after max retries".to_string(),
                             ));
                         }
 
-                        // Exponential backoff before retry
-                        let delay_ms = BASE_DELAY_MS * 2u64.pow(consecutive_failures - 1);
+                        // Track this failure and calculate backoff
+                        consecutive_failures += 1;
+
+                        // Exponential backoff before retry, capped at 1 second
+                        let delay_ms =
+                            (BASE_DELAY_MS * 2u64.pow(consecutive_failures - 1)).min(1000);
                         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                         // Continue retry loop
                     }

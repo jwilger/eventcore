@@ -1,7 +1,7 @@
 //! Integration test for eventcore-a5a: Database poll retry with exponential backoff
 //!
 //! Scenario: Developer handles transient database errors during event polling
-//! - Given projector is running in continuous poll mode
+//! - Given projector is running in batch poll mode
 //! - When database read fails transiently (connection timeout, etc)
 //! - Then runner retries with exponential backoff
 //! - And after max consecutive failures, propagates error to caller
@@ -53,9 +53,11 @@ where
         let remaining = self.failures_remaining.load(Ordering::SeqCst);
         if remaining > 0 {
             self.failures_remaining.fetch_sub(1, Ordering::SeqCst);
-            // Simulate transient database error
-            // TODO: This needs to return S::Error, but we don't know how to construct it
-            // We need a way to inject failures that matches the error type
+            // Simulate transient database error by panicking.
+            // This is caught by the ProjectionRunner's catch_unwind() mechanism.
+            // We use panic here because EventReader::Error is generic and we can't
+            // construct an arbitrary error type. The catch_unwind approach works
+            // for both Result errors and panics, making this a clean test pattern.
             panic!("transient database connection timeout");
         }
 
@@ -76,9 +78,11 @@ where
         let remaining = self.failures_remaining.load(Ordering::SeqCst);
         if remaining > 0 {
             self.failures_remaining.fetch_sub(1, Ordering::SeqCst);
-            // Simulate transient database error
-            // TODO: This needs to return S::Error, but we don't know how to construct it
-            // We need a way to inject failures that matches the error type
+            // Simulate transient database error by panicking.
+            // This is caught by the ProjectionRunner's catch_unwind() mechanism.
+            // We use panic here because EventReader::Error is generic and we can't
+            // construct an arbitrary error type. The catch_unwind approach works
+            // for both Result errors and panics, making this a clean test pattern.
             panic!("transient database connection timeout");
         }
 
