@@ -163,7 +163,9 @@ async fn runner_retries_transient_database_errors_with_exponential_backoff() {
     let runner =
         ProjectionRunner::new(projector, coordinator, reader).with_poll_mode(PollMode::Batch);
 
-    let result = runner.run().await;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), runner.run())
+        .await
+        .expect("Batch mode should complete, not loop forever");
 
     // Then: Runner succeeds after retries
     assert!(result.is_ok());
@@ -249,7 +251,9 @@ async fn runner_propagates_error_after_max_consecutive_poll_failures() {
     let runner =
         ProjectionRunner::new(projector, coordinator, reader).with_poll_mode(PollMode::Batch);
 
-    let result = runner.run().await;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), runner.run())
+        .await
+        .expect("Batch mode should complete, not loop forever");
 
     // Then: Runner returns error after max retries
     assert!(result.is_err());
@@ -307,7 +311,9 @@ async fn runner_resets_consecutive_failure_count_on_successful_poll() {
         .with_poll_mode(PollMode::Batch)
         .with_checkpoint_store(checkpoint_store.clone());
 
-    let result = runner.run().await;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), runner.run())
+        .await
+        .expect("Batch mode should complete, not loop forever");
 
     // Then: First run succeeds after retries
     assert!(result.is_ok());
@@ -349,10 +355,92 @@ async fn runner_resets_consecutive_failure_count_on_successful_poll() {
         .with_poll_mode(PollMode::Batch)
         .with_checkpoint_store(checkpoint_store.clone());
 
-    let result2 = runner2.run().await;
+    let result2 = tokio::time::timeout(std::time::Duration::from_secs(5), runner2.run())
+        .await
+        .expect("Batch mode should complete, not loop forever");
 
     // Then: Second run also succeeds (failures didn't accumulate)
     assert!(result2.is_ok());
     assert_eq!(poll_count2.load(Ordering::SeqCst), 4); // 3 failures + 1 success
     assert_eq!(apply_count.load(Ordering::SeqCst), 2); // Second event applied
+}
+
+/// Wrapper that counts read calls without injecting failures.
+/// Used to verify poll behavior (e.g., Batch mode polls exactly once).
+struct PollCountingReader<S> {
+    inner: Arc<S>,
+    poll_count: Arc<AtomicUsize>,
+}
+
+impl<S> PollCountingReader<S> {
+    fn new(inner: Arc<S>, poll_count: Arc<AtomicUsize>) -> Self {
+        Self { inner, poll_count }
+    }
+}
+
+impl<S: EventReader + Sync + Send> EventReader for PollCountingReader<S> {
+    type Error = S::Error;
+
+    async fn read_all<E: Event>(&self) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
+        self.poll_count.fetch_add(1, Ordering::SeqCst);
+        self.inner.read_all().await
+    }
+
+    async fn read_after<E: Event>(
+        &self,
+        after_position: StreamPosition,
+    ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
+        self.poll_count.fetch_add(1, Ordering::SeqCst);
+        self.inner.read_after(after_position).await
+    }
+}
+
+#[tokio::test]
+async fn batch_mode_exits_after_single_poll() {
+    // Given: Store with one event
+    let store = Arc::new(InMemoryEventStore::new());
+    let stream_id = StreamId::try_new("test-stream").expect("valid stream id");
+    let event = TestEvent {
+        stream_id: stream_id.clone(),
+    };
+    let writes = StreamWrites::new()
+        .register_stream(stream_id.clone(), StreamVersion::new(0))
+        .expect("register stream")
+        .append(event)
+        .expect("append event");
+    store.append_events(writes).await.expect("append succeeds");
+
+    // And: Counting reader to track poll count
+    let poll_count = Arc::new(AtomicUsize::new(0));
+    let reader = PollCountingReader::new(store.clone(), poll_count.clone());
+
+    // And: Projector that tracks apply calls
+    let apply_count = Arc::new(AtomicUsize::new(0));
+    let projector = ApplyCounterProjector {
+        apply_count: apply_count.clone(),
+    };
+
+    // When: Runner processes in Batch mode (should exit after one pass)
+    let coordinator = LocalCoordinator::new();
+    let runner =
+        ProjectionRunner::new(projector, coordinator, reader).with_poll_mode(PollMode::Batch);
+
+    // Use timeout to catch infinite loop mutants quickly
+    let result = tokio::time::timeout(std::time::Duration::from_millis(200), runner.run()).await;
+
+    // Then: Runner completes within timeout (doesn't loop forever)
+    assert!(
+        result.is_ok(),
+        "runner timed out - Batch mode should exit after one pass, not loop continuously"
+    );
+
+    // And: Runner succeeds
+    assert!(result.unwrap().is_ok());
+
+    // And: Database was polled EXACTLY once (not continuously looping)
+    // This assertion catches the mutant that flips == to != at line 420
+    assert_eq!(poll_count.load(Ordering::SeqCst), 1);
+
+    // And: Event was successfully applied
+    assert_eq!(apply_count.load(Ordering::SeqCst), 1);
 }
