@@ -537,3 +537,169 @@ impl Projector for FatalErrorProjector {
         FailureStrategy::Fatal
     }
 }
+
+/// Integration test for eventcore-dvp: Skip failure strategy in projection runner
+///
+/// Scenario: Projector encounters error but chooses to skip and continue
+/// - Given projector configured to fail on specific event with FailureStrategy::Skip
+/// - And event store contains events before and after the failing event
+/// - When runner processes events and encounters the failure
+/// - Then runner logs the error but continues processing
+/// - And checkpoint is updated past the skipped event
+/// - And events after the failure are processed successfully
+#[tokio::test]
+async fn runner_skips_failed_event_and_continues_processing() {
+    // Given: Event store with 5 events
+    let store = InMemoryEventStore::new();
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    // Seed 5 events into the store (positions 0-4)
+    for i in 0..5 {
+        let event = CounterIncremented {
+            counter_id: counter_id.clone(),
+        };
+        let writes = StreamWrites::new()
+            .register_stream(counter_id.clone(), StreamVersion::new(i))
+            .expect("register stream")
+            .append(event)
+            .expect("append event");
+        store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+    }
+
+    // And: A checkpoint store to track progress
+    let checkpoint_store = InMemoryCheckpointStore::new();
+
+    // And: A projector that fails at position 2 but returns Skip strategy
+    let processed_events = Arc::new(std::sync::Mutex::new(Vec::<StreamPosition>::new()));
+    let projector = SkipErrorProjector::new(
+        processed_events.clone(),
+        StreamPosition::new(2), // Fail on event at position 2
+    );
+
+    // When: Developer runs the projector with checkpoint store
+    let coordinator = LocalCoordinator::new();
+    let runner = ProjectionRunner::new(projector, coordinator, &store)
+        .with_checkpoint_store(checkpoint_store.clone());
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), runner.run()).await;
+
+    // Then: Runner completes successfully (does not return error)
+    assert!(
+        result.is_ok(),
+        "runner should complete within timeout (not hang)"
+    );
+    assert!(
+        result.unwrap().is_ok(),
+        "runner should succeed even though event at position 2 failed (Skip strategy)"
+    );
+
+    // And: Events at positions 0, 1, 3, 4 were processed (4 events total)
+    // Event at position 2 was skipped
+    {
+        let processed = processed_events.lock().unwrap();
+        assert_eq!(
+            processed.len(),
+            4,
+            "4 events should be processed (positions 0, 1, 3, 4); position 2 skipped"
+        );
+        assert_eq!(
+            processed[0],
+            StreamPosition::new(0),
+            "first processed event should be at position 0"
+        );
+        assert_eq!(
+            processed[1],
+            StreamPosition::new(1),
+            "second processed event should be at position 1"
+        );
+        assert_eq!(
+            processed[2],
+            StreamPosition::new(3),
+            "third processed event should be at position 3 (skipped 2)"
+        );
+        assert_eq!(
+            processed[3],
+            StreamPosition::new(4),
+            "fourth processed event should be at position 4"
+        );
+    }
+
+    // And: Checkpoint was saved at position 4 (past the skipped event)
+    // Verify by restarting - no events should be reprocessed
+    let restarted_processed = Arc::new(std::sync::Mutex::new(Vec::<StreamPosition>::new()));
+    let restarted_projector = SkipErrorProjector::new(
+        restarted_processed.clone(),
+        StreamPosition::new(2), // Same failure point (but won't be reached on restart)
+    );
+
+    let coordinator2 = LocalCoordinator::new();
+    let runner2 = ProjectionRunner::new(restarted_projector, coordinator2, &store)
+        .with_checkpoint_store(checkpoint_store);
+
+    let result2 = tokio::time::timeout(std::time::Duration::from_secs(1), runner2.run()).await;
+
+    // Then: Restarted runner completes successfully
+    assert!(
+        result2.unwrap().is_ok(),
+        "restarted runner should succeed (checkpoint at position 4)"
+    );
+
+    // And: No events were reprocessed
+    {
+        let restarted = restarted_processed.lock().unwrap();
+        assert_eq!(
+            restarted.len(),
+            0,
+            "checkpoint at position 4 should prevent reprocessing all events"
+        );
+    }
+}
+
+/// Projector that fails at a specific position but returns Skip strategy.
+/// Uses on_error() to return FailureStrategy::Skip.
+struct SkipErrorProjector {
+    processed: Arc<std::sync::Mutex<Vec<StreamPosition>>>,
+    fail_at_position: StreamPosition,
+}
+
+impl SkipErrorProjector {
+    fn new(
+        processed: Arc<std::sync::Mutex<Vec<StreamPosition>>>,
+        fail_at_position: StreamPosition,
+    ) -> Self {
+        Self {
+            processed,
+            fail_at_position,
+        }
+    }
+}
+
+impl Projector for SkipErrorProjector {
+    type Event = CounterIncremented;
+    type Error = String;
+    type Context = ();
+
+    fn apply(
+        &mut self,
+        _event: Self::Event,
+        position: StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        if position == self.fail_at_position {
+            return Err(format!("error at position {} (will skip)", position));
+        }
+        self.processed.lock().unwrap().push(position);
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "skip-error-projector"
+    }
+
+    fn on_error(&mut self, _error: &Self::Error, _position: StreamPosition) -> FailureStrategy {
+        FailureStrategy::Skip
+    }
+}

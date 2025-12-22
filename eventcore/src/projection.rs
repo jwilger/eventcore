@@ -293,7 +293,10 @@ where
     /// - Leadership cannot be acquired
     /// - Event store operations fail
     /// - The projector returns a fatal error
-    pub async fn run(mut self) -> Result<(), ProjectionError> {
+    pub async fn run(mut self) -> Result<(), ProjectionError>
+    where
+        P::Error: std::fmt::Debug,
+    {
         // Load checkpoint if checkpoint store is configured
         let mut last_checkpoint = self
             .checkpoint_store
@@ -336,8 +339,19 @@ where
                                 ));
                             }
                             FailureStrategy::Skip => {
-                                // TODO: implement skip strategy
-                                todo!("Skip strategy not yet implemented")
+                                // Log the error and continue processing
+                                tracing::warn!(
+                                    projector = self.projector.name(),
+                                    position = %position,
+                                    error = ?error,
+                                    "Skipping failed event"
+                                );
+                                // Update checkpoint to skip past this event
+                                last_checkpoint = Some(position);
+                                if let Some(cs) = &self.checkpoint_store {
+                                    cs.save(self.projector.name(), position);
+                                }
+                                // Continue to next event
                             }
                             FailureStrategy::Retry => {
                                 // TODO: implement retry strategy
