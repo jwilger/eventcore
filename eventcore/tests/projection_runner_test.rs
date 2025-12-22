@@ -352,3 +352,41 @@ impl Projector for TrackingProjector {
         "tracking-projector"
     }
 }
+
+/// Integration test for eventcore-dvp: LocalCoordinator for single-process leadership
+///
+/// Scenario: Developer uses LocalCoordinator for single-process deployment
+/// - Given developer creates LocalCoordinator::new()
+/// - When developer calls try_acquire()
+/// - Then it returns Some(guard) (leadership always granted in single-process)
+/// - And guard.is_valid() returns true
+/// - When guard is dropped
+/// - Then subsequent try_acquire() succeeds
+#[tokio::test]
+async fn local_coordinator_grants_leadership_without_contention() {
+    // Given: Developer creates a LocalCoordinator for single-process deployment
+    let coordinator = LocalCoordinator::new();
+
+    // When: Developer tries to acquire leadership
+    let guard = coordinator
+        .try_acquire()
+        .await
+        .expect("LocalCoordinator should always grant leadership");
+
+    // Then: Leadership is granted
+    assert!(
+        guard.is_valid(),
+        "acquired guard should indicate valid leadership"
+    );
+
+    // When: Guard is dropped (RAII pattern releases leadership)
+    drop(guard);
+
+    // Then: Subsequent acquire succeeds (leadership can be re-acquired)
+    let guard2 = coordinator
+        .try_acquire()
+        .await
+        .expect("LocalCoordinator should grant leadership again after release");
+
+    assert!(guard2.is_valid(), "re-acquired guard should also be valid");
+}

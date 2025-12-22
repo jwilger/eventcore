@@ -63,6 +63,47 @@ impl InMemoryCheckpointStore {
     }
 }
 
+/// Guard representing acquired leadership from a coordinator.
+///
+/// `CoordinatorGuard` uses RAII pattern to automatically release leadership
+/// when dropped. While the guard is held, the projector has exclusive rights
+/// to process events.
+///
+/// # Example
+///
+/// ```ignore
+/// let guard = coordinator.try_acquire().await?;
+/// if guard.is_valid() {
+///     // Process events while holding leadership
+/// }
+/// // Guard dropped here - leadership automatically released
+/// ```
+pub struct CoordinatorGuard {
+    // Guard state placeholder
+}
+
+impl CoordinatorGuard {
+    /// Check if this guard represents valid leadership.
+    ///
+    /// Returns `true` if the guard still holds valid leadership rights.
+    /// For `LocalCoordinator`, this always returns `true` since leadership
+    /// cannot be revoked in single-process mode.
+    ///
+    /// # Returns
+    ///
+    /// `true` if leadership is valid, `false` otherwise.
+    pub fn is_valid(&self) -> bool {
+        true
+    }
+}
+
+impl Drop for CoordinatorGuard {
+    fn drop(&mut self) {
+        // For LocalCoordinator, dropping the guard releases leadership.
+        // No cleanup needed for the minimal single-process implementation.
+    }
+}
+
 /// Single-process coordinator for projector leadership.
 ///
 /// `LocalCoordinator` provides a simple coordination mechanism for single-process
@@ -91,6 +132,27 @@ impl LocalCoordinator {
     /// required for single-process deployments.
     pub fn new() -> Self {
         Self {}
+    }
+
+    /// Try to acquire leadership for projection processing.
+    ///
+    /// For `LocalCoordinator`, this always succeeds immediately since there
+    /// is no contention in single-process deployments. The returned guard
+    /// uses RAII pattern to release leadership when dropped.
+    ///
+    /// # Returns
+    ///
+    /// `Some(guard)` if leadership was acquired (always for LocalCoordinator).
+    /// `None` would indicate leadership is held elsewhere (never for LocalCoordinator).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let guard = coordinator.try_acquire().await
+    ///     .expect("LocalCoordinator always grants leadership");
+    /// ```
+    pub async fn try_acquire(&self) -> Option<CoordinatorGuard> {
+        Some(CoordinatorGuard {})
     }
 }
 

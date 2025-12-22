@@ -50,7 +50,9 @@ pub use eventcore_types::{
 };
 
 // Re-export projection runtime components
-pub use projection::{InMemoryCheckpointStore, LocalCoordinator, PollMode, ProjectionRunner};
+pub use projection::{
+    CoordinatorGuard, InMemoryCheckpointStore, LocalCoordinator, PollMode, ProjectionRunner,
+};
 
 // Re-export InMemoryEventStore from local store module
 pub use store::InMemoryEventStore;
