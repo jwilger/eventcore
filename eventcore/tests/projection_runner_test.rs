@@ -11,10 +11,11 @@
 //! - And developer can get a working projection with minimal code
 
 use eventcore::{
-    Event, EventStore, InMemoryCheckpointStore, InMemoryEventStore, LocalCoordinator,
-    ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
+    Event, EventReader, EventStore, InMemoryCheckpointStore, InMemoryEventStore, LocalCoordinator,
+    PollMode, ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
 };
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -189,6 +190,136 @@ async fn projector_resumes_from_checkpoint_after_restart() {
         0,
         "previously processed events should not be reprocessed after restart"
     );
+}
+
+/// Integration test for eventcore-dvp: Empty poll handling with backoff
+///
+/// Scenario: Developer projector handles empty poll results
+/// - Given projector is caught up with all events
+/// - When runner polls and receives empty result
+/// - Then runner waits before polling again (backoff)
+/// - And runner does not call projector.apply()
+#[tokio::test]
+async fn runner_waits_before_polling_again_when_no_events() {
+    // Given: An event store with no events (projector is caught up)
+    let store = Arc::new(InMemoryEventStore::new());
+
+    // And: A projector that tracks apply() calls
+    let apply_count = Arc::new(AtomicUsize::new(0));
+    let projector = ApplyCountingProjector::new(apply_count.clone());
+
+    // And: A poll-counting wrapper around the store to observe poll behavior
+    let poll_count = Arc::new(AtomicUsize::new(0));
+    let counting_reader = PollCountingReader::new(store.clone(), poll_count.clone());
+
+    // When: Developer creates runner in continuous polling mode
+    let coordinator = LocalCoordinator::new();
+    let runner = ProjectionRunner::new(projector, coordinator, counting_reader)
+        .with_poll_mode(PollMode::Continuous);
+
+    // And: Runner runs for a short time with empty store
+    // Use a cancellation token to stop after observing behavior
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let runner_handle = tokio::spawn(async move {
+        tokio::select! {
+            result = runner.run() => result,
+            _ = cancel_rx => Ok(()),
+        }
+    });
+
+    // Wait long enough to observe multiple poll attempts with backoff
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    let _ = cancel_tx.send(());
+    runner_handle
+        .await
+        .expect("runner task panicked")
+        .expect("runner failed");
+
+    // Then: Store was polled multiple times (continuous polling)
+    let polls = poll_count.load(Ordering::SeqCst);
+    assert!(
+        polls >= 2,
+        "expected at least 2 polls during 150ms, got {}",
+        polls
+    );
+
+    // And: apply() was never called (no events to process)
+    assert_eq!(
+        apply_count.load(Ordering::SeqCst),
+        0,
+        "apply() should not be called when there are no events"
+    );
+
+    // And: Backoff is happening (not spinning - with 150ms wait and default backoff,
+    // we should see limited polls, not hundreds)
+    assert!(
+        polls < 20,
+        "expected backoff to limit polls, but got {} polls in 150ms (spinning?)",
+        polls
+    );
+}
+
+/// Projector that counts apply() calls.
+struct ApplyCountingProjector {
+    count: Arc<AtomicUsize>,
+}
+
+impl ApplyCountingProjector {
+    fn new(count: Arc<AtomicUsize>) -> Self {
+        Self { count }
+    }
+}
+
+impl Projector for ApplyCountingProjector {
+    type Event = CounterIncremented;
+    type Error = std::convert::Infallible;
+    type Context = ();
+
+    fn apply(
+        &mut self,
+        _event: Self::Event,
+        _position: StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "apply-counting-projector"
+    }
+}
+
+/// Wrapper around EventReader that counts poll operations.
+struct PollCountingReader<S> {
+    inner: Arc<S>,
+    poll_count: Arc<AtomicUsize>,
+}
+
+impl<S> PollCountingReader<S> {
+    fn new(inner: Arc<S>, poll_count: Arc<AtomicUsize>) -> Self {
+        Self { inner, poll_count }
+    }
+}
+
+impl<S: EventReader + Sync> EventReader for PollCountingReader<S> {
+    type Error = S::Error;
+
+    fn read_all<E: Event>(
+        &self,
+    ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send {
+        self.poll_count.fetch_add(1, Ordering::SeqCst);
+        self.inner.read_all()
+    }
+
+    fn read_after<E: Event>(
+        &self,
+        after_position: StreamPosition,
+    ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send {
+        self.poll_count.fetch_add(1, Ordering::SeqCst);
+        self.inner.read_after(after_position)
+    }
 }
 
 /// Projector that tracks which events it processes (by position).

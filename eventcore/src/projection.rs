@@ -6,6 +6,19 @@
 
 use crate::{Event, EventReader, Projector, StreamPosition};
 
+/// Polling mode for projection runners.
+///
+/// Controls how the projection runner polls for new events:
+/// - `Batch`: Process all available events then stop
+/// - `Continuous`: Keep polling for new events until stopped
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PollMode {
+    /// Process available events once then stop.
+    Batch,
+    /// Continuously poll for new events until stopped.
+    Continuous,
+}
+
 /// In-memory checkpoint store for tracking projection progress.
 ///
 /// `InMemoryCheckpointStore` stores checkpoint positions in memory. It is
@@ -124,6 +137,7 @@ where
     _coordinator: C,
     store: S,
     checkpoint_store: Option<InMemoryCheckpointStore>,
+    poll_mode: PollMode,
 }
 
 impl<P, C, S> ProjectionRunner<P, C, S>
@@ -150,6 +164,7 @@ where
             _coordinator: coordinator,
             store,
             checkpoint_store: None,
+            poll_mode: PollMode::Batch,
         }
     }
 
@@ -169,6 +184,30 @@ where
     /// Self for method chaining.
     pub fn with_checkpoint_store(mut self, checkpoint_store: InMemoryCheckpointStore) -> Self {
         self.checkpoint_store = Some(checkpoint_store);
+        self
+    }
+
+    /// Configure the polling mode for event processing.
+    ///
+    /// Controls whether the runner processes events once (batch mode) or
+    /// continuously polls for new events until stopped (continuous mode).
+    ///
+    /// # Parameters
+    ///
+    /// - `mode`: The polling mode (Batch or Continuous)
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let runner = ProjectionRunner::new(projector, coordinator, &store)
+    ///     .with_poll_mode(PollMode::Continuous);
+    /// ```
+    pub fn with_poll_mode(mut self, mode: PollMode) -> Self {
+        self.poll_mode = mode;
         self
     }
 
@@ -194,38 +233,45 @@ where
     /// - The projector returns a fatal error
     pub async fn run(mut self) -> Result<(), ProjectionError> {
         // Load checkpoint if checkpoint store is configured
-        let last_checkpoint = self
+        let mut last_checkpoint = self
             .checkpoint_store
             .as_ref()
             .and_then(|cs| cs.load(self.projector.name()));
 
-        // Read events from the store (either all or after checkpoint)
-        let events: Vec<(P::Event, _)> = match last_checkpoint {
-            Some(checkpoint) => self
-                .store
-                .read_after(checkpoint)
-                .await
-                .map_err(|_| ProjectionError::Failed("failed to read events".to_string()))?,
-            None => self
-                .store
-                .read_all()
-                .await
-                .map_err(|_| ProjectionError::Failed("failed to read events".to_string()))?,
-        };
-
-        // Apply each event to the projector
         let mut ctx = P::Context::default();
-        let mut last_position = last_checkpoint;
-        for (event, position) in events {
-            self.projector
-                .apply(event, position, &mut ctx)
-                .map_err(|_| ProjectionError::Failed("projector apply failed".to_string()))?;
-            last_position = Some(position);
-        }
 
-        // Save checkpoint if checkpoint store is configured
-        if let (Some(cs), Some(position)) = (&self.checkpoint_store, last_position) {
-            cs.save(self.projector.name(), position);
+        loop {
+            // Read events from the store (either all or after checkpoint)
+            let events: Vec<(P::Event, _)> =
+                match last_checkpoint {
+                    Some(checkpoint) => self.store.read_after(checkpoint).await.map_err(|_| {
+                        ProjectionError::Failed("failed to read events".to_string())
+                    })?,
+                    None => self.store.read_all().await.map_err(|_| {
+                        ProjectionError::Failed("failed to read events".to_string())
+                    })?,
+                };
+
+            // Apply each event to the projector
+            for (event, position) in events {
+                self.projector
+                    .apply(event, position, &mut ctx)
+                    .map_err(|_| ProjectionError::Failed("projector apply failed".to_string()))?;
+                last_checkpoint = Some(position);
+            }
+
+            // Save checkpoint if checkpoint store is configured
+            if let (Some(cs), Some(position)) = (&self.checkpoint_store, last_checkpoint) {
+                cs.save(self.projector.name(), position);
+            }
+
+            // For batch mode, exit after one pass
+            if self.poll_mode == PollMode::Batch {
+                break;
+            }
+
+            // For continuous mode, sleep before next poll
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
         Ok(())
