@@ -885,3 +885,49 @@ impl Projector for RetryThenFatalProjector {
         }
     }
 }
+
+/// Integration test for EventReader blanket implementation
+///
+/// Scenario: EventReader blanket impl forwards read_all() correctly
+/// - Given event store with some events
+/// - When read_all() is called on a REFERENCE to the store (&store)
+/// - Then the blanket impl forwards to the underlying store's read_all()
+/// - And returns all events (not an empty vec)
+///
+/// This test catches mutations in the blanket impl at line 288 that would
+/// change `(*self).read_all().await` to `Ok(vec![])`.
+#[tokio::test]
+async fn event_reader_blanket_impl_forwards_read_all_correctly() {
+    // Given: Event store with 3 events
+    let store = InMemoryEventStore::new();
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    // Seed 3 events into the store
+    for i in 0..3 {
+        let event = CounterIncremented {
+            counter_id: counter_id.clone(),
+        };
+        let writes = StreamWrites::new()
+            .register_stream(counter_id.clone(), StreamVersion::new(i))
+            .expect("register stream")
+            .append(event)
+            .expect("append event");
+        store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+    }
+
+    // When: read_all() is called on a reference to the store
+    // This exercises the blanket impl: impl<T: EventReader + Sync> EventReader for &T
+    let store_ref: &InMemoryEventStore = &store;
+    let events: Vec<(CounterIncremented, StreamPosition)> =
+        store_ref.read_all().await.expect("read should succeed");
+
+    // Then: The blanket impl forwards correctly and returns all events
+    assert_eq!(
+        events.len(),
+        3,
+        "blanket impl should forward read_all() and return all 3 events, not an empty vec"
+    );
+}
