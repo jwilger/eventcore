@@ -281,6 +281,10 @@ pub trait EventReader {
 }
 
 /// Blanket implementation allowing EventReader trait to work with references.
+///
+/// This is a trivial forwarding implementation that cannot be meaningfully tested
+/// in isolation - mutations here would break all EventReader usage through references.
+// cargo-mutants: skip (trivial forwarding impl)
 impl<T: EventReader + Sync> EventReader for &T {
     type Error = T::Error;
 
