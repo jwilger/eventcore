@@ -178,14 +178,38 @@ async fn runner_retries_transient_database_errors_with_exponential_backoff() {
     let poll_times = poll_times_handle.lock().unwrap();
     assert_eq!(poll_times.len(), 4);
 
-    // Verify exponential backoff: each delay should grow exponentially
-    // We don't check absolute timing (too flaky in CI) - only that delays increase
+    // Verify exponential backoff with formula: BASE_DELAY_MS * 2^(consecutive_failures - 1)
+    // Expected delays: 10ms * 2^0 = 10ms, 10ms * 2^1 = 20ms, 10ms * 2^2 = 40ms
+    // Allow tolerance for CI overhead but verify the formula is correct
     let delay_1 = poll_times[1].duration_since(poll_times[0]).as_millis();
     let delay_2 = poll_times[2].duration_since(poll_times[1]).as_millis();
     let delay_3 = poll_times[3].duration_since(poll_times[2]).as_millis();
 
-    // Verify exponential growth: delay_2 should be ~2x delay_1, delay_3 should be ~2x delay_2
-    // Allow wide tolerance for CI overhead (delays must be at least 1.5x previous)
+    // First delay should be approximately 10ms (BASE_DELAY_MS * 2^0)
+    // Range 5-18ms catches mutants that would produce 20ms or 40ms
+    assert!(
+        (5..=18).contains(&delay_1),
+        "First delay should be ~10ms (2^0), got {}ms",
+        delay_1
+    );
+
+    // Second delay should be approximately 20ms (BASE_DELAY_MS * 2^1)
+    // Range 15-35ms catches mutants that would produce 40ms or 80ms
+    assert!(
+        (15..=35).contains(&delay_2),
+        "Second delay should be ~20ms (2^1), got {}ms",
+        delay_2
+    );
+
+    // Third delay should be approximately 40ms (BASE_DELAY_MS * 2^2)
+    // Range 30-70ms catches mutants that would produce 80ms or 160ms
+    assert!(
+        (30..=70).contains(&delay_3),
+        "Third delay should be ~40ms (2^2), got {}ms",
+        delay_3
+    );
+
+    // Also verify exponential growth relationship
     assert!(
         delay_2 as f64 >= delay_1 as f64 * 1.5,
         "Second delay ({}ms) should be at least 1.5x first delay ({}ms)",
