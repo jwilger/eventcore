@@ -28,20 +28,29 @@ impl Event for TestEvent {
     }
 }
 
-/// Mock EventReader that fails N times then delegates to wrapped store.
+/// Error type for the failing mock reader.
+#[derive(Debug, Clone)]
+struct MockDatabaseError(String);
+
+impl std::fmt::Display for MockDatabaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for MockDatabaseError {}
+
+/// Mock EventReader that fails N times then succeeds.
 /// Tracks consecutive poll failures and delays to verify backoff behavior.
-struct FailNTimesReader<S> {
-    inner: S,
+struct FailNTimesReader {
+    store: Arc<InMemoryEventStore>,
     failures_remaining: Arc<AtomicUsize>,
     poll_count: Arc<AtomicUsize>,
     poll_times: Arc<Mutex<Vec<Instant>>>,
 }
 
-impl<S> EventReader for FailNTimesReader<S>
-where
-    S: EventReader + Sync,
-{
-    type Error = S::Error;
+impl EventReader for FailNTimesReader {
+    type Error = MockDatabaseError;
 
     async fn read_all<E>(&self) -> Result<Vec<(E, StreamPosition)>, Self::Error>
     where
@@ -53,16 +62,17 @@ where
         let remaining = self.failures_remaining.load(Ordering::SeqCst);
         if remaining > 0 {
             self.failures_remaining.fetch_sub(1, Ordering::SeqCst);
-            // Simulate transient database error by panicking.
-            // This is caught by the ProjectionRunner's catch_unwind() mechanism.
-            // We use panic here because EventReader::Error is generic and we can't
-            // construct an arbitrary error type. The catch_unwind approach works
-            // for both Result errors and panics, making this a clean test pattern.
-            panic!("transient database connection timeout");
+            // Simulate transient database error with a proper error type
+            return Err(MockDatabaseError(
+                "transient database connection timeout".to_string(),
+            ));
         }
 
         // Delegate to wrapped store after failures exhausted
-        self.inner.read_all().await
+        self.store
+            .read_all()
+            .await
+            .map_err(|_| MockDatabaseError("unexpected store error".to_string()))
     }
 
     async fn read_after<E>(
@@ -78,16 +88,17 @@ where
         let remaining = self.failures_remaining.load(Ordering::SeqCst);
         if remaining > 0 {
             self.failures_remaining.fetch_sub(1, Ordering::SeqCst);
-            // Simulate transient database error by panicking.
-            // This is caught by the ProjectionRunner's catch_unwind() mechanism.
-            // We use panic here because EventReader::Error is generic and we can't
-            // construct an arbitrary error type. The catch_unwind approach works
-            // for both Result errors and panics, making this a clean test pattern.
-            panic!("transient database connection timeout");
+            // Simulate transient database error with a proper error type
+            return Err(MockDatabaseError(
+                "transient database connection timeout".to_string(),
+            ));
         }
 
         // Delegate to wrapped store after failures exhausted
-        self.inner.read_after(position).await
+        self.store
+            .read_after(position)
+            .await
+            .map_err(|_| MockDatabaseError("unexpected store error".to_string()))
     }
 }
 
@@ -119,7 +130,7 @@ impl Projector for ApplyCounterProjector {
 #[tokio::test]
 async fn runner_retries_transient_database_errors_with_exponential_backoff() {
     // Given: Event store with one event
-    let store = InMemoryEventStore::new();
+    let store = Arc::new(InMemoryEventStore::new());
     let stream_id = StreamId::try_new("test-1").expect("valid stream id");
     let event = TestEvent {
         stream_id: stream_id.clone(),
@@ -135,7 +146,7 @@ async fn runner_retries_transient_database_errors_with_exponential_backoff() {
     let poll_count = Arc::new(AtomicUsize::new(0));
     let poll_times_handle = Arc::new(Mutex::new(Vec::new()));
     let reader = FailNTimesReader {
-        inner: &store,
+        store,
         failures_remaining: Arc::new(AtomicUsize::new(3)),
         poll_count: poll_count.clone(),
         poll_times: poll_times_handle.clone(),
@@ -192,12 +203,12 @@ async fn runner_retries_transient_database_errors_with_exponential_backoff() {
 #[tokio::test]
 async fn runner_propagates_error_after_max_consecutive_poll_failures() {
     // Given: Event store (content doesn't matter - reader always fails)
-    let store = InMemoryEventStore::new();
+    let store = Arc::new(InMemoryEventStore::new());
 
     // And: Mock reader that fails 6 times (exceeds max retries of 5)
     let poll_count = Arc::new(AtomicUsize::new(0));
     let reader = FailNTimesReader {
-        inner: &store,
+        store,
         failures_remaining: Arc::new(AtomicUsize::new(6)),
         poll_count: poll_count.clone(),
         poll_times: Arc::new(Mutex::new(Vec::new())),
@@ -230,7 +241,7 @@ async fn runner_propagates_error_after_max_consecutive_poll_failures() {
 #[tokio::test]
 async fn runner_resets_consecutive_failure_count_on_successful_poll() {
     // Given: Event store with two events at different positions
-    let store = InMemoryEventStore::new();
+    let store = Arc::new(InMemoryEventStore::new());
     let stream_id = StreamId::try_new("test-1").expect("valid stream id");
 
     // Append first event
@@ -251,7 +262,7 @@ async fn runner_resets_consecutive_failure_count_on_successful_poll() {
     // After 3 failures + 1 success = 4 polls, consecutive failure count should reset
     let poll_count = Arc::new(AtomicUsize::new(0));
     let reader = FailNTimesReader {
-        inner: &store,
+        store: store.clone(),
         failures_remaining: Arc::new(AtomicUsize::new(3)),
         poll_count: poll_count.clone(),
         poll_times: Arc::new(Mutex::new(Vec::new())),
@@ -279,7 +290,7 @@ async fn runner_resets_consecutive_failure_count_on_successful_poll() {
     assert_eq!(poll_count.load(Ordering::SeqCst), 4); // 3 failures + 1 success
     assert_eq!(apply_count.load(Ordering::SeqCst), 1); // First event applied
 
-    // And: Append second event
+    // And: Append second event to same store
     let event2 = TestEvent {
         stream_id: stream_id.clone(),
     };
@@ -297,7 +308,7 @@ async fn runner_resets_consecutive_failure_count_on_successful_poll() {
     // This should NOT accumulate with previous failures - counter should reset
     let poll_count2 = Arc::new(AtomicUsize::new(0));
     let reader2 = FailNTimesReader {
-        inner: &store,
+        store: store.clone(),
         failures_remaining: Arc::new(AtomicUsize::new(3)),
         poll_count: poll_count2.clone(),
         poll_times: Arc::new(Mutex::new(Vec::new())),
