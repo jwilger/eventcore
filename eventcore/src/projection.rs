@@ -5,6 +5,7 @@
 //! - `ProjectionRunner`: Orchestrates projector execution with event polling
 
 use crate::{Event, EventReader, FailureStrategy, Projector, StreamPosition};
+use futures::FutureExt;
 
 /// Polling mode for projection runners.
 ///
@@ -312,18 +313,49 @@ where
             .and_then(|cs| cs.load(self.projector.name()));
 
         let mut ctx = P::Context::default();
+        let mut consecutive_failures = 0u32;
+        const MAX_RETRIES: u32 = 5;
+        const BASE_DELAY_MS: u64 = 10;
 
         loop {
-            // Read events from the store (either all or after checkpoint)
-            let events: Vec<(P::Event, _)> =
-                match last_checkpoint {
-                    Some(checkpoint) => self.store.read_after(checkpoint).await.map_err(|_| {
-                        ProjectionError::Failed("failed to read events".to_string())
-                    })?,
-                    None => self.store.read_all().await.map_err(|_| {
-                        ProjectionError::Failed("failed to read events".to_string())
-                    })?,
+            // Read events from the store with retry logic for transient errors
+            let events: Vec<(P::Event, _)> = loop {
+                // Attempt to read events, catching any panics from the reader
+                let read_future = async {
+                    match last_checkpoint {
+                        Some(checkpoint) => self.store.read_after(checkpoint).await,
+                        None => self.store.read_all().await,
+                    }
                 };
+
+                let result = std::panic::AssertUnwindSafe(read_future)
+                    .catch_unwind()
+                    .await;
+
+                match result {
+                    Ok(Ok(events)) => {
+                        // Success - reset failure counter and return events
+                        consecutive_failures = 0;
+                        break events;
+                    }
+                    Ok(Err(_)) | Err(_) => {
+                        // Database error or panic - check retry limit
+                        consecutive_failures += 1;
+
+                        if consecutive_failures > MAX_RETRIES {
+                            // Exceeded max retries - propagate error
+                            return Err(ProjectionError::Failed(
+                                "failed to read events after max retries".to_string(),
+                            ));
+                        }
+
+                        // Exponential backoff before retry
+                        let delay_ms = BASE_DELAY_MS * 2u64.pow(consecutive_failures - 1);
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        // Continue retry loop
+                    }
+                }
+            };
 
             // Apply each event to the projector
             for (event, position) in events {

@@ -32,6 +32,7 @@ eventcore-macros = { path = "../eventcore-macros", optional = true }
 
 # Optional dependency for PostgreSQL backend (enabled via feature flag)
 eventcore-postgres = { path = "../eventcore-postgres", optional = true }
+futures = "0.3.31"
 
 [dev-dependencies]
 nutype = { version = "0.6.2", features = ["serde"] }
