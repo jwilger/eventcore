@@ -239,7 +239,7 @@ where
     ///
     /// # Parameters
     ///
-    /// - `_checkpoint_store`: The checkpoint store for saving/loading positions
+    /// - `checkpoint_store`: The checkpoint store for saving/loading positions
     ///
     /// # Returns
     ///
@@ -276,11 +276,10 @@ where
     /// Run the projection, processing events until completion.
     ///
     /// This method:
-    /// 1. Acquires leadership from the coordinator
-    /// 2. Polls for events starting from the last checkpoint
-    /// 3. Applies each event to the projector
-    /// 4. Checkpoints progress after successful processing
-    /// 5. Continues until no more events are available
+    /// 1. Polls for events starting from the last checkpoint
+    /// 2. Applies each event to the projector
+    /// 3. Checkpoints progress after successful processing
+    /// 4. Continues until no more events are available
     ///
     /// # Returns
     ///
@@ -290,7 +289,6 @@ where
     /// # Errors
     ///
     /// Returns an error if:
-    /// - Leadership cannot be acquired
     /// - Event store operations fail
     /// - The projector returns a fatal error
     pub async fn run(mut self) -> Result<(), ProjectionError>
