@@ -5,8 +5,6 @@
 //! - `ProjectionRunner`: Orchestrates projector execution with event polling
 
 use crate::{Event, EventReader, FailureStrategy, Projector, StreamPosition};
-use futures::FutureExt;
-use std::panic::AssertUnwindSafe;
 
 /// Polling mode for projection runners.
 ///
@@ -321,24 +319,20 @@ where
         loop {
             // Read events from the store with retry logic for transient errors
             let events: Vec<(P::Event, _)> = loop {
-                // Attempt to read events, catching any panics from the reader
-                let read_future = async {
-                    match last_checkpoint {
-                        Some(checkpoint) => self.store.read_after(checkpoint).await,
-                        None => self.store.read_all().await,
-                    }
+                // Attempt to read events
+                let result = match last_checkpoint {
+                    Some(checkpoint) => self.store.read_after(checkpoint).await,
+                    None => self.store.read_all().await,
                 };
 
-                let result = AssertUnwindSafe(read_future).catch_unwind().await;
-
                 match result {
-                    Ok(Ok(events)) => {
+                    Ok(events) => {
                         // Success - reset failure counter and return events
                         consecutive_failures = 0;
                         break events;
                     }
-                    Ok(Err(_)) | Err(_) => {
-                        // Database error or panic - check if retries exhausted
+                    Err(_) => {
+                        // Database error - check if retries exhausted
                         if consecutive_failures >= MAX_RETRIES {
                             // Already failed MAX_RETRIES times, no more retries allowed
                             return Err(ProjectionError::Failed(

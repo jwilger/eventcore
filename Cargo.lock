@@ -592,7 +592,6 @@ dependencies = [
  "eventcore-macros",
  "eventcore-postgres",
  "eventcore-types",
- "futures",
  "nutype",
  "proptest",
  "rand 0.9.2",
