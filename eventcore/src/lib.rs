@@ -44,9 +44,9 @@ mod projection;
 // Re-export all types from eventcore-types for backward compatibility
 pub use eventcore_types::{
     CommandError, CommandLogic, CommandStreams, Event, EventReader, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, NewEvents, Operation, Projector, StreamDeclarations,
-    StreamDeclarationsError, StreamId, StreamPosition, StreamResolver, StreamVersion,
-    StreamWriteEntry, StreamWrites,
+    EventStreamReader, EventStreamSlice, FailureStrategy, NewEvents, Operation, Projector,
+    StreamDeclarations, StreamDeclarationsError, StreamId, StreamPosition, StreamResolver,
+    StreamVersion, StreamWriteEntry, StreamWrites,
 };
 
 // Re-export projection runtime components

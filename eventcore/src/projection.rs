@@ -4,7 +4,7 @@
 //! - `LocalCoordinator`: Single-process coordination for projector leadership
 //! - `ProjectionRunner`: Orchestrates projector execution with event polling
 
-use crate::{Event, EventReader, Projector, StreamPosition};
+use crate::{Event, EventReader, FailureStrategy, Projector, StreamPosition};
 
 /// Polling mode for projection runners.
 ///
@@ -316,15 +316,36 @@ where
 
             // Apply each event to the projector
             for (event, position) in events {
-                self.projector
-                    .apply(event, position, &mut ctx)
-                    .map_err(|_| ProjectionError::Failed("projector apply failed".to_string()))?;
-                last_checkpoint = Some(position);
-            }
-
-            // Save checkpoint if checkpoint store is configured
-            if let (Some(cs), Some(position)) = (&self.checkpoint_store, last_checkpoint) {
-                cs.save(self.projector.name(), position);
+                match self.projector.apply(event, position, &mut ctx) {
+                    Ok(()) => {
+                        // Event processed successfully - update and save checkpoint
+                        last_checkpoint = Some(position);
+                        if let Some(cs) = &self.checkpoint_store {
+                            cs.save(self.projector.name(), position);
+                        }
+                    }
+                    Err(error) => {
+                        // Error occurred - ask projector what to do
+                        let strategy = self.projector.on_error(&error, position);
+                        match strategy {
+                            FailureStrategy::Fatal => {
+                                // Stop processing and return error
+                                // Checkpoint is already saved up to last successful event
+                                return Err(ProjectionError::Failed(
+                                    "projector apply failed".to_string(),
+                                ));
+                            }
+                            FailureStrategy::Skip => {
+                                // TODO: implement skip strategy
+                                todo!("Skip strategy not yet implemented")
+                            }
+                            FailureStrategy::Retry => {
+                                // TODO: implement retry strategy
+                                todo!("Retry strategy not yet implemented")
+                            }
+                        }
+                    }
+                }
             }
 
             // For batch mode, exit after one pass

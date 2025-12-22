@@ -8,6 +8,60 @@
 use nutype::nutype;
 use std::future::Future;
 
+/// Strategy for handling event processing failures.
+///
+/// When a projector's `apply()` method returns an error, the `on_error()`
+/// callback determines how the projection runner should respond. This enum
+/// represents the available failure strategies.
+///
+/// # Variants
+///
+/// - `Fatal`: Stop processing immediately and return the error
+/// - `Skip`: Log the error and continue processing the next event
+/// - `Retry`: Attempt to reprocess the event according to retry configuration
+///
+/// # Example
+///
+/// ```ignore
+/// fn on_error(
+///     &mut self,
+///     error: &Self::Error,
+///     position: StreamPosition,
+/// ) -> FailureStrategy {
+///     match error {
+///         MyError::Transient(_) => FailureStrategy::Retry,
+///         MyError::PoisonEvent(_) => FailureStrategy::Skip,
+///         MyError::Fatal(_) => FailureStrategy::Fatal,
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureStrategy {
+    /// Stop processing immediately and return the error to the caller.
+    ///
+    /// Use this when:
+    /// - The error is unrecoverable (e.g., database schema mismatch)
+    /// - The projector requires manual intervention
+    /// - Continuing would corrupt the read model
+    Fatal,
+
+    /// Skip this event and continue processing the next one.
+    ///
+    /// Use this when:
+    /// - The event is malformed or invalid (poison event)
+    /// - Processing this event is not critical
+    /// - Continuing without this event is acceptable
+    Skip,
+
+    /// Retry processing this event according to retry configuration.
+    ///
+    /// Use this when:
+    /// - The error is likely transient (e.g., network timeout)
+    /// - Retrying might succeed
+    /// - The event is important and should not be skipped
+    Retry,
+}
+
 /// Global stream position representing a location in the ordered event log.
 ///
 /// StreamPosition uniquely identifies a position in the global event stream
@@ -111,6 +165,48 @@ pub trait Projector {
     /// Names should be stable across deployments. Changing a projector's
     /// name will cause it to reprocess all events from the beginning.
     fn name(&self) -> &str;
+
+    /// Handle event processing errors and determine failure strategy.
+    ///
+    /// Called when `apply()` returns an error. The projector can inspect
+    /// the error and decide how the runner should respond.
+    ///
+    /// # Parameters
+    ///
+    /// - `error`: Reference to the error returned by `apply()`
+    /// - `position`: The global stream position of the event that failed
+    ///
+    /// # Returns
+    ///
+    /// The failure strategy the runner should use:
+    /// - `FailureStrategy::Fatal`: Stop processing and return error
+    /// - `FailureStrategy::Skip`: Skip this event and continue
+    /// - `FailureStrategy::Retry`: Retry processing this event
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns `FailureStrategy::Fatal` for all errors. This is the safest
+    /// default - projectors that need different behavior should override
+    /// this method.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn on_error(
+    ///     &mut self,
+    ///     error: &Self::Error,
+    ///     _position: StreamPosition,
+    /// ) -> FailureStrategy {
+    ///     match error {
+    ///         MyError::Transient(_) => FailureStrategy::Retry,
+    ///         MyError::PoisonEvent(_) => FailureStrategy::Skip,
+    ///         MyError::Fatal(_) => FailureStrategy::Fatal,
+    ///     }
+    /// }
+    /// ```
+    fn on_error(&mut self, _error: &Self::Error, _position: StreamPosition) -> FailureStrategy {
+        FailureStrategy::Fatal
+    }
 }
 
 /// Trait for reading events globally for projections.

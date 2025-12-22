@@ -11,8 +11,9 @@
 //! - And developer can get a working projection with minimal code
 
 use eventcore::{
-    Event, EventReader, EventStore, InMemoryCheckpointStore, InMemoryEventStore, LocalCoordinator,
-    PollMode, ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
+    Event, EventReader, EventStore, FailureStrategy, InMemoryCheckpointStore, InMemoryEventStore,
+    LocalCoordinator, PollMode, ProjectionRunner, Projector, StreamId, StreamPosition,
+    StreamVersion, StreamWrites,
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -389,4 +390,150 @@ async fn local_coordinator_grants_leadership_without_contention() {
         .expect("LocalCoordinator should grant leadership again after release");
 
     assert!(guard2.is_valid(), "re-acquired guard should also be valid");
+}
+
+/// Integration test for eventcore-dvp: Fatal error handling in projection runner
+///
+/// Scenario: Projector encounters fatal error and stops processing
+/// - Given projector configured to fail on specific event with FailureStrategy::Fatal
+/// - And event store contains events before and after the failing event
+/// - When runner processes events and encounters the failure
+/// - Then runner stops immediately and returns error
+/// - And checkpoint is updated only up to event before failure
+/// - And events after the failure are not processed
+#[tokio::test]
+async fn runner_stops_on_fatal_error_and_preserves_checkpoint() {
+    // Given: Event store with multiple events
+    let store = InMemoryEventStore::new();
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    // Seed 5 events into the store
+    for i in 0..5 {
+        let event = CounterIncremented {
+            counter_id: counter_id.clone(),
+        };
+        let writes = StreamWrites::new()
+            .register_stream(counter_id.clone(), StreamVersion::new(i))
+            .expect("register stream")
+            .append(event)
+            .expect("append event");
+        store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+    }
+
+    // And: A checkpoint store to track progress
+    let checkpoint_store = InMemoryCheckpointStore::new();
+
+    // And: A projector that fails fatally on the 3rd event (position 2)
+    let processed_events = Arc::new(std::sync::Mutex::new(Vec::<StreamPosition>::new()));
+    let projector = FatalErrorProjector::new(
+        processed_events.clone(),
+        StreamPosition::new(2), // Fail on 3rd event
+    );
+
+    // When: Developer runs the projector with checkpoint store
+    let coordinator = LocalCoordinator::new();
+    let runner = ProjectionRunner::new(projector, coordinator, &store)
+        .with_checkpoint_store(checkpoint_store.clone());
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), runner.run()).await;
+
+    // Then: Runner returns an error (fatal error from projector)
+    assert!(
+        result.is_ok(),
+        "runner should complete within timeout (not hang)"
+    );
+    assert!(
+        result.unwrap().is_err(),
+        "runner should return error on fatal failure"
+    );
+
+    // And: Only events before the failure were processed
+    {
+        let processed = processed_events.lock().unwrap();
+        assert_eq!(
+            processed.len(),
+            2,
+            "only events at positions 0 and 1 should be processed before fatal error at position 2"
+        );
+    }
+
+    // And: Checkpoint was saved up to the last successfully processed event
+    // When we restart with a fresh projector, it should resume from position 1
+    // and immediately hit the fatal error again at position 2
+    let restarted_processed = Arc::new(std::sync::Mutex::new(Vec::<StreamPosition>::new()));
+    let restarted_projector = FatalErrorProjector::new(
+        restarted_processed.clone(),
+        StreamPosition::new(2), // Same failure point
+    );
+
+    let coordinator2 = LocalCoordinator::new();
+    let runner2 = ProjectionRunner::new(restarted_projector, coordinator2, &store)
+        .with_checkpoint_store(checkpoint_store);
+
+    let result2 = tokio::time::timeout(std::time::Duration::from_secs(1), runner2.run()).await;
+
+    // Then: Restarted runner also fails (checkpoint prevented reprocessing positions 0-1)
+    assert!(
+        result2.unwrap().is_err(),
+        "restarted runner should also fail on same event"
+    );
+
+    // And: No events were reprocessed (checkpoint preserved)
+    {
+        let restarted = restarted_processed.lock().unwrap();
+        assert_eq!(
+            restarted.len(),
+            0,
+            "checkpoint should prevent reprocessing positions 0-1; runner fails at position 2"
+        );
+    }
+}
+
+/// Projector that fails with a fatal error at a specific position.
+/// Uses on_error() to return FailureStrategy::Fatal.
+struct FatalErrorProjector {
+    processed: Arc<std::sync::Mutex<Vec<StreamPosition>>>,
+    fail_at_position: StreamPosition,
+}
+
+impl FatalErrorProjector {
+    fn new(
+        processed: Arc<std::sync::Mutex<Vec<StreamPosition>>>,
+        fail_at_position: StreamPosition,
+    ) -> Self {
+        Self {
+            processed,
+            fail_at_position,
+        }
+    }
+}
+
+impl Projector for FatalErrorProjector {
+    type Event = CounterIncremented;
+    type Error = String;
+    type Context = ();
+
+    fn apply(
+        &mut self,
+        _event: Self::Event,
+        position: StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        if position == self.fail_at_position {
+            return Err(format!("fatal error at position {}", position));
+        }
+        self.processed.lock().unwrap().push(position);
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "fatal-error-projector"
+    }
+
+    fn on_error(&mut self, _error: &Self::Error, _position: StreamPosition) -> FailureStrategy {
+        FailureStrategy::Fatal
+    }
 }
