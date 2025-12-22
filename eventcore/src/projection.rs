@@ -6,6 +6,7 @@
 
 use crate::{Event, EventReader, FailureStrategy, Projector, StreamPosition};
 use futures::FutureExt;
+use std::panic::AssertUnwindSafe;
 
 /// Polling mode for projection runners.
 ///
@@ -328,9 +329,7 @@ where
                     }
                 };
 
-                let result = std::panic::AssertUnwindSafe(read_future)
-                    .catch_unwind()
-                    .await;
+                let result = AssertUnwindSafe(read_future).catch_unwind().await;
 
                 match result {
                     Ok(Ok(events)) => {
