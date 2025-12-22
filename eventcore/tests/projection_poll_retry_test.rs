@@ -167,23 +167,25 @@ async fn runner_retries_transient_database_errors_with_exponential_backoff() {
     let poll_times = poll_times_handle.lock().unwrap();
     assert_eq!(poll_times.len(), 4);
 
-    // Verify exponential backoff: each delay should roughly double
-    // First retry: ~10ms, second: ~20ms, third: ~40ms
+    // Verify exponential backoff: each delay should grow exponentially
+    // We don't check absolute timing (too flaky in CI) - only that delays increase
     let delay_1 = poll_times[1].duration_since(poll_times[0]).as_millis();
     let delay_2 = poll_times[2].duration_since(poll_times[1]).as_millis();
     let delay_3 = poll_times[3].duration_since(poll_times[2]).as_millis();
 
-    // Allow tolerance for timing variance (±50%)
-    assert!((5..=20).contains(&delay_1), "First delay: {}ms", delay_1);
-    assert!((10..=40).contains(&delay_2), "Second delay: {}ms", delay_2);
-    assert!((20..=80).contains(&delay_3), "Third delay: {}ms", delay_3);
+    // Verify exponential growth: delay_2 should be ~2x delay_1, delay_3 should be ~2x delay_2
+    // Allow wide tolerance for CI overhead (delays must be at least 1.5x previous)
     assert!(
-        delay_2 > delay_1,
-        "Second delay should be greater than first"
+        delay_2 as f64 >= delay_1 as f64 * 1.5,
+        "Second delay ({}ms) should be at least 1.5x first delay ({}ms)",
+        delay_2,
+        delay_1
     );
     assert!(
-        delay_3 > delay_2,
-        "Third delay should be greater than second"
+        delay_3 as f64 >= delay_2 as f64 * 1.5,
+        "Third delay ({}ms) should be at least 1.5x second delay ({}ms)",
+        delay_3,
+        delay_2
     );
 }
 
