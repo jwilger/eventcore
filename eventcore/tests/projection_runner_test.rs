@@ -11,9 +11,9 @@
 //! - And developer can get a working projection with minimal code
 
 use eventcore::{
-    Event, EventReader, EventStore, FailureStrategy, InMemoryCheckpointStore, InMemoryEventStore,
-    LocalCoordinator, PollMode, ProjectionRunner, Projector, StreamId, StreamPosition,
-    StreamVersion, StreamWrites,
+    Event, EventReader, EventStore, FailureContext, FailureStrategy, InMemoryCheckpointStore,
+    InMemoryEventStore, LocalCoordinator, PollMode, ProjectionRunner, Projector, StreamId,
+    StreamPosition, StreamVersion, StreamWrites,
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -533,7 +533,7 @@ impl Projector for FatalErrorProjector {
         "fatal-error-projector"
     }
 
-    fn on_error(&mut self, _error: &Self::Error, _position: StreamPosition) -> FailureStrategy {
+    fn on_error(&mut self, _ctx: FailureContext<'_, Self::Error>) -> FailureStrategy {
         FailureStrategy::Fatal
     }
 }
@@ -699,7 +699,189 @@ impl Projector for SkipErrorProjector {
         "skip-error-projector"
     }
 
-    fn on_error(&mut self, _error: &Self::Error, _position: StreamPosition) -> FailureStrategy {
+    fn on_error(&mut self, _ctx: FailureContext<'_, Self::Error>) -> FailureStrategy {
         FailureStrategy::Skip
+    }
+}
+
+/// Integration test for eventcore-dvp: Retry with escalation to Fatal
+///
+/// Scenario: Projector retries failed event with escalation to Fatal
+/// - Given projector configured to fail on specific event with FailureStrategy::Retry
+/// - And retry configuration has max_retries limit
+/// - When runner processes events and encounters the failure
+/// - Then runner retries the event (apply called multiple times for same event)
+/// - And on_error receives incrementing retry counts (0, 1, 2, ...)
+/// - And after max retries exceeded, runner escalates to Fatal and stops
+/// - And checkpoint is NOT updated past the failed event
+#[tokio::test]
+async fn runner_retries_failed_event_then_escalates_to_fatal() {
+    // Given: Event store with 5 events
+    let store = InMemoryEventStore::new();
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    // Seed 5 events into the store (positions 0-4)
+    for i in 0..5 {
+        let event = CounterIncremented {
+            counter_id: counter_id.clone(),
+        };
+        let writes = StreamWrites::new()
+            .register_stream(counter_id.clone(), StreamVersion::new(i))
+            .expect("register stream")
+            .append(event)
+            .expect("append event");
+        store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+    }
+
+    // And: A checkpoint store to track progress
+    let checkpoint_store = InMemoryCheckpointStore::new();
+
+    // And: A projector that tracks retry behavior
+    let retry_log = Arc::new(std::sync::Mutex::new(Vec::<u32>::new()));
+    let apply_count = Arc::new(AtomicUsize::new(0));
+    let projector = RetryThenFatalProjector::new(
+        retry_log.clone(),
+        apply_count.clone(),
+        StreamPosition::new(2), // Fail on event at position 2
+        3,                      // Max 3 retries before escalating to Fatal
+    );
+
+    // When: Developer runs the projector with checkpoint store
+    let coordinator = LocalCoordinator::new();
+    let runner = ProjectionRunner::new(projector, coordinator, &store)
+        .with_checkpoint_store(checkpoint_store.clone());
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), runner.run()).await;
+
+    // Then: Runner returns an error after retries exhausted
+    assert!(
+        result.is_ok(),
+        "runner should complete within timeout (not hang)"
+    );
+    assert!(
+        result.unwrap().is_err(),
+        "runner should return error after retries exhausted"
+    );
+
+    // And: on_error was called multiple times with incrementing retry counts
+    {
+        let retry_counts = retry_log.lock().unwrap();
+        assert_eq!(
+            retry_counts.len(),
+            4,
+            "on_error should be called 4 times (initial failure + 3 retries)"
+        );
+        assert_eq!(
+            *retry_counts,
+            vec![0, 1, 2, 3],
+            "retry counts should increment from 0 to 3"
+        );
+    }
+
+    // And: apply() was called multiple times for position 2 (retries)
+    // Initial attempt + 3 retries = 4 attempts at position 2
+    // Plus 2 successful events at positions 0 and 1
+    {
+        let total_apply_calls = apply_count.load(Ordering::SeqCst);
+        assert_eq!(
+            total_apply_calls, 6,
+            "apply should be called 2 times (positions 0,1) + 4 times (position 2 retries)"
+        );
+    }
+
+    // And: Checkpoint was saved up to the last successfully processed event
+    // Verify by restarting - should process positions 0-1, then fail at position 2 again
+    let restarted_retry_log = Arc::new(std::sync::Mutex::new(Vec::<u32>::new()));
+    let restarted_apply_count = Arc::new(AtomicUsize::new(0));
+    let restarted_projector = RetryThenFatalProjector::new(
+        restarted_retry_log.clone(),
+        restarted_apply_count.clone(),
+        StreamPosition::new(2), // Same failure point
+        3,
+    );
+
+    let coordinator2 = LocalCoordinator::new();
+    let runner2 = ProjectionRunner::new(restarted_projector, coordinator2, &store)
+        .with_checkpoint_store(checkpoint_store);
+
+    let result2 = tokio::time::timeout(std::time::Duration::from_secs(5), runner2.run()).await;
+
+    // Then: Restarted runner also fails after retries
+    assert!(
+        result2.unwrap().is_err(),
+        "restarted runner should also fail after retries exhausted"
+    );
+
+    // And: No events at positions 0-1 were reprocessed (checkpoint preserved)
+    // Only position 2 is retried again
+    {
+        let restarted_apply = restarted_apply_count.load(Ordering::SeqCst);
+        assert_eq!(
+            restarted_apply, 4,
+            "checkpoint should prevent reprocessing positions 0-1; only position 2 retried 4 times"
+        );
+    }
+}
+
+/// Projector that retries N times then escalates to Fatal.
+/// Tracks retry counts passed to on_error() and number of apply() calls.
+struct RetryThenFatalProjector {
+    retry_log: Arc<std::sync::Mutex<Vec<u32>>>,
+    apply_count: Arc<AtomicUsize>,
+    fail_at_position: StreamPosition,
+    max_retries: u32,
+}
+
+impl RetryThenFatalProjector {
+    fn new(
+        retry_log: Arc<std::sync::Mutex<Vec<u32>>>,
+        apply_count: Arc<AtomicUsize>,
+        fail_at_position: StreamPosition,
+        max_retries: u32,
+    ) -> Self {
+        Self {
+            retry_log,
+            apply_count,
+            fail_at_position,
+            max_retries,
+        }
+    }
+}
+
+impl Projector for RetryThenFatalProjector {
+    type Event = CounterIncremented;
+    type Error = String;
+    type Context = ();
+
+    fn apply(
+        &mut self,
+        _event: Self::Event,
+        position: StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        self.apply_count.fetch_add(1, Ordering::SeqCst);
+        if position == self.fail_at_position {
+            return Err(format!("transient error at position {}", position));
+        }
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "retry-then-fatal-projector"
+    }
+
+    fn on_error(&mut self, ctx: FailureContext<'_, Self::Error>) -> FailureStrategy {
+        // Track the retry count we received from the runner
+        self.retry_log.lock().unwrap().push(ctx.retry_count);
+
+        // Return Retry until max_retries exceeded, then escalate to Fatal
+        if ctx.retry_count < self.max_retries {
+            FailureStrategy::Retry
+        } else {
+            FailureStrategy::Fatal
+        }
     }
 }

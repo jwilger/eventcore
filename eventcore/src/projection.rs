@@ -205,7 +205,7 @@ where
 impl<P, C, S> ProjectionRunner<P, C, S>
 where
     P: Projector,
-    P::Event: Event,
+    P::Event: Event + Clone,
     P::Context: Default,
     S: EventReader,
 {
@@ -319,43 +319,62 @@ where
 
             // Apply each event to the projector
             for (event, position) in events {
-                match self.projector.apply(event, position, &mut ctx) {
-                    Ok(()) => {
-                        // Event processed successfully - update and save checkpoint
-                        last_checkpoint = Some(position);
-                        if let Some(cs) = &self.checkpoint_store {
-                            cs.save(self.projector.name(), position);
+                let mut retry_count = 0u32;
+                let max_retries = 3u32;
+
+                loop {
+                    match self.projector.apply(event.clone(), position, &mut ctx) {
+                        Ok(()) => {
+                            // Event processed successfully - update and save checkpoint
+                            last_checkpoint = Some(position);
+                            if let Some(cs) = &self.checkpoint_store {
+                                cs.save(self.projector.name(), position);
+                            }
+                            break; // Move to next event
                         }
-                    }
-                    Err(error) => {
-                        // Error occurred - ask projector what to do
-                        let strategy = self.projector.on_error(&error, position);
-                        match strategy {
-                            FailureStrategy::Fatal => {
-                                // Stop processing and return error
-                                // Checkpoint is already saved up to last successful event
-                                return Err(ProjectionError::Failed(
-                                    "projector apply failed".to_string(),
-                                ));
-                            }
-                            FailureStrategy::Skip => {
-                                // Log the error and continue processing
-                                tracing::warn!(
-                                    projector = self.projector.name(),
-                                    position = %position,
-                                    error = ?error,
-                                    "Skipping failed event"
-                                );
-                                // Update checkpoint to skip past this event
-                                last_checkpoint = Some(position);
-                                if let Some(cs) = &self.checkpoint_store {
-                                    cs.save(self.projector.name(), position);
+                        Err(error) => {
+                            // Error occurred - ask projector what to do
+                            let failure_ctx = eventcore_types::FailureContext {
+                                error: &error,
+                                position,
+                                retry_count,
+                            };
+                            let strategy = self.projector.on_error(failure_ctx);
+                            match strategy {
+                                FailureStrategy::Fatal => {
+                                    // Stop processing and return error
+                                    // Checkpoint is already saved up to last successful event
+                                    return Err(ProjectionError::Failed(
+                                        "projector apply failed".to_string(),
+                                    ));
                                 }
-                                // Continue to next event
-                            }
-                            FailureStrategy::Retry => {
-                                // TODO: implement retry strategy
-                                todo!("Retry strategy not yet implemented")
+                                FailureStrategy::Skip => {
+                                    // Log the error and continue processing
+                                    tracing::warn!(
+                                        projector = self.projector.name(),
+                                        position = %position,
+                                        error = ?error,
+                                        "Skipping failed event"
+                                    );
+                                    // Update checkpoint to skip past this event
+                                    last_checkpoint = Some(position);
+                                    if let Some(cs) = &self.checkpoint_store {
+                                        cs.save(self.projector.name(), position);
+                                    }
+                                    break; // Move to next event
+                                }
+                                FailureStrategy::Retry => {
+                                    retry_count += 1;
+                                    if retry_count > max_retries {
+                                        // Max retries exceeded - escalate to Fatal
+                                        return Err(ProjectionError::Failed(
+                                            "max retries exceeded".to_string(),
+                                        ));
+                                    }
+                                    // Wait before retrying
+                                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                                    // Continue retry loop
+                                }
                             }
                         }
                     }

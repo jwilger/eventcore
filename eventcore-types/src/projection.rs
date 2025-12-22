@@ -8,6 +8,30 @@
 use nutype::nutype;
 use std::future::Future;
 
+/// Context provided to error handler when event processing fails.
+///
+/// This struct bundles together all the information needed to make
+/// informed decisions about how to handle a projection failure.
+///
+/// # Type Parameters
+///
+/// - `E`: The error type returned by the projector's `apply()` method
+///
+/// # Fields
+///
+/// - `error`: Reference to the error that occurred
+/// - `position`: Global stream position where the failure occurred
+/// - `retry_count`: Number of times this event has been retried (0 on first failure)
+#[derive(Debug)]
+pub struct FailureContext<'a, E> {
+    /// Reference to the error that occurred during event processing.
+    pub error: &'a E,
+    /// Global stream position of the event that failed to process.
+    pub position: StreamPosition,
+    /// Number of retry attempts so far (0 on initial failure).
+    pub retry_count: u32,
+}
+
 /// Strategy for handling event processing failures.
 ///
 /// When a projector's `apply()` method returns an error, the `on_error()`
@@ -25,13 +49,12 @@ use std::future::Future;
 /// ```ignore
 /// fn on_error(
 ///     &mut self,
-///     error: &Self::Error,
-///     position: StreamPosition,
+///     ctx: FailureContext<Self::Error>,
 /// ) -> FailureStrategy {
-///     match error {
-///         MyError::Transient(_) => FailureStrategy::Retry,
+///     match ctx.error {
+///         MyError::Transient(_) if ctx.retry_count < 3 => FailureStrategy::Retry,
 ///         MyError::PoisonEvent(_) => FailureStrategy::Skip,
-///         MyError::Fatal(_) => FailureStrategy::Fatal,
+///         _ => FailureStrategy::Fatal,
 ///     }
 /// }
 /// ```
@@ -169,12 +192,11 @@ pub trait Projector {
     /// Handle event processing errors and determine failure strategy.
     ///
     /// Called when `apply()` returns an error. The projector can inspect
-    /// the error and decide how the runner should respond.
+    /// the error context and decide how the runner should respond.
     ///
     /// # Parameters
     ///
-    /// - `error`: Reference to the error returned by `apply()`
-    /// - `position`: The global stream position of the event that failed
+    /// - `ctx`: Context containing the error, position, and retry count
     ///
     /// # Returns
     ///
@@ -194,17 +216,16 @@ pub trait Projector {
     /// ```ignore
     /// fn on_error(
     ///     &mut self,
-    ///     error: &Self::Error,
-    ///     _position: StreamPosition,
+    ///     ctx: FailureContext<Self::Error>,
     /// ) -> FailureStrategy {
-    ///     match error {
-    ///         MyError::Transient(_) => FailureStrategy::Retry,
+    ///     match ctx.error {
+    ///         MyError::Transient(_) if ctx.retry_count < 3 => FailureStrategy::Retry,
     ///         MyError::PoisonEvent(_) => FailureStrategy::Skip,
-    ///         MyError::Fatal(_) => FailureStrategy::Fatal,
+    ///         _ => FailureStrategy::Fatal,
     ///     }
     /// }
     /// ```
-    fn on_error(&mut self, _error: &Self::Error, _position: StreamPosition) -> FailureStrategy {
+    fn on_error(&mut self, _ctx: FailureContext<'_, Self::Error>) -> FailureStrategy {
         FailureStrategy::Fatal
     }
 }
