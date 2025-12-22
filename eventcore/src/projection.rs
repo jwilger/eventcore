@@ -57,8 +57,18 @@ impl InMemoryCheckpointStore {
 
     /// Save checkpoint for the given projector name.
     pub fn save(&self, projector_name: &str, position: StreamPosition) {
-        if let Ok(mut guard) = self.checkpoints.lock() {
-            let _ = guard.insert(projector_name.to_string(), position);
+        match self.checkpoints.lock() {
+            Ok(mut guard) => {
+                let _ = guard.insert(projector_name.to_string(), position);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    projector = projector_name,
+                    position = %position,
+                    error = %e,
+                    "Failed to save checkpoint due to poisoned mutex"
+                );
+            }
         }
     }
 }
@@ -318,7 +328,6 @@ where
             // Apply each event to the projector
             for (event, position) in events {
                 let mut retry_count = 0u32;
-                let max_retries = 3u32;
 
                 loop {
                     match self.projector.apply(event.clone(), position, &mut ctx) {
@@ -355,6 +364,13 @@ where
                                         "Skipping failed event"
                                     );
                                     // Update checkpoint to skip past this event
+                                    //
+                                    // IMPORTANT: This permanently skips the failed event across restarts.
+                                    // The checkpoint is saved at the current (failed) event position.
+                                    // On restart, read_after(position) will skip all events at or before
+                                    // this position, meaning the failed event will never be retried.
+                                    // This is intentional - Skip is for poison events that should never
+                                    // be retried (e.g., malformed data, unrecoverable errors).
                                     last_checkpoint = Some(position);
                                     if let Some(cs) = &self.checkpoint_store {
                                         cs.save(self.projector.name(), position);
@@ -363,15 +379,9 @@ where
                                 }
                                 FailureStrategy::Retry => {
                                     retry_count += 1;
-                                    if retry_count > max_retries {
-                                        // Max retries exceeded - escalate to Fatal
-                                        return Err(ProjectionError::Failed(
-                                            "max retries exceeded".to_string(),
-                                        ));
-                                    }
                                     // Wait before retrying
                                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                                    // Continue retry loop
+                                    // Continue retry loop - projector controls when to escalate to Fatal
                                 }
                             }
                         }

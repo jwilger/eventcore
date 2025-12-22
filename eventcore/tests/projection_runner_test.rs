@@ -931,3 +931,52 @@ async fn event_reader_blanket_impl_forwards_read_all_correctly() {
         "blanket impl should forward read_all() and return all 3 events, not an empty vec"
     );
 }
+
+///
+/// Scenario: EventReader blanket impl forwards read_after() correctly
+/// - Given event store with some events at different positions
+/// - When read_after(position) is called on a REFERENCE to the store (&store)
+/// - Then the blanket impl forwards to the underlying store's read_after()
+/// - And returns only events after the specified position (not an empty vec)
+///
+/// This test catches mutations in the blanket impl at line 295 that would
+/// change `(*self).read_after(after_position).await` to `Ok(vec![])`.
+#[tokio::test]
+async fn event_reader_blanket_impl_forwards_read_after_correctly() {
+    // Given: Event store with 5 events
+    let store = InMemoryEventStore::new();
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    // Seed 5 events into the store
+    for i in 0..5 {
+        let event = CounterIncremented {
+            counter_id: counter_id.clone(),
+        };
+        let writes = StreamWrites::new()
+            .register_stream(counter_id.clone(), StreamVersion::new(i))
+            .expect("register stream")
+            .append(event)
+            .expect("append event");
+        store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+    }
+
+    // When: read_after() is called on a reference to the store
+    // This exercises the blanket impl: impl<T: EventReader + Sync> EventReader for &T
+    // Reading after position 2 should return events at positions 3, 4
+    let store_ref: &InMemoryEventStore = &store;
+    let after_position = StreamPosition::new(2);
+    let events: Vec<(CounterIncremented, StreamPosition)> = store_ref
+        .read_after(after_position)
+        .await
+        .expect("read should succeed");
+
+    // Then: The blanket impl forwards correctly and returns events after position 2
+    assert_eq!(
+        events.len(),
+        2,
+        "blanket impl should forward read_after() and return 2 events (positions 3, 4), not an empty vec"
+    );
+}
