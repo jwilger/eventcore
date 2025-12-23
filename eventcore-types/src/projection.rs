@@ -5,6 +5,7 @@
 //! - `EventReader`: Trait for reading events globally for projections
 //! - `StreamPosition`: Global position in the event stream
 
+use crate::store::StreamPrefix;
 use nutype::nutype;
 use std::future::Future;
 
@@ -230,6 +231,87 @@ pub trait Projector {
     }
 }
 
+/// Query for filtering events when reading from the event store.
+///
+/// SubscriptionQuery allows callers to specify which events to retrieve.
+/// At minimum, it supports reading all events via the `::all()` constructor.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Read all events
+/// let query = SubscriptionQuery::all();
+/// // Filter by stream prefix
+/// let query = SubscriptionQuery::all().with_stream_prefix(StreamPrefix::new("account-"));
+/// ```
+#[derive(Debug, Clone)]
+pub struct SubscriptionQuery {
+    stream_prefix: Option<StreamPrefix>,
+    limit: Option<usize>,
+}
+
+impl SubscriptionQuery {
+    /// Create a query that matches all events.
+    ///
+    /// This is the most basic query - it returns all events in the store
+    /// in global append order.
+    pub fn all() -> Self {
+        Self {
+            stream_prefix: None,
+            limit: None,
+        }
+    }
+
+    /// Filter events to only those from streams matching the given prefix.
+    ///
+    /// Returns a new query that will only match events whose stream ID
+    /// starts with the specified prefix.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let query = SubscriptionQuery::all()
+    ///     .with_stream_prefix(StreamPrefix::new("account-"));
+    /// ```
+    pub fn with_stream_prefix(self, prefix: StreamPrefix) -> Self {
+        Self {
+            stream_prefix: Some(prefix),
+            limit: self.limit,
+        }
+    }
+
+    /// Limit the number of events returned by the query.
+    ///
+    /// Returns a new query that will return at most `limit` events.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let query = SubscriptionQuery::all().with_limit(10);
+    /// ```
+    pub fn with_limit(self, limit: usize) -> Self {
+        Self {
+            stream_prefix: self.stream_prefix,
+            limit: Some(limit),
+        }
+    }
+
+    /// Get the stream prefix filter, if any.
+    ///
+    /// Returns `Some(&StreamPrefix)` if a prefix filter is set, or `None`
+    /// if this query matches all streams.
+    pub fn stream_prefix(&self) -> Option<&StreamPrefix> {
+        self.stream_prefix.as_ref()
+    }
+
+    /// Get the limit, if any.
+    ///
+    /// Returns `Some(usize)` if a limit is set, or `None` if there is no limit.
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
+    }
+}
+
 /// Trait for reading events globally for projections.
 ///
 /// EventReader provides access to all events in global order, which is
@@ -278,6 +360,31 @@ pub trait EventReader {
         &self,
         after_position: StreamPosition,
     ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send;
+
+    /// Read events matching a query, optionally after a given position.
+    ///
+    /// Returns a vector of tuples containing the event and its global position.
+    /// Events are filtered according to the query criteria. If a position is
+    /// provided, only events after that position are returned.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `E`: The event type to deserialize events as
+    ///
+    /// # Parameters
+    ///
+    /// - `query`: The subscription query specifying which events to read
+    /// - `after_position`: Optional position filter (None reads from beginning)
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Vec<(E, StreamPosition)>)`: Events with their positions
+    /// - `Err(Self::Error)`: If the read operation fails
+    fn read_events_after<E: crate::Event>(
+        &self,
+        query: SubscriptionQuery,
+        after_position: Option<StreamPosition>,
+    ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send;
 }
 
 /// Blanket implementation allowing EventReader trait to work with references.
@@ -297,5 +404,13 @@ impl<T: EventReader + Sync> EventReader for &T {
         after_position: StreamPosition,
     ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
         (*self).read_after(after_position).await
+    }
+
+    async fn read_events_after<E: crate::Event>(
+        &self,
+        query: SubscriptionQuery,
+        after_position: Option<StreamPosition>,
+    ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
+        (*self).read_events_after(query, after_position).await
     }
 }

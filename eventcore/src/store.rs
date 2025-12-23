@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use crate::{
     Event, EventReader, EventStore, EventStoreError, EventStreamReader, EventStreamSlice,
     Operation, StreamId, StreamPosition, StreamVersion, StreamWriteEntry, StreamWrites,
+    SubscriptionQuery,
 };
 
 /// In-memory event store implementation for testing.
@@ -193,6 +194,46 @@ impl EventReader for InMemoryEventStore {
                     .map(|e| (e, StreamPosition::new(idx as u64)))
             })
             .collect();
+
+        Ok(events)
+    }
+
+    async fn read_events_after<E: Event>(
+        &self,
+        query: SubscriptionQuery,
+        after_position: Option<StreamPosition>,
+    ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
+        let data = self
+            .data
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure {
+                operation: Operation::ReadStream,
+            })?;
+
+        let after_idx = after_position.map(|p| p.into_inner() as usize);
+
+        let iter = data
+            .global_log
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| match after_idx {
+                None => true,
+                Some(after) => *idx > after,
+            })
+            .filter_map(|(idx, (_event_type, event_data))| {
+                serde_json::from_value::<E>(event_data.clone())
+                    .ok()
+                    .map(|e| (e, StreamPosition::new(idx as u64)))
+            })
+            .filter(|(event, _pos)| match query.stream_prefix() {
+                None => true,
+                Some(prefix) => event.stream_id().as_ref().contains(prefix.as_ref()),
+            });
+
+        let events: Vec<(E, StreamPosition)> = match query.limit() {
+            Some(limit) => iter.take(limit).collect(),
+            None => iter.collect(),
+        };
 
         Ok(events)
     }

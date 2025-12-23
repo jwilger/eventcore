@@ -46,7 +46,7 @@ pub use eventcore_types::{
     CommandError, CommandLogic, CommandStreams, Event, EventReader, EventStore, EventStoreError,
     EventStreamReader, EventStreamSlice, FailureContext, FailureStrategy, NewEvents, Operation,
     Projector, StreamDeclarations, StreamDeclarationsError, StreamId, StreamPosition,
-    StreamResolver, StreamVersion, StreamWriteEntry, StreamWrites,
+    StreamResolver, StreamVersion, StreamWriteEntry, StreamWrites, SubscriptionQuery,
 };
 
 // Re-export projection runtime components

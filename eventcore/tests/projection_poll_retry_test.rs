@@ -10,6 +10,7 @@
 use eventcore::{
     Event, EventReader, EventStore, InMemoryCheckpointStore, InMemoryEventStore, LocalCoordinator,
     PollMode, ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
+    SubscriptionQuery,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -99,6 +100,17 @@ impl EventReader for FailNTimesReader {
             .read_after(position)
             .await
             .map_err(|_| MockDatabaseError("unexpected store error".to_string()))
+    }
+
+    async fn read_events_after<E>(
+        &self,
+        _query: SubscriptionQuery,
+        _after_position: Option<StreamPosition>,
+    ) -> Result<Vec<(E, StreamPosition)>, Self::Error>
+    where
+        E: Event,
+    {
+        unimplemented!()
     }
 }
 
@@ -392,6 +404,14 @@ impl<S: EventReader + Sync + Send> EventReader for PollCountingReader<S> {
     ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
         self.poll_count.fetch_add(1, Ordering::SeqCst);
         self.inner.read_after(after_position).await
+    }
+
+    async fn read_events_after<E: Event>(
+        &self,
+        query: SubscriptionQuery,
+        after_position: Option<StreamPosition>,
+    ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
+        self.inner.read_events_after(query, after_position).await
     }
 }
 

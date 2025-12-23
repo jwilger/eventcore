@@ -60,8 +60,10 @@ pub use command::{
     StreamResolver,
 };
 pub use errors::CommandError;
-pub use projection::{EventReader, FailureContext, FailureStrategy, Projector, StreamPosition};
+pub use projection::{
+    EventReader, FailureContext, FailureStrategy, Projector, StreamPosition, SubscriptionQuery,
+};
 pub use store::{
     EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
-    StreamVersion, StreamWriteEntry, StreamWrites,
+    StreamPrefix, StreamVersion, StreamWriteEntry, StreamWrites,
 };

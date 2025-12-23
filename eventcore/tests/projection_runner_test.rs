@@ -13,7 +13,7 @@
 use eventcore::{
     Event, EventReader, EventStore, FailureContext, FailureStrategy, InMemoryCheckpointStore,
     InMemoryEventStore, LocalCoordinator, PollMode, ProjectionRunner, Projector, StreamId,
-    StreamPosition, StreamVersion, StreamWrites,
+    StreamPosition, StreamVersion, StreamWrites, SubscriptionQuery,
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -320,6 +320,14 @@ impl<S: EventReader + Sync> EventReader for PollCountingReader<S> {
     ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send {
         self.poll_count.fetch_add(1, Ordering::SeqCst);
         self.inner.read_after(after_position)
+    }
+
+    fn read_events_after<E: Event>(
+        &self,
+        query: SubscriptionQuery,
+        after_position: Option<StreamPosition>,
+    ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send {
+        self.inner.read_events_after(query, after_position)
     }
 }
 
