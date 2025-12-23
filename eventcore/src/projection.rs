@@ -210,6 +210,8 @@ where
     store: S,
     checkpoint_store: Option<InMemoryCheckpointStore>,
     poll_mode: PollMode,
+    max_retries: u32,
+    base_delay_ms: u64,
 }
 
 impl<P, C, S> ProjectionRunner<P, C, S>
@@ -237,6 +239,8 @@ where
             store,
             checkpoint_store: None,
             poll_mode: PollMode::Batch,
+            max_retries: 5,    // Default: 5 retries before propagating error
+            base_delay_ms: 10, // Default: 10ms base delay for exponential backoff
         }
     }
 
@@ -283,6 +287,42 @@ where
         self
     }
 
+    /// Configure the maximum number of retries for database poll failures.
+    ///
+    /// When the event reader fails (network timeout, connection error, etc.),
+    /// the runner will retry up to `max_retries` times with exponential backoff
+    /// before propagating the error to the caller.
+    ///
+    /// # Parameters
+    ///
+    /// - `max_retries`: Maximum retry attempts (default: 5)
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    pub fn with_max_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
+    /// Configure the base delay for exponential backoff between retries.
+    ///
+    /// After a database poll failure, the runner waits before retrying.
+    /// The delay follows exponential backoff: `base_delay_ms * 2^(attempt - 1)`
+    /// capped at 1 second to prevent unbounded growth.
+    ///
+    /// # Parameters
+    ///
+    /// - `base_delay_ms`: Base delay in milliseconds (default: 10)
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    pub fn with_base_delay_ms(mut self, base_delay_ms: u64) -> Self {
+        self.base_delay_ms = base_delay_ms;
+        self
+    }
+
     /// Run the projection, processing events until completion.
     ///
     /// This method:
@@ -312,18 +352,43 @@ where
             .and_then(|cs| cs.load(self.projector.name()));
 
         let mut ctx = P::Context::default();
+        let mut consecutive_failures = 0u32;
 
         loop {
-            // Read events from the store (either all or after checkpoint)
-            let events: Vec<(P::Event, _)> =
-                match last_checkpoint {
-                    Some(checkpoint) => self.store.read_after(checkpoint).await.map_err(|_| {
-                        ProjectionError::Failed("failed to read events".to_string())
-                    })?,
-                    None => self.store.read_all().await.map_err(|_| {
-                        ProjectionError::Failed("failed to read events".to_string())
-                    })?,
+            // Read events from the store with retry logic for transient errors
+            let events: Vec<(P::Event, _)> = loop {
+                // Attempt to read events
+                let result = match last_checkpoint {
+                    Some(checkpoint) => self.store.read_after(checkpoint).await,
+                    None => self.store.read_all().await,
                 };
+
+                match result {
+                    Ok(events) => {
+                        // Success - reset failure counter and return events
+                        consecutive_failures = 0;
+                        break events;
+                    }
+                    Err(_) => {
+                        // Database error - check if retries exhausted
+                        if consecutive_failures >= self.max_retries {
+                            // Already failed max_retries times, no more retries allowed
+                            return Err(ProjectionError::Failed(
+                                "failed to read events after max retries".to_string(),
+                            ));
+                        }
+
+                        // Track this failure and calculate backoff
+                        consecutive_failures += 1;
+
+                        // Exponential backoff before retry, capped at 1 second
+                        let delay_ms =
+                            (self.base_delay_ms * 2u64.pow(consecutive_failures - 1)).min(1000);
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        // Continue retry loop
+                    }
+                }
+            };
 
             // Apply each event to the projector
             for (event, position) in events {
