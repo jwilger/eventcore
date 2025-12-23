@@ -8,9 +8,9 @@
 //! - And caller can decide recovery strategy (restart, alert, etc)
 
 use eventcore::{
-    Event, EventReader, EventStore, InMemoryCheckpointStore, InMemoryEventStore, LocalCoordinator,
-    PollMode, ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
-    SubscriptionQuery,
+    Event, EventFilter, EventPage, EventReader, EventStore, InMemoryCheckpointStore,
+    InMemoryEventStore, LocalCoordinator, PollMode, ProjectionRunner, Projector, StreamId,
+    StreamPosition, StreamVersion, StreamWrites,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -53,32 +53,10 @@ struct FailNTimesReader {
 impl EventReader for FailNTimesReader {
     type Error = MockDatabaseError;
 
-    async fn read_all<E>(&self) -> Result<Vec<(E, StreamPosition)>, Self::Error>
-    where
-        E: Event,
-    {
-        self.poll_count.fetch_add(1, Ordering::SeqCst);
-        self.poll_times.lock().unwrap().push(Instant::now());
-
-        let remaining = self.failures_remaining.load(Ordering::SeqCst);
-        if remaining > 0 {
-            self.failures_remaining.fetch_sub(1, Ordering::SeqCst);
-            // Simulate transient database error with a proper error type
-            return Err(MockDatabaseError(
-                "transient database connection timeout".to_string(),
-            ));
-        }
-
-        // Delegate to wrapped store after failures exhausted
-        self.store
-            .read_all()
-            .await
-            .map_err(|_| MockDatabaseError("unexpected store error".to_string()))
-    }
-
-    async fn read_after<E>(
+    async fn read_events<E>(
         &self,
-        position: StreamPosition,
+        filter: EventFilter,
+        page: EventPage,
     ) -> Result<Vec<(E, StreamPosition)>, Self::Error>
     where
         E: Event,
@@ -97,20 +75,9 @@ impl EventReader for FailNTimesReader {
 
         // Delegate to wrapped store after failures exhausted
         self.store
-            .read_after(position)
+            .read_events(filter, page)
             .await
             .map_err(|_| MockDatabaseError("unexpected store error".to_string()))
-    }
-
-    async fn read_events_after<E>(
-        &self,
-        _query: SubscriptionQuery,
-        _after_position: Option<StreamPosition>,
-    ) -> Result<Vec<(E, StreamPosition)>, Self::Error>
-    where
-        E: Event,
-    {
-        unimplemented!()
     }
 }
 
@@ -393,25 +360,13 @@ impl<S> PollCountingReader<S> {
 impl<S: EventReader + Sync + Send> EventReader for PollCountingReader<S> {
     type Error = S::Error;
 
-    async fn read_all<E: Event>(&self) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
-        self.poll_count.fetch_add(1, Ordering::SeqCst);
-        self.inner.read_all().await
-    }
-
-    async fn read_after<E: Event>(
+    async fn read_events<E: Event>(
         &self,
-        after_position: StreamPosition,
+        filter: EventFilter,
+        page: EventPage,
     ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
         self.poll_count.fetch_add(1, Ordering::SeqCst);
-        self.inner.read_after(after_position).await
-    }
-
-    async fn read_events_after<E: Event>(
-        &self,
-        query: SubscriptionQuery,
-        after_position: Option<StreamPosition>,
-    ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
-        self.inner.read_events_after(query, after_position).await
+        self.inner.read_events(filter, page).await
     }
 }
 

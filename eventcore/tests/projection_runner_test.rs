@@ -11,9 +11,9 @@
 //! - And developer can get a working projection with minimal code
 
 use eventcore::{
-    Event, EventReader, EventStore, FailureContext, FailureStrategy, InMemoryCheckpointStore,
-    InMemoryEventStore, LocalCoordinator, PollMode, ProjectionRunner, Projector, StreamId,
-    StreamPosition, StreamVersion, StreamWrites, SubscriptionQuery,
+    BatchSize, Event, EventFilter, EventPage, EventReader, EventStore, FailureContext,
+    FailureStrategy, InMemoryCheckpointStore, InMemoryEventStore, LocalCoordinator, PollMode,
+    ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -307,27 +307,13 @@ impl<S> PollCountingReader<S> {
 impl<S: EventReader + Sync> EventReader for PollCountingReader<S> {
     type Error = S::Error;
 
-    fn read_all<E: Event>(
+    fn read_events<E: Event>(
         &self,
+        filter: EventFilter,
+        page: EventPage,
     ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send {
         self.poll_count.fetch_add(1, Ordering::SeqCst);
-        self.inner.read_all()
-    }
-
-    fn read_after<E: Event>(
-        &self,
-        after_position: StreamPosition,
-    ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send {
-        self.poll_count.fetch_add(1, Ordering::SeqCst);
-        self.inner.read_after(after_position)
-    }
-
-    fn read_events_after<E: Event>(
-        &self,
-        query: SubscriptionQuery,
-        after_position: Option<StreamPosition>,
-    ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send {
-        self.inner.read_events_after(query, after_position)
+        self.inner.read_events(filter, page)
     }
 }
 
@@ -896,16 +882,16 @@ impl Projector for RetryThenFatalProjector {
 
 /// Integration test for EventReader blanket implementation
 ///
-/// Scenario: EventReader blanket impl forwards read_all() correctly
+/// Scenario: EventReader blanket impl forwards read_events() correctly
 /// - Given event store with some events
-/// - When read_all() is called on a REFERENCE to the store (&store)
-/// - Then the blanket impl forwards to the underlying store's read_all()
-/// - And returns all events (not an empty vec)
+/// - When read_events() is called on a REFERENCE to the store (&store)
+/// - Then the blanket impl forwards to the underlying store's read_events()
+/// - And returns filtered/paginated events (not an empty vec)
 ///
-/// This test catches mutations in the blanket impl at line 288 that would
-/// change `(*self).read_all().await` to `Ok(vec![])`.
+/// This test catches mutations in the blanket impl that would
+/// change `(*self).read_events(...)` to `Ok(vec![])`.
 #[tokio::test]
-async fn event_reader_blanket_impl_forwards_read_all_correctly() {
+async fn event_reader_blanket_impl_forwards_read_events_correctly() {
     // Given: Event store with 3 events
     let store = InMemoryEventStore::new();
     let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
@@ -926,65 +912,20 @@ async fn event_reader_blanket_impl_forwards_read_all_correctly() {
             .expect("append to succeed");
     }
 
-    // When: read_all() is called on a reference to the store
+    // When: read_events() is called on a reference to the store
     // This exercises the blanket impl: impl<T: EventReader + Sync> EventReader for &T
     let store_ref: &InMemoryEventStore = &store;
-    let events: Vec<(CounterIncremented, StreamPosition)> =
-        store_ref.read_all().await.expect("read should succeed");
+    let filter = EventFilter::all();
+    let page = EventPage::first(BatchSize::new(10));
+    let events: Vec<(CounterIncremented, StreamPosition)> = store_ref
+        .read_events(filter, page)
+        .await
+        .expect("read should succeed");
 
     // Then: The blanket impl forwards correctly and returns all events
     assert_eq!(
         events.len(),
         3,
-        "blanket impl should forward read_all() and return all 3 events, not an empty vec"
-    );
-}
-
-///
-/// Scenario: EventReader blanket impl forwards read_after() correctly
-/// - Given event store with some events at different positions
-/// - When read_after(position) is called on a REFERENCE to the store (&store)
-/// - Then the blanket impl forwards to the underlying store's read_after()
-/// - And returns only events after the specified position (not an empty vec)
-///
-/// This test catches mutations in the blanket impl at line 295 that would
-/// change `(*self).read_after(after_position).await` to `Ok(vec![])`.
-#[tokio::test]
-async fn event_reader_blanket_impl_forwards_read_after_correctly() {
-    // Given: Event store with 5 events
-    let store = InMemoryEventStore::new();
-    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
-
-    // Seed 5 events into the store
-    for i in 0..5 {
-        let event = CounterIncremented {
-            counter_id: counter_id.clone(),
-        };
-        let writes = StreamWrites::new()
-            .register_stream(counter_id.clone(), StreamVersion::new(i))
-            .expect("register stream")
-            .append(event)
-            .expect("append event");
-        store
-            .append_events(writes)
-            .await
-            .expect("append to succeed");
-    }
-
-    // When: read_after() is called on a reference to the store
-    // This exercises the blanket impl: impl<T: EventReader + Sync> EventReader for &T
-    // Reading after position 2 should return events at positions 3, 4
-    let store_ref: &InMemoryEventStore = &store;
-    let after_position = StreamPosition::new(2);
-    let events: Vec<(CounterIncremented, StreamPosition)> = store_ref
-        .read_after(after_position)
-        .await
-        .expect("read should succeed");
-
-    // Then: The blanket impl forwards correctly and returns events after position 2
-    assert_eq!(
-        events.len(),
-        2,
-        "blanket impl should forward read_after() and return 2 events (positions 3, 4), not an empty vec"
+        "blanket impl should forward read_events() and return all 3 events, not an empty vec"
     );
 }

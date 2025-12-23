@@ -61,7 +61,8 @@ pub use command::{
 };
 pub use errors::CommandError;
 pub use projection::{
-    EventReader, FailureContext, FailureStrategy, Projector, StreamPosition, SubscriptionQuery,
+    BatchSize, EventFilter, EventPage, EventReader, FailureContext, FailureStrategy, Projector,
+    StreamPosition,
 };
 pub use store::{
     EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,

@@ -1,6 +1,6 @@
 use eventcore_types::{
-    Event, EventReader, EventStore, EventStoreError, StreamId, StreamPrefix, StreamVersion,
-    StreamWrites, SubscriptionQuery,
+    BatchSize, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, StreamId,
+    StreamPrefix, StreamVersion, StreamWrites,
 };
 use std::fmt;
 
@@ -559,12 +559,13 @@ where
         .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
 
     // When: Reading all events via EventReader with no position filter
-    let query = SubscriptionQuery::all();
+    let filter = EventFilter::all();
+    let page = EventPage::first(BatchSize::new(100));
     let events = store
-        .read_events_after::<ContractTestEvent>(query, None)
+        .read_events::<ContractTestEvent>(filter, page)
         .await
         .map_err(|_error| {
-            ContractTestFailure::assertion(SCENARIO, "read_events_after failed to read events")
+            ContractTestFailure::assertion(SCENARIO, "read_events failed to read events")
         })?;
 
     // Then: Events are returned in global append order (A, B, C)
@@ -643,24 +644,26 @@ where
         .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
 
     // Get position of third event (index 2, position 2)
-    let query = SubscriptionQuery::all();
+    let filter = EventFilter::all();
+    let page = EventPage::first(BatchSize::new(100));
     let all_events = store
-        .read_events_after::<ContractTestEvent>(query.clone(), None)
+        .read_events::<ContractTestEvent>(filter.clone(), page)
         .await
         .map_err(|_error| {
-            ContractTestFailure::assertion(SCENARIO, "read_events_after failed to read events")
+            ContractTestFailure::assertion(SCENARIO, "read_events failed to read events")
         })?;
 
     let (_third_event, third_position) = &all_events[2];
 
     // When: Reading events after position 2
+    let page_after = EventPage::after(*third_position, BatchSize::new(100));
     let events_after = store
-        .read_events_after::<ContractTestEvent>(query, Some(*third_position))
+        .read_events::<ContractTestEvent>(filter, page_after)
         .await
         .map_err(|_error| {
             ContractTestFailure::assertion(
                 SCENARIO,
-                "read_events_after failed when reading after position",
+                "read_events failed when reading after position",
             )
         })?;
 
@@ -752,15 +755,13 @@ where
     let prefix = StreamPrefix::try_new("account-").map_err(|e| {
         ContractTestFailure::assertion(SCENARIO, format!("failed to create stream prefix: {}", e))
     })?;
-    let query = SubscriptionQuery::all().with_stream_prefix(prefix);
+    let filter = EventFilter::prefix(prefix);
+    let page = EventPage::first(BatchSize::new(100));
     let events = store
-        .read_events_after::<ContractTestEvent>(query, None)
+        .read_events::<ContractTestEvent>(filter, page)
         .await
         .map_err(|_error| {
-            ContractTestFailure::assertion(
-                SCENARIO,
-                "read_events_after failed with stream prefix filter",
-            )
+            ContractTestFailure::assertion(SCENARIO, "read_events failed with stream prefix filter")
         })?;
 
     // Then: Only events from account-1 and account-2 are returned
@@ -839,15 +840,13 @@ where
     let prefix = StreamPrefix::try_new("account-").map_err(|e| {
         ContractTestFailure::assertion(SCENARIO, format!("failed to create stream prefix: {}", e))
     })?;
-    let query = SubscriptionQuery::all().with_stream_prefix(prefix);
+    let filter = EventFilter::prefix(prefix);
+    let page = EventPage::first(BatchSize::new(100));
     let events = store
-        .read_events_after::<ContractTestEvent>(query, None)
+        .read_events::<ContractTestEvent>(filter, page)
         .await
         .map_err(|_error| {
-            ContractTestFailure::assertion(
-                SCENARIO,
-                "read_events_after failed with stream prefix filter",
-            )
+            ContractTestFailure::assertion(SCENARIO, "read_events failed with stream prefix filter")
         })?;
 
     // Then: ONLY "account-123" stream should be returned (not "my-account-456")
@@ -916,12 +915,13 @@ where
         .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
 
     // When: Read events with limit of 10
-    let query = SubscriptionQuery::all().with_limit(10);
+    let filter = EventFilter::all();
+    let page = EventPage::first(BatchSize::new(10));
     let events = store
-        .read_events_after::<ContractTestEvent>(query, None)
+        .read_events::<ContractTestEvent>(filter, page)
         .await
         .map_err(|_error| {
-            ContractTestFailure::assertion(SCENARIO, "read_events_after failed with limit")
+            ContractTestFailure::assertion(SCENARIO, "read_events failed with limit")
         })?;
 
     // Then: Exactly 10 events are returned
