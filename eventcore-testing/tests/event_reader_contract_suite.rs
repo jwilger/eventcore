@@ -7,7 +7,7 @@
 
 use eventcore_testing::contract::{
     test_batch_limiting, test_event_ordering_across_streams, test_position_based_resumption,
-    test_stream_prefix_filtering,
+    test_stream_prefix_filtering, test_stream_prefix_requires_prefix_match,
 };
 
 #[tokio::test(flavor = "multi_thread")]
@@ -27,6 +27,13 @@ async fn position_based_resumption_contract() {
 #[tokio::test(flavor = "multi_thread")]
 async fn stream_prefix_filtering_contract() {
     test_stream_prefix_filtering(eventcore::InMemoryEventStore::new)
+        .await
+        .expect("event reader contract failed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stream_prefix_requires_prefix_match_contract() {
+    test_stream_prefix_requires_prefix_match(eventcore::InMemoryEventStore::new)
         .await
         .expect("event reader contract failed");
 }

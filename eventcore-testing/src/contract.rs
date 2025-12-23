@@ -460,6 +460,7 @@ macro_rules! event_reader_contract_tests {
             use $crate::contract::{
                 test_batch_limiting, test_event_ordering_across_streams,
                 test_position_based_resumption, test_stream_prefix_filtering,
+                test_stream_prefix_requires_prefix_match,
             };
 
             #[tokio::test(flavor = "multi_thread")]
@@ -479,6 +480,13 @@ macro_rules! event_reader_contract_tests {
             #[tokio::test(flavor = "multi_thread")]
             async fn stream_prefix_filtering_contract() {
                 test_stream_prefix_filtering($make_store)
+                    .await
+                    .expect("event reader contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn stream_prefix_requires_prefix_match_contract() {
+                test_stream_prefix_requires_prefix_match($make_store)
                     .await
                     .expect("event reader contract failed");
             }
@@ -645,7 +653,7 @@ where
         ));
     }
 
-    // And: Position 3 event is NOT included (verify exclusivity)
+    // And: Position 2 event is NOT included (verify exclusivity)
     for (_event, position) in events_after.iter() {
         if *position == *third_position {
             return Err(ContractTestFailure::assertion(
@@ -656,6 +664,23 @@ where
                 ),
             ));
         }
+    }
+
+    // And: Returned events are at exactly positions 3 and 4
+    let returned_positions: Vec<u64> = events_after
+        .iter()
+        .map(|(_, pos)| pos.into_inner())
+        .collect();
+
+    let expected_positions = vec![3u64, 4u64];
+    if returned_positions != expected_positions {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected events at positions [3, 4] but got {:?}",
+                returned_positions
+            ),
+        ));
     }
 
     Ok(())
@@ -735,6 +760,89 @@ where
     }
 
     // And: order-1 events are filtered out (verified by length check above)
+
+    Ok(())
+}
+
+/// Contract test: Stream prefix filtering requires true prefix match (not substring match)
+pub async fn test_stream_prefix_requires_prefix_match<F, S>(make_store: F) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + EventReader + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "stream_prefix_requires_prefix_match";
+
+    let store = make_store();
+
+    // Given: Three streams including one with prefix in middle: "account-123", "my-account-456", "order-789"
+    let account_stream = contract_stream_id(SCENARIO, "account-123")?;
+    let my_account_stream = contract_stream_id(SCENARIO, "my-account-456")?;
+    let order_stream = contract_stream_id(SCENARIO, "order-789")?;
+
+    let mut writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &account_stream,
+        StreamVersion::new(0),
+    )?;
+    writes = register_contract_stream(SCENARIO, writes, &my_account_stream, StreamVersion::new(0))?;
+    writes = register_contract_stream(SCENARIO, writes, &order_stream, StreamVersion::new(0))?;
+
+    writes = append_contract_event(SCENARIO, writes, &account_stream)?;
+    writes = append_contract_event(SCENARIO, writes, &my_account_stream)?;
+    writes = append_contract_event(SCENARIO, writes, &order_stream)?;
+
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+
+    // When: Reading with prefix filter "account-"
+    let prefix = StreamPrefix::try_new("account-").map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("failed to create stream prefix: {}", e))
+    })?;
+    let query = SubscriptionQuery::all().with_stream_prefix(prefix);
+    let events = store
+        .read_events_after::<ContractTestEvent>(query, None)
+        .await
+        .map_err(|_error| {
+            ContractTestFailure::assertion(
+                SCENARIO,
+                "read_events_after failed with stream prefix filter",
+            )
+        })?;
+
+    // Then: ONLY "account-123" stream should be returned (not "my-account-456")
+    if events.len() != 1 {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected exactly 1 event from account-* prefix but got {} (bug: implementation uses contains() instead of starts_with())",
+                events.len()
+            ),
+        ));
+    }
+
+    // And: The event must be from the account-123 stream
+    let (event, _) = &events[0];
+    let stream_id_str = event.stream_id().as_ref();
+    if !stream_id_str.contains("account-123") {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected event from account-123 stream but got from {}",
+                stream_id_str
+            ),
+        ));
+    }
+
+    // And: Verify it's NOT from my-account-456
+    if stream_id_str.contains("my-account-456") {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "BUG EXPOSED: got event from my-account-456 stream (substring match) when filtering for prefix 'account-' - implementation must use starts_with() not contains()",
+        ));
+    }
 
     Ok(())
 }
