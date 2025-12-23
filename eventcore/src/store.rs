@@ -8,8 +8,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    Event, EventReader, EventStore, EventStoreError, EventStreamReader, EventStreamSlice,
-    Operation, StreamId, StreamPosition, StreamVersion, StreamWriteEntry, StreamWrites,
+    Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, EventStreamReader,
+    EventStreamSlice, Operation, StreamId, StreamPosition, StreamVersion, StreamWriteEntry,
+    StreamWrites,
 };
 
 /// In-memory event store implementation for testing.
@@ -147,31 +148,10 @@ impl EventStore for InMemoryEventStore {
 impl EventReader for InMemoryEventStore {
     type Error = EventStoreError;
 
-    async fn read_all<E: Event>(&self) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
-        let data = self
-            .data
-            .lock()
-            .map_err(|_| EventStoreError::StoreFailure {
-                operation: Operation::ReadStream,
-            })?;
-
-        let events: Vec<(E, StreamPosition)> = data
-            .global_log
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, (_event_type, event_data))| {
-                serde_json::from_value::<E>(event_data.clone())
-                    .ok()
-                    .map(|e| (e, StreamPosition::new(idx as u64)))
-            })
-            .collect();
-
-        Ok(events)
-    }
-
-    async fn read_after<E: Event>(
+    async fn read_events<E: Event>(
         &self,
-        after_position: StreamPosition,
+        filter: EventFilter,
+        page: EventPage,
     ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
         let data = self
             .data
@@ -180,18 +160,26 @@ impl EventReader for InMemoryEventStore {
                 operation: Operation::ReadStream,
             })?;
 
-        let after_idx = after_position.into_inner() as usize;
+        let after_idx = page.after_position().map(|p| p.into_inner() as usize);
 
         let events: Vec<(E, StreamPosition)> = data
             .global_log
             .iter()
             .enumerate()
-            .skip(after_idx + 1)
+            .filter(|(idx, _)| match after_idx {
+                None => true,
+                Some(after) => *idx > after,
+            })
             .filter_map(|(idx, (_event_type, event_data))| {
                 serde_json::from_value::<E>(event_data.clone())
                     .ok()
                     .map(|e| (e, StreamPosition::new(idx as u64)))
             })
+            .filter(|(event, _pos)| match filter.stream_prefix() {
+                None => true,
+                Some(prefix) => event.stream_id().as_ref().starts_with(prefix.as_ref()),
+            })
+            .take(page.limit().into_inner())
             .collect();
 
         Ok(events)

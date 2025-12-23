@@ -4,7 +4,10 @@
 //! - `LocalCoordinator`: Single-process coordination for projector leadership
 //! - `ProjectionRunner`: Orchestrates projector execution with event polling
 
-use crate::{Event, EventReader, FailureStrategy, Projector, StreamPosition};
+use crate::{
+    BatchSize, Event, EventFilter, EventPage, EventReader, FailureStrategy, Projector,
+    StreamPosition,
+};
 
 /// Polling mode for projection runners.
 ///
@@ -358,10 +361,12 @@ where
             // Read events from the store with retry logic for transient errors
             let events: Vec<(P::Event, _)> = loop {
                 // Attempt to read events
-                let result = match last_checkpoint {
-                    Some(checkpoint) => self.store.read_after(checkpoint).await,
-                    None => self.store.read_all().await,
+                let filter = EventFilter::all();
+                let page = match last_checkpoint {
+                    Some(position) => EventPage::after(position, BatchSize::new(1000)),
+                    None => EventPage::first(BatchSize::new(1000)),
                 };
+                let result = self.store.read_events(filter, page).await;
 
                 match result {
                     Ok(events) => {
