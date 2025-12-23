@@ -696,10 +696,16 @@ where
 
     let store = make_store();
 
-    // Given: Events on streams: account-1, account-2, order-1
-    let account_1 = contract_stream_id(SCENARIO, "account-1")?;
-    let account_2 = contract_stream_id(SCENARIO, "account-2")?;
-    let order_1 = contract_stream_id(SCENARIO, "order-1")?;
+    // Given: Events on streams with IDs that actually start with "account-" or "order-"
+    let account_1 = StreamId::try_new(format!("account-1-{}", Uuid::now_v7())).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+    })?;
+    let account_2 = StreamId::try_new(format!("account-2-{}", Uuid::now_v7())).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+    })?;
+    let order_1 = StreamId::try_new(format!("order-1-{}", Uuid::now_v7())).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+    })?;
 
     let mut writes = register_contract_stream(
         SCENARIO,
@@ -745,14 +751,14 @@ where
         ));
     }
 
-    // And: All events are from account-* streams
+    // And: All events are from streams starting with "account-"
     for (event, _) in events.iter() {
         let stream_id_str = event.stream_id().as_ref();
-        if !stream_id_str.contains("account-") {
+        if !stream_id_str.starts_with("account-") {
             return Err(ContractTestFailure::assertion(
                 SCENARIO,
                 format!(
-                    "expected all events from account-* streams but found event from {}",
+                    "expected all events from streams starting with 'account-' but found event from {}",
                     stream_id_str
                 ),
             ));
@@ -774,10 +780,19 @@ where
 
     let store = make_store();
 
-    // Given: Three streams including one with prefix in middle: "account-123", "my-account-456", "order-789"
-    let account_stream = contract_stream_id(SCENARIO, "account-123")?;
-    let my_account_stream = contract_stream_id(SCENARIO, "my-account-456")?;
-    let order_stream = contract_stream_id(SCENARIO, "order-789")?;
+    // Given: Three streams with actual prefixes: "account-123", "my-account-456", "order-789"
+    // We want to verify that prefix "account-" matches ONLY "account-123", not "my-account-456"
+    let account_stream =
+        StreamId::try_new(format!("account-123-{}", Uuid::now_v7())).map_err(|e| {
+            ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+        })?;
+    let my_account_stream = StreamId::try_new(format!("my-account-456-{}", Uuid::now_v7()))
+        .map_err(|e| {
+            ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+        })?;
+    let order_stream = StreamId::try_new(format!("order-789-{}", Uuid::now_v7())).map_err(|e| {
+        ContractTestFailure::assertion(SCENARIO, format!("invalid stream id: {}", e))
+    })?;
 
     let mut writes = register_contract_stream(
         SCENARIO,
@@ -823,24 +838,24 @@ where
         ));
     }
 
-    // And: The event must be from the account-123 stream
+    // And: The event must be from a stream starting with "account-123"
     let (event, _) = &events[0];
     let stream_id_str = event.stream_id().as_ref();
-    if !stream_id_str.contains("account-123") {
+    if !stream_id_str.starts_with("account-123") {
         return Err(ContractTestFailure::assertion(
             SCENARIO,
             format!(
-                "expected event from account-123 stream but got from {}",
+                "expected event from stream starting with 'account-123' but got from {}",
                 stream_id_str
             ),
         ));
     }
 
-    // And: Verify it's NOT from my-account-456
-    if stream_id_str.contains("my-account-456") {
+    // And: Verify it's NOT from my-account-456 (proves we're not doing substring matching)
+    if stream_id_str.starts_with("my-account-456") {
         return Err(ContractTestFailure::assertion(
             SCENARIO,
-            "BUG EXPOSED: got event from my-account-456 stream (substring match) when filtering for prefix 'account-' - implementation must use starts_with() not contains()",
+            "BUG EXPOSED: got event from stream starting with 'my-account-456' when filtering for prefix 'account-' - implementation must use prefix matching from the start of the stream ID",
         ));
     }
 

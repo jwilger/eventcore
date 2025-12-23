@@ -227,11 +227,7 @@ impl EventReader for InMemoryEventStore {
             })
             .filter(|(event, _pos)| match query.stream_prefix() {
                 None => true,
-                Some(prefix) => event
-                    .stream_id()
-                    .as_ref()
-                    .split("::")
-                    .any(|segment| segment.starts_with(prefix.as_ref())),
+                Some(prefix) => event.stream_id().as_ref().starts_with(prefix.as_ref()),
             });
 
         let events: Vec<(E, StreamPosition)> = match query.limit() {
