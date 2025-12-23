@@ -233,6 +233,40 @@ pub trait EventStore {
 )]
 pub struct StreamId(String);
 
+/// Stream prefix domain type for filtering events by stream ID prefix.
+///
+/// StreamPrefix represents a literal prefix string used to filter events from
+/// streams whose IDs start with this prefix. It is used in subscription
+/// queries to select a subset of streams (e.g., all streams starting with
+/// "account-") via simple "starts with" matching on StreamId.
+///
+/// Uses nutype for validation ensuring all prefixes are:
+/// - Non-empty (at least 1 character after trimming)
+/// - Within reasonable length (max 255 characters)
+/// - Sanitized (leading/trailing whitespace removed)
+///
+/// Note: StreamPrefix performs literal prefix matching only. Any characters
+/// appearing in a prefix (including *, ?, [, ]) are treated as ordinary
+/// characters and do not provide glob-style pattern matching. Future support
+/// for glob pattern matching will be provided by a dedicated StreamPattern type.
+#[nutype(
+    sanitize(trim),
+    validate(not_empty, len_char_max = 255),
+    derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Hash,
+        AsRef,
+        Deref,
+        Display,
+        Serialize,
+        Deserialize
+    )
+)]
+pub struct StreamPrefix(String);
+
 /// Stream version domain type.
 ///
 /// StreamVersion represents the version (event count) of an event stream.

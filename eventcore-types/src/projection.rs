@@ -5,6 +5,7 @@
 //! - `EventReader`: Trait for reading events globally for projections
 //! - `StreamPosition`: Global position in the event stream
 
+use crate::store::StreamPrefix;
 use nutype::nutype;
 use std::future::Future;
 
@@ -230,21 +231,201 @@ pub trait Projector {
     }
 }
 
+/// Batch size domain type for limiting query results.
+///
+/// BatchSize represents the maximum number of events to return in a single
+/// query. Callers are responsible for choosing appropriate batch sizes based
+/// on their memory constraints and use case requirements.
+///
+/// A batch size of zero is valid and will return an empty result set.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::BatchSize;
+///
+/// let small = BatchSize::new(100);
+/// let large = BatchSize::new(1_000_000);
+/// let empty = BatchSize::new(0);  // Valid - returns no events
+/// ```
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display))]
+pub struct BatchSize(usize);
+
+/// Pagination parameters for reading events.
+///
+/// EventPage bundles together the cursor position and page size for paginating
+/// through events. This separates pagination concerns from filtering concerns.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::{EventPage, BatchSize};
+///
+/// // First page
+/// let page = EventPage::first(BatchSize::new(100));
+/// let events = reader.read_events(filter, page).await?;
+///
+/// // Next page using the last event's position
+/// if let Some(next_page) = page.next_from_results(&events) {
+///     let more = reader.read_events(filter, next_page).await?;
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventPage {
+    after_position: Option<StreamPosition>,
+    limit: BatchSize,
+}
+
+impl EventPage {
+    /// Create the first page with the given limit.
+    ///
+    /// Starts reading from the beginning of the event stream.
+    pub fn first(limit: BatchSize) -> Self {
+        Self {
+            after_position: None,
+            limit,
+        }
+    }
+
+    /// Create a page starting after the given position.
+    ///
+    /// Only events with position > `after_position` will be returned.
+    pub fn after(position: StreamPosition, limit: BatchSize) -> Self {
+        Self {
+            after_position: Some(position),
+            limit,
+        }
+    }
+
+    /// Create the next page using the last position from previous results.
+    ///
+    /// This is a convenience method for the common pagination pattern.
+    /// Returns `Some(next_page)` if events were returned, `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut page = EventPage::first(BatchSize::new(100));
+    /// loop {
+    ///     let events = reader.read_events(filter, page).await?;
+    ///     if events.is_empty() {
+    ///         break;
+    ///     }
+    ///     // Process events...
+    ///
+    ///     // Get next page
+    ///     page = match page.next_from_results(&events) {
+    ///         Some(next) => next,
+    ///         None => break,
+    ///     };
+    /// }
+    /// ```
+    pub fn next_from_results<E>(&self, events: &[(E, StreamPosition)]) -> Option<Self> {
+        events.last().map(|(_, pos)| Self {
+            after_position: Some(*pos),
+            limit: self.limit,
+        })
+    }
+
+    /// Create the next page using an explicit position.
+    ///
+    /// Returns a new page that starts after the given position with the same limit.
+    pub fn next(&self, last_position: StreamPosition) -> Self {
+        Self {
+            after_position: Some(last_position),
+            limit: self.limit,
+        }
+    }
+
+    /// Get the cursor position for this page.
+    pub fn after_position(&self) -> Option<StreamPosition> {
+        self.after_position
+    }
+
+    /// Get the page size limit.
+    pub fn limit(&self) -> BatchSize {
+        self.limit
+    }
+}
+
+/// Filter criteria for selecting which events to read from the event store.
+///
+/// EventFilter specifies filtering criteria (e.g., stream prefix) separate from
+/// pagination concerns (position and limit). Use `::all()` to match all events,
+/// or `::prefix()` to filter by stream ID prefix.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Match all events
+/// let filter = EventFilter::all();
+///
+/// // Filter by stream prefix
+/// let filter = EventFilter::prefix("account-");
+/// ```
+#[derive(Debug, Clone)]
+pub struct EventFilter {
+    stream_prefix: Option<StreamPrefix>,
+}
+
+impl EventFilter {
+    /// Create a filter that matches all events from all streams.
+    ///
+    /// This is the most permissive filter - it matches every event
+    /// in the store.
+    pub fn all() -> Self {
+        Self {
+            stream_prefix: None,
+        }
+    }
+
+    /// Create a filter that matches events from streams with the given prefix.
+    ///
+    /// Only events whose stream ID starts with the specified prefix will match.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use eventcore_types::{EventFilter, StreamPrefix};
+    ///
+    /// let prefix = StreamPrefix::try_new("account-").unwrap();
+    /// let filter = EventFilter::prefix(prefix);
+    /// ```
+    pub fn prefix(prefix: StreamPrefix) -> Self {
+        Self {
+            stream_prefix: Some(prefix),
+        }
+    }
+
+    /// Get the stream prefix filter, if any.
+    ///
+    /// Returns `Some(&StreamPrefix)` if a prefix filter is set, or `None`
+    /// if this filter matches all streams.
+    pub fn stream_prefix(&self) -> Option<&StreamPrefix> {
+        self.stream_prefix.as_ref()
+    }
+}
+
 /// Trait for reading events globally for projections.
 ///
 /// EventReader provides access to all events in global order, which is
 /// required for building read models that aggregate data across streams.
 ///
+/// # Pagination and Filtering
+///
+/// The `read_events` method requires explicit pagination via `EventPage`
+/// to prevent accidental memory exhaustion. Filtering is specified via `EventFilter`.
+///
 /// # Type Safety
 ///
-/// The `read_all` method is generic over the event type, allowing the
-/// caller to specify which event type to deserialize. Events that cannot
-/// be deserialized to the requested type are skipped.
+/// The method is generic over the event type, allowing the caller to specify
+/// which event type to deserialize. Events that cannot be deserialized to the
+/// requested type are skipped.
 pub trait EventReader {
     /// Error type returned by read operations.
     type Error;
 
-    /// Read all events from the store in global order.
+    /// Read events matching filter criteria with pagination.
     ///
     /// Returns a vector of tuples containing the event and its global position.
     /// Events are ordered by their append time (oldest first).
@@ -253,30 +434,26 @@ pub trait EventReader {
     ///
     /// - `E`: The event type to deserialize events as
     ///
-    /// # Returns
+    /// # Parameters
     ///
-    /// - `Ok(Vec<(E, StreamPosition)>)`: Events with their positions
-    /// - `Err(Self::Error)`: If the read operation fails
-    fn read_all<E: crate::Event>(
-        &self,
-    ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send;
-
-    /// Read events after the given position in global order.
-    ///
-    /// Returns a vector of tuples containing the event and its global position.
-    /// Only events with position > after_position are returned.
-    ///
-    /// # Type Parameters
-    ///
-    /// - `E`: The event type to deserialize events as
+    /// - `filter`: Filtering criteria (stream prefix, etc.)
+    /// - `page`: Pagination parameters (cursor position and limit)
     ///
     /// # Returns
     ///
     /// - `Ok(Vec<(E, StreamPosition)>)`: Events with their positions
     /// - `Err(Self::Error)`: If the read operation fails
-    fn read_after<E: crate::Event>(
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let page = EventPage::first(BatchSize::new(100));
+    /// let events = reader.read_events(EventFilter::all(), page).await?;
+    /// ```
+    fn read_events<E: crate::Event>(
         &self,
-        after_position: StreamPosition,
+        filter: EventFilter,
+        page: EventPage,
     ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send;
 }
 
@@ -288,14 +465,40 @@ pub trait EventReader {
 impl<T: EventReader + Sync> EventReader for &T {
     type Error = T::Error;
 
-    async fn read_all<E: crate::Event>(&self) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
-        (*self).read_all().await
+    async fn read_events<E: crate::Event>(
+        &self,
+        filter: EventFilter,
+        page: EventPage,
+    ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
+        (*self).read_events(filter, page).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_page_first_has_no_after_position() {
+        let page = EventPage::first(BatchSize::new(100));
+        assert_eq!(page.after_position(), None);
+        assert_eq!(page.limit().into_inner(), 100);
     }
 
-    async fn read_after<E: crate::Event>(
-        &self,
-        after_position: StreamPosition,
-    ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
-        (*self).read_after(after_position).await
+    #[test]
+    fn event_page_after_has_correct_position() {
+        let position = StreamPosition::new(42);
+        let page = EventPage::after(position, BatchSize::new(50));
+        assert_eq!(page.after_position(), Some(position));
+        assert_eq!(page.limit().into_inner(), 50);
+    }
+
+    #[test]
+    fn event_page_next_preserves_limit_and_updates_position() {
+        let page = EventPage::first(BatchSize::new(100));
+        let new_position = StreamPosition::new(99);
+        let next_page = page.next(new_position);
+        assert_eq!(next_page.after_position(), Some(new_position));
+        assert_eq!(next_page.limit().into_inner(), 100);
     }
 }
