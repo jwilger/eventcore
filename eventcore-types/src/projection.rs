@@ -473,3 +473,32 @@ impl<T: EventReader + Sync> EventReader for &T {
         (*self).read_events(filter, page).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_page_first_has_no_after_position() {
+        let page = EventPage::first(BatchSize::new(100));
+        assert_eq!(page.after_position(), None);
+        assert_eq!(page.limit().into_inner(), 100);
+    }
+
+    #[test]
+    fn event_page_after_has_correct_position() {
+        let position = StreamPosition::new(42);
+        let page = EventPage::after(position, BatchSize::new(50));
+        assert_eq!(page.after_position(), Some(position));
+        assert_eq!(page.limit().into_inner(), 50);
+    }
+
+    #[test]
+    fn event_page_next_preserves_limit_and_updates_position() {
+        let page = EventPage::first(BatchSize::new(100));
+        let new_position = StreamPosition::new(99);
+        let next_page = page.next(new_position);
+        assert_eq!(next_page.after_position(), Some(new_position));
+        assert_eq!(next_page.limit().into_inner(), 100);
+    }
+}
