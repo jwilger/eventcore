@@ -575,6 +575,7 @@ where
         ));
     }
 
+    // And: Verify complete ordering across all three streams
     let (first_event, _) = &events[0];
     if first_event.stream_id() != &stream_a {
         return Err(ContractTestFailure::assertion(
@@ -582,6 +583,28 @@ where
             format!(
                 "expected first event from stream_a but got from {:?}",
                 first_event.stream_id()
+            ),
+        ));
+    }
+
+    let (second_event, _) = &events[1];
+    if second_event.stream_id() != &stream_b {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected second event from stream_b but got from {:?}",
+                second_event.stream_id()
+            ),
+        ));
+    }
+
+    let (third_event, _) = &events[2];
+    if third_event.stream_id() != &stream_c {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected third event from stream_c but got from {:?}",
+                third_event.stream_id()
             ),
         ));
     }
