@@ -19,7 +19,7 @@ use eventcore_testing::event_store_suite;
 // Desired API: Single macro invocation generates ALL tests
 event_store_suite! {
     suite = in_memory_store_unified_suite,
-    make_store = || { eventcore::InMemoryEventStore::new() },
+    make_store = || { eventcore_memory::InMemoryEventStore::new() },
 }
 
 // The macro should generate 10 tests total:

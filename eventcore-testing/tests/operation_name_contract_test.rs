@@ -10,9 +10,9 @@
 //! This ensures consistency across all EventStore implementations at compile time.
 
 use eventcore::{
-    Event, EventStore, EventStoreError, InMemoryEventStore, Operation, StreamId, StreamVersion,
-    StreamWrites,
+    Event, EventStore, EventStoreError, Operation, StreamId, StreamVersion, StreamWrites,
 };
+use eventcore_memory::InMemoryEventStore;
 use eventcore_testing::chaos::{ChaosConfig, ChaosEventStoreExt};
 use serde::{Deserialize, Serialize};
 

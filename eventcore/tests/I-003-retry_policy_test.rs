@@ -1,8 +1,9 @@
 use eventcore::{
     CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, InMemoryEventStore, MetricsHook, NewEvents, RetryContext,
-    RetryPolicy, StreamDeclarations, StreamId, StreamWrites, execute,
+    EventStreamReader, EventStreamSlice, MetricsHook, NewEvents, RetryContext, RetryPolicy,
+    StreamDeclarations, StreamId, StreamWrites, execute,
 };
+use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;

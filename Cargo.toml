@@ -2,6 +2,7 @@
 members = [
     "eventcore",
     "eventcore-macros",
+    "eventcore-memory",
     "eventcore-postgres",
     "eventcore-testing",
     "eventcore-types",

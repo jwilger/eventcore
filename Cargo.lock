@@ -590,6 +590,7 @@ version = "0.1.8"
 dependencies = [
  "chrono",
  "eventcore-macros",
+ "eventcore-memory",
  "eventcore-postgres",
  "eventcore-types",
  "nutype",
@@ -610,6 +611,7 @@ name = "eventcore-macros"
 version = "0.1.0"
 dependencies = [
  "eventcore",
+ "eventcore-memory",
  "proc-macro2",
  "quote",
  "serde",
@@ -617,6 +619,17 @@ dependencies = [
  "tokio",
  "trybuild",
  "uuid",
+]
+
+[[package]]
+name = "eventcore-memory"
+version = "0.1.0"
+dependencies = [
+ "eventcore-testing",
+ "eventcore-types",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -644,6 +657,7 @@ name = "eventcore-testing"
 version = "0.1.0"
 dependencies = [
  "eventcore",
+ "eventcore-memory",
  "eventcore-types",
  "rand 0.9.2",
  "serde",

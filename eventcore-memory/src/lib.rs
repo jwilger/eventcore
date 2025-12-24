@@ -1,13 +1,11 @@
 //! In-memory event store implementation for testing.
 //!
 //! This module provides the `InMemoryEventStore` - a lightweight, zero-dependency
-//! storage backend for EventCore integration tests and development. Per ADR-011,
-//! this implementation is included in the main eventcore crate because it has zero
-//! heavyweight dependencies and is essential testing infrastructure for all EventCore users.
+//! storage backend for EventCore integration tests and development.
 
 use std::collections::HashMap;
 
-use crate::{
+use eventcore_types::{
     Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, EventStreamReader,
     EventStreamSlice, Operation, StreamId, StreamPosition, StreamVersion, StreamWriteEntry,
     StreamWrites,
@@ -20,14 +18,10 @@ use crate::{
 /// trait using standard library collections (HashMap, BTreeMap) with optimistic
 /// concurrency control via version checking.
 ///
-/// This implementation is included in the main eventcore crate (per ADR-011)
-/// because it has zero heavyweight dependencies and is essential testing
-/// infrastructure for all EventCore users.
-///
 /// # Example
 ///
 /// ```ignore
-/// use eventcore::InMemoryEventStore;
+/// use eventcore_memory::InMemoryEventStore;
 ///
 /// let store = InMemoryEventStore::new();
 /// // Use store with execute() function
