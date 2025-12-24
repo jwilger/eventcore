@@ -504,6 +504,93 @@ macro_rules! event_reader_contract_tests {
 pub use event_reader_contract_tests;
 pub use event_store_contract_tests;
 
+#[macro_export]
+macro_rules! event_store_suite {
+    (suite = $suite:ident, make_store = $make_store:expr $(,)?) => {
+        #[allow(non_snake_case)]
+        mod $suite {
+            use $crate::contract::{
+                test_basic_read_write, test_batch_limiting, test_concurrent_version_conflicts,
+                test_conflict_preserves_atomicity, test_event_ordering_across_streams,
+                test_missing_stream_reads, test_position_based_resumption, test_stream_isolation,
+                test_stream_prefix_filtering, test_stream_prefix_requires_prefix_match,
+            };
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn basic_read_write_contract() {
+                test_basic_read_write($make_store)
+                    .await
+                    .expect("event store contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn concurrent_version_conflicts_contract() {
+                test_concurrent_version_conflicts($make_store)
+                    .await
+                    .expect("event store contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn stream_isolation_contract() {
+                test_stream_isolation($make_store)
+                    .await
+                    .expect("event store contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn missing_stream_reads_contract() {
+                test_missing_stream_reads($make_store)
+                    .await
+                    .expect("event store contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn conflict_preserves_atomicity_contract() {
+                test_conflict_preserves_atomicity($make_store)
+                    .await
+                    .expect("event store contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn event_ordering_across_streams_contract() {
+                test_event_ordering_across_streams($make_store)
+                    .await
+                    .expect("event reader contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn position_based_resumption_contract() {
+                test_position_based_resumption($make_store)
+                    .await
+                    .expect("event reader contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn stream_prefix_filtering_contract() {
+                test_stream_prefix_filtering($make_store)
+                    .await
+                    .expect("event reader contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn stream_prefix_requires_prefix_match_contract() {
+                test_stream_prefix_requires_prefix_match($make_store)
+                    .await
+                    .expect("event reader contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn batch_limiting_contract() {
+                test_batch_limiting($make_store)
+                    .await
+                    .expect("event reader contract failed");
+            }
+        }
+    };
+}
+
+pub use event_store_suite;
+
 /// Contract test: Events from multiple streams are read in global append order
 pub async fn test_event_ordering_across_streams<F, S>(make_store: F) -> ContractTestResult
 where
