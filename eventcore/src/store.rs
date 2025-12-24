@@ -38,11 +38,25 @@ use crate::{
 /// InMemoryEventStore uses interior mutability for concurrent access.
 type StreamData = (Vec<Box<dyn std::any::Any + Send>>, StreamVersion);
 
+/// Entry in the global event log with indexed stream_id for efficient filtering.
+///
+/// This structure mirrors the Postgres schema where stream_id is a separate
+/// indexed column. By storing stream_id separately, we can filter by stream
+/// prefix without parsing JSON, matching the performance characteristics of
+/// the database implementation.
+#[derive(Debug, Clone)]
+struct GlobalLogEntry {
+    /// Stream identifier, extracted at write time for efficient filtering
+    stream_id: String,
+    /// Event data as JSON value
+    event_data: serde_json::Value,
+}
+
 /// Internal storage combining per-stream data with global event ordering.
 struct StoreData {
     streams: HashMap<StreamId, StreamData>,
-    /// Global log stores (event_type, event_data_json) for EventReader
-    global_log: Vec<(String, serde_json::Value)>,
+    /// Global log with indexed stream_id for efficient EventReader queries
+    global_log: Vec<GlobalLogEntry>,
 }
 
 pub struct InMemoryEventStore {
@@ -126,12 +140,15 @@ impl EventStore for InMemoryEventStore {
             let StreamWriteEntry {
                 stream_id,
                 event,
-                event_type,
+                event_type: _,
                 event_data,
             } = entry;
 
-            // Store in global log for EventReader
-            data.global_log.push((event_type.to_string(), event_data));
+            // Store in global log for EventReader with indexed stream_id
+            data.global_log.push(GlobalLogEntry {
+                stream_id: stream_id.as_ref().to_string(),
+                event_data,
+            });
 
             let (events, version) = data
                 .streams
@@ -170,16 +187,19 @@ impl EventReader for InMemoryEventStore {
                 None => true,
                 Some(after) => *idx > after,
             })
-            .filter_map(|(idx, (_event_type, event_data))| {
-                serde_json::from_value::<E>(event_data.clone())
+            .filter(|(_idx, entry)| {
+                // Filter by indexed stream_id WITHOUT parsing JSON (matches Postgres behavior)
+                match filter.stream_prefix() {
+                    None => true,
+                    Some(prefix) => entry.stream_id.starts_with(prefix.as_ref()),
+                }
+            })
+            .take(page.limit().into_inner())
+            .filter_map(|(idx, entry)| {
+                serde_json::from_value::<E>(entry.event_data.clone())
                     .ok()
                     .map(|e| (e, StreamPosition::new(idx as u64)))
             })
-            .filter(|(event, _pos)| match filter.stream_prefix() {
-                None => true,
-                Some(prefix) => event.stream_id().as_ref().starts_with(prefix.as_ref()),
-            })
-            .take(page.limit().into_inner())
             .collect();
 
         Ok(events)
