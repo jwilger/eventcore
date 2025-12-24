@@ -1,21 +1,18 @@
-//! Integration test demonstrating desired unified contract suite macro behavior.
+//! Integration test demonstrating the unified contract suite macro behavior.
 //!
-//! This test demonstrates how a SINGLE `event_store_suite!` macro invocation should
-//! automatically run ALL applicable contract tests (both EventStore and EventReader)
+//! This test demonstrates how a SINGLE `event_store_suite!` macro invocation
+//! automatically runs ALL applicable contract tests (both EventStore and EventReader)
 //! without requiring implementers to call separate macros.
 //!
-//! **Current State**: This test will FAIL because the `event_store_suite!` macro
-//! doesn't exist yet. We currently have two separate macros:
-//! - `event_store_contract_tests!` (5 tests)
-//! - `event_reader_contract_tests!` (5 tests)
+//! **Current State**: The unified `event_store_suite!` macro is implemented and this
+//! file serves as a working demonstration that a single invocation generates all
+//! relevant EventStore and EventReader contract tests.
 //!
-//! **Desired Behavior**: A single macro that:
+//! **Behavior**: This macro:
 //! 1. Generates all 5 EventStore contract tests
 //! 2. Automatically detects if EventReader is implemented
 //! 3. Generates all 5 EventReader contract tests when applicable
 //! 4. Allows implementers to opt-out of EventReader tests if needed
-//!
-//! **Expected Failure**: Compilation error E0433 - unresolved import `event_store_suite`
 
 use eventcore_testing::event_store_suite;
 
