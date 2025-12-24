@@ -4,17 +4,14 @@ mod postgres_contract_suite {
     use std::sync::OnceLock;
 
     use eventcore_postgres::PostgresEventStore;
-    use eventcore_testing::contract::event_store_contract_tests;
-    use testcontainers::{Container, ImageExt, ReuseDirective, runners::SyncRunner};
+    use eventcore_testing::contract::{event_reader_contract_tests, event_store_contract_tests};
+    use testcontainers::{Container, ImageExt, runners::SyncRunner};
     use testcontainers_modules::postgres::Postgres;
 
     use crate::common::postgres_version;
 
-    /// Container name for the shared reusable Postgres instance.
-    const CONTAINER_NAME: &str = "eventcore-test-postgres";
-
-    /// Shared container and connection string for all contract tests.
-    /// The container persists between test runs for faster iteration.
+    /// Shared container and connection string for all contract tests in this module.
+    /// Each test gets isolated data via separate database container.
     static SHARED_CONTAINER: OnceLock<SharedPostgres> = OnceLock::new();
 
     struct SharedPostgres {
@@ -23,46 +20,23 @@ mod postgres_contract_suite {
         container: Container<Postgres>,
     }
 
-    /// Start a reusable container with retry logic for cross-process races.
+    /// Start a container for testing.
     ///
-    /// When nextest runs test binaries in parallel, multiple processes may try to
-    /// create the same named container simultaneously. This retries on "name already
-    /// in use" errors, allowing the other process to finish creation.
-    fn start_container_with_retry() -> Container<Postgres> {
+    /// Each test module gets its own container for proper test isolation.
+    /// Tests can run in parallel without interfering with each other.
+    fn start_container() -> Container<Postgres> {
         let version = postgres_version();
-        let max_retries = 10;
-        let retry_delay = std::time::Duration::from_millis(500);
-
-        for attempt in 0..max_retries {
-            match Postgres::default()
-                .with_tag(&version)
-                .with_container_name(CONTAINER_NAME)
-                .with_reuse(ReuseDirective::Always)
-                .start()
-            {
-                Ok(container) => return container,
-                Err(e) => {
-                    let error_str = e.to_string();
-                    if error_str.contains("already in use") && attempt < max_retries - 1 {
-                        // Another process is creating the container, wait and retry
-                        std::thread::sleep(retry_delay);
-                        continue;
-                    }
-                    panic!("should start postgres container: {}", e);
-                }
-            }
-        }
-        panic!(
-            "failed to start postgres container after {} retries",
-            max_retries
-        );
+        Postgres::default()
+            .with_tag(&version)
+            .start()
+            .expect("should start postgres container")
     }
 
     fn get_shared_postgres() -> &'static SharedPostgres {
         SHARED_CONTAINER.get_or_init(|| {
             // Run container setup in a separate thread to avoid tokio runtime conflicts
             std::thread::spawn(|| {
-                let container = start_container_with_retry();
+                let container = start_container();
 
                 let host_port = container
                     .get_host_port_ipv4(5432)
@@ -129,6 +103,13 @@ mod postgres_contract_suite {
 
     event_store_contract_tests! {
         suite = postgres_contract,
+        make_store = || {
+            crate::postgres_contract_suite::make_store()
+        },
+    }
+
+    event_reader_contract_tests! {
+        suite = postgres_reader_contract,
         make_store = || {
             crate::postgres_contract_suite::make_store()
         },

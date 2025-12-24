@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use eventcore_types::{
-    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
-    StreamWriteEntry, StreamWrites,
+    Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, EventStreamReader,
+    EventStreamSlice, Operation, StreamId, StreamPosition, StreamWriteEntry, StreamWrites,
 };
 use serde_json::{Value, json};
 use sqlx::types::Json;
@@ -196,6 +196,57 @@ impl EventStore for PostgresEventStore {
             .map_err(|error| map_sqlx_error(error, Operation::CommitTransaction))?;
 
         Ok(EventStreamSlice)
+    }
+}
+
+impl EventReader for PostgresEventStore {
+    type Error = EventStoreError;
+
+    async fn read_events<E: Event>(
+        &self,
+        filter: EventFilter,
+        page: EventPage,
+    ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
+        // Query events ordered by created_at with ROW_NUMBER for global position
+        let query_str = r#"
+            SELECT
+                event_data,
+                stream_id,
+                ROW_NUMBER() OVER (ORDER BY created_at, event_id) - 1 AS global_position
+            FROM eventcore_events
+            ORDER BY created_at, event_id
+        "#;
+
+        let rows = query(query_str)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
+
+        let after_idx = page.after_position().map(|p| p.into_inner() as usize);
+
+        let events: Vec<(E, StreamPosition)> = rows
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| match after_idx {
+                None => true,
+                Some(after) => *idx > after,
+            })
+            .filter_map(|(idx, row)| {
+                let event_data: Json<Value> = row.get("event_data");
+                let stream_id: String = row.get("stream_id");
+                serde_json::from_value::<E>(event_data.0)
+                    .ok()
+                    .map(|e| (e, StreamPosition::new(idx as u64), stream_id))
+            })
+            .filter(|(_event, _pos, stream_id)| match filter.stream_prefix() {
+                None => true,
+                Some(prefix) => stream_id.starts_with(prefix.as_ref()),
+            })
+            .map(|(event, pos, _stream_id)| (event, pos))
+            .take(page.limit().into_inner())
+            .collect();
+
+        Ok(events)
     }
 }
 
