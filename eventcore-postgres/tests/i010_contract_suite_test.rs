@@ -11,7 +11,7 @@ mod postgres_contract_suite {
     use crate::common::postgres_version;
 
     /// Shared container and connection string for all contract tests in this module.
-    /// Each test gets isolated data via separate database container.
+    /// Tests share a container but are isolated via unique stream IDs with UUIDs.
     static SHARED_CONTAINER: OnceLock<SharedPostgres> = OnceLock::new();
 
     struct SharedPostgres {

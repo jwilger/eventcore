@@ -207,43 +207,79 @@ impl EventReader for PostgresEventStore {
         filter: EventFilter,
         page: EventPage,
     ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
-        // Query events ordered by created_at with ROW_NUMBER for global position
-        let query_str = r#"
-            SELECT
-                event_data,
-                stream_id,
-                ROW_NUMBER() OVER (ORDER BY created_at, event_id) - 1 AS global_position
-            FROM eventcore_events
-            ORDER BY created_at, event_id
-        "#;
+        // Query events ordered by created_at with ROW_NUMBER for global position,
+        // and apply position/prefix filtering and pagination at the database level.
+        let after_pos: i64 = page
+            .after_position()
+            .map(|p| p.into_inner() as i64)
+            // Use -1 so that "global_position > after_pos" returns all events when no
+            // explicit after_position is provided (since positions start at 0).
+            .unwrap_or(-1);
+        let limit: i64 = page.limit().into_inner() as i64;
 
-        let rows = query(query_str)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
+        let rows = if let Some(prefix) = filter.stream_prefix() {
+            let prefix_str = prefix.as_ref();
+            let query_str = r#"
+                WITH ordered AS (
+                    SELECT
+                        event_data,
+                        stream_id,
+                        ROW_NUMBER() OVER (ORDER BY created_at, event_id) - 1 AS global_position
+                    FROM eventcore_events
+                )
+                SELECT
+                    event_data,
+                    stream_id,
+                    global_position
+                FROM ordered
+                WHERE global_position > $1
+                  AND stream_id LIKE $2 || '%'
+                ORDER BY global_position
+                LIMIT $3
+            "#;
 
-        let after_idx = page.after_position().map(|p| p.into_inner() as usize);
+            query(query_str)
+                .bind(after_pos)
+                .bind(prefix_str)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+        } else {
+            let query_str = r#"
+                WITH ordered AS (
+                    SELECT
+                        event_data,
+                        stream_id,
+                        ROW_NUMBER() OVER (ORDER BY created_at, event_id) - 1 AS global_position
+                    FROM eventcore_events
+                )
+                SELECT
+                    event_data,
+                    stream_id,
+                    global_position
+                FROM ordered
+                WHERE global_position > $1
+                ORDER BY global_position
+                LIMIT $2
+            "#;
+
+            query(query_str)
+                .bind(after_pos)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+        }
+        .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
 
         let events: Vec<(E, StreamPosition)> = rows
-            .iter()
-            .enumerate()
-            .filter(|(idx, _)| match after_idx {
-                None => true,
-                Some(after) => *idx > after,
-            })
-            .filter_map(|(idx, row)| {
+            .into_iter()
+            .filter_map(|row| {
                 let event_data: Json<Value> = row.get("event_data");
-                let stream_id: String = row.get("stream_id");
+                let global_position: i64 = row.get("global_position");
                 serde_json::from_value::<E>(event_data.0)
                     .ok()
-                    .map(|e| (e, StreamPosition::new(idx as u64), stream_id))
+                    .map(|e| (e, StreamPosition::new(global_position as u64)))
             })
-            .filter(|(_event, _pos, stream_id)| match filter.stream_prefix() {
-                None => true,
-                Some(prefix) => stream_id.starts_with(prefix.as_ref()),
-            })
-            .map(|(event, pos, _stream_id)| (event, pos))
-            .take(page.limit().into_inner())
             .collect();
 
         Ok(events)
