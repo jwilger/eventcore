@@ -10,9 +10,10 @@ use std::{
 
 use eventcore::{
     CommandLogic, CommandStreams, Event, EventStore, EventStoreError, EventStreamReader,
-    EventStreamSlice, InMemoryEventStore, NewEvents, RetryPolicy, StreamDeclarations, StreamId,
-    StreamVersion, StreamWrites, execute,
+    EventStreamSlice, NewEvents, RetryPolicy, StreamDeclarations, StreamId, StreamVersion,
+    StreamWrites, execute,
 };
+use eventcore_memory::InMemoryEventStore;
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

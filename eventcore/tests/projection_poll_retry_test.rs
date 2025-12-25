@@ -9,9 +9,10 @@
 
 use eventcore::{
     Event, EventFilter, EventPage, EventReader, EventStore, InMemoryCheckpointStore,
-    InMemoryEventStore, LocalCoordinator, PollMode, ProjectionRunner, Projector, StreamId,
-    StreamPosition, StreamVersion, StreamWrites,
+    LocalCoordinator, PollMode, ProjectionRunner, Projector, StreamId, StreamPosition,
+    StreamVersion, StreamWrites,
 };
+use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

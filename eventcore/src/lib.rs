@@ -33,8 +33,6 @@
     unused_variables
 )]
 
-mod store;
-
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -54,9 +52,6 @@ pub use eventcore_types::{
 pub use projection::{
     CoordinatorGuard, InMemoryCheckpointStore, LocalCoordinator, PollMode, ProjectionRunner,
 };
-
-// Re-export InMemoryEventStore from local store module
-pub use store::InMemoryEventStore;
 
 // Re-export Command derive macro when the "macros" feature is enabled (default)
 // Users can disable with: eventcore = { version = "...", default-features = false }
@@ -559,6 +554,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eventcore_memory::InMemoryEventStore;
     use serde::{Deserialize, Serialize};
     use std::sync::Arc;
 
