@@ -1,7 +1,7 @@
 # EventCore Architecture
 
-**Document Version:** 2.3
-**Date:** 2025-12-20
+**Document Version:** 2.4
+**Date:** 2025-12-25
 **Phase:** 4 - Architecture Synthesis
 
 ## Overview
@@ -765,6 +765,59 @@ eventcore = { version = "0.1", default-features = false }
 
 Third-party adapter implementations depend on `eventcore-types` rather than the full `eventcore` crate, keeping their dependency footprint minimal.
 
+## Versioning and Release Policy
+
+EventCore follows a lockstep versioning strategy across all workspace crates to ensure compatibility and clear mental model for users.
+
+### Lockstep Major/Minor Versioning
+
+All workspace crates maintain identical major and minor version numbers, while patch versions may differ independently:
+
+- **Allowed**: `eventcore 0.2.1`, `eventcore-types 0.2.0`, `eventcore-postgres 0.2.3`
+- **Allowed**: All crates at `0.3.0` after breaking change in `eventcore-types`
+- **Forbidden**: `eventcore 0.3.0`, `eventcore-types 0.2.5` (major/minor skew)
+
+This approach provides clear compatibility guarantees: matching major/minor versions are compatible.
+
+### Independent Patch Versions
+
+Bug fixes in individual crates may bump patch versions independently. For example:
+
+- `eventcore-postgres 0.2.1` fixes a connection pool leak
+- `eventcore` remains at `0.2.0` (no changes, no release)
+- Users can update: `eventcore-postgres = "0.2.1"` with `eventcore = "0.2.0"`
+
+This reduces unnecessary releases and provides faster patch turnaround for individual components.
+
+### Release Automation
+
+Releases are managed through a two-phase workflow using release-plz:
+
+**Phase 1: Release PR Preview**
+- Automated PR created on main branch with version bumps and changelog
+- Must pass all CI quality gates (tests, clippy, format, mutation testing ≥80%, security audit)
+- Maintainers review and can edit before merge
+
+**Phase 2: Publication to crates.io**
+- Triggered by release PR merge
+- Crates published in dependency order:
+  1. `eventcore-types` (foundation, no EventCore dependencies)
+  2. `eventcore-macros`, `eventcore-postgres`, `eventcore-memory`, `eventcore-testing` (depend on types)
+  3. `eventcore` (depends on all via feature flags)
+- GitHub release created with combined changelog
+- Repository tagged with release version
+
+### Version Compatibility
+
+Users depend on the main crate with feature flags:
+
+```toml
+[dependencies]
+eventcore = { version = "0.2", features = ["postgres"] }
+```
+
+The lockstep major/minor policy ensures that `eventcore 0.2.x` is compatible with `eventcore-postgres 0.2.y` for any `x` and `y` values. Breaking changes in shared vocabulary (`eventcore-types`) trigger coordinated major/minor bumps across all crates.
+
 ## Quality Attributes
 
 ### Correctness
@@ -809,5 +862,6 @@ EventCore provides a cohesive architecture for event-sourced applications:
 7. **Rich metadata and observability** hooks for auditing, compliance, and debugging
 8. **Pluggable storage backends** validated by a shared contract suite
 9. **Feature flag ergonomics** for adapter configuration matching Rust ecosystem patterns
+10. **Lockstep versioning policy** with automated release management for clear compatibility guarantees
 
 This document is the single source of truth for EventCore's architecture and serves as the working reference for all implementation work.
