@@ -144,7 +144,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::{InMemoryEventStore, StreamVersion};
+    use eventcore::StreamVersion;
+    use eventcore_memory::InMemoryEventStore;
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]

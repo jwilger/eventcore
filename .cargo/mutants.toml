@@ -8,3 +8,6 @@ exclude_re = [
     "impl EventReader for &T.*::read_all",
     "impl EventReader for &T.*::read_after",
 ]
+
+# Note: To enforce 100% mutation coverage locally, run: cargo mutants --workspace --check
+# CI automatically uses --check flag

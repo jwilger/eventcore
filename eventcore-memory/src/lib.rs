@@ -1,13 +1,11 @@
 //! In-memory event store implementation for testing.
 //!
 //! This module provides the `InMemoryEventStore` - a lightweight, zero-dependency
-//! storage backend for EventCore integration tests and development. Per ADR-011,
-//! this implementation is included in the main eventcore crate because it has zero
-//! heavyweight dependencies and is essential testing infrastructure for all EventCore users.
+//! storage backend for EventCore integration tests and development.
 
 use std::collections::HashMap;
 
-use crate::{
+use eventcore_types::{
     Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, EventStreamReader,
     EventStreamSlice, Operation, StreamId, StreamPosition, StreamVersion, StreamWriteEntry,
     StreamWrites,
@@ -20,14 +18,10 @@ use crate::{
 /// trait using standard library collections (HashMap, BTreeMap) with optimistic
 /// concurrency control via version checking.
 ///
-/// This implementation is included in the main eventcore crate (per ADR-011)
-/// because it has zero heavyweight dependencies and is essential testing
-/// infrastructure for all EventCore users.
-///
 /// # Example
 ///
 /// ```ignore
-/// use eventcore::InMemoryEventStore;
+/// use eventcore_memory::InMemoryEventStore;
 ///
 /// let store = InMemoryEventStore::new();
 /// // Use store with execute() function
@@ -209,6 +203,7 @@ impl EventReader for InMemoryEventStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eventcore_types::{BatchSize, EventFilter, EventPage};
     use serde::{Deserialize, Serialize};
 
     /// Test-specific domain event type for unit testing storage operations.
@@ -508,6 +503,68 @@ mod tests {
         assert!(
             result.is_err(),
             "StreamId should reject close bracket glob metacharacter"
+        );
+    }
+
+    #[tokio::test]
+    async fn event_reader_after_position_excludes_event_at_position() {
+        // Given: An event store with 3 events
+        let store = InMemoryEventStore::new();
+        let stream_id = StreamId::try_new("reader-test").expect("valid stream id");
+
+        let event1 = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "first".to_string(),
+        };
+        let event2 = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "second".to_string(),
+        };
+        let event3 = TestEvent {
+            stream_id: stream_id.clone(),
+            data: "third".to_string(),
+        };
+
+        let writes = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(0))
+            .and_then(|w| w.append(event1))
+            .and_then(|w| w.append(event2))
+            .and_then(|w| w.append(event3))
+            .expect("append should succeed");
+
+        store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+
+        // When: We read events after position 0 (which points to event1)
+        let page = EventPage::first(BatchSize::new(100)).next(StreamPosition::new(0));
+        let filter = EventFilter::all();
+        let events = store
+            .read_events::<TestEvent>(filter, page)
+            .await
+            .expect("read to succeed");
+
+        // Then: We should get events at positions 1 and 2 (event2 and event3)
+        // And: The event at position 0 (event1) should NOT be included
+        assert_eq!(events.len(), 2, "Should get 2 events after position 0");
+        assert_eq!(
+            events[0].0.data, "second",
+            "First event should be at position 1"
+        );
+        assert_eq!(
+            events[1].0.data, "third",
+            "Second event should be at position 2"
+        );
+        assert_eq!(
+            events[0].1,
+            StreamPosition::new(1),
+            "First result should have position 1"
+        );
+        assert_eq!(
+            events[1].1,
+            StreamPosition::new(2),
+            "Second result should have position 2"
         );
     }
 }

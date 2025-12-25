@@ -112,7 +112,7 @@ jobs:
       - name: Run cargo mutants
         env:
           POSTGRES_VERSION: 17
-        run: cargo mutants --workspace
+        run: cargo mutants --workspace --check
 
       - name: Upload mutation report
         uses: actions/upload-artifact@v6

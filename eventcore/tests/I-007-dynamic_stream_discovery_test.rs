@@ -3,9 +3,10 @@ use std::sync::{Arc, Mutex};
 
 use eventcore::{
     CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, InMemoryEventStore, NewEvents, RetryPolicy,
-    StreamDeclarations, StreamId, StreamResolver, StreamVersion, StreamWrites, execute,
+    EventStreamReader, EventStreamSlice, NewEvents, RetryPolicy, StreamDeclarations, StreamId,
+    StreamResolver, StreamVersion, StreamWrites, execute,
 };
+use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 

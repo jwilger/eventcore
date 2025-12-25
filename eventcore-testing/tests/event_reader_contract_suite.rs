@@ -12,35 +12,35 @@ use eventcore_testing::contract::{
 
 #[tokio::test(flavor = "multi_thread")]
 async fn event_ordering_across_streams_contract() {
-    test_event_ordering_across_streams(eventcore::InMemoryEventStore::new)
+    test_event_ordering_across_streams(eventcore_memory::InMemoryEventStore::new)
         .await
         .expect("event reader contract failed");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn position_based_resumption_contract() {
-    test_position_based_resumption(eventcore::InMemoryEventStore::new)
+    test_position_based_resumption(eventcore_memory::InMemoryEventStore::new)
         .await
         .expect("event reader contract failed");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stream_prefix_filtering_contract() {
-    test_stream_prefix_filtering(eventcore::InMemoryEventStore::new)
+    test_stream_prefix_filtering(eventcore_memory::InMemoryEventStore::new)
         .await
         .expect("event reader contract failed");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stream_prefix_requires_prefix_match_contract() {
-    test_stream_prefix_requires_prefix_match(eventcore::InMemoryEventStore::new)
+    test_stream_prefix_requires_prefix_match(eventcore_memory::InMemoryEventStore::new)
         .await
         .expect("event reader contract failed");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn batch_limiting_contract() {
-    test_batch_limiting(eventcore::InMemoryEventStore::new)
+    test_batch_limiting(eventcore_memory::InMemoryEventStore::new)
         .await
         .expect("event reader contract failed");
 }

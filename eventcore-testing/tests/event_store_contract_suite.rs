@@ -11,5 +11,5 @@ use eventcore_testing::contract::event_store_contract_tests;
 /// Runs the standard EventStore contract suite against the in-memory store implementation.
 event_store_contract_tests! {
     suite = in_memory,
-    make_store = eventcore::InMemoryEventStore::new,
+    make_store = eventcore_memory::InMemoryEventStore::new,
 }
