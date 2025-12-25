@@ -360,6 +360,8 @@ pub trait EventReader {
 
 EventStore implementations that support projections implement this trait. The poll-based approach aligns control flow with transactional requirements - the projector controls when to fetch events, applies them transactionally, and checkpoints atomically.
 
+**StreamPosition** wraps the event's UUID7 identifier, providing a monotonically increasing, globally sortable position for tracking projection progress. This design eliminates the need for computed row numbers and provides natural portability across database instances and sharding scenarios.
+
 ### Subscribable Trait
 
 The `Subscribable` trait enables type filtering for subscriptions:

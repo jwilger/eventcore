@@ -779,19 +779,26 @@ where
         }
     }
 
-    // And: Returned events are at exactly positions 3 and 4
-    let returned_positions: Vec<u64> = events_after
-        .iter()
-        .map(|(_, pos)| pos.into_inner())
-        .collect();
+    // And: Returned event positions are greater than third_position and in ascending order
+    let (_event1, pos1) = &events_after[0];
+    let (_event2, pos2) = &events_after[1];
 
-    let expected_positions = vec![3u64, 4u64];
-    if returned_positions != expected_positions {
+    if *pos1 <= *third_position {
         return Err(ContractTestFailure::assertion(
             SCENARIO,
             format!(
-                "expected events at positions [3, 4] but got {:?}",
-                returned_positions
+                "expected first returned position to be > {} but got {}",
+                third_position, pos1
+            ),
+        ));
+    }
+
+    if *pos2 <= *pos1 {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected positions to be in ascending order but {} <= {}",
+                pos2, pos1
             ),
         ));
     }
