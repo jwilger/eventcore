@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use eventcore_types::{
-    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
-    StreamWriteEntry, StreamWrites,
+    Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, EventStreamReader,
+    EventStreamSlice, Operation, StreamId, StreamPosition, StreamWriteEntry, StreamWrites,
 };
 use serde_json::{Value, json};
 use sqlx::types::Json;
@@ -196,6 +196,93 @@ impl EventStore for PostgresEventStore {
             .map_err(|error| map_sqlx_error(error, Operation::CommitTransaction))?;
 
         Ok(EventStreamSlice)
+    }
+}
+
+impl EventReader for PostgresEventStore {
+    type Error = EventStoreError;
+
+    async fn read_events<E: Event>(
+        &self,
+        filter: EventFilter,
+        page: EventPage,
+    ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
+        // Query events ordered by created_at with ROW_NUMBER for global position,
+        // and apply position/prefix filtering and pagination at the database level.
+        let after_pos: i64 = page
+            .after_position()
+            .map(|p| p.into_inner() as i64)
+            // Use -1 so that "global_position > after_pos" returns all events when no
+            // explicit after_position is provided (since positions start at 0).
+            .unwrap_or(-1);
+        let limit: i64 = page.limit().into_inner() as i64;
+
+        let rows = if let Some(prefix) = filter.stream_prefix() {
+            let prefix_str = prefix.as_ref();
+            let query_str = r#"
+                WITH ordered AS (
+                    SELECT
+                        event_data,
+                        stream_id,
+                        ROW_NUMBER() OVER (ORDER BY created_at, event_id) - 1 AS global_position
+                    FROM eventcore_events
+                )
+                SELECT
+                    event_data,
+                    stream_id,
+                    global_position
+                FROM ordered
+                WHERE global_position > $1
+                  AND stream_id LIKE $2 || '%'
+                ORDER BY global_position
+                LIMIT $3
+            "#;
+
+            query(query_str)
+                .bind(after_pos)
+                .bind(prefix_str)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+        } else {
+            let query_str = r#"
+                WITH ordered AS (
+                    SELECT
+                        event_data,
+                        stream_id,
+                        ROW_NUMBER() OVER (ORDER BY created_at, event_id) - 1 AS global_position
+                    FROM eventcore_events
+                )
+                SELECT
+                    event_data,
+                    stream_id,
+                    global_position
+                FROM ordered
+                WHERE global_position > $1
+                ORDER BY global_position
+                LIMIT $2
+            "#;
+
+            query(query_str)
+                .bind(after_pos)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+        }
+        .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
+
+        let events: Vec<(E, StreamPosition)> = rows
+            .into_iter()
+            .filter_map(|row| {
+                let event_data: Json<Value> = row.get("event_data");
+                let global_position: i64 = row.get("global_position");
+                serde_json::from_value::<E>(event_data.0)
+                    .ok()
+                    .map(|e| (e, StreamPosition::new(global_position as u64)))
+            })
+            .collect();
+
+        Ok(events)
     }
 }
 
