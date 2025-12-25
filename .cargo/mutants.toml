@@ -9,5 +9,5 @@ exclude_re = [
     "impl EventReader for &T.*::read_after",
 ]
 
-# Require 100% mutation coverage - exit with error if any viable mutants are missed
-check = true
+# Note: To enforce 100% mutation coverage locally, run: cargo mutants --workspace --check
+# CI automatically uses --check flag
