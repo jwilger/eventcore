@@ -207,67 +207,64 @@ impl EventReader for PostgresEventStore {
         filter: EventFilter,
         page: EventPage,
     ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
-        // Query events ordered by created_at with ROW_NUMBER for global position,
-        // and apply position/prefix filtering and pagination at the database level.
-        let after_pos: i64 = page
-            .after_position()
-            .map(|p| p.into_inner() as i64)
-            // Use -1 so that "global_position > after_pos" returns all events when no
-            // explicit after_position is provided (since positions start at 0).
-            .unwrap_or(-1);
+        // Query events ordered by event_id (UUID7, monotonically increasing).
+        // Use event_id directly as the global position - no need for ROW_NUMBER.
+        let after_event_id: Option<Uuid> = page.after_position().map(|p| p.into_inner());
         let limit: i64 = page.limit().into_inner() as i64;
 
         let rows = if let Some(prefix) = filter.stream_prefix() {
             let prefix_str = prefix.as_ref();
-            let query_str = r#"
-                WITH ordered AS (
-                    SELECT
-                        event_data,
-                        stream_id,
-                        ROW_NUMBER() OVER (ORDER BY created_at, event_id) - 1 AS global_position
-                    FROM eventcore_events
-                )
-                SELECT
-                    event_data,
-                    stream_id,
-                    global_position
-                FROM ordered
-                WHERE global_position > $1
-                  AND stream_id LIKE $2 || '%'
-                ORDER BY global_position
-                LIMIT $3
-            "#;
 
+            if let Some(after_id) = after_event_id {
+                let query_str = r#"
+                    SELECT event_id, event_data, stream_id
+                    FROM eventcore_events
+                    WHERE event_id > $1
+                      AND stream_id LIKE $2 || '%'
+                    ORDER BY event_id
+                    LIMIT $3
+                "#;
+                query(query_str)
+                    .bind(after_id)
+                    .bind(prefix_str)
+                    .bind(limit)
+                    .fetch_all(&self.pool)
+                    .await
+            } else {
+                let query_str = r#"
+                    SELECT event_id, event_data, stream_id
+                    FROM eventcore_events
+                    WHERE stream_id LIKE $1 || '%'
+                    ORDER BY event_id
+                    LIMIT $2
+                "#;
+                query(query_str)
+                    .bind(prefix_str)
+                    .bind(limit)
+                    .fetch_all(&self.pool)
+                    .await
+            }
+        } else if let Some(after_id) = after_event_id {
+            let query_str = r#"
+                SELECT event_id, event_data, stream_id
+                FROM eventcore_events
+                WHERE event_id > $1
+                ORDER BY event_id
+                LIMIT $2
+            "#;
             query(query_str)
-                .bind(after_pos)
-                .bind(prefix_str)
+                .bind(after_id)
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await
         } else {
             let query_str = r#"
-                WITH ordered AS (
-                    SELECT
-                        event_data,
-                        stream_id,
-                        ROW_NUMBER() OVER (ORDER BY created_at, event_id) - 1 AS global_position
-                    FROM eventcore_events
-                )
-                SELECT
-                    event_data,
-                    stream_id,
-                    global_position
-                FROM ordered
-                WHERE global_position > $1
-                ORDER BY global_position
-                LIMIT $2
+                SELECT event_id, event_data, stream_id
+                FROM eventcore_events
+                ORDER BY event_id
+                LIMIT $1
             "#;
-
-            query(query_str)
-                .bind(after_pos)
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await
+            query(query_str).bind(limit).fetch_all(&self.pool).await
         }
         .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
 
@@ -275,10 +272,10 @@ impl EventReader for PostgresEventStore {
             .into_iter()
             .filter_map(|row| {
                 let event_data: Json<Value> = row.get("event_data");
-                let global_position: i64 = row.get("global_position");
+                let event_id: Uuid = row.get("event_id");
                 serde_json::from_value::<E>(event_data.0)
                     .ok()
-                    .map(|e| (e, StreamPosition::new(global_position as u64)))
+                    .map(|e| (e, StreamPosition::new(event_id)))
             })
             .collect();
 

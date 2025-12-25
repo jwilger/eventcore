@@ -9,7 +9,7 @@ serde_json = "1.0"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "macros", "migrate"] }
 thiserror = "2.0.17"
 tracing = "0.1"
-uuid = { version = "1.18.1", features = ["serde", "v7"] }
+uuid = { version = "1.19.0", features = ["serde", "v7"] }
 
 [dev-dependencies]
 eventcore-testing = { path = "../eventcore-testing" }

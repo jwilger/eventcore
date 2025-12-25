@@ -10,6 +10,7 @@ use eventcore_types::{
     EventStreamSlice, Operation, StreamId, StreamPosition, StreamVersion, StreamWriteEntry,
     StreamWrites,
 };
+use uuid::Uuid;
 
 /// In-memory event store implementation for testing.
 ///
@@ -35,11 +36,14 @@ type StreamData = (Vec<Box<dyn std::any::Any + Send>>, StreamVersion);
 /// Entry in the global event log with indexed stream_id for efficient filtering.
 ///
 /// This structure mirrors the Postgres schema where stream_id is a separate
-/// indexed column. By storing stream_id separately, we can filter by stream
-/// prefix without parsing JSON, matching the performance characteristics of
-/// the database implementation.
+/// indexed column and event_id (UUID7) serves as the global position.
+/// By storing stream_id and event_id separately, we can filter by stream
+/// prefix and position without parsing JSON, matching the performance
+/// characteristics of the database implementation.
 #[derive(Debug, Clone)]
 struct GlobalLogEntry {
+    /// Event identifier (UUID7), used as global position
+    event_id: Uuid,
     /// Stream identifier, extracted at write time for efficient filtering
     stream_id: String,
     /// Event data as JSON value
@@ -138,8 +142,12 @@ impl EventStore for InMemoryEventStore {
                 event_data,
             } = entry;
 
-            // Store in global log for EventReader with indexed stream_id
+            // Generate UUID7 for this event (monotonic, timestamp-ordered)
+            let event_id = Uuid::now_v7();
+
+            // Store in global log for EventReader with indexed stream_id and event_id
             data.global_log.push(GlobalLogEntry {
+                event_id,
                 stream_id: stream_id.as_ref().to_string(),
                 event_data,
             });
@@ -171,17 +179,19 @@ impl EventReader for InMemoryEventStore {
                 operation: Operation::ReadStream,
             })?;
 
-        let after_idx = page.after_position().map(|p| p.into_inner() as usize);
+        let after_event_id = page.after_position().map(|p| p.into_inner());
 
         let events: Vec<(E, StreamPosition)> = data
             .global_log
             .iter()
-            .enumerate()
-            .filter(|(idx, _)| match after_idx {
-                None => true,
-                Some(after) => *idx > after,
+            .filter(|entry| {
+                // Filter by event_id (UUID7 comparison)
+                match after_event_id {
+                    None => true,
+                    Some(after_id) => entry.event_id > after_id,
+                }
             })
-            .filter(|(_idx, entry)| {
+            .filter(|entry| {
                 // Filter by indexed stream_id WITHOUT parsing JSON (matches Postgres behavior)
                 match filter.stream_prefix() {
                     None => true,
@@ -189,10 +199,10 @@ impl EventReader for InMemoryEventStore {
                 }
             })
             .take(page.limit().into_inner())
-            .filter_map(|(idx, entry)| {
+            .filter_map(|entry| {
                 serde_json::from_value::<E>(entry.event_data.clone())
                     .ok()
-                    .map(|e| (e, StreamPosition::new(idx as u64)))
+                    .map(|e| (e, StreamPosition::new(entry.event_id)))
             })
             .collect();
 
@@ -537,34 +547,50 @@ mod tests {
             .await
             .expect("append to succeed");
 
-        // When: We read events after position 0 (which points to event1)
-        let page = EventPage::first(BatchSize::new(100)).next(StreamPosition::new(0));
+        // First, read all events to get their positions
+        let all_events = store
+            .read_events::<TestEvent>(EventFilter::all(), EventPage::first(BatchSize::new(100)))
+            .await
+            .expect("read all events to succeed");
+
+        assert_eq!(all_events.len(), 3, "Should have 3 events total");
+        let (first_event, first_position) = &all_events[0];
+
+        // When: We read events after the first event's position
+        let page = EventPage::after(*first_position, BatchSize::new(100));
         let filter = EventFilter::all();
         let events = store
             .read_events::<TestEvent>(filter, page)
             .await
             .expect("read to succeed");
 
-        // Then: We should get events at positions 1 and 2 (event2 and event3)
-        // And: The event at position 0 (event1) should NOT be included
-        assert_eq!(events.len(), 2, "Should get 2 events after position 0");
+        // Then: We should get 2 events (event2 and event3), not including event1
+        assert_eq!(events.len(), 2, "Should get 2 events after first position");
         assert_eq!(
             events[0].0.data, "second",
-            "First event should be at position 1"
+            "First returned event should be 'second'"
         );
         assert_eq!(
             events[1].0.data, "third",
-            "Second event should be at position 2"
+            "Second returned event should be 'third'"
         );
-        assert_eq!(
-            events[0].1,
-            StreamPosition::new(1),
-            "First result should have position 1"
-        );
-        assert_eq!(
-            events[1].1,
-            StreamPosition::new(2),
-            "Second result should have position 2"
-        );
+
+        // And: The first event should NOT be in the results
+        for (event, _pos) in &events {
+            assert_ne!(
+                event.data, first_event.data,
+                "First event should be excluded"
+            );
+        }
+
+        // And: All returned positions should be greater than first_position
+        for (_event, pos) in &events {
+            assert!(
+                *pos > *first_position,
+                "Returned position {} should be > first position {}",
+                pos,
+                first_position
+            );
+        }
     }
 }

@@ -8,6 +8,7 @@
 use crate::store::StreamPrefix;
 use nutype::nutype;
 use std::future::Future;
+use uuid::Uuid;
 
 /// Context provided to error handler when event processing fails.
 ///
@@ -92,9 +93,10 @@ pub enum FailureStrategy {
 /// across all individual streams. Used by projectors to track progress and
 /// enable resumable event processing.
 ///
-/// Positions are 0-indexed: position 0 is the first event ever appended.
+/// Positions are UUID7 values (timestamp-ordered UUIDs) assigned at event
+/// append time. They are monotonically increasing and globally sortable.
 #[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display))]
-pub struct StreamPosition(u64);
+pub struct StreamPosition(Uuid);
 
 /// Trait for transforming events into read model updates.
 ///
@@ -487,7 +489,8 @@ mod tests {
 
     #[test]
     fn event_page_after_has_correct_position() {
-        let position = StreamPosition::new(42);
+        let uuid = Uuid::parse_str("018e8c5e-8c5e-7000-8000-000000000001").unwrap();
+        let position = StreamPosition::new(uuid);
         let page = EventPage::after(position, BatchSize::new(50));
         assert_eq!(page.after_position(), Some(position));
         assert_eq!(page.limit().into_inner(), 50);
@@ -496,7 +499,8 @@ mod tests {
     #[test]
     fn event_page_next_preserves_limit_and_updates_position() {
         let page = EventPage::first(BatchSize::new(100));
-        let new_position = StreamPosition::new(99);
+        let uuid = Uuid::parse_str("018e8c5e-8c5e-7000-8000-000000000002").unwrap();
+        let new_position = StreamPosition::new(uuid);
         let next_page = page.next(new_position);
         assert_eq!(next_page.after_position(), Some(new_position));
         assert_eq!(next_page.limit().into_inner(), 100);

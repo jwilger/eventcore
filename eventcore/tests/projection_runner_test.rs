@@ -33,6 +33,41 @@ impl Event for CounterIncremented {
     }
 }
 
+/// Helper function to seed N events and return their positions.
+/// Returns a Vec of (event, position) tuples.
+async fn seed_events_and_get_positions(
+    store: &InMemoryEventStore,
+    counter_id: &StreamId,
+    count: usize,
+) -> Vec<StreamPosition> {
+    // Append events
+    for i in 0..count {
+        let event = CounterIncremented {
+            counter_id: counter_id.clone(),
+        };
+        let writes = StreamWrites::new()
+            .register_stream(counter_id.clone(), StreamVersion::new(i))
+            .expect("register stream")
+            .append(event)
+            .expect("append event");
+        store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+    }
+
+    // Read back all events to get their positions
+    let all_events = store
+        .read_events::<CounterIncremented>(
+            EventFilter::all(),
+            EventPage::first(BatchSize::new(100)),
+        )
+        .await
+        .expect("read events to succeed");
+
+    all_events.into_iter().map(|(_event, pos)| pos).collect()
+}
+
 /// Minimal projector that counts events.
 /// Implements only the required methods: apply() and name().
 struct EventCounterProjector {
@@ -402,30 +437,17 @@ async fn runner_stops_on_fatal_error_and_preserves_checkpoint() {
     let store = InMemoryEventStore::new();
     let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
 
-    // Seed 5 events into the store
-    for i in 0..5 {
-        let event = CounterIncremented {
-            counter_id: counter_id.clone(),
-        };
-        let writes = StreamWrites::new()
-            .register_stream(counter_id.clone(), StreamVersion::new(i))
-            .expect("register stream")
-            .append(event)
-            .expect("append event");
-        store
-            .append_events(writes)
-            .await
-            .expect("append to succeed");
-    }
+    // Seed 5 events and get their positions
+    let positions = seed_events_and_get_positions(&store, &counter_id, 5).await;
 
     // And: A checkpoint store to track progress
     let checkpoint_store = InMemoryCheckpointStore::new();
 
-    // And: A projector that fails fatally on the 3rd event (position 2)
+    // And: A projector that fails fatally on the 3rd event (index 2)
     let processed_events = Arc::new(std::sync::Mutex::new(Vec::<StreamPosition>::new()));
     let projector = FatalErrorProjector::new(
         processed_events.clone(),
-        StreamPosition::new(2), // Fail on 3rd event
+        positions[2], // Fail on 3rd event
     );
 
     // When: Developer runs the projector with checkpoint store
@@ -456,12 +478,12 @@ async fn runner_stops_on_fatal_error_and_preserves_checkpoint() {
     }
 
     // And: Checkpoint was saved up to the last successfully processed event
-    // When we restart with a fresh projector, it should resume from position 1
-    // and immediately hit the fatal error again at position 2
+    // When we restart with a fresh projector, it should resume from checkpoint
+    // and immediately hit the fatal error again at the same position
     let restarted_processed = Arc::new(std::sync::Mutex::new(Vec::<StreamPosition>::new()));
     let restarted_projector = FatalErrorProjector::new(
         restarted_processed.clone(),
-        StreamPosition::new(2), // Same failure point
+        positions[2], // Same failure point
     );
 
     let coordinator2 = LocalCoordinator::new();
@@ -548,30 +570,17 @@ async fn runner_skips_failed_event_and_continues_processing() {
     let store = InMemoryEventStore::new();
     let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
 
-    // Seed 5 events into the store (positions 0-4)
-    for i in 0..5 {
-        let event = CounterIncremented {
-            counter_id: counter_id.clone(),
-        };
-        let writes = StreamWrites::new()
-            .register_stream(counter_id.clone(), StreamVersion::new(i))
-            .expect("register stream")
-            .append(event)
-            .expect("append event");
-        store
-            .append_events(writes)
-            .await
-            .expect("append to succeed");
-    }
+    // Seed 5 events and get their positions
+    let positions = seed_events_and_get_positions(&store, &counter_id, 5).await;
 
     // And: A checkpoint store to track progress
     let checkpoint_store = InMemoryCheckpointStore::new();
 
-    // And: A projector that fails at position 2 but returns Skip strategy
+    // And: A projector that fails at the 3rd event (index 2) but returns Skip strategy
     let processed_events = Arc::new(std::sync::Mutex::new(Vec::<StreamPosition>::new()));
     let projector = SkipErrorProjector::new(
         processed_events.clone(),
-        StreamPosition::new(2), // Fail on event at position 2
+        positions[2], // Fail on 3rd event
     );
 
     // When: Developer runs the projector with checkpoint store
@@ -591,43 +600,39 @@ async fn runner_skips_failed_event_and_continues_processing() {
         "runner should succeed even though event at position 2 failed (Skip strategy)"
     );
 
-    // And: Events at positions 0, 1, 3, 4 were processed (4 events total)
-    // Event at position 2 was skipped
+    // And: Events at indices 0, 1, 3, 4 were processed (4 events total)
+    // Event at index 2 was skipped
     {
         let processed = processed_events.lock().unwrap();
         assert_eq!(
             processed.len(),
             4,
-            "4 events should be processed (positions 0, 1, 3, 4); position 2 skipped"
+            "4 events should be processed (indices 0, 1, 3, 4); index 2 skipped"
         );
         assert_eq!(
-            processed[0],
-            StreamPosition::new(0),
-            "first processed event should be at position 0"
+            processed[0], positions[0],
+            "first processed event should be at positions[0]"
         );
         assert_eq!(
-            processed[1],
-            StreamPosition::new(1),
-            "second processed event should be at position 1"
+            processed[1], positions[1],
+            "second processed event should be at positions[1]"
         );
         assert_eq!(
-            processed[2],
-            StreamPosition::new(3),
-            "third processed event should be at position 3 (skipped 2)"
+            processed[2], positions[3],
+            "third processed event should be at positions[3] (skipped index 2)"
         );
         assert_eq!(
-            processed[3],
-            StreamPosition::new(4),
-            "fourth processed event should be at position 4"
+            processed[3], positions[4],
+            "fourth processed event should be at positions[4]"
         );
     }
 
-    // And: Checkpoint was saved at position 4 (past the skipped event)
+    // And: Checkpoint was saved at last position (past the skipped event)
     // Verify by restarting - no events should be reprocessed
     let restarted_processed = Arc::new(std::sync::Mutex::new(Vec::<StreamPosition>::new()));
     let restarted_projector = SkipErrorProjector::new(
         restarted_processed.clone(),
-        StreamPosition::new(2), // Same failure point (but won't be reached on restart)
+        positions[2], // Same failure point (but won't be reached on restart)
     );
 
     let coordinator2 = LocalCoordinator::new();
@@ -715,21 +720,8 @@ async fn runner_retries_failed_event_then_escalates_to_fatal() {
     let store = InMemoryEventStore::new();
     let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
 
-    // Seed 5 events into the store (positions 0-4)
-    for i in 0..5 {
-        let event = CounterIncremented {
-            counter_id: counter_id.clone(),
-        };
-        let writes = StreamWrites::new()
-            .register_stream(counter_id.clone(), StreamVersion::new(i))
-            .expect("register stream")
-            .append(event)
-            .expect("append event");
-        store
-            .append_events(writes)
-            .await
-            .expect("append to succeed");
-    }
+    // Seed 5 events and get their positions
+    let positions = seed_events_and_get_positions(&store, &counter_id, 5).await;
 
     // And: A checkpoint store to track progress
     let checkpoint_store = InMemoryCheckpointStore::new();
@@ -740,8 +732,8 @@ async fn runner_retries_failed_event_then_escalates_to_fatal() {
     let projector = RetryThenFatalProjector::new(
         retry_log.clone(),
         apply_count.clone(),
-        StreamPosition::new(2), // Fail on event at position 2
-        3,                      // Max 3 retries before escalating to Fatal
+        positions[2], // Fail on 3rd event
+        3,            // Max 3 retries before escalating to Fatal
     );
 
     // When: Developer runs the projector with checkpoint store
@@ -794,7 +786,7 @@ async fn runner_retries_failed_event_then_escalates_to_fatal() {
     let restarted_projector = RetryThenFatalProjector::new(
         restarted_retry_log.clone(),
         restarted_apply_count.clone(),
-        StreamPosition::new(2), // Same failure point
+        positions[2], // Same failure point
         3,
     );
 

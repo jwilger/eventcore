@@ -13,6 +13,7 @@ nutype = { version = "0.6.2", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0.17"
+uuid = { version = "1.19.0", features = ["serde", "v7"] }
 
 [dev-dependencies]
 proptest = "1.9.0"
