@@ -104,12 +104,3 @@ name = "eventcore"
 release = true
 changelog_include = ["eventcore/src/**", "eventcore/Cargo.toml"]
 changelog_path = "./eventcore/CHANGELOG.md"
-
-# Don't publish example and benchmark crates
-[[package]]
-name = "eventcore-examples"
-publish = false
-
-[[package]]
-name = "eventcore-benchmarks"
-publish = false
