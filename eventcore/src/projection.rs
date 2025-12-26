@@ -8,6 +8,43 @@ use crate::{
     BatchSize, Event, EventFilter, EventPage, EventReader, FailureStrategy, Projector,
     StreamPosition,
 };
+use std::time::Duration;
+
+/// Configuration for projection polling behavior.
+///
+/// `PollConfig` controls how the projection runner polls for new events,
+/// including intervals between polls and backoff strategies for empty results
+/// or failures.
+///
+/// # Example
+///
+/// ```ignore
+/// let config = PollConfig::default();
+/// let runner = ProjectionRunner::new(projector, coordinator, &store)
+///     .with_poll_config(config);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollConfig {
+    /// Interval between polls when events are available.
+    pub poll_interval: Duration,
+    /// Additional backoff delay when no events are found.
+    pub empty_poll_backoff: Duration,
+    /// Additional backoff delay after a poll failure.
+    pub poll_failure_backoff: Duration,
+    /// Maximum consecutive poll failures before stopping.
+    pub max_consecutive_poll_failures: u32,
+}
+
+impl Default for PollConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval: Duration::from_millis(100),
+            empty_poll_backoff: Duration::from_millis(50),
+            poll_failure_backoff: Duration::from_millis(100),
+            max_consecutive_poll_failures: 5,
+        }
+    }
+}
 
 /// Polling mode for projection runners.
 ///
@@ -213,8 +250,7 @@ where
     store: S,
     checkpoint_store: Option<InMemoryCheckpointStore>,
     poll_mode: PollMode,
-    max_retries: u32,
-    base_delay_ms: u64,
+    poll_config: PollConfig,
 }
 
 impl<P, C, S> ProjectionRunner<P, C, S>
@@ -242,8 +278,7 @@ where
             store,
             checkpoint_store: None,
             poll_mode: PollMode::Batch,
-            max_retries: 5,    // Default: 5 retries before propagating error
-            base_delay_ms: 10, // Default: 10ms base delay for exponential backoff
+            poll_config: PollConfig::default(),
         }
     }
 
@@ -290,39 +325,28 @@ where
         self
     }
 
-    /// Configure the maximum number of retries for database poll failures.
+    /// Configure polling behavior and backoff strategies.
     ///
-    /// When the event reader fails (network timeout, connection error, etc.),
-    /// the runner will retry up to `max_retries` times with exponential backoff
-    /// before propagating the error to the caller.
+    /// Controls how the runner polls for events, including intervals between
+    /// polls and backoff delays for empty results or failures.
     ///
     /// # Parameters
     ///
-    /// - `max_retries`: Maximum retry attempts (default: 5)
+    /// - `config`: The polling configuration
     ///
     /// # Returns
     ///
     /// Self for method chaining.
-    pub fn with_max_retries(mut self, max_retries: u32) -> Self {
-        self.max_retries = max_retries;
-        self
-    }
-
-    /// Configure the base delay for exponential backoff between retries.
     ///
-    /// After a database poll failure, the runner waits before retrying.
-    /// The delay follows exponential backoff: `base_delay_ms * 2^(attempt - 1)`
-    /// capped at 1 second to prevent unbounded growth.
+    /// # Example
     ///
-    /// # Parameters
-    ///
-    /// - `base_delay_ms`: Base delay in milliseconds (default: 10)
-    ///
-    /// # Returns
-    ///
-    /// Self for method chaining.
-    pub fn with_base_delay_ms(mut self, base_delay_ms: u64) -> Self {
-        self.base_delay_ms = base_delay_ms;
+    /// ```ignore
+    /// let config = PollConfig::default();
+    /// let runner = ProjectionRunner::new(projector, coordinator, &store)
+    ///     .with_poll_config(config);
+    /// ```
+    pub fn with_poll_config(mut self, config: PollConfig) -> Self {
+        self.poll_config = config;
         self
     }
 
@@ -376,24 +400,25 @@ where
                     }
                     Err(_) => {
                         // Database error - check if retries exhausted
-                        if consecutive_failures >= self.max_retries {
-                            // Already failed max_retries times, no more retries allowed
+                        if consecutive_failures >= self.poll_config.max_consecutive_poll_failures {
+                            // Already failed max_consecutive_poll_failures times, no more retries allowed
                             return Err(ProjectionError::Failed(
                                 "failed to read events after max retries".to_string(),
                             ));
                         }
 
-                        // Track this failure and calculate backoff
+                        // Track this failure and apply backoff
                         consecutive_failures += 1;
 
-                        // Exponential backoff before retry, capped at 1 second
-                        let delay_ms =
-                            (self.base_delay_ms * 2u64.pow(consecutive_failures - 1)).min(1000);
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        // Use configured poll failure backoff
+                        tokio::time::sleep(self.poll_config.poll_failure_backoff).await;
                         // Continue retry loop
                     }
                 }
             };
+
+            // Track whether we found events for poll delay selection
+            let found_events = !events.is_empty();
 
             // Apply each event to the projector
             for (event, position) in events {
@@ -450,7 +475,7 @@ where
                                 FailureStrategy::Retry => {
                                     retry_count += 1;
                                     // Wait before retrying
-                                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                                    tokio::time::sleep(Duration::from_millis(10)).await;
                                     // Continue retry loop - projector controls when to escalate to Fatal
                                 }
                             }
@@ -465,7 +490,13 @@ where
             }
 
             // For continuous mode, sleep before next poll
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            // Use poll_interval if events were found, empty_poll_backoff if not
+            let delay = if found_events {
+                self.poll_config.poll_interval
+            } else {
+                self.poll_config.empty_poll_backoff
+            };
+            tokio::time::sleep(delay).await;
         }
 
         Ok(())

@@ -50,7 +50,8 @@ pub use eventcore_types::{
 
 // Re-export projection runtime components
 pub use projection::{
-    CoordinatorGuard, InMemoryCheckpointStore, LocalCoordinator, PollMode, ProjectionRunner,
+    CoordinatorGuard, InMemoryCheckpointStore, LocalCoordinator, PollConfig, PollMode,
+    ProjectionRunner,
 };
 
 // Re-export Command derive macro when the "macros" feature is enabled (default)
