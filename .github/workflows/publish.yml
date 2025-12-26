@@ -9,6 +9,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:  # Allow manual triggering
 
 permissions:
   contents: write
@@ -18,8 +19,8 @@ jobs:
   publish:
     name: Publish Workspace Crates
     runs-on: ubuntu-latest
-    # Only run if this is a release PR merge (commit message starts with "chore: release")
-    if: "startsWith(github.event.head_commit.message, 'chore: release')"
+    # Run if: (1) release PR merge (commit starts with "chore: release"), OR (2) manually triggered
+    if: "github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'chore: release')"
 
     steps:
       - name: Checkout repository
