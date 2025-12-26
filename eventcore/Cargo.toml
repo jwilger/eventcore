@@ -34,7 +34,7 @@ eventcore-macros = { version = "0.2.1", path = "../eventcore-macros", optional =
 eventcore-postgres = { version = "0.2.0", path = "../eventcore-postgres", optional = true }
 
 [dev-dependencies]
-eventcore-memory = { version = "0.2.0", path = "../eventcore-memory" }
+eventcore-memory = { path = "../eventcore-memory" }
 nutype = { version = "0.6.2", features = ["serde"] }
 proptest = "1.9.0"
 # tracing-mock is only available as beta (official tokio-rs crate); used for testing structured tracing output
