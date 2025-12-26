@@ -103,7 +103,6 @@ changelog_path = "./eventcore-postgres/CHANGELOG.md"
 name = "eventcore"
 release = true
 changelog_include = ["eventcore/src/**", "eventcore/Cargo.toml"]
-changelog_exclude = ["eventcore-macros/**", "eventcore-types/**", "eventcore-testing/**", "eventcore-memory/**", "eventcore-postgres/**"]
 changelog_path = "./eventcore/CHANGELOG.md"
 
 # Don't publish example and benchmark crates
