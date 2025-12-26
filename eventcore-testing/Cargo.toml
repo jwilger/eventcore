@@ -16,6 +16,6 @@ serde = { version = "1.0", features = ["derive"] }
 uuid = { version = "1.19.0", features = ["v7"] }
 
 [dev-dependencies]
-eventcore = { path = "../eventcore" }
-eventcore-memory = { path = "../eventcore-memory" }
+eventcore = { version = "0.2.0", path = "../eventcore" }
+eventcore-memory = { version = "0.2.0", path = "../eventcore-memory" }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
