@@ -40,22 +40,8 @@ jobs:
         with:
           tool: release-plz
 
-      # Verify quality gates (belt-and-suspenders - CI should have already passed)
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.115
-
-      - name: Run tests
-        env:
-          POSTGRES_VERSION: 17
-        run: cargo nextest run --workspace --all-features
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # Note: Quality gates (tests, clippy, fmt) already verified by CI workflows
+      # No need to re-run here - branch protection ensures they passed before merge
 
       # Publish to crates.io and create GitHub release
       # release-plz handles:
