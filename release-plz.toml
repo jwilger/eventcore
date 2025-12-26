@@ -52,45 +52,59 @@ protect_breaking_commits = true
 
 # Package-specific configuration
 #
-# IMPORTANT: release-plz does not always respect dependency order when publishing.
-# See: https://github.com/release-plz/release-plz/issues/1316
+# IMPORTANT: Package order in this file defines publication order (ADR-025)
+# release-plz publishes in dependency order to prevent "missing dependency" errors
 #
-# The correct publishing order based on dependencies is:
-# 1. eventcore-macros (no internal dependencies)
-# 2. eventcore (depends on macros)
-# 3. eventcore-memory (depends on eventcore)
-# 4. eventcore-postgres (depends on eventcore and eventcore-memory)
+# Dependency graph (bottom-up publication):
+# 1. eventcore-types (no internal dependencies)
+# 2. eventcore-macros (no internal dependencies)
+# 3. eventcore-testing, eventcore-memory, eventcore-postgres (depend on eventcore-types)
+# 4. eventcore (depends on all via feature flags)
 #
-# However, release-plz may publish in a different order, causing failures.
-# If this happens, packages need to be manually published in the correct order.
+# See ADR-025 for versioning policy and rationale
+
+# Layer 1: Foundation types (no internal dependencies)
+[[package]]
+name = "eventcore-types"
+release = true
+changelog_include = ["eventcore-types/**"]
+changelog_path = "./eventcore-types/CHANGELOG.md"
+
+# Layer 2: Proc macros (no internal dependencies)
 [[package]]
 name = "eventcore-macros"
 release = true
-# Ensure only commits affecting this package are included
 changelog_include = ["eventcore-macros/**"]
-# Also include commits with explicit scope
 changelog_path = "./eventcore-macros/CHANGELOG.md"
 
+# Layer 3: Testing utilities (depends on eventcore-types)
 [[package]]
-name = "eventcore"
+name = "eventcore-testing"
 release = true
-# Include commits affecting the core library
-changelog_include = ["eventcore/src/**", "eventcore/Cargo.toml"]
-# Exclude macro-specific changes
-changelog_exclude = ["eventcore-macros/**"]
-changelog_path = "./eventcore/CHANGELOG.md"
+changelog_include = ["eventcore-testing/**"]
+changelog_path = "./eventcore-testing/CHANGELOG.md"
 
+# Layer 3: In-memory adapter (depends on eventcore-types)
 [[package]]
 name = "eventcore-memory"
 release = true
 changelog_include = ["eventcore-memory/**"]
 changelog_path = "./eventcore-memory/CHANGELOG.md"
 
+# Layer 3: PostgreSQL adapter (depends on eventcore-types)
 [[package]]
 name = "eventcore-postgres"
 release = true
 changelog_include = ["eventcore-postgres/**"]
 changelog_path = "./eventcore-postgres/CHANGELOG.md"
+
+# Layer 4: Main facade crate (depends on all via feature flags)
+[[package]]
+name = "eventcore"
+release = true
+changelog_include = ["eventcore/src/**", "eventcore/Cargo.toml"]
+changelog_exclude = ["eventcore-macros/**", "eventcore-types/**", "eventcore-testing/**", "eventcore-memory/**", "eventcore-postgres/**"]
+changelog_path = "./eventcore/CHANGELOG.md"
 
 # Don't publish example and benchmark crates
 [[package]]

@@ -1,0 +1,79 @@
+# Phase 2: Publish to crates.io
+# Runs when release PR is merged to main
+# Publishes all workspace crates in dependency order
+# See ADR-025 for release management policy
+
+name: Publish to crates.io
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  publish:
+    name: Publish Workspace Crates
+    runs-on: ubuntu-latest
+    # Only run if this is a release PR merge (commit message starts with "chore: release")
+    if: "startsWith(github.event.head_commit.message, 'chore: release')"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install release-plz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: release-plz
+
+      # Verify quality gates (belt-and-suspenders - CI should have already passed)
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.115
+
+      - name: Run tests
+        env:
+          POSTGRES_VERSION: 17
+        run: cargo nextest run --workspace --all-features
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # Publish to crates.io and create GitHub release
+      # release-plz handles:
+      # - Publishing in dependency order (per release-plz.toml)
+      # - Retry logic with exponential backoff (3 attempts)
+      # - GitHub release creation with changelog
+      # - Git tag creation
+      - name: Publish to crates.io and create GitHub release
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # See ADR-025 for publication order:
+          # 1. eventcore-types (no deps)
+          # 2. eventcore-macros (no deps)
+          # 3. eventcore-testing, eventcore-memory, eventcore-postgres (depend on types)
+          # 4. eventcore (depends on all)
+
+          release-plz release \
+            --git-token "$GITHUB_TOKEN" \
+            --backend github \
+            --config ./release-plz.toml
