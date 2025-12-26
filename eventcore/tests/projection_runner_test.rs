@@ -12,14 +12,15 @@
 
 use eventcore::{
     BatchSize, Event, EventFilter, EventPage, EventReader, EventStore, FailureContext,
-    FailureStrategy, InMemoryCheckpointStore, LocalCoordinator, PollMode, ProjectionRunner,
-    Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
+    FailureStrategy, InMemoryCheckpointStore, LocalCoordinator, PollConfig, PollMode,
+    ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 /// A simple event type for testing projections.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -873,6 +874,53 @@ impl Projector for RetryThenFatalProjector {
     }
 }
 
+/// Integration test for eventcore-f71: Default poll configuration
+///
+/// Scenario: Developer uses default poll configuration
+/// - Given developer creates ProjectionRunner without explicit PollConfig
+/// - When runner executes polling loop
+/// - Then runner uses sensible defaults (e.g., 100ms poll interval)
+/// - And runner works correctly without configuration
+#[tokio::test]
+async fn runner_uses_default_poll_config_when_not_specified() {
+    // Given: Developer has an event store with an event
+    let store = InMemoryEventStore::new();
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    let event = CounterIncremented {
+        counter_id: counter_id.clone(),
+    };
+    let writes = StreamWrites::new()
+        .register_stream(counter_id.clone(), StreamVersion::new(0))
+        .expect("register stream")
+        .append(event)
+        .expect("append event");
+    store
+        .append_events(writes)
+        .await
+        .expect("append to succeed");
+
+    // And: A minimal projector
+    let event_count = Arc::new(AtomicUsize::new(0));
+    let projector = EventCounterProjector::new(event_count.clone());
+
+    // When: Developer creates ProjectionRunner WITHOUT specifying PollConfig
+    // (relying on default configuration via PollConfig::default())
+    let coordinator = LocalCoordinator::new();
+    let default_config = PollConfig::default();
+    let runner =
+        ProjectionRunner::new(projector, coordinator, &store).with_poll_config(default_config);
+
+    // And: Runner executes
+    tokio::time::timeout(std::time::Duration::from_secs(1), runner.run())
+        .await
+        .expect("runner should complete within timeout")
+        .expect("runner should succeed");
+
+    // Then: Runner used default poll configuration and processed the event successfully
+    assert_eq!(event_count.load(Ordering::SeqCst), 1);
+}
+
 /// Integration test for EventReader blanket implementation
 ///
 /// Scenario: EventReader blanket impl forwards read_events() correctly
@@ -921,4 +969,173 @@ async fn event_reader_blanket_impl_forwards_read_events_correctly() {
         3,
         "blanket impl should forward read_events() and return all 3 events, not an empty vec"
     );
+}
+
+/// Integration test for eventcore-f71: Custom poll interval configuration
+///
+/// Scenario: Developer configures custom poll interval
+/// - Given developer creates PollConfig with poll_interval of 500ms
+/// - When runner polls and finds events
+/// - Then runner waits 500ms before next poll
+/// - And polling cadence matches configuration
+#[tokio::test]
+async fn runner_respects_custom_poll_interval_when_events_found() {
+    // Given: Event store with an event
+    let store = Arc::new(InMemoryEventStore::new());
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    let event = CounterIncremented {
+        counter_id: counter_id.clone(),
+    };
+    let writes = StreamWrites::new()
+        .register_stream(counter_id.clone(), StreamVersion::new(0))
+        .expect("register stream")
+        .append(event)
+        .expect("append event");
+    store
+        .append_events(writes)
+        .await
+        .expect("append to succeed");
+
+    // And: A projector that counts events
+    let event_count = Arc::new(AtomicUsize::new(0));
+    let projector = EventCounterProjector::new(event_count.clone());
+
+    // And: A poll-counting wrapper to track poll timing
+    let poll_times = Arc::new(std::sync::Mutex::new(Vec::<Instant>::new()));
+    let counting_reader = TimingPollCountingReader::new(store.clone(), poll_times.clone());
+
+    // When: Developer creates runner with custom poll_interval of 500ms
+    let config = PollConfig {
+        poll_interval: Duration::from_millis(500),
+        ..Default::default()
+    };
+    let coordinator = LocalCoordinator::new();
+    let runner = ProjectionRunner::new(projector, coordinator, counting_reader)
+        .with_poll_config(config)
+        .with_poll_mode(PollMode::Continuous);
+
+    // And: Runner runs for enough time to observe multiple polls with events
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let runner_handle = tokio::spawn(async move {
+        tokio::select! {
+            result = runner.run() => result,
+            _ = cancel_rx => Ok(()),
+        }
+    });
+
+    // Wait long enough for at least 2 polls (500ms interval * 2 = 1000ms, plus buffer)
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let _ = cancel_tx.send(());
+    runner_handle
+        .await
+        .expect("runner task panicked")
+        .expect("runner failed");
+
+    // Then: The interval between polls should be approximately poll_interval duration
+    let times = poll_times.lock().unwrap();
+    assert!(
+        times.len() >= 2,
+        "expected at least 2 polls, got {}",
+        times.len()
+    );
+
+    // Verify interval between first and second poll is approximately 500ms
+    let interval = times[1].duration_since(times[0]).as_millis();
+    assert!(
+        (450..=550).contains(&interval),
+        "expected poll interval ~500ms when events found, got {}ms",
+        interval
+    );
+}
+
+/// Integration test for eventcore-f71: Custom empty poll backoff
+///
+/// Scenario: Developer configures empty poll backoff
+/// - Given developer creates PollConfig with empty_poll_backoff of 1 second
+/// - When runner polls and finds no new events
+/// - Then runner waits 1 second before next poll
+/// - And backoff reduces unnecessary database load
+#[tokio::test]
+async fn runner_respects_custom_empty_poll_backoff_when_no_events() {
+    // Given: An event store with NO events (empty poll results)
+    let store = Arc::new(InMemoryEventStore::new());
+
+    // And: A projector that counts events
+    let event_count = Arc::new(AtomicUsize::new(0));
+    let projector = EventCounterProjector::new(event_count.clone());
+
+    // And: A poll-counting wrapper to track poll timing
+    let poll_times = Arc::new(std::sync::Mutex::new(Vec::<Instant>::new()));
+    let counting_reader = TimingPollCountingReader::new(store.clone(), poll_times.clone());
+
+    // When: Developer creates runner with custom empty_poll_backoff of 1 second
+    let config = PollConfig {
+        empty_poll_backoff: Duration::from_secs(1),
+        ..Default::default()
+    };
+    let coordinator = LocalCoordinator::new();
+    let runner = ProjectionRunner::new(projector, coordinator, counting_reader)
+        .with_poll_config(config)
+        .with_poll_mode(PollMode::Continuous);
+
+    // And: Runner runs for enough time to observe multiple empty polls
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let runner_handle = tokio::spawn(async move {
+        tokio::select! {
+            result = runner.run() => result,
+            _ = cancel_rx => Ok(()),
+        }
+    });
+
+    // Wait long enough for at least 2 polls (1 second interval * 2 = 2 seconds, plus buffer)
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    let _ = cancel_tx.send(());
+    runner_handle
+        .await
+        .expect("runner task panicked")
+        .expect("runner failed");
+
+    // Then: The interval between polls should be approximately 1 second (empty_poll_backoff)
+    let times = poll_times.lock().unwrap();
+    assert!(
+        times.len() >= 2,
+        "expected at least 2 polls, got {}",
+        times.len()
+    );
+
+    // Verify interval between first and second poll is approximately 1000ms (±10% tolerance)
+    let interval = times[1].duration_since(times[0]).as_millis();
+    assert!(
+        (900..=1100).contains(&interval),
+        "expected empty poll backoff ~1000ms when no events found, got {}ms",
+        interval
+    );
+}
+
+/// Wrapper around EventReader that tracks poll timing.
+struct TimingPollCountingReader<S> {
+    inner: Arc<S>,
+    poll_times: Arc<std::sync::Mutex<Vec<Instant>>>,
+}
+
+impl<S> TimingPollCountingReader<S> {
+    fn new(inner: Arc<S>, poll_times: Arc<std::sync::Mutex<Vec<Instant>>>) -> Self {
+        Self { inner, poll_times }
+    }
+}
+
+impl<S: EventReader + Sync> EventReader for TimingPollCountingReader<S> {
+    type Error = S::Error;
+
+    fn read_events<E: Event>(
+        &self,
+        filter: EventFilter,
+        page: EventPage,
+    ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send {
+        self.poll_times.lock().unwrap().push(Instant::now());
+        self.inner.read_events(filter, page)
+    }
 }

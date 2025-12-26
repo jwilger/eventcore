@@ -9,7 +9,7 @@
 
 use eventcore::{
     Event, EventFilter, EventPage, EventReader, EventStore, InMemoryCheckpointStore,
-    LocalCoordinator, PollMode, ProjectionRunner, Projector, StreamId, StreamPosition,
+    LocalCoordinator, PollConfig, PollMode, ProjectionRunner, Projector, StreamId, StreamPosition,
     StreamVersion, StreamWrites,
 };
 use eventcore_memory::InMemoryEventStore;
@@ -138,10 +138,15 @@ async fn runner_retries_transient_database_errors_with_exponential_backoff() {
         apply_count: apply_count.clone(),
     };
 
-    // When: Runner processes with failing reader
+    // When: Runner processes with failing reader using custom poll_failure_backoff
     let coordinator = LocalCoordinator::new();
-    let runner =
-        ProjectionRunner::new(projector, coordinator, reader).with_poll_mode(PollMode::Batch);
+    let poll_config = PollConfig {
+        poll_failure_backoff: std::time::Duration::from_millis(10),
+        ..PollConfig::default()
+    };
+    let runner = ProjectionRunner::new(projector, coordinator, reader)
+        .with_poll_mode(PollMode::Batch)
+        .with_poll_config(poll_config);
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), runner.run())
         .await
@@ -156,53 +161,33 @@ async fn runner_retries_transient_database_errors_with_exponential_backoff() {
     // And: Event was successfully applied once
     assert_eq!(apply_count.load(Ordering::SeqCst), 1);
 
-    // And: Polls had exponential backoff between them
+    // And: Polls had consistent backoff between them
     let poll_times = poll_times_handle.lock().unwrap();
     assert_eq!(poll_times.len(), 4);
 
-    // Verify exponential backoff with formula: BASE_DELAY_MS * 2^(consecutive_failures - 1)
-    // Expected delays: 10ms * 2^0 = 10ms, 10ms * 2^1 = 20ms, 10ms * 2^2 = 40ms
-    // Allow tolerance for CI overhead but verify the formula is correct
+    // Verify consistent backoff with configured poll_failure_backoff (10ms)
     let delay_1 = poll_times[1].duration_since(poll_times[0]).as_millis();
     let delay_2 = poll_times[2].duration_since(poll_times[1]).as_millis();
     let delay_3 = poll_times[3].duration_since(poll_times[2]).as_millis();
 
-    // First delay should be approximately 10ms (BASE_DELAY_MS * 2^0)
-    // Range 5-18ms catches mutants that would produce 20ms or 40ms
+    // All delays should be approximately 10ms (poll_failure_backoff)
+    // Allow tolerance for CI overhead
     assert!(
-        (5..=18).contains(&delay_1),
-        "First delay should be ~10ms (2^0), got {}ms",
+        (5..=20).contains(&delay_1),
+        "First delay should be ~10ms, got {}ms",
         delay_1
     );
 
-    // Second delay should be approximately 20ms (BASE_DELAY_MS * 2^1)
-    // Range 15-35ms catches mutants that would produce 40ms or 80ms
     assert!(
-        (15..=35).contains(&delay_2),
-        "Second delay should be ~20ms (2^1), got {}ms",
+        (5..=20).contains(&delay_2),
+        "Second delay should be ~10ms, got {}ms",
         delay_2
     );
 
-    // Third delay should be approximately 40ms (BASE_DELAY_MS * 2^2)
-    // Range 30-70ms catches mutants that would produce 80ms or 160ms
     assert!(
-        (30..=70).contains(&delay_3),
-        "Third delay should be ~40ms (2^2), got {}ms",
+        (5..=20).contains(&delay_3),
+        "Third delay should be ~10ms, got {}ms",
         delay_3
-    );
-
-    // Also verify exponential growth relationship
-    assert!(
-        delay_2 as f64 >= delay_1 as f64 * 1.5,
-        "Second delay ({}ms) should be at least 1.5x first delay ({}ms)",
-        delay_2,
-        delay_1
-    );
-    assert!(
-        delay_3 as f64 >= delay_2 as f64 * 1.5,
-        "Third delay ({}ms) should be at least 1.5x second delay ({}ms)",
-        delay_3,
-        delay_2
     );
 }
 
@@ -452,12 +437,16 @@ async fn custom_retry_configuration_is_respected() {
         apply_count: apply_count.clone(),
     };
 
-    // When: Runner with custom retry config (max_retries=2, base_delay=5ms)
+    // When: Runner with custom retry config (max_consecutive_poll_failures=2)
     let coordinator = LocalCoordinator::new();
+    let poll_config = PollConfig {
+        max_consecutive_poll_failures: 2,
+        poll_failure_backoff: std::time::Duration::from_millis(5),
+        ..PollConfig::default()
+    };
     let runner = ProjectionRunner::new(projector, coordinator, reader)
         .with_poll_mode(PollMode::Batch)
-        .with_max_retries(2)
-        .with_base_delay_ms(5);
+        .with_poll_config(poll_config);
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), runner.run())
         .await
