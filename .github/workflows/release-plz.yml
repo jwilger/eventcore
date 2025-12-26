@@ -41,6 +41,11 @@ jobs:
         with:
           tool: release-plz
 
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+
       - name: Run release-plz
         env:
           # Use PAT instead of GITHUB_TOKEN to trigger CI on release PR
