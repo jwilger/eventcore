@@ -13,9 +13,10 @@ dependencies_update = false
 # The workspace is at v0.1.3 to bypass these issues.
 
 # Git configuration
-git_release_enable = true  # Create GitHub releases
-git_tag_enable = true      # Create git tags
-git_tag_name = "v{{ version }}"  # Single tag for all packages: v0.1.8
+git_release_enable = true  # Create GitHub releases per crate
+git_tag_enable = true      # Create git tags per crate
+git_tag_name = "{{ package }}-v{{ version }}"  # Per-crate tags: eventcore-v0.2.1, eventcore-types-v0.2.0
+# This supports ADR-025's independent patch versioning policy (lockstep major.minor, independent patch)
 
 # PR configuration
 pr_labels = ["release", "automated"]
