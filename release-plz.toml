@@ -91,7 +91,7 @@ release = true
 changelog_include = ["eventcore-memory/**"]
 changelog_path = "./eventcore-memory/CHANGELOG.md"
 
-# Layer 3: PostgreSQL adapter (depends on eventcore-types and eventcore-memory)
+# Layer 3: PostgreSQL adapter (depends on eventcore-types)
 [[package]]
 name = "eventcore-postgres"
 release = true

@@ -38,8 +38,8 @@ cargo-workspaces automatically determines and uses the correct publishing order 
 2. `eventcore-macros` (no internal dependencies - proc macros)
 3. `eventcore` (depends on eventcore-types and eventcore-macros)
 4. `eventcore-testing` (depends on eventcore-types - testing utilities)
-5. `eventcore-memory` (depends on eventcore)
-6. `eventcore-postgres` (depends on eventcore and eventcore-memory)
+5. `eventcore-memory` (depends on eventcore-types)
+6. `eventcore-postgres` (depends on eventcore-types)
 
 **Note:** `eventcore-types` and `eventcore-testing` are not yet published to crates.io. They will be published for the first time when the automated release workflow runs.
 
@@ -65,11 +65,6 @@ cargo publish
 cd ..
 # Wait for crates.io to index the package
 
-cd eventcore
-cargo publish
-cd ..
-# Wait for crates.io to index the package
-
 cd eventcore-testing
 cargo publish
 cd ..
@@ -81,6 +76,11 @@ cd ..
 # Wait for crates.io to index the package
 
 cd eventcore-postgres
+cargo publish
+cd ..
+# Wait for crates.io to index the package
+
+cd eventcore
 cargo publish
 cd ..
 
