@@ -1,0 +1,49 @@
+# Phase 1: Release PR Creation
+# Runs on push to main (except when merging release PRs)
+# Creates/updates release PR with version bumps and changelog
+# See ADR-025 for release management policy
+
+name: Release PR
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-pr:
+    name: Create/Update Release PR
+    runs-on: ubuntu-latest
+    # Skip if this is a release PR merge (to avoid infinite loops)
+    if: "!startsWith(github.event.head_commit.message, 'chore: release')"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # Fetch all history for changelog generation
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install release-plz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: release-plz
+
+      - name: Run release-plz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          release-plz release-pr \
+            --git-token "$GITHUB_TOKEN" \
+            --backend github \
+            --config ./release-plz.toml
