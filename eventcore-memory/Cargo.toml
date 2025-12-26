@@ -2,6 +2,9 @@
 name = "eventcore-memory"
 version = "0.2.0"
 edition = "2024"
+description = "In-memory event store adapter for EventCore event sourcing library"
+license = "MIT"
+repository = "https://github.com/jwilger/eventcore"
 
 [dependencies]
 eventcore-types = { path = "../eventcore-types" }
