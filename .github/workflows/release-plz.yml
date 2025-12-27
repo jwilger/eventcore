@@ -1,7 +1,7 @@
 # Phase 1: Release PR Creation
 # Runs on push to main (except when merging release PRs)
 # Creates/updates release PR with version bumps and changelog
-# See ADR-025 for release management policy
+# Enforces lockstep major/minor versioning per ADR-025
 
 name: Release PR
 
