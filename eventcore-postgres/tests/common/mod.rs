@@ -21,44 +21,57 @@ use uuid::Uuid;
 /// Singleton to ensure container is started only once across all tests.
 static POSTGRES_CONTAINER: OnceLock<()> = OnceLock::new();
 
-/// Ensure the Postgres container is running via docker-compose.
+/// Ensure Postgres is available, either from CI service or docker-compose.
 ///
-/// This is idempotent - safe to call multiple times.
-/// Handles race conditions when multiple test processes try to start the container simultaneously.
+/// This is idempotent and works in both CI and local development:
+/// - In CI: Postgres is provided as a service container, already running
+/// - Locally: Starts postgres via docker-compose if not already running
 fn ensure_postgres_running() {
-    // Get the project root directory (two levels up from tests/common)
+    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+    let connection_string = format!("postgres://postgres:postgres@localhost:{}/postgres", port);
+
+    // First, check if postgres is already accessible (e.g., CI service container)
+    if can_connect_to_postgres(&connection_string) {
+        eprintln!("Postgres already available at {}", connection_string);
+        return;
+    }
+
+    // Postgres not accessible, try to start via docker-compose (local dev)
+    eprintln!("Postgres not accessible, attempting to start via docker-compose...");
+
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let project_root = std::path::Path::new(manifest_dir)
         .parent()
         .expect("should have parent directory");
 
-    // Try to start the container (idempotent - will reuse existing container)
+    // Try to start docker-compose (may fail in CI where docker isn't available)
     let result = Command::new("docker")
         .args(["compose", "up", "-d", "--wait"])
         .current_dir(project_root)
-        .output()
-        .expect("Failed to execute docker compose command");
+        .output();
 
-    // Check if the command failed due to the container already existing (race condition)
-    if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        // If the error is "already in use", that's fine - another test process started it
-        if !stderr.contains("already in use") && !stderr.contains("already exists") {
-            panic!("Failed to start postgres container: {}", stderr);
+    match result {
+        Ok(output) if output.status.success() => {
+            eprintln!("Started postgres via docker-compose");
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // "already in use" is fine - another process started it
+            if !stderr.contains("already in use") && !stderr.contains("already exists") {
+                eprintln!("Warning: docker-compose failed: {}", stderr);
+            }
+        }
+        Err(e) => {
+            eprintln!("Warning: docker command not available: {}", e);
         }
     }
 
-    // Verify the container is actually running
+    // Verify postgres is now accessible (whether from CI service or docker-compose)
     let max_retries = 30;
     let retry_delay = Duration::from_millis(500);
     for attempt in 0..max_retries {
-        let status = Command::new("docker")
-            .args(["ps", "-q", "-f", "name=eventcore-postgres"])
-            .output()
-            .expect("Failed to check docker container status");
-
-        if !status.stdout.is_empty() {
-            // Container is running
+        if can_connect_to_postgres(&connection_string) {
+            eprintln!("Postgres is now accessible");
             return;
         }
 
@@ -68,9 +81,46 @@ fn ensure_postgres_running() {
     }
 
     panic!(
-        "Postgres container did not start after {} retries",
-        max_retries
+        "Postgres is not accessible at {} after {} retries. \
+         Ensure either: (1) GitHub Actions service container is configured, \
+         or (2) Docker is installed and docker-compose.yml exists",
+        connection_string, max_retries
     );
+}
+
+/// Check if we can connect to postgres at the given connection string.
+fn can_connect_to_postgres(connection_string: &str) -> bool {
+    use std::process::Command;
+
+    // Use psql if available for a quick connection test
+    let result = Command::new("psql")
+        .arg(connection_string)
+        .arg("-c")
+        .arg("SELECT 1")
+        .output();
+
+    if let Ok(output) = result {
+        return output.status.success();
+    }
+
+    // Fallback: try using docker exec if psql not available
+    let result = Command::new("docker")
+        .args([
+            "exec",
+            "eventcore-postgres",
+            "psql",
+            "-U",
+            "postgres",
+            "-c",
+            "SELECT 1",
+        ])
+        .output();
+
+    if let Ok(output) = result {
+        return output.status.success();
+    }
+
+    false
 }
 
 /// Get the connection string for the Postgres container.
