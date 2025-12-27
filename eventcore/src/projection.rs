@@ -55,6 +55,79 @@ pub struct HeartbeatConfig {
     pub heartbeat_timeout: Duration,
 }
 
+impl HeartbeatConfig {
+    /// Create a new HeartbeatConfig with validation.
+    ///
+    /// # Arguments
+    ///
+    /// * `heartbeat_interval` - Interval between heartbeat signals
+    /// * `heartbeat_timeout` - Timeout for detecting hung projectors
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(HeartbeatConfig)` if the configuration is valid, or
+    /// `Err(HeartbeatConfigError)` if validation fails.
+    ///
+    /// # Validation Rules
+    ///
+    /// - `heartbeat_timeout` must be >= `heartbeat_interval`
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use eventcore::HeartbeatConfig;
+    /// use std::time::Duration;
+    ///
+    /// // Valid configuration
+    /// let config = HeartbeatConfig::try_new(
+    ///     Duration::from_secs(5),
+    ///     Duration::from_secs(15),
+    /// ).unwrap();
+    ///
+    /// // Invalid configuration (timeout < interval)
+    /// let result = HeartbeatConfig::try_new(
+    ///     Duration::from_secs(10),
+    ///     Duration::from_secs(5),
+    /// );
+    /// assert!(result.is_err());
+    /// ```
+    pub fn try_new(
+        heartbeat_interval: Duration,
+        heartbeat_timeout: Duration,
+    ) -> Result<Self, HeartbeatConfigError> {
+        if heartbeat_timeout < heartbeat_interval {
+            return Err(HeartbeatConfigError::InvalidTimeout {
+                interval: heartbeat_interval,
+                timeout: heartbeat_timeout,
+            });
+        }
+
+        Ok(Self {
+            heartbeat_interval,
+            heartbeat_timeout,
+        })
+    }
+}
+
+/// Error type for HeartbeatConfig validation failures.
+///
+/// Represents validation failures when constructing a HeartbeatConfig.
+#[derive(thiserror::Error, Debug)]
+pub enum HeartbeatConfigError {
+    /// Invalid timeout configuration.
+    ///
+    /// The heartbeat timeout must be greater than or equal to the heartbeat
+    /// interval. If timeout < interval, the timeout would fire before the next
+    /// heartbeat is even due, making the configuration nonsensical.
+    #[error("heartbeat timeout ({timeout:?}) must be >= interval ({interval:?})")]
+    InvalidTimeout {
+        /// The configured heartbeat interval.
+        interval: Duration,
+        /// The configured heartbeat timeout.
+        timeout: Duration,
+    },
+}
+
 /// Configuration for projection polling behavior.
 ///
 /// `PollConfig` controls how the projection runner polls for new events,

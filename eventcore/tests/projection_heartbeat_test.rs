@@ -603,3 +603,16 @@ async fn developer_can_configure_custom_heartbeat_timeout() {
     // Then: Leadership is revoked after custom timeout elapses
     assert!(!guard.is_valid());
 }
+
+#[test]
+fn invalid_heartbeat_configuration_is_rejected() {
+    // Given: Developer creates HeartbeatConfig with invalid timeout
+    // When: heartbeat_timeout is less than heartbeat_interval
+    let result = HeartbeatConfig::try_new(
+        Duration::from_millis(200), // interval
+        Duration::from_millis(100), // timeout < interval (invalid!)
+    );
+
+    // Then: builder returns descriptive error
+    assert!(result.is_err());
+}
