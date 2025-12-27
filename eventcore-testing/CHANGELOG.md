@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/jwilger/eventcore/compare/eventcore-testing-v0.2.0...eventcore-testing-v0.3.0) - 2025-12-27
+
+### Refactoring
+
+- eliminate primitive obsession across configuration structs ([#216](https://github.com/jwilger/eventcore/pull/216))
+- *(release)* switch to workspace version inheritance for full lockstep versioning ([#221](https://github.com/jwilger/eventcore/pull/221))
+
 ## [0.2.0](https://github.com/jwilger/eventcore/releases/tag/v0.2.0) - 2025-12-26
 
 ### Features

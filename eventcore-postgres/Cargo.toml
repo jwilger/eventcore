@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-eventcore-types = { version = "0.2.0", path = "../eventcore-types" }
+eventcore-types = { version = "0.3.0", path = "../eventcore-types" }
 nutype = { version = "0.6.2", features = ["serde"] }
 serde_json = "1.0"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "macros", "migrate"] }
