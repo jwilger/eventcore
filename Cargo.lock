@@ -641,6 +641,7 @@ dependencies = [
  "eventcore-types",
  "futures",
  "mutants",
+ "nutype",
  "serde",
  "serde_json",
  "sqlx",
