@@ -15,6 +15,7 @@ use std::time::Duration;
 use eventcore_postgres::PostgresEventStore;
 use eventcore_types::{Event, StreamId};
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
@@ -213,44 +214,43 @@ impl Event for TestEvent {
 
 /// A test fixture that creates an isolated database for each test.
 ///
-/// This provides true database-level isolation for tests that need it
-/// by creating a unique database per test instance and dropping it on cleanup.
-/// Use this when tests need to query across all events/streams without interference.
+/// This provides true database-level isolation for tests that query across all events
+/// (e.g., event_reader contract tests). Tests that only access specific streams can use
+/// PostgresTestFixture with unique stream IDs instead.
 ///
-/// Note: This fixture does NOT own the store - it only manages the database lifecycle.
-/// You must create your own store connection using the connection_string field.
+/// Cleans up old test databases on creation to prevent accumulation.
 pub struct IsolatedPostgresFixture {
     /// The connection string for the isolated database.
     pub connection_string: String,
-    /// The name of the isolated database (for cleanup).
-    database_name: String,
+    /// The name of the isolated database (for tracking).
+    pub database_name: String,
 }
 
 impl IsolatedPostgresFixture {
     /// Create a new isolated test fixture with its own database.
     ///
-    /// Ensures the container is running, creates a unique database,
-    /// and runs migrations. Returns a connection string that can be used
-    /// to create stores.
+    /// Cleans up old test_* databases before creating a new one to prevent resource leaks.
     pub async fn new() -> Self {
         // Ensure container is running (idempotent)
         POSTGRES_CONTAINER.get_or_init(|| {
             ensure_postgres_running();
         });
 
-        // Create unique database name using UUIDv7
-        let database_name = format!("test_{}", Uuid::now_v7().simple());
-
-        // Get admin connection string
         let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
         let admin_conn_string = format!("postgres://postgres:postgres@localhost:{}/postgres", port);
 
-        // Connect to postgres database to create the new database
+        // Connect to postgres database
         let admin_pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&admin_conn_string)
             .await
             .expect("Failed to connect to postgres database");
+
+        // Clean up old test databases to prevent accumulation
+        Self::cleanup_old_test_databases(&admin_pool).await;
+
+        // Create unique database name using UUIDv7
+        let database_name = format!("test_{}", Uuid::now_v7().simple());
 
         // Create the isolated database
         sqlx::query(&format!("CREATE DATABASE {}", database_name))
@@ -276,10 +276,30 @@ impl IsolatedPostgresFixture {
             database_name,
         }
     }
-}
 
-// Note: We don't implement Drop to clean up the database because:
-// 1. Drop runs synchronously but cleanup is async
-// 2. Creating a new runtime in Drop fails when already inside a runtime
-// 3. The database will be cleaned up when `docker compose down -v` is run
-// 4. Each test gets a unique database name, so there's no cross-test pollution
+    /// Drop all test_* databases to prevent accumulation from previous test runs.
+    async fn cleanup_old_test_databases(admin_pool: &sqlx::PgPool) {
+        // Query for all databases matching test_* pattern
+        let rows = sqlx::query("SELECT datname FROM pg_database WHERE datname LIKE 'test_%'")
+            .fetch_all(admin_pool)
+            .await
+            .expect("Failed to query test databases");
+
+        // Drop each test database
+        for row in rows {
+            let db_name: String = row.get("datname");
+            eprintln!("Cleaning up old test database: {}", db_name);
+
+            // Terminate connections to the database before dropping
+            let terminate_query = format!(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{}'",
+                db_name
+            );
+            let _ = sqlx::query(&terminate_query).execute(admin_pool).await;
+
+            // Drop the database
+            let drop_query = format!("DROP DATABASE IF EXISTS {}", db_name);
+            let _ = sqlx::query(&drop_query).execute(admin_pool).await;
+        }
+    }
+}

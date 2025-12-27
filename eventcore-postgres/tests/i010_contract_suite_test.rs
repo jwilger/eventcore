@@ -10,11 +10,12 @@ mod postgres_contract_suite {
         // Use block_in_place to allow blocking within multi-threaded tokio runtime
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
+                // Event reader contract tests query across all events in the database
+                // so they need true database-level isolation (not just stream-level)
                 let fixture = IsolatedPostgresFixture::new().await;
-                // Each test gets its own isolated database for complete isolation
-                PostgresEventStore::new(fixture.connection_string.clone())
+                PostgresEventStore::new(fixture.connection_string)
                     .await
-                    .expect("should connect to isolated database")
+                    .expect("should connect to isolated test database")
             })
         })
     }
