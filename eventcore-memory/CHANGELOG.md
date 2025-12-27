@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/jwilger/eventcore/compare/eventcore-memory-v0.2.0...eventcore-memory-v0.3.0) - 2025-12-27
+
+### Refactoring
+
+- *(release)* switch to workspace version inheritance for full lockstep versioning ([#221](https://github.com/jwilger/eventcore/pull/221))
+
 ## [0.2.0](https://github.com/jwilger/eventcore/releases/tag/v0.2.0) - 2025-12-26
 
 ### Miscellaneous Tasks
