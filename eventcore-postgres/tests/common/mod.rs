@@ -89,38 +89,30 @@ fn ensure_postgres_running() {
 }
 
 /// Check if we can connect to postgres at the given connection string.
+///
+/// Uses sqlx to attempt a quick connection test. This works with both
+/// GitHub Actions service containers and local docker-compose.
+///
+/// Runs in a separate thread to avoid "runtime within runtime" issues.
 fn can_connect_to_postgres(connection_string: &str) -> bool {
-    use std::process::Command;
+    let connection_string = connection_string.to_string();
 
-    // Use psql if available for a quick connection test
-    let result = Command::new("psql")
-        .arg(connection_string)
-        .arg("-c")
-        .arg("SELECT 1")
-        .output();
-
-    if let Ok(output) = result {
-        return output.status.success();
-    }
-
-    // Fallback: try using docker exec if psql not available
-    let result = Command::new("docker")
-        .args([
-            "exec",
-            "eventcore-postgres",
-            "psql",
-            "-U",
-            "postgres",
-            "-c",
-            "SELECT 1",
-        ])
-        .output();
-
-    if let Ok(output) = result {
-        return output.status.success();
-    }
-
-    false
+    // Spawn a new thread to avoid runtime conflicts
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().ok()?;
+        rt.block_on(async {
+            PgPoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(Duration::from_secs(2))
+                .connect(&connection_string)
+                .await
+                .ok()
+        })
+    })
+    .join()
+    .ok()
+    .flatten()
+    .is_some()
 }
 
 /// Get the connection string for the Postgres container.
