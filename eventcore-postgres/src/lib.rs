@@ -333,3 +333,190 @@ fn map_sqlx_error(error: sqlx::Error, operation: Operation) -> EventStoreError {
     );
     EventStoreError::StoreFailure { operation }
 }
+
+/// Error type for PostgresCoordinator operations.
+#[derive(Debug, Error)]
+pub enum PostgresCoordinatorError {
+    /// Failed to establish database connection for coordination.
+    #[error("failed to create postgres connection for coordinator")]
+    ConnectionFailed(#[source] sqlx::Error),
+}
+
+/// PostgreSQL-based distributed coordinator for projection leadership.
+///
+/// Uses PostgreSQL advisory locks to coordinate leadership among multiple instances.
+/// Only one instance can hold leadership at a time. The guard becomes invalid after
+/// the heartbeat timeout expires without calling `heartbeat()`.
+///
+/// # RAII Pattern
+///
+/// The returned `PostgresCoordinatorGuard` implements RAII - leadership is automatically
+/// released when the guard is dropped.
+///
+/// # Database Requirements
+///
+/// Requires a PostgreSQL database connection for distributed coordination.
+/// Each coordinator instance maintains its own connection pool for advisory locks.
+pub struct PostgresCoordinator {
+    connection_string: String,
+    heartbeat_timeout: Duration,
+}
+
+/// Fixed advisory lock ID for coordinator leadership.
+/// Future versions can hash projector name for multiple coordinators.
+const COORDINATOR_LOCK_ID: i64 = 314159265;
+
+impl PostgresCoordinator {
+    /// Creates a new PostgresCoordinator with the given connection string and heartbeat timeout.
+    ///
+    /// # Parameters
+    ///
+    /// - `connection_string`: PostgreSQL connection string (e.g., "postgres://user:pass@host/db")
+    /// - `heartbeat_timeout`: Duration after which a guard becomes invalid without heartbeat
+    ///
+    /// # Errors
+    ///
+    /// Returns `PostgresCoordinatorError::ConnectionFailed` if the connection cannot be established.
+    pub fn new(
+        connection_string: String,
+        heartbeat_timeout: Duration,
+    ) -> Result<Self, PostgresCoordinatorError> {
+        Ok(Self {
+            connection_string,
+            heartbeat_timeout,
+        })
+    }
+
+    /// Attempts to acquire leadership, returning a guard if successful.
+    ///
+    /// Returns `None` if another instance currently holds leadership.
+    /// Returns `Some(guard)` if leadership was acquired successfully.
+    ///
+    /// This is an async method because it requires database communication.
+    pub async fn try_acquire(&self) -> Option<PostgresCoordinatorGuard> {
+        use sqlx::Row;
+        use sqlx::postgres::PgPoolOptions;
+
+        // Create dedicated connection pool for this guard
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(10))
+            .connect(&self.connection_string)
+            .await
+            .ok()?;
+
+        // Try to acquire advisory lock
+        let acquired: bool = sqlx::query("SELECT pg_try_advisory_lock($1)")
+            .bind(COORDINATOR_LOCK_ID)
+            .fetch_one(&pool)
+            .await
+            .ok()
+            .and_then(|row| row.try_get(0).ok())?;
+
+        if !acquired {
+            return None;
+        }
+
+        // Create heartbeat table if not exists
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS coordinator_heartbeat (
+                lock_id BIGINT PRIMARY KEY,
+                last_heartbeat TIMESTAMPTZ NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .ok()?;
+
+        // Insert initial heartbeat timestamp
+        sqlx::query(
+            r#"
+            INSERT INTO coordinator_heartbeat (lock_id, last_heartbeat)
+            VALUES ($1, NOW())
+            ON CONFLICT (lock_id)
+            DO UPDATE SET last_heartbeat = NOW()
+            "#,
+        )
+        .bind(COORDINATOR_LOCK_ID)
+        .execute(&pool)
+        .await
+        .ok()?;
+
+        Some(PostgresCoordinatorGuard {
+            pool,
+            heartbeat_timeout: self.heartbeat_timeout,
+        })
+    }
+}
+
+/// Guard representing active leadership in distributed coordination.
+///
+/// Implements RAII pattern - leadership is released when dropped.
+/// The guard tracks heartbeat timestamps and becomes invalid after
+/// the configured timeout expires without calling `heartbeat()`.
+pub struct PostgresCoordinatorGuard {
+    pool: sqlx::Pool<sqlx::Postgres>,
+    heartbeat_timeout: Duration,
+}
+
+impl PostgresCoordinatorGuard {
+    /// Checks if this guard is still valid.
+    ///
+    /// Returns `false` if the heartbeat timeout has expired without a heartbeat.
+    /// Returns `true` if the guard is still within the heartbeat timeout window.
+    ///
+    /// This is an async method because it requires database communication to check
+    /// the heartbeat timestamp.
+    pub async fn is_valid(&self) -> bool {
+        use sqlx::Row;
+
+        // Query the time elapsed since last heartbeat
+        let result = sqlx::query(
+            r#"
+            SELECT NOW() - last_heartbeat AS elapsed
+            FROM coordinator_heartbeat
+            WHERE lock_id = $1
+            "#,
+        )
+        .bind(COORDINATOR_LOCK_ID)
+        .fetch_optional(&self.pool)
+        .await;
+
+        match result {
+            Ok(Some(row)) => {
+                // PostgreSQL interval type - extract as PgInterval and convert
+                if let Ok(interval) = row.try_get::<sqlx::postgres::types::PgInterval, _>("elapsed")
+                {
+                    // PgInterval has microseconds field
+                    let elapsed_micros = interval.microseconds;
+                    let elapsed = Duration::from_micros(elapsed_micros as u64);
+                    elapsed < self.heartbeat_timeout
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Sends a heartbeat signal to refresh the guard's validity.
+    ///
+    /// Updates the last-heartbeat timestamp in the database, extending the
+    /// validity window by the configured heartbeat timeout.
+    ///
+    /// This is an async method because it requires database communication.
+    pub async fn heartbeat(&self) {
+        let _ = sqlx::query(
+            r#"
+            UPDATE coordinator_heartbeat
+            SET last_heartbeat = NOW()
+            WHERE lock_id = $1
+            "#,
+        )
+        .bind(COORDINATOR_LOCK_ID)
+        .execute(&self.pool)
+        .await;
+    }
+}
