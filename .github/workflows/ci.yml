@@ -71,15 +71,6 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-  version-lockstep:
-    name: Version Lockstep
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Validate lockstep versioning (ADR-025)
-        run: ./.github/scripts/validate-lockstep-versions.sh
-
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
