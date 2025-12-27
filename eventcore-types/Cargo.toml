@@ -1,9 +1,10 @@
 [package]
 name = "eventcore-types"
-version = "0.2.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Shared vocabulary types and traits for EventCore event sourcing library"
-license = "MIT"
+license.workspace = true
+repository.workspace = true
 
 [lints.rust]
 warnings = "deny"

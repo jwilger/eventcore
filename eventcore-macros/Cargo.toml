@@ -1,10 +1,10 @@
 [package]
 name = "eventcore-macros"
-version = "0.2.1"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Procedural macros for EventCore event sourcing library"
-license = "MIT"
-repository = "https://github.com/jwilger/eventcore"
+license.workspace = true
+repository.workspace = true
 
 [lib]
 proc-macro = true
