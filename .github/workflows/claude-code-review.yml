@@ -91,6 +91,10 @@ jobs:
             Use `"event": "REQUEST_CHANGES"` if there are issues to fix.
             Use `"event": "COMMENT"` for non-blocking suggestions.
 
+            **IMPORTANT:** When using REQUEST_CHANGES, you MUST include inline comments
+            in the "comments" array pointing to specific lines of code. Never request
+            changes with only a summary - always provide actionable inline feedback.
+
             **Step 4: Resolve addressed review threads**
 
             If previous review comments have been addressed, actually RESOLVE them (not just reply).
