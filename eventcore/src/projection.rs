@@ -94,6 +94,26 @@ impl Default for EventRetryConfig {
     }
 }
 
+/// Error type for heartbeat configuration validation failures.
+///
+/// Represents validation errors when constructing `HeartbeatConfig`.
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
+pub enum HeartbeatConfigError {
+    /// Timeout must be greater than or equal to interval.
+    ///
+    /// This error indicates that `heartbeat_timeout` is less than
+    /// `heartbeat_interval`, which would cause timeout detection to fire
+    /// before the next heartbeat is even due. The timeout must allow at
+    /// least one heartbeat interval to elapse.
+    #[error("heartbeat timeout ({timeout:?}) must be >= interval ({interval:?})")]
+    InvalidTimeout {
+        /// The configured heartbeat interval.
+        interval: Duration,
+        /// The configured heartbeat timeout (invalid because < interval).
+        timeout: Duration,
+    },
+}
+
 /// Configuration for heartbeat and liveness detection (coordination level).
 ///
 /// `HeartbeatConfig` controls how often the projection runner sends heartbeat
@@ -106,10 +126,10 @@ impl Default for EventRetryConfig {
 /// # Example
 ///
 /// ```ignore
-/// let heartbeat_config = HeartbeatConfig {
-///     heartbeat_interval: Duration::from_secs(5),
-///     heartbeat_timeout: Duration::from_secs(15),
-/// };
+/// let heartbeat_config = HeartbeatConfig::try_new(
+///     Duration::from_secs(5),  // interval
+///     Duration::from_secs(15), // timeout
+/// )?;
 /// let runner = ProjectionRunner::new(projector, coordinator, &store)
 ///     .with_heartbeat_config(heartbeat_config);
 /// ```
@@ -120,6 +140,58 @@ pub struct HeartbeatConfig {
     /// Timeout after which a projector is considered hung if no heartbeat received.
     /// Must be greater than heartbeat_interval to tolerate transient delays.
     pub heartbeat_timeout: Duration,
+}
+
+impl HeartbeatConfig {
+    /// Create a validated heartbeat configuration.
+    ///
+    /// Validates that `heartbeat_timeout` is greater than or equal to
+    /// `heartbeat_interval`. If the timeout is less than the interval,
+    /// the coordinator would incorrectly assume a projector is hung before
+    /// the next heartbeat is even due.
+    ///
+    /// # Parameters
+    ///
+    /// - `heartbeat_interval`: How often the projector sends heartbeat signals
+    /// - `heartbeat_timeout`: How long to wait without heartbeats before considering hung
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(HeartbeatConfig)`: Valid configuration
+    /// - `Err(HeartbeatConfigError::InvalidTimeout)`: Timeout is less than interval
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Valid: timeout > interval
+    /// let config = HeartbeatConfig::try_new(
+    ///     Duration::from_secs(5),
+    ///     Duration::from_secs(15),
+    /// )?;
+    ///
+    /// // Invalid: timeout < interval
+    /// let result = HeartbeatConfig::try_new(
+    ///     Duration::from_secs(10),
+    ///     Duration::from_secs(5),
+    /// );
+    /// assert!(result.is_err());
+    /// ```
+    pub fn try_new(
+        heartbeat_interval: Duration,
+        heartbeat_timeout: Duration,
+    ) -> Result<Self, HeartbeatConfigError> {
+        if heartbeat_timeout < heartbeat_interval {
+            return Err(HeartbeatConfigError::InvalidTimeout {
+                interval: heartbeat_interval,
+                timeout: heartbeat_timeout,
+            });
+        }
+
+        Ok(Self {
+            heartbeat_interval,
+            heartbeat_timeout,
+        })
+    }
 }
 
 impl Default for HeartbeatConfig {

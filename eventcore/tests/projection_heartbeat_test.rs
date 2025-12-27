@@ -379,3 +379,18 @@ async fn developer_can_configure_custom_heartbeat_timeout() {
         "Guard should be invalid when elapsed time (250ms) exceeds custom timeout (200ms)"
     );
 }
+
+#[tokio::test]
+async fn invalid_heartbeat_configuration_is_rejected() {
+    // Given: developer attempts to create config with timeout shorter than interval
+    let result = HeartbeatConfig::try_new(
+        Duration::from_millis(200), // interval
+        Duration::from_millis(100), // timeout < interval (invalid!)
+    );
+
+    // Then: configuration is rejected with error
+    assert!(
+        result.is_err(),
+        "HeartbeatConfig should reject timeout shorter than interval"
+    );
+}
