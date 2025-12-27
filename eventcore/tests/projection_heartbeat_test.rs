@@ -309,3 +309,52 @@ async fn new_instance_takes_over_from_hung_projector() {
         "Second instance should acquire leadership after first instance's guard timed out"
     );
 }
+
+#[tokio::test]
+async fn developer_can_configure_custom_heartbeat_interval() {
+    // Given: heartbeat tracking coordinator
+    let heartbeat_count = Arc::new(AtomicUsize::new(0));
+    let coordinator = HeartbeatCountingCoordinator::new(heartbeat_count.clone());
+
+    // Given: projector that simulates work
+    let projector = HeartbeatCountingProjector::new();
+
+    // Given: event store with events to process
+    let store = InMemoryEventStore::new();
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    // Seed 10 events (with 100ms processing each = 1 second total)
+    for i in 0..10 {
+        let event = CounterIncremented {
+            counter_id: counter_id.clone(),
+        };
+        let writes = StreamWrites::new()
+            .register_stream(counter_id.clone(), StreamVersion::new(i))
+            .expect("register stream")
+            .append(event)
+            .expect("append event");
+        store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+    }
+
+    // When: developer configures custom heartbeat interval of 50ms (faster than default 200ms)
+    let custom_interval = Duration::from_millis(50);
+    let runner = ProjectionRunner::new(projector, coordinator, &store).with_heartbeat_config(
+        HeartbeatConfig {
+            heartbeat_interval: custom_interval,
+            heartbeat_timeout: Duration::from_secs(5),
+        },
+    );
+
+    let _result = runner.run().await;
+
+    // Then: heartbeats are sent at the configured frequency (expect ~20 heartbeats in 1 second with 50ms interval)
+    let heartbeats = heartbeat_count.load(Ordering::SeqCst);
+    assert!(
+        heartbeats >= 18,
+        "Expected at least 18 heartbeats during 1 second of processing with 50ms interval, got {}",
+        heartbeats
+    );
+}

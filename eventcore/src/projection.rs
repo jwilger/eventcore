@@ -670,6 +670,12 @@ where
 
             // Apply each event to the projector
             for (event, position) in events {
+                // Send heartbeat(s) before processing event if interval(s) elapsed
+                while last_heartbeat.elapsed() >= self.heartbeat_config.heartbeat_interval {
+                    guard.heartbeat();
+                    last_heartbeat += self.heartbeat_config.heartbeat_interval;
+                }
+
                 let mut retry_count = 0u32;
 
                 loop {
@@ -681,11 +687,12 @@ where
                                 cs.save(self.projector.name(), position);
                             }
 
-                            // Send heartbeat if enough time has passed
-                            if last_heartbeat.elapsed() >= self.heartbeat_config.heartbeat_interval
+                            // Send heartbeat(s) if enough time has passed
+                            while last_heartbeat.elapsed()
+                                >= self.heartbeat_config.heartbeat_interval
                             {
                                 guard.heartbeat();
-                                last_heartbeat = tokio::time::Instant::now();
+                                last_heartbeat += self.heartbeat_config.heartbeat_interval;
                             }
 
                             break; // Move to next event
