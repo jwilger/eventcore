@@ -52,10 +52,13 @@ pub struct PostgresConfig {
 
 impl Default for PostgresConfig {
     fn default() -> Self {
+        const DEFAULT_MAX_CONNECTIONS: std::num::NonZeroU32 = match std::num::NonZeroU32::new(10) {
+            Some(v) => v,
+            None => unreachable!(),
+        };
+
         Self {
-            max_connections: MaxConnections::new(
-                std::num::NonZeroU32::new(10).expect("10 is non-zero"),
-            ),
+            max_connections: MaxConnections::new(DEFAULT_MAX_CONNECTIONS),
             acquire_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(600), // 10 minutes
         }
