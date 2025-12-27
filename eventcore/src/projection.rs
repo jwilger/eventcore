@@ -8,6 +8,7 @@ use crate::{
     BackoffMultiplier, BatchSize, Event, EventFilter, EventPage, EventReader, FailureStrategy,
     MaxConsecutiveFailures, MaxRetryAttempts, Projector, StreamPosition,
 };
+use std::future::Future;
 use std::time::Duration;
 
 /// Configuration for projection polling behavior.
@@ -93,6 +94,43 @@ impl Default for EventRetryConfig {
     }
 }
 
+/// Configuration for heartbeat and liveness detection (coordination level).
+///
+/// `HeartbeatConfig` controls how often the projection runner sends heartbeat
+/// signals to indicate it is still alive and processing events. This enables
+/// detection of hung projectors (infinite loops, deadlocks, network partitions).
+///
+/// Per ADR-024, heartbeat is a coordination-level concern, separate from
+/// poll retry (infrastructure) and event retry (application).
+///
+/// # Example
+///
+/// ```ignore
+/// let heartbeat_config = HeartbeatConfig {
+///     heartbeat_interval: Duration::from_secs(5),
+///     heartbeat_timeout: Duration::from_secs(15),
+/// };
+/// let runner = ProjectionRunner::new(projector, coordinator, &store)
+///     .with_heartbeat_config(heartbeat_config);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeartbeatConfig {
+    /// Interval between heartbeat signals.
+    pub heartbeat_interval: Duration,
+    /// Timeout after which a projector is considered hung if no heartbeat received.
+    /// Must be greater than heartbeat_interval to tolerate transient delays.
+    pub heartbeat_timeout: Duration,
+}
+
+impl Default for HeartbeatConfig {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval: Duration::from_secs(5),
+            heartbeat_timeout: Duration::from_secs(15),
+        }
+    }
+}
+
 /// Polling mode for projection runners.
 ///
 /// Controls how the projection runner polls for new events:
@@ -160,6 +198,64 @@ impl InMemoryCheckpointStore {
     }
 }
 
+/// Trait for types that provide heartbeat functionality.
+///
+/// This trait allows any guard-like type to provide heartbeat signals.
+///
+/// # Implementation
+///
+/// Implement this trait for custom guard types:
+///
+/// ```ignore
+/// impl HasHeartbeat for MyGuard {
+///     fn heartbeat(&self) {
+///         // Send heartbeat signal
+///     }
+/// }
+/// ```
+pub trait HasHeartbeat {
+    /// Send a heartbeat signal to indicate the projector is still alive.
+    fn heartbeat(&self);
+}
+
+/// Trait for coordinators that can acquire guards.
+///
+/// This trait allows any coordinator-like type to participate in leadership acquisition.
+pub trait HasTryAcquire {
+    /// The type of guard returned by this coordinator.
+    type Guard;
+
+    /// Try to acquire leadership for projection processing.
+    ///
+    /// Returns `Some(guard)` if leadership was acquired, `None` otherwise.
+    fn try_acquire(&self) -> impl std::future::Future<Output = Option<Self::Guard>> + Send + '_;
+}
+
+/// Trait for coordinator guards that manage leadership.
+///
+/// `GuardTrait` defines the interface for guards returned by coordinators.
+/// Guards use the RAII pattern to automatically release leadership when dropped.
+pub trait GuardTrait {
+    /// Check if this guard represents valid leadership.
+    fn is_valid(&self) -> bool;
+
+    /// Send a heartbeat signal to indicate the projector is still alive.
+    fn heartbeat(&self);
+}
+
+/// Trait for coordinators that manage projector leadership.
+///
+/// `CoordinatorTrait` defines the interface for acquiring leadership guards.
+pub trait CoordinatorTrait {
+    /// The type of guard returned by this coordinator.
+    type Guard: GuardTrait;
+
+    /// Try to acquire leadership for projection processing.
+    ///
+    /// Returns `Some(guard)` if leadership was acquired, `None` otherwise.
+    fn try_acquire(&self) -> impl Future<Output = Option<Self::Guard>> + Send + '_;
+}
+
 /// Guard representing acquired leadership from a coordinator.
 ///
 /// `CoordinatorGuard` uses RAII pattern to automatically release leadership
@@ -179,7 +275,15 @@ pub struct CoordinatorGuard {
     // Guard state placeholder
 }
 
-impl CoordinatorGuard {
+impl HasHeartbeat for CoordinatorGuard {
+    fn heartbeat(&self) {
+        // For LocalCoordinator, heartbeat is a no-op
+        // Distributed coordinators (e.g., PostgresCoordinator) will
+        // implement actual heartbeat logic here
+    }
+}
+
+impl GuardTrait for CoordinatorGuard {
     /// Check if this guard represents valid leadership.
     ///
     /// Returns `true` if the guard still holds valid leadership rights.
@@ -189,8 +293,20 @@ impl CoordinatorGuard {
     /// # Returns
     ///
     /// `true` if leadership is valid, `false` otherwise.
-    pub fn is_valid(&self) -> bool {
+    fn is_valid(&self) -> bool {
         true
+    }
+
+    /// Send a heartbeat signal to indicate the projector is still alive.
+    ///
+    /// The runner calls this method at regular intervals (configured via
+    /// `HeartbeatConfig::heartbeat_interval`) to signal that the projector
+    /// is still processing events and has not hung.
+    ///
+    /// For `LocalCoordinator`, this is a no-op since single-process
+    /// deployments don't need distributed liveness detection.
+    fn heartbeat(&self) {
+        HasHeartbeat::heartbeat(self)
     }
 }
 
@@ -230,6 +346,20 @@ impl LocalCoordinator {
     pub fn new() -> Self {
         Self {}
     }
+}
+
+impl HasTryAcquire for LocalCoordinator {
+    type Guard = CoordinatorGuard;
+
+    fn try_acquire(
+        &self,
+    ) -> impl std::future::Future<Output = Option<CoordinatorGuard>> + Send + '_ {
+        async { Some(CoordinatorGuard {}) }
+    }
+}
+
+impl CoordinatorTrait for LocalCoordinator {
+    type Guard = CoordinatorGuard;
 
     /// Try to acquire leadership for projection processing.
     ///
@@ -248,8 +378,8 @@ impl LocalCoordinator {
     /// let guard = coordinator.try_acquire().await
     ///     .expect("LocalCoordinator always grants leadership");
     /// ```
-    pub async fn try_acquire(&self) -> Option<CoordinatorGuard> {
-        Some(CoordinatorGuard {})
+    fn try_acquire(&self) -> impl Future<Output = Option<CoordinatorGuard>> + Send + '_ {
+        HasTryAcquire::try_acquire(self)
     }
 }
 
@@ -293,12 +423,13 @@ where
     S: EventReader,
 {
     projector: P,
-    _coordinator: C,
+    coordinator: C,
     store: S,
     checkpoint_store: Option<InMemoryCheckpointStore>,
     poll_mode: PollMode,
     poll_config: PollConfig,
     event_retry_config: EventRetryConfig,
+    heartbeat_config: HeartbeatConfig,
 }
 
 impl<P, C, S> ProjectionRunner<P, C, S>
@@ -322,12 +453,13 @@ where
     pub fn new(projector: P, coordinator: C, store: S) -> Self {
         Self {
             projector,
-            _coordinator: coordinator,
+            coordinator,
             store,
             checkpoint_store: None,
             poll_mode: PollMode::Batch,
             poll_config: PollConfig::default(),
             event_retry_config: EventRetryConfig::default(),
+            heartbeat_config: HeartbeatConfig::default(),
         }
     }
 
@@ -433,6 +565,38 @@ where
         self
     }
 
+    /// Configure heartbeat and liveness detection.
+    ///
+    /// Controls how often the runner sends heartbeat signals to indicate
+    /// the projector is still alive and processing events. This enables
+    /// detection of hung projectors (infinite loops, deadlocks, network partitions).
+    ///
+    /// Per ADR-024, heartbeat is a coordination-level concern, separate from
+    /// poll retry (infrastructure) and event retry (application).
+    ///
+    /// # Parameters
+    ///
+    /// - `config`: The heartbeat configuration
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let heartbeat_config = HeartbeatConfig {
+    ///     heartbeat_interval: Duration::from_secs(5),
+    ///     heartbeat_timeout: Duration::from_secs(15),
+    /// };
+    /// let runner = ProjectionRunner::new(projector, coordinator, &store)
+    ///     .with_heartbeat_config(heartbeat_config);
+    /// ```
+    pub fn with_heartbeat_config(mut self, config: HeartbeatConfig) -> Self {
+        self.heartbeat_config = config;
+        self
+    }
+
     /// Run the projection, processing events until completion.
     ///
     /// This method:
@@ -451,10 +615,18 @@ where
     /// Returns an error if:
     /// - Event store operations fail
     /// - The projector returns a fatal error
-    pub async fn run(mut self) -> Result<(), ProjectionError>
+    pub async fn run<Guard>(mut self) -> Result<(), ProjectionError>
     where
         P::Error: std::fmt::Debug,
+        C: HasTryAcquire<Guard = Guard>,
+        Guard: HasHeartbeat,
     {
+        // Try to acquire leadership guard from coordinator
+        let guard =
+            self.coordinator.try_acquire().await.ok_or_else(|| {
+                ProjectionError::Failed("failed to acquire leadership".to_string())
+            })?;
+
         // Load checkpoint if checkpoint store is configured
         let mut last_checkpoint = self
             .checkpoint_store
@@ -463,6 +635,7 @@ where
 
         let mut ctx = P::Context::default();
         let mut consecutive_failures = 0u32;
+        let mut last_heartbeat = tokio::time::Instant::now();
 
         loop {
             // Read events from the store with retry logic for transient errors
@@ -517,6 +690,14 @@ where
                             if let Some(cs) = &self.checkpoint_store {
                                 cs.save(self.projector.name(), position);
                             }
+
+                            // Send heartbeat if enough time has passed
+                            if last_heartbeat.elapsed() >= self.heartbeat_config.heartbeat_interval
+                            {
+                                guard.heartbeat();
+                                last_heartbeat = tokio::time::Instant::now();
+                            }
+
                             break; // Move to next event
                         }
                         Err(error) => {

@@ -83,3 +83,6 @@ mutants.out/
 mutants.out.old/
 
 .serena/
+
+# Git worktrees
+.worktrees/

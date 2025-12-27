@@ -12,8 +12,9 @@
 
 use eventcore::{
     BatchSize, Event, EventFilter, EventPage, EventReader, EventStore, FailureContext,
-    FailureStrategy, InMemoryCheckpointStore, LocalCoordinator, PollConfig, PollMode,
-    ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
+    FailureStrategy, GuardTrait, HasTryAcquire, InMemoryCheckpointStore, LocalCoordinator,
+    PollConfig, PollMode, ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion,
+    StreamWrites,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};

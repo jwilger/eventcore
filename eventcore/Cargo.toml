@@ -8,6 +8,11 @@ license = "MIT"
 [lints.rust]
 warnings = "deny"
 
+[lints.clippy]
+# Allow impl Future syntax in trait methods (not async fn) for explicit Send bounds
+# This is the recommended pattern for public async traits per Rust RFC 3425
+manual-async-fn = "allow"
+
 [features]
 default = ["macros"]
 macros = ["dep:eventcore-macros"]
