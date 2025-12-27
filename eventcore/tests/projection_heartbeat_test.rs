@@ -358,3 +358,24 @@ async fn developer_can_configure_custom_heartbeat_interval() {
         heartbeats
     );
 }
+
+#[tokio::test]
+async fn developer_can_configure_custom_heartbeat_timeout() {
+    // Given: coordinator configured with custom 200ms timeout (shorter than default 300ms)
+    let coordinator = SharedLeadershipCoordinator::new(Duration::from_millis(200));
+
+    // Given: first guard acquires leadership
+    let guard = coordinator
+        .try_acquire()
+        .await
+        .expect("should acquire leadership");
+
+    // When: developer waits 250ms without heartbeat (exceeds custom 200ms timeout, but below default 300ms)
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    // Then: guard becomes invalid because custom timeout has elapsed
+    assert!(
+        !guard.is_valid(),
+        "Guard should be invalid when elapsed time (250ms) exceeds custom timeout (200ms)"
+    );
+}
