@@ -57,15 +57,23 @@ The workspace has reached six published crates with active development. Manual v
 
 Implement automated release management using release-plz with the following policy:
 
-### 1. Lockstep Major/Minor Versioning
+### 1. Full Lockstep Versioning (Updated 2025-12-27)
 
-All workspace crates SHALL maintain identical major and minor version numbers. Patch versions MAY differ independently.
+All workspace crates SHALL maintain identical major, minor, AND patch version numbers using Cargo workspace version inheritance.
+
+**Implementation:**
+- Workspace `Cargo.toml` defines `[workspace.package]` with shared `version`
+- All crates use `version.workspace = true` to inherit from workspace
+- release-plz bumps workspace version, all crates get identical version automatically
 
 **Examples:**
-- ✅ Allowed: eventcore 0.2.1, eventcore-types 0.2.0, eventcore-postgres 0.2.3
-- ✅ Allowed: All crates at 0.3.0 after breaking change in eventcore-types
-- ❌ Forbidden: eventcore 0.3.0, eventcore-types 0.2.5 (major/minor skew)
-- ❌ Forbidden: eventcore-postgres 1.0.0, eventcore 0.9.0 (major skew)
+- ✅ Allowed: All crates at 0.3.0 (identical versions)
+- ✅ Allowed: All crates at 0.2.1 after patch in any crate
+- ❌ Forbidden: eventcore 0.3.0, eventcore-types 0.2.5 (version skew)
+- ❌ Forbidden: Mixed patch versions (0.2.1 and 0.2.0)
+
+**Rationale for Change:**
+Initial ADR proposed lockstep major/minor with independent patches. Implementation revealed this required 234 lines of custom bash scripts and complex workflow orchestration to enforce, fighting against release-plz's natural behavior. Full lockstep via workspace inheritance is native Cargo functionality requiring zero custom code. The complexity cost outweighs the benefit of independent patches.
 
 ### 2. Two-Phase Publication Workflow
 
@@ -149,21 +157,35 @@ Without lockstep versioning, users face compatibility confusion:
 - Aligns with user expectation from existing documentation (VERSIONING.md assumes lockstep)
 - Industry precedent: tokio crates use lockstep versioning for same reasons
 
-### Why Independent Patch Versions?
+### Why Full Lockstep? (Updated 2025-12-27)
 
 **Problem Solved:**
-Bug fix in eventcore-postgres shouldn't force eventcore 0.2.1 release when eventcore code unchanged.
+Workspace version inheritance eliminates all custom enforcement complexity while providing identical compatibility guarantees.
 
-**Example Scenario:**
-- eventcore-postgres 0.2.0 has connection pool leak (bug fix)
-- Publish eventcore-postgres 0.2.1 (patch bump)
-- eventcore remains at 0.2.0 (no changes, no publish)
-- User updates: `eventcore-postgres = "0.2.1"` compatible with `eventcore = "0.2.0"`
+**Implementation Reality:**
+- Independent patches required 234 lines of custom bash scripts
+- Complex workflow orchestration (modify PR branch post-creation)
+- Fighting against release-plz's natural behavior
+- Maintenance burden outweighed benefit
 
-**Why Worth It:**
-- Reduces unnecessary releases
-- Clearer changelog (only affected crate shows changes)
-- Faster patch turnaround (don't need to coordinate workspace-wide release)
+**Benefits of Full Lockstep:**
+- Zero custom code (native Cargo workspace feature)
+- Single source of truth (workspace Cargo.toml)
+- release-plz works naturally without intervention
+- Simpler release workflow (62 lines vs 121 lines)
+- No post-processing of PRs needed
+- PR descriptions accurate immediately
+
+**Trade-off Accepted:**
+- All crates get new version even if only one changed
+- "Unnecessary" releases (e.g., eventcore 0.2.1 when only eventcore-postgres changed)
+- Changelog may show "no changes" for some crates
+
+**Why Trade-off is Worth It:**
+- Reduced complexity = fewer bugs in release automation
+- Maintainer time saved >> minor version number inflation
+- Users already expect lockstep (mental model unchanged)
+- Industry precedent: many Rust workspaces use full lockstep for simplicity
 
 ### Why Two-Phase Workflow (PR Preview + Publish)?
 

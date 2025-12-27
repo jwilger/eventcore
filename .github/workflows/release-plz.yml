@@ -1,7 +1,7 @@
 # Phase 1: Release PR Creation
 # Runs on push to main (except when merging release PRs)
 # Creates/updates release PR with version bumps and changelog
-# Enforces lockstep major/minor versioning per ADR-025
+# Uses workspace version inheritance for lockstep versioning per ADR-025
 
 name: Release PR
 
@@ -47,74 +47,15 @@ jobs:
           tool: cargo-semver-checks
 
       - name: Create/update release PR
-        id: release-pr
         env:
           # Use PAT instead of GITHUB_TOKEN to trigger CI on release PR
           # See: https://release-plz.dev/docs/github/token
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
         run: |
-          # Let release-plz create/update the PR with its semver analysis
-          # This creates the PR branch and initial commits
+          # release-plz creates/updates PR with version bumps and changelog
+          # Lockstep versioning enforced via workspace version inheritance
+          # (see workspace Cargo.toml and ADR-025)
           release-plz release-pr \
             --git-token "$GITHUB_TOKEN" \
             --backend github \
             --config ./release-plz.toml
-
-      - name: Find release PR branch
-        id: find-pr
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-        run: |
-          # Find the most recent release-plz PR
-          PR_BRANCH=$(gh pr list \
-            --state open \
-            --author "github-actions[bot]" \
-            --search "chore: release in:title" \
-            --json headRefName \
-            --jq '.[0].headRefName')
-
-          if [ -z "$PR_BRANCH" ]; then
-            echo "No release PR found - nothing to enforce"
-            echo "pr_found=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "Found release PR branch: $PR_BRANCH"
-          echo "pr_branch=$PR_BRANCH" >> $GITHUB_OUTPUT
-          echo "pr_found=true" >> $GITHUB_OUTPUT
-
-      - name: Enforce lockstep versioning on PR branch
-        if: steps.find-pr.outputs.pr_found == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-        run: |
-          PR_BRANCH="${{ steps.find-pr.outputs.pr_branch }}"
-
-          # Fetch and checkout the PR branch
-          git fetch origin "$PR_BRANCH"
-          git checkout "$PR_BRANCH"
-
-          # Run lockstep enforcement
-          # ADR-025 requires all crates share identical major.minor versions
-          ./.github/scripts/enforce-lockstep-versions.sh
-
-          # Validate the enforcement worked
-          ./.github/scripts/validate-lockstep-versions.sh
-
-          # Check if enforcement made any changes
-          if ! git diff --quiet; then
-            # Configure git for commit
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-
-            # Commit the lockstep enforcement changes
-            git add -A
-            git commit -m "chore: enforce lockstep major/minor versioning per ADR-025"
-
-            # Push the changes to the PR branch
-            git push origin "$PR_BRANCH"
-
-            echo "✅ Lockstep versioning enforced and committed to PR"
-          else
-            echo "✅ Versions already satisfy lockstep policy - no changes needed"
-          fi
