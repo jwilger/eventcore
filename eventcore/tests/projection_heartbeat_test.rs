@@ -189,3 +189,123 @@ async fn guard_becomes_invalid_after_heartbeat_timeout() {
         "Guard should be invalid after heartbeat timeout elapsed without heartbeat"
     );
 }
+
+/// Coordinator that tracks shared leadership state across multiple instances.
+struct SharedLeadershipCoordinator {
+    state: Arc<Mutex<SharedLeadershipState>>,
+    heartbeat_timeout: Duration,
+}
+
+/// Shared state for distributed leadership tracking.
+struct SharedLeadershipState {
+    current_guard_id: Option<usize>,
+    last_heartbeat: Option<Instant>,
+    next_guard_id: usize,
+}
+
+impl SharedLeadershipCoordinator {
+    fn new(heartbeat_timeout: Duration) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(SharedLeadershipState {
+                current_guard_id: None,
+                last_heartbeat: None,
+                next_guard_id: 1,
+            })),
+            heartbeat_timeout,
+        }
+    }
+}
+
+impl CoordinatorTrait for SharedLeadershipCoordinator {
+    type Guard = SharedLeadershipGuard;
+
+    fn try_acquire(&self) -> impl std::future::Future<Output = Option<Self::Guard>> + Send + '_ {
+        async {
+            let mut state = self.state.lock().unwrap();
+
+            // Check if there's a current guard and if it's still valid
+            let can_acquire = match (state.current_guard_id, state.last_heartbeat) {
+                (Some(_), Some(last_heartbeat)) => {
+                    // There's a guard, check if it timed out
+                    last_heartbeat.elapsed() >= self.heartbeat_timeout
+                }
+                _ => {
+                    // No guard or no heartbeat, can acquire
+                    true
+                }
+            };
+
+            if can_acquire {
+                // Create new guard with unique ID
+                let guard_id = state.next_guard_id;
+                state.next_guard_id += 1;
+                state.current_guard_id = Some(guard_id);
+                state.last_heartbeat = Some(Instant::now());
+
+                Some(SharedLeadershipGuard {
+                    guard_id,
+                    state: self.state.clone(),
+                    heartbeat_timeout: self.heartbeat_timeout,
+                })
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Guard that validates against shared leadership state.
+struct SharedLeadershipGuard {
+    guard_id: usize,
+    state: Arc<Mutex<SharedLeadershipState>>,
+    heartbeat_timeout: Duration,
+}
+
+impl GuardTrait for SharedLeadershipGuard {
+    fn is_valid(&self) -> bool {
+        let state = self.state.lock().unwrap();
+
+        // Check if this guard still holds leadership
+        if state.current_guard_id != Some(self.guard_id) {
+            return false;
+        }
+
+        // Check if heartbeat has not timed out
+        match state.last_heartbeat {
+            Some(last_heartbeat) => last_heartbeat.elapsed() < self.heartbeat_timeout,
+            None => false,
+        }
+    }
+
+    fn heartbeat(&self) {
+        let mut state = self.state.lock().unwrap();
+        if state.current_guard_id == Some(self.guard_id) {
+            state.last_heartbeat = Some(Instant::now());
+        }
+    }
+}
+
+#[tokio::test]
+async fn new_instance_takes_over_from_hung_projector() {
+    // Given: coordinator with shared leadership state
+    let coordinator = SharedLeadershipCoordinator::new(Duration::from_millis(300));
+
+    // Given: first projector acquires leadership
+    let _first_guard = coordinator
+        .try_acquire()
+        .await
+        .expect("first instance should acquire leadership");
+
+    // Given: first projector stops sending heartbeats (simulating hang)
+    // Wait for timeout to elapse without calling heartbeat()
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+    // When: second projector tries to acquire leadership after timeout
+    let second_guard = coordinator.try_acquire().await;
+
+    // Then: second instance successfully acquires leadership
+    assert!(
+        second_guard.is_some(),
+        "Second instance should acquire leadership after first instance's guard timed out"
+    );
+}
