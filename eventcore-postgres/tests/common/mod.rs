@@ -1,140 +1,133 @@
 //! Shared test fixtures for eventcore-postgres integration tests.
 //!
-//! Uses testcontainers with reusable containers to share a single Postgres
-//! instance across all tests. The container persists between test runs for
-//! faster iteration. Clean up manually with: `docker rm -f eventcore-test-postgres`
+//! Uses docker-compose to manage a shared Postgres instance across all tests.
+//! The container persists between test runs for faster iteration.
+//! Clean up with: `docker compose down -v`
 
 // Allow dead_code because not all test binaries use all exports from this module
 #![allow(dead_code)]
 
 use std::env;
+use std::process::Command;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use eventcore_postgres::PostgresEventStore;
 use eventcore_types::{Event, StreamId};
 use serde::{Deserialize, Serialize};
-use testcontainers::{Container, ImageExt, ReuseDirective, runners::SyncRunner};
-use testcontainers_modules::postgres::Postgres;
-
+use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
-/// Container name for the shared reusable Postgres instance.
-const CONTAINER_NAME: &str = "eventcore-test-postgres";
+/// Singleton to ensure container is started only once across all tests.
+static POSTGRES_CONTAINER: OnceLock<()> = OnceLock::new();
 
-/// Shared container and connection string for all integration tests.
-/// The container persists between test runs for faster iteration.
-static SHARED_CONTAINER: OnceLock<SharedPostgres> = OnceLock::new();
-
-struct SharedPostgres {
-    connection_string: String,
-    #[allow(dead_code)]
-    container: Container<Postgres>,
-}
-
-/// Get the Postgres version to use for tests.
+/// Ensure Postgres is available, either from CI service or docker-compose.
 ///
-/// Reads from `POSTGRES_VERSION` env var, defaults to "17".
-pub fn postgres_version() -> String {
-    env::var("POSTGRES_VERSION").unwrap_or_else(|_| "17".to_string())
-}
+/// This is idempotent and works in both CI and local development:
+/// - In CI: Postgres is provided as a service container, already running
+/// - Locally: Starts postgres via docker-compose if not already running
+fn ensure_postgres_running() {
+    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+    let connection_string = format!("postgres://postgres:postgres@localhost:{}/postgres", port);
 
-/// Start a reusable container with retry logic for cross-process races.
-///
-/// When nextest runs test binaries in parallel, multiple processes may try to
-/// create the same named container simultaneously. This retries on "name already
-/// in use" errors, allowing the other process to finish creation.
-fn start_container_with_retry() -> Container<Postgres> {
-    let version = postgres_version();
-    let max_retries = 10;
-    let retry_delay = std::time::Duration::from_millis(500);
+    // First, check if postgres is already accessible (e.g., CI service container)
+    if can_connect_to_postgres(&connection_string) {
+        eprintln!("Postgres already available at {}", connection_string);
+        return;
+    }
 
-    for attempt in 0..max_retries {
-        match Postgres::default()
-            .with_tag(&version)
-            .with_container_name(CONTAINER_NAME)
-            .with_reuse(ReuseDirective::Always)
-            .start()
-        {
-            Ok(container) => return container,
-            Err(e) => {
-                let error_str = e.to_string();
-                if error_str.contains("already in use") && attempt < max_retries - 1 {
-                    // Another process is creating the container, wait and retry
-                    std::thread::sleep(retry_delay);
-                    continue;
-                }
-                panic!("should start postgres container: {}", e);
+    // Postgres not accessible, try to start via docker-compose (local dev)
+    eprintln!("Postgres not accessible, attempting to start via docker-compose...");
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = std::path::Path::new(manifest_dir)
+        .parent()
+        .expect("should have parent directory");
+
+    // Try to start docker-compose (may fail in CI where docker isn't available)
+    let result = Command::new("docker")
+        .args(["compose", "up", "-d", "--wait"])
+        .current_dir(project_root)
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            eprintln!("Started postgres via docker-compose");
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // "already in use" is fine - another process started it
+            if !stderr.contains("already in use") && !stderr.contains("already exists") {
+                eprintln!("Warning: docker-compose failed: {}", stderr);
             }
         }
+        Err(e) => {
+            eprintln!("Warning: docker command not available: {}", e);
+        }
     }
+
+    // Verify postgres is now accessible (whether from CI service or docker-compose)
+    let max_retries = 30;
+    let retry_delay = Duration::from_millis(500);
+    for attempt in 0..max_retries {
+        if can_connect_to_postgres(&connection_string) {
+            eprintln!("Postgres is now accessible");
+            return;
+        }
+
+        if attempt < max_retries - 1 {
+            std::thread::sleep(retry_delay);
+        }
+    }
+
     panic!(
-        "failed to start postgres container after {} retries",
-        max_retries
+        "Postgres is not accessible at {} after {} retries. \
+         Ensure either: (1) GitHub Actions service container is configured, \
+         or (2) Docker is installed and docker-compose.yml exists",
+        connection_string, max_retries
     );
 }
 
-fn get_shared_postgres() -> &'static SharedPostgres {
-    SHARED_CONTAINER.get_or_init(|| {
-        // Run container setup in a separate thread to avoid tokio runtime conflicts
-        std::thread::spawn(|| {
-            let container = start_container_with_retry();
+/// Check if we can connect to postgres at the given connection string.
+///
+/// Uses sqlx to attempt a quick connection test. This works with both
+/// GitHub Actions service containers and local docker-compose.
+///
+/// Runs in a separate thread to avoid "runtime within runtime" issues.
+fn can_connect_to_postgres(connection_string: &str) -> bool {
+    let connection_string = connection_string.to_string();
 
-            let host_port = container
-                .get_host_port_ipv4(5432)
-                .expect("should get postgres port");
-
-            let connection_string = format!(
-                "postgres://postgres:postgres@127.0.0.1:{}/postgres",
-                host_port
-            );
-
-            // Run migrations using a temporary runtime
-            // Retry connection in case postgres is still starting up
-            let rt =
-                tokio::runtime::Runtime::new().expect("should create tokio runtime for migrations");
-            rt.block_on(async {
-                let max_conn_retries = 30;
-                let conn_retry_delay = std::time::Duration::from_millis(500);
-                let mut store = None;
-
-                for attempt in 0..max_conn_retries {
-                    match PostgresEventStore::new(connection_string.clone()).await {
-                        Ok(s) => {
-                            store = Some(s);
-                            break;
-                        }
-                        Err(e) => {
-                            if attempt < max_conn_retries - 1 {
-                                tokio::time::sleep(conn_retry_delay).await;
-                                continue;
-                            }
-                            panic!(
-                                "should connect to postgres container after {} retries: {}",
-                                max_conn_retries, e
-                            );
-                        }
-                    }
-                }
-
-                let store = store.expect("store should be set");
-                store.migrate().await;
-            });
-
-            SharedPostgres {
-                connection_string,
-                container,
-            }
+    // Spawn a new thread to avoid runtime conflicts
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().ok()?;
+        rt.block_on(async {
+            PgPoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(Duration::from_secs(2))
+                .connect(&connection_string)
+                .await
+                .ok()
         })
-        .join()
-        .expect("container setup thread should complete")
     })
+    .join()
+    .ok()
+    .flatten()
+    .is_some()
 }
 
-/// A test fixture that manages a reusable Postgres container and store.
+/// Get the connection string for the Postgres container.
+///
+/// Reads `POSTGRES_PORT` from env var, defaults to 5432.
+fn connection_string() -> String {
+    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+    format!("postgres://postgres:postgres@localhost:{}/postgres", port)
+}
+
+/// A test fixture that manages a Postgres container and store.
 ///
 /// The container is shared across all tests and persists between test runs.
 /// This avoids the overhead of starting a new container for each test.
-/// Clean up manually with: `docker rm -f eventcore-test-postgres`
+/// Clean up with: `docker compose down -v`
 pub struct PostgresTestFixture {
     /// The Postgres event store connected to the container.
     pub store: PostgresEventStore,
@@ -143,20 +136,57 @@ pub struct PostgresTestFixture {
 }
 
 impl PostgresTestFixture {
-    /// Create a new test fixture with a reusable Postgres container.
+    /// Create a new test fixture with a Postgres container.
     ///
-    /// Connects to an existing container if available, or starts a new one.
-    /// The container persists between test runs for faster iteration.
-    /// Uses `POSTGRES_VERSION` env var (default "17") for the Postgres version.
+    /// Ensures the container is running (starts it if not), waits for it to be ready,
+    /// runs migrations, and returns a connected store.
     pub async fn new() -> Self {
-        let shared = get_shared_postgres();
-        let store = PostgresEventStore::new(shared.connection_string.clone())
-            .await
-            .expect("should connect to shared postgres container");
+        // Ensure container is running (idempotent, only runs once)
+        POSTGRES_CONTAINER.get_or_init(|| {
+            ensure_postgres_running();
+        });
+
+        let connection_string = connection_string();
+
+        // Wait for postgres to be ready and connect
+        // Retry connection in case postgres is still starting up
+        let max_retries = 30;
+        let retry_delay = Duration::from_millis(500);
+        let mut store = None;
+
+        for attempt in 0..max_retries {
+            match PostgresEventStore::new(connection_string.clone()).await {
+                Ok(s) => {
+                    store = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    if attempt < max_retries - 1 {
+                        eprintln!(
+                            "Postgres not ready (attempt {}/{}): {}",
+                            attempt + 1,
+                            max_retries,
+                            e
+                        );
+                        tokio::time::sleep(retry_delay).await;
+                        continue;
+                    }
+                    panic!(
+                        "Failed to connect to postgres after {} retries: {}",
+                        max_retries, e
+                    );
+                }
+            }
+        }
+
+        let store = store.expect("store should be set after successful connection");
+
+        // Run migrations
+        store.migrate().await;
 
         Self {
             store,
-            connection_string: shared.connection_string.clone(),
+            connection_string,
         }
     }
 }
@@ -178,5 +208,73 @@ pub struct TestEvent {
 impl Event for TestEvent {
     fn stream_id(&self) -> &StreamId {
         &self.stream_id
+    }
+}
+
+/// A test fixture that creates an isolated database for each test.
+///
+/// This provides true database-level isolation for tests that query across all events
+/// (e.g., event_reader contract tests). Tests that only access specific streams can use
+/// PostgresTestFixture with unique stream IDs instead.
+///
+/// Each test run creates new databases without cleanup. This is fine because:
+/// - In CI, each run starts with a fresh Postgres service container
+/// - Locally, run `docker compose down -v` to clean up when needed
+pub struct IsolatedPostgresFixture {
+    /// The connection string for the isolated database.
+    pub connection_string: String,
+    /// The name of the isolated database (for reference).
+    pub database_name: String,
+}
+
+impl IsolatedPostgresFixture {
+    /// Create a new isolated test fixture with its own database.
+    ///
+    /// Creates a unique database with UUIDv7-based name and runs migrations.
+    pub async fn new() -> Self {
+        // Ensure container is running (idempotent)
+        POSTGRES_CONTAINER.get_or_init(|| {
+            ensure_postgres_running();
+        });
+
+        let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+        let admin_conn_string = format!("postgres://postgres:postgres@localhost:{}/postgres", port);
+
+        // Connect to postgres database
+        let admin_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&admin_conn_string)
+            .await
+            .expect("Failed to connect to postgres database");
+
+        // Create unique database name using UUIDv7
+        // Note: We don't clean up old test databases here to avoid race conditions.
+        // In CI, each run starts with a fresh Postgres service container.
+        // Locally, clean up with: docker compose down -v
+        let database_name = format!("test_{}", Uuid::now_v7().simple());
+
+        // Create the isolated database
+        sqlx::query(&format!("CREATE DATABASE {}", database_name))
+            .execute(&admin_pool)
+            .await
+            .expect("Failed to create isolated database");
+
+        // Build connection string for the new database
+        let connection_string = format!(
+            "postgres://postgres:postgres@localhost:{}/{}",
+            port, database_name
+        );
+
+        // Connect to the new database and run migrations
+        let store = PostgresEventStore::new(connection_string.clone())
+            .await
+            .expect("Failed to connect to isolated database");
+
+        store.migrate().await;
+
+        Self {
+            connection_string,
+            database_name,
+        }
     }
 }
