@@ -48,6 +48,13 @@ jobs:
 
             4. **Skip the obvious** - Don't comment on things that are fine.
 
+            ## Project-Specific Context
+
+            **eventcore-testing crate:** The `eventcore-testing` crate is ALL test code.
+            For any instructions that differentiate between test code and production code,
+            treat the entire eventcore-testing crate as test code, regardless of file
+            location or naming.
+
             ## Review Process
 
             **Step 1: Check for previous reviews**
@@ -83,6 +90,10 @@ jobs:
             Use `"event": "APPROVE"` if no blocking issues.
             Use `"event": "REQUEST_CHANGES"` if there are issues to fix.
             Use `"event": "COMMENT"` for non-blocking suggestions.
+
+            **IMPORTANT:** When using REQUEST_CHANGES, you MUST include inline comments
+            in the "comments" array pointing to specific lines of code. Never request
+            changes with only a summary - always provide actionable inline feedback.
 
             **Step 4: Resolve addressed review threads**
 
