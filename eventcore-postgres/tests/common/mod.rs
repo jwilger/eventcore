@@ -15,17 +15,11 @@ use std::time::Duration;
 use eventcore_postgres::PostgresEventStore;
 use eventcore_types::{Event, StreamId};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// Singleton to ensure container is started only once across all tests.
 static POSTGRES_CONTAINER: OnceLock<()> = OnceLock::new();
-
-/// Async mutex to serialize database creation and cleanup for isolated tests.
-/// Prevents race conditions where cleanup drops databases being created by parallel tests.
-static DB_CREATION_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// Ensure Postgres is available, either from CI service or docker-compose.
 ///
@@ -223,19 +217,20 @@ impl Event for TestEvent {
 /// (e.g., event_reader contract tests). Tests that only access specific streams can use
 /// PostgresTestFixture with unique stream IDs instead.
 ///
-/// Cleans up old test databases on creation to prevent accumulation.
+/// Each test run creates new databases without cleanup. This is fine because:
+/// - In CI, each run starts with a fresh Postgres service container
+/// - Locally, run `docker compose down -v` to clean up when needed
 pub struct IsolatedPostgresFixture {
     /// The connection string for the isolated database.
     pub connection_string: String,
-    /// The name of the isolated database (for tracking).
+    /// The name of the isolated database (for reference).
     pub database_name: String,
 }
 
 impl IsolatedPostgresFixture {
     /// Create a new isolated test fixture with its own database.
     ///
-    /// Cleans up old test_* databases before creating a new one to prevent resource leaks.
-    /// Uses a mutex to prevent parallel tests from interfering with cleanup.
+    /// Creates a unique database with UUIDv7-based name and runs migrations.
     pub async fn new() -> Self {
         // Ensure container is running (idempotent)
         POSTGRES_CONTAINER.get_or_init(|| {
@@ -252,14 +247,10 @@ impl IsolatedPostgresFixture {
             .await
             .expect("Failed to connect to postgres database");
 
-        // Acquire lock to serialize cleanup and database creation
-        // This prevents race conditions where cleanup drops databases being created by parallel tests
-        let _lock = DB_CREATION_LOCK.lock().await;
-
-        // Clean up old test databases to prevent accumulation
-        Self::cleanup_old_test_databases(&admin_pool).await;
-
         // Create unique database name using UUIDv7
+        // Note: We don't clean up old test databases here to avoid race conditions.
+        // In CI, each run starts with a fresh Postgres service container.
+        // Locally, clean up with: docker compose down -v
         let database_name = format!("test_{}", Uuid::now_v7().simple());
 
         // Create the isolated database
@@ -281,38 +272,9 @@ impl IsolatedPostgresFixture {
 
         store.migrate().await;
 
-        // Release lock after migrations complete to prevent cleanup from terminating our connection
-        drop(_lock);
-
         Self {
             connection_string,
             database_name,
-        }
-    }
-
-    /// Drop all test_* databases to prevent accumulation from previous test runs.
-    async fn cleanup_old_test_databases(admin_pool: &sqlx::PgPool) {
-        // Query for all databases matching test_* pattern
-        let rows = sqlx::query("SELECT datname FROM pg_database WHERE datname LIKE 'test_%'")
-            .fetch_all(admin_pool)
-            .await
-            .expect("Failed to query test databases");
-
-        // Drop each test database
-        for row in rows {
-            let db_name: String = row.get("datname");
-            eprintln!("Cleaning up old test database: {}", db_name);
-
-            // Terminate connections to the database before dropping
-            let terminate_query = format!(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{}'",
-                db_name
-            );
-            let _ = sqlx::query(&terminate_query).execute(admin_pool).await;
-
-            // Drop the database
-            let drop_query = format!("DROP DATABASE IF EXISTS {}", db_name);
-            let _ = sqlx::query(&drop_query).execute(admin_pool).await;
         }
     }
 }
