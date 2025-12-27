@@ -460,3 +460,41 @@ async fn new_instance_takes_over_from_hung_projector() {
         total_events, unique_count, total_processed
     );
 }
+
+#[tokio::test]
+async fn developer_can_configure_custom_heartbeat_interval() {
+    // Given: 10 events × 100ms each = 1 second total
+    let store = InMemoryEventStore::new();
+    let stream_id = StreamId::try_new("test").unwrap();
+    for i in 0..10 {
+        let event = TestEvent {
+            stream_id: stream_id.clone(),
+        };
+        let writes = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(i))
+            .unwrap()
+            .append(event)
+            .unwrap();
+        store.append_events(writes).await.unwrap();
+    }
+
+    let heartbeat_count = Arc::new(AtomicUsize::new(0));
+
+    // When: Developer configures custom heartbeat_interval of 50ms (faster than default)
+    let projector = SlowProjector {
+        processing_time: Duration::from_millis(100),
+    };
+    let coordinator = HeartbeatCountingCoordinator::new(heartbeat_count.clone());
+    let runner = ProjectionRunner::new(projector, coordinator, &store).with_heartbeat_config(
+        HeartbeatConfig {
+            heartbeat_interval: Duration::from_millis(50),
+            heartbeat_timeout: Duration::from_millis(300),
+        },
+    );
+
+    runner.run().await.unwrap();
+
+    // Then: Configured interval is respected - at least 18 heartbeats in 1 second
+    // (1000ms / 50ms = 20 heartbeats theoretical, allowing ~10% tolerance)
+    assert!(heartbeat_count.load(Ordering::SeqCst) >= 18);
+}
