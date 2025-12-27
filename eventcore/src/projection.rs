@@ -8,7 +8,46 @@ use crate::{
     BackoffMultiplier, BatchSize, Event, EventFilter, EventPage, EventReader, FailureStrategy,
     MaxConsecutiveFailures, MaxRetryAttempts, Projector, StreamPosition,
 };
+use std::future::Future;
 use std::time::Duration;
+
+/// Trait for guards that support heartbeat operations.
+pub trait GuardLike {
+    /// Send a heartbeat signal.
+    fn heartbeat(&self);
+}
+
+/// Trait for coordinators that can acquire guards.
+pub trait CoordinatorLike {
+    /// The guard type returned by this coordinator.
+    type Guard;
+
+    /// Try to acquire leadership, returning a guard if successful.
+    fn try_acquire(&self) -> impl Future<Output = Option<Self::Guard>> + Send;
+}
+
+/// Configuration for heartbeat and liveness detection.
+///
+/// Controls how frequently the projection runner sends heartbeats
+/// to the coordinator, and the timeout for detecting hung projectors.
+///
+/// # Example
+///
+/// ```ignore
+/// let config = HeartbeatConfig {
+///     heartbeat_interval: Duration::from_secs(5),
+///     heartbeat_timeout: Duration::from_secs(15),
+/// };
+/// let runner = ProjectionRunner::new(projector, coordinator, &store)
+///     .with_heartbeat_config(config);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeartbeatConfig {
+    /// Interval between heartbeat signals.
+    pub heartbeat_interval: Duration,
+    /// Timeout for detecting hung projectors.
+    pub heartbeat_timeout: Duration,
+}
 
 /// Configuration for projection polling behavior.
 ///
@@ -259,6 +298,20 @@ impl Default for LocalCoordinator {
     }
 }
 
+impl CoordinatorLike for LocalCoordinator {
+    type Guard = CoordinatorGuard;
+
+    async fn try_acquire(&self) -> Option<Self::Guard> {
+        Some(CoordinatorGuard {})
+    }
+}
+
+impl GuardLike for CoordinatorGuard {
+    fn heartbeat(&self) {
+        // LocalCoordinator doesn't need heartbeats for single-process mode
+    }
+}
+
 /// Orchestrates projector execution with event polling and coordination.
 ///
 /// `ProjectionRunner` is the main entry point for running projections. It:
@@ -293,12 +346,13 @@ where
     S: EventReader,
 {
     projector: P,
-    _coordinator: C,
+    coordinator: C,
     store: S,
     checkpoint_store: Option<InMemoryCheckpointStore>,
     poll_mode: PollMode,
     poll_config: PollConfig,
     event_retry_config: EventRetryConfig,
+    heartbeat_config: Option<HeartbeatConfig>,
 }
 
 impl<P, C, S> ProjectionRunner<P, C, S>
@@ -322,12 +376,13 @@ where
     pub fn new(projector: P, coordinator: C, store: S) -> Self {
         Self {
             projector,
-            _coordinator: coordinator,
+            coordinator,
             store,
             checkpoint_store: None,
             poll_mode: PollMode::Batch,
             poll_config: PollConfig::default(),
             event_retry_config: EventRetryConfig::default(),
+            heartbeat_config: None,
         }
     }
 
@@ -433,6 +488,34 @@ where
         self
     }
 
+    /// Configure heartbeat and liveness detection behavior.
+    ///
+    /// Controls how frequently the runner sends heartbeat signals to the
+    /// coordinator, and the timeout for detecting hung projectors.
+    ///
+    /// # Parameters
+    ///
+    /// - `config`: The heartbeat configuration
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let heartbeat_config = HeartbeatConfig {
+    ///     heartbeat_interval: Duration::from_secs(5),
+    ///     heartbeat_timeout: Duration::from_secs(15),
+    /// };
+    /// let runner = ProjectionRunner::new(projector, coordinator, &store)
+    ///     .with_heartbeat_config(heartbeat_config);
+    /// ```
+    pub fn with_heartbeat_config(mut self, config: HeartbeatConfig) -> Self {
+        self.heartbeat_config = Some(config);
+        self
+    }
+
     /// Run the projection, processing events until completion.
     ///
     /// This method:
@@ -451,10 +534,19 @@ where
     /// Returns an error if:
     /// - Event store operations fail
     /// - The projector returns a fatal error
-    pub async fn run(mut self) -> Result<(), ProjectionError>
+    pub async fn run<G>(mut self) -> Result<(), ProjectionError>
     where
         P::Error: std::fmt::Debug,
+        C: CoordinatorLike<Guard = G>,
+        G: GuardLike,
     {
+        // Acquire guard and set up heartbeat tracking if configured
+        let guard = self.coordinator.try_acquire().await;
+        let mut last_heartbeat = self
+            .heartbeat_config
+            .as_ref()
+            .map(|_| tokio::time::Instant::now());
+
         // Load checkpoint if checkpoint store is configured
         let mut last_checkpoint = self
             .checkpoint_store
@@ -507,6 +599,16 @@ where
 
             // Apply each event to the projector
             for (event, position) in events {
+                // Send heartbeat before processing if interval elapsed
+                if let (Some(config), Some(last_hb), Some(g)) =
+                    (&self.heartbeat_config, &mut last_heartbeat, &guard)
+                {
+                    while last_hb.elapsed() >= config.heartbeat_interval {
+                        g.heartbeat();
+                        *last_hb += config.heartbeat_interval;
+                    }
+                }
+
                 let mut retry_count = 0u32;
 
                 loop {
@@ -517,6 +619,17 @@ where
                             if let Some(cs) = &self.checkpoint_store {
                                 cs.save(self.projector.name(), position);
                             }
+
+                            // Send heartbeat after processing if interval elapsed
+                            if let (Some(config), Some(last_hb), Some(g)) =
+                                (&self.heartbeat_config, &mut last_heartbeat, &guard)
+                            {
+                                while last_hb.elapsed() >= config.heartbeat_interval {
+                                    g.heartbeat();
+                                    *last_hb += config.heartbeat_interval;
+                                }
+                            }
+
                             break; // Move to next event
                         }
                         Err(error) => {
