@@ -253,6 +253,61 @@ pub trait Projector {
 #[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display))]
 pub struct BatchSize(usize);
 
+/// Maximum number of retry attempts for event processing.
+///
+/// MaxRetryAttempts represents the maximum number of times to retry processing
+/// a failed event before escalating to a fatal error. A value of 0 means no
+/// retries are attempted.
+///
+/// The upper bound of 100 prevents infinite retry loops and ensures reasonable
+/// resource consumption.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::MaxRetryAttempts;
+///
+/// let no_retries = MaxRetryAttempts::new(0).unwrap();
+/// let standard = MaxRetryAttempts::new(3).unwrap();
+/// let aggressive = MaxRetryAttempts::new(10).unwrap();
+///
+/// // Values above 100 are rejected
+/// assert!(MaxRetryAttempts::new(101).is_err());
+/// ```
+#[nutype(
+    validate(less_or_equal = 100),
+    derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display)
+)]
+pub struct MaxRetryAttempts(u32);
+
+/// Backoff multiplier for exponential retry delays.
+///
+/// BackoffMultiplier represents the factor by which retry delays grow on each
+/// attempt. A value of 1.0 means constant delay (no backoff), while values
+/// greater than 1.0 implement exponential backoff.
+///
+/// The minimum value of 1.0 prevents decreasing delays, which would not make
+/// sense for retry backoff. Common values are 2.0 (double each time) or 1.5
+/// (50% increase).
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::BackoffMultiplier;
+///
+/// let constant = BackoffMultiplier::new(1.0).unwrap();  // No backoff
+/// let standard = BackoffMultiplier::new(2.0).unwrap();  // Double each time
+/// let gentle = BackoffMultiplier::new(1.5).unwrap();    // 50% increase
+///
+/// // Values below 1.0 are rejected
+/// assert!(BackoffMultiplier::new(0.5).is_err());
+/// ```
+#[nutype(
+    validate(greater_or_equal = 1.0),
+    derive(Debug, Clone, Copy, PartialEq, PartialOrd, Display)
+)]
+pub struct BackoffMultiplier(f64);
+
 /// Pagination parameters for reading events.
 ///
 /// EventPage bundles together the cursor position and page size for paginating

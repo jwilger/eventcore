@@ -9,8 +9,9 @@
 //! - And checkpoint is NOT advanced past the failed event
 
 use eventcore::{
-    Event, EventRetryConfig, EventStore, FailureContext, FailureStrategy, LocalCoordinator,
-    PollMode, ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
+    BackoffMultiplier, Event, EventRetryConfig, EventStore, FailureContext, FailureStrategy,
+    LocalCoordinator, MaxRetryAttempts, PollMode, ProjectionRunner, Projector, StreamId,
+    StreamPosition, StreamVersion, StreamWrites,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
@@ -92,9 +93,9 @@ async fn event_retry_config_limits_retries_and_escalates_to_fatal() {
 
     // Given: EventRetryConfig with max_retry_attempts = 3
     let retry_config = EventRetryConfig {
-        max_retry_attempts: 3,
+        max_retry_attempts: MaxRetryAttempts::try_new(3).expect("valid value"),
         retry_delay: Duration::from_millis(1), // Keep test fast
-        retry_backoff_multiplier: 1.0,         // No backoff for this test
+        retry_backoff_multiplier: BackoffMultiplier::try_new(1.0).expect("valid value"), // No backoff for this test
         max_retry_delay: Duration::from_millis(1),
     };
 
@@ -267,9 +268,9 @@ async fn retry_delay_is_respected_during_retry() {
     // Given: EventRetryConfig with retry_delay = 50ms
     let retry_delay = Duration::from_millis(50);
     let retry_config = EventRetryConfig {
-        max_retry_attempts: 3,
+        max_retry_attempts: MaxRetryAttempts::try_new(3).expect("valid value"),
         retry_delay,
-        retry_backoff_multiplier: 1.0, // No backoff for this test
+        retry_backoff_multiplier: BackoffMultiplier::try_new(1.0).expect("valid value"), // No backoff for this test
         max_retry_delay: Duration::from_millis(50),
     };
 
@@ -380,9 +381,9 @@ async fn exponential_backoff_is_applied_during_retries() {
 
     // Given: EventRetryConfig with retry_delay=50ms, backoff_multiplier=2.0
     let retry_config = EventRetryConfig {
-        max_retry_attempts: 5,
+        max_retry_attempts: MaxRetryAttempts::try_new(5).expect("valid value"),
         retry_delay: Duration::from_millis(50),
-        retry_backoff_multiplier: 2.0,
+        retry_backoff_multiplier: BackoffMultiplier::try_new(2.0).expect("valid value"),
         max_retry_delay: Duration::from_secs(10), // High enough not to cap our test
     };
 
@@ -467,9 +468,9 @@ async fn max_retry_delay_caps_exponential_backoff() {
     // Without cap: 100ms, 200ms, 400ms
     // With cap: 100ms, 150ms (capped from 200ms), 150ms (capped from 400ms)
     let retry_config = EventRetryConfig {
-        max_retry_attempts: 5,
+        max_retry_attempts: MaxRetryAttempts::try_new(5).expect("valid value"),
         retry_delay: Duration::from_millis(100),
-        retry_backoff_multiplier: 2.0,
+        retry_backoff_multiplier: BackoffMultiplier::try_new(2.0).expect("valid value"),
         max_retry_delay: Duration::from_millis(150), // Cap to prevent unbounded growth
     };
 
@@ -598,9 +599,9 @@ async fn on_error_decides_retry_eligibility_config_only_applies_when_retry() {
 
     // Given: EventRetryConfig with max_retry_attempts = 3
     let retry_config = EventRetryConfig {
-        max_retry_attempts: 3,
+        max_retry_attempts: MaxRetryAttempts::try_new(3).expect("valid value"),
         retry_delay: Duration::from_millis(1),
-        retry_backoff_multiplier: 1.0,
+        retry_backoff_multiplier: BackoffMultiplier::try_new(1.0).expect("valid value"),
         max_retry_delay: Duration::from_millis(1),
     };
 
