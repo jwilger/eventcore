@@ -17,10 +17,15 @@ use eventcore_types::{Event, StreamId};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// Singleton to ensure container is started only once across all tests.
 static POSTGRES_CONTAINER: OnceLock<()> = OnceLock::new();
+
+/// Async mutex to serialize database creation and cleanup for isolated tests.
+/// Prevents race conditions where cleanup drops databases being created by parallel tests.
+static DB_CREATION_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// Ensure Postgres is available, either from CI service or docker-compose.
 ///
@@ -230,6 +235,7 @@ impl IsolatedPostgresFixture {
     /// Create a new isolated test fixture with its own database.
     ///
     /// Cleans up old test_* databases before creating a new one to prevent resource leaks.
+    /// Uses a mutex to prevent parallel tests from interfering with cleanup.
     pub async fn new() -> Self {
         // Ensure container is running (idempotent)
         POSTGRES_CONTAINER.get_or_init(|| {
@@ -245,6 +251,10 @@ impl IsolatedPostgresFixture {
             .connect(&admin_conn_string)
             .await
             .expect("Failed to connect to postgres database");
+
+        // Acquire lock to serialize cleanup and database creation
+        // This prevents race conditions where cleanup drops databases being created by parallel tests
+        let _lock = DB_CREATION_LOCK.lock().await;
 
         // Clean up old test databases to prevent accumulation
         Self::cleanup_old_test_databases(&admin_pool).await;
@@ -270,6 +280,9 @@ impl IsolatedPostgresFixture {
             .expect("Failed to connect to isolated database");
 
         store.migrate().await;
+
+        // Release lock after migrations complete to prevent cleanup from terminating our connection
+        drop(_lock);
 
         Self {
             connection_string,
