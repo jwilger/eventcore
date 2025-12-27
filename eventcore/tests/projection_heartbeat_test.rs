@@ -616,3 +616,41 @@ fn invalid_heartbeat_configuration_is_rejected() {
     // Then: builder returns descriptive error
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn runner_handles_slow_event_processing() {
+    // Given: Event processing takes longer than heartbeat_interval
+    // Scenario 8: apply() takes 20 seconds but heartbeat_interval is 5 seconds
+    let store = InMemoryEventStore::new();
+    let stream_id = StreamId::try_new("test").unwrap();
+
+    // Seed single event for focused test
+    let event = TestEvent {
+        stream_id: stream_id.clone(),
+    };
+    let writes = StreamWrites::new()
+        .register_stream(stream_id.clone(), StreamVersion::new(0))
+        .unwrap()
+        .append(event)
+        .unwrap();
+    store.append_events(writes).await.unwrap();
+
+    let heartbeat_count = Arc::new(AtomicUsize::new(0));
+    let coordinator = HeartbeatCountingCoordinator::new(heartbeat_count.clone());
+
+    // When: Process event that takes 200ms with 50ms heartbeat_interval and 100ms timeout
+    let projector = SlowProjector {
+        processing_time: Duration::from_millis(200),
+    };
+    let runner = ProjectionRunner::new(projector, coordinator, &store).with_heartbeat_config(
+        HeartbeatConfig {
+            heartbeat_interval: Duration::from_millis(50),
+            heartbeat_timeout: Duration::from_millis(100),
+        },
+    );
+
+    let result = runner.run().await;
+
+    // Then: Guard remains valid after slow event processing (no spurious leadership loss)
+    assert!(result.is_ok());
+}
