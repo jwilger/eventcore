@@ -7,7 +7,7 @@
 //! - And guard.is_valid() continues to return true
 
 use eventcore::{
-    Event, EventStore, FailureContext, FailureStrategy, HasHeartbeat, HasTryAcquire,
+    CoordinatorTrait, Event, EventStore, FailureContext, FailureStrategy, GuardTrait,
     HeartbeatConfig, ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion,
     StreamWrites,
 };
@@ -73,7 +73,7 @@ impl HeartbeatCountingCoordinator {
     }
 }
 
-impl HasTryAcquire for HeartbeatCountingCoordinator {
+impl CoordinatorTrait for HeartbeatCountingCoordinator {
     type Guard = HeartbeatCountingGuard;
 
     fn try_acquire(&self) -> impl std::future::Future<Output = Option<Self::Guard>> + Send + '_ {
@@ -90,7 +90,11 @@ struct HeartbeatCountingGuard {
     heartbeat_count: Arc<AtomicUsize>,
 }
 
-impl HasHeartbeat for HeartbeatCountingGuard {
+impl GuardTrait for HeartbeatCountingGuard {
+    fn is_valid(&self) -> bool {
+        true
+    }
+
     fn heartbeat(&self) {
         self.heartbeat_count.fetch_add(1, Ordering::SeqCst);
     }

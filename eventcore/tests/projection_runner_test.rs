@@ -11,8 +11,8 @@
 //! - And developer can get a working projection with minimal code
 
 use eventcore::{
-    BatchSize, Event, EventFilter, EventPage, EventReader, EventStore, FailureContext,
-    FailureStrategy, GuardTrait, HasTryAcquire, InMemoryCheckpointStore, LocalCoordinator,
+    BatchSize, CoordinatorTrait, Event, EventFilter, EventPage, EventReader, EventStore,
+    FailureContext, FailureStrategy, GuardTrait, InMemoryCheckpointStore, LocalCoordinator,
     PollConfig, PollMode, ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion,
     StreamWrites,
 };

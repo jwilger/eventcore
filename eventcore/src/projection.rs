@@ -198,61 +198,68 @@ impl InMemoryCheckpointStore {
     }
 }
 
-/// Trait for types that provide heartbeat functionality.
+/// Trait for coordinator guards that manage leadership.
 ///
-/// This trait allows any guard-like type to provide heartbeat signals.
+/// Guards use the RAII pattern to automatically release leadership when dropped.
+/// They provide methods to check validity and send heartbeat signals.
 ///
-/// # Implementation
-///
-/// Implement this trait for custom guard types:
+/// # Example
 ///
 /// ```ignore
-/// impl HasHeartbeat for MyGuard {
+/// impl GuardTrait for MyGuard {
+///     fn is_valid(&self) -> bool {
+///         // Check if leadership is still valid
+///         true
+///     }
+///
 ///     fn heartbeat(&self) {
 ///         // Send heartbeat signal
 ///     }
 /// }
 /// ```
-pub trait HasHeartbeat {
-    /// Send a heartbeat signal to indicate the projector is still alive.
-    fn heartbeat(&self);
-}
-
-/// Trait for coordinators that can acquire guards.
-///
-/// This trait allows any coordinator-like type to participate in leadership acquisition.
-pub trait HasTryAcquire {
-    /// The type of guard returned by this coordinator.
-    type Guard;
-
-    /// Try to acquire leadership for projection processing.
-    ///
-    /// Returns `Some(guard)` if leadership was acquired, `None` otherwise.
-    fn try_acquire(&self) -> impl std::future::Future<Output = Option<Self::Guard>> + Send + '_;
-}
-
-/// Trait for coordinator guards that manage leadership.
-///
-/// `GuardTrait` defines the interface for guards returned by coordinators.
-/// Guards use the RAII pattern to automatically release leadership when dropped.
 pub trait GuardTrait {
     /// Check if this guard represents valid leadership.
+    ///
+    /// Returns `true` if the guard still holds valid leadership rights.
+    /// For distributed coordinators, this may check for network partitions,
+    /// lease expiration, or heartbeat timeouts.
     fn is_valid(&self) -> bool;
 
     /// Send a heartbeat signal to indicate the projector is still alive.
+    ///
+    /// Heartbeats maintain leadership validity and prevent the coordinator
+    /// from assuming the projector has hung. Should be called regularly
+    /// according to the configured heartbeat interval.
     fn heartbeat(&self);
 }
 
 /// Trait for coordinators that manage projector leadership.
 ///
-/// `CoordinatorTrait` defines the interface for acquiring leadership guards.
+/// Coordinators handle leader election and ensure exactly one projector
+/// instance processes events at a time. They return guards that use RAII
+/// to automatically release leadership on drop.
+///
+/// # Example
+///
+/// ```ignore
+/// impl CoordinatorTrait for MyCoordinator {
+///     type Guard = MyGuard;
+///
+///     async fn try_acquire(&self) -> Option<Self::Guard> {
+///         // Attempt to acquire leadership
+///         Some(MyGuard::new())
+///     }
+/// }
+/// ```
 pub trait CoordinatorTrait {
     /// The type of guard returned by this coordinator.
     type Guard: GuardTrait;
 
     /// Try to acquire leadership for projection processing.
     ///
-    /// Returns `Some(guard)` if leadership was acquired, `None` otherwise.
+    /// Returns `Some(guard)` if leadership was acquired, `None` if another
+    /// instance currently holds leadership. The guard will automatically
+    /// release leadership when dropped.
     fn try_acquire(&self) -> impl Future<Output = Option<Self::Guard>> + Send + '_;
 }
 
@@ -273,14 +280,6 @@ pub trait CoordinatorTrait {
 /// ```
 pub struct CoordinatorGuard {
     // Guard state placeholder
-}
-
-impl HasHeartbeat for CoordinatorGuard {
-    fn heartbeat(&self) {
-        // For LocalCoordinator, heartbeat is a no-op
-        // Distributed coordinators (e.g., PostgresCoordinator) will
-        // implement actual heartbeat logic here
-    }
 }
 
 impl GuardTrait for CoordinatorGuard {
@@ -306,7 +305,7 @@ impl GuardTrait for CoordinatorGuard {
     /// For `LocalCoordinator`, this is a no-op since single-process
     /// deployments don't need distributed liveness detection.
     fn heartbeat(&self) {
-        HasHeartbeat::heartbeat(self)
+        // No-op for LocalCoordinator
     }
 }
 
@@ -348,15 +347,7 @@ impl LocalCoordinator {
     }
 }
 
-impl HasTryAcquire for LocalCoordinator {
-    type Guard = CoordinatorGuard;
-
-    fn try_acquire(
-        &self,
-    ) -> impl std::future::Future<Output = Option<CoordinatorGuard>> + Send + '_ {
-        async { Some(CoordinatorGuard {}) }
-    }
-}
+// LocalCoordinator already implements CoordinatorTrait below
 
 impl CoordinatorTrait for LocalCoordinator {
     type Guard = CoordinatorGuard;
@@ -379,7 +370,7 @@ impl CoordinatorTrait for LocalCoordinator {
     ///     .expect("LocalCoordinator always grants leadership");
     /// ```
     fn try_acquire(&self) -> impl Future<Output = Option<CoordinatorGuard>> + Send + '_ {
-        HasTryAcquire::try_acquire(self)
+        async { Some(CoordinatorGuard {}) }
     }
 }
 
@@ -615,11 +606,10 @@ where
     /// Returns an error if:
     /// - Event store operations fail
     /// - The projector returns a fatal error
-    pub async fn run<Guard>(mut self) -> Result<(), ProjectionError>
+    pub async fn run(mut self) -> Result<(), ProjectionError>
     where
         P::Error: std::fmt::Debug,
-        C: HasTryAcquire<Guard = Guard>,
-        Guard: HasHeartbeat,
+        C: CoordinatorTrait,
     {
         // Try to acquire leadership guard from coordinator
         let guard =
