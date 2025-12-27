@@ -59,6 +59,9 @@ cobertura.xml
 # SQLx offline mode
 .sqlx/
 
+# Docker volumes
+postgres-data/
+
 # Local environment files
 .env
 .env.local
