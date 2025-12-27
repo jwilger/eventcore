@@ -46,6 +46,50 @@ impl Default for PollConfig {
     }
 }
 
+/// Configuration for event retry behavior (application level).
+///
+/// `EventRetryConfig` controls HOW retries work when a projector's `on_error()`
+/// callback returns `FailureStrategy::Retry`. The projector decides WHETHER to
+/// retry; this configuration controls the retry mechanics.
+///
+/// Per ADR-024, event retry is an application-level concern, separate from
+/// poll retry (infrastructure) and heartbeat (coordination).
+///
+/// # Example
+///
+/// ```ignore
+/// let retry_config = EventRetryConfig {
+///     max_retry_attempts: 3,
+///     retry_delay: Duration::from_millis(100),
+///     retry_backoff_multiplier: 2.0,
+///     max_retry_delay: Duration::from_secs(5),
+/// };
+/// let runner = ProjectionRunner::new(projector, coordinator, &store)
+///     .with_event_retry_config(retry_config);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventRetryConfig {
+    /// Maximum number of retry attempts before escalating to Fatal.
+    pub max_retry_attempts: u32,
+    /// Initial delay between retry attempts.
+    pub retry_delay: Duration,
+    /// Multiplier for exponential backoff (e.g., 2.0 doubles delay each retry).
+    pub retry_backoff_multiplier: f64,
+    /// Maximum delay between retry attempts (caps exponential growth).
+    pub max_retry_delay: Duration,
+}
+
+impl Default for EventRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retry_attempts: 3,
+            retry_delay: Duration::from_millis(100),
+            retry_backoff_multiplier: 2.0,
+            max_retry_delay: Duration::from_secs(5),
+        }
+    }
+}
+
 /// Polling mode for projection runners.
 ///
 /// Controls how the projection runner polls for new events:
@@ -251,6 +295,7 @@ where
     checkpoint_store: Option<InMemoryCheckpointStore>,
     poll_mode: PollMode,
     poll_config: PollConfig,
+    event_retry_config: EventRetryConfig,
 }
 
 impl<P, C, S> ProjectionRunner<P, C, S>
@@ -279,6 +324,7 @@ where
             checkpoint_store: None,
             poll_mode: PollMode::Batch,
             poll_config: PollConfig::default(),
+            event_retry_config: EventRetryConfig::default(),
         }
     }
 
@@ -347,6 +393,40 @@ where
     /// ```
     pub fn with_poll_config(mut self, config: PollConfig) -> Self {
         self.poll_config = config;
+        self
+    }
+
+    /// Configure event retry behavior.
+    ///
+    /// Controls HOW retries work when the projector's `on_error()` callback
+    /// returns `FailureStrategy::Retry`. The projector decides WHETHER to retry;
+    /// this configuration controls retry mechanics (delays, backoff, limits).
+    ///
+    /// Per ADR-024, event retry is application-level configuration, separate
+    /// from poll retry (infrastructure) and heartbeat (coordination).
+    ///
+    /// # Parameters
+    ///
+    /// - `config`: The event retry configuration
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let retry_config = EventRetryConfig {
+    ///     max_retry_attempts: 5,
+    ///     retry_delay: Duration::from_millis(100),
+    ///     retry_backoff_multiplier: 2.0,
+    ///     max_retry_delay: Duration::from_secs(10),
+    /// };
+    /// let runner = ProjectionRunner::new(projector, coordinator, &store)
+    ///     .with_event_retry_config(retry_config);
+    /// ```
+    pub fn with_event_retry_config(mut self, config: EventRetryConfig) -> Self {
+        self.event_retry_config = config;
         self
     }
 
@@ -473,10 +553,32 @@ where
                                     break; // Move to next event
                                 }
                                 FailureStrategy::Retry => {
+                                    // Check if we've exceeded max retry attempts
+                                    if retry_count >= self.event_retry_config.max_retry_attempts {
+                                        // Escalate to Fatal after exhausting retries
+                                        return Err(ProjectionError::Failed(
+                                            "projector apply failed after max retries".to_string(),
+                                        ));
+                                    }
+
                                     retry_count += 1;
+
+                                    // Calculate delay with exponential backoff
+                                    let base_delay_ms =
+                                        self.event_retry_config.retry_delay.as_millis() as f64;
+                                    let multiplier =
+                                        self.event_retry_config.retry_backoff_multiplier;
+                                    let delay_ms =
+                                        base_delay_ms * multiplier.powi(retry_count as i32 - 1);
+                                    let delay = Duration::from_millis(delay_ms as u64);
+
+                                    // Cap at max_retry_delay
+                                    let capped_delay =
+                                        delay.min(self.event_retry_config.max_retry_delay);
+
                                     // Wait before retrying
-                                    tokio::time::sleep(Duration::from_millis(10)).await;
-                                    // Continue retry loop - projector controls when to escalate to Fatal
+                                    tokio::time::sleep(capped_delay).await;
+                                    // Continue retry loop
                                 }
                             }
                         }
