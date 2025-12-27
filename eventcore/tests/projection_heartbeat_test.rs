@@ -380,6 +380,90 @@ async fn developer_can_configure_custom_heartbeat_timeout() {
     );
 }
 
+/// Projector that simulates slow event processing.
+struct SlowEventProjector;
+
+impl SlowEventProjector {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl Projector for SlowEventProjector {
+    type Event = CounterIncremented;
+    type Error = std::convert::Infallible;
+    type Context = ();
+
+    fn apply(
+        &mut self,
+        _event: Self::Event,
+        _position: StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        // Simulate slow processing: 200ms per event (2x heartbeat timeout of 100ms)
+        std::thread::sleep(Duration::from_millis(200));
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "slow-event-projector"
+    }
+
+    fn on_error(&mut self, _ctx: FailureContext<Self::Error>) -> FailureStrategy {
+        FailureStrategy::Fatal
+    }
+}
+
+/// Coordinator that tracks heartbeats and validates guard remains valid during slow processing.
+struct SlowEventCoordinator {
+    heartbeat_count: Arc<AtomicUsize>,
+    last_heartbeat: Arc<Mutex<Instant>>,
+    heartbeat_timeout: Duration,
+}
+
+impl SlowEventCoordinator {
+    fn new(heartbeat_count: Arc<AtomicUsize>, heartbeat_timeout: Duration) -> Self {
+        Self {
+            heartbeat_count,
+            last_heartbeat: Arc::new(Mutex::new(Instant::now())),
+            heartbeat_timeout,
+        }
+    }
+}
+
+impl CoordinatorTrait for SlowEventCoordinator {
+    type Guard = SlowEventGuard;
+
+    fn try_acquire(&self) -> impl std::future::Future<Output = Option<Self::Guard>> + Send + '_ {
+        async {
+            Some(SlowEventGuard {
+                heartbeat_count: self.heartbeat_count.clone(),
+                last_heartbeat: self.last_heartbeat.clone(),
+                heartbeat_timeout: self.heartbeat_timeout,
+            })
+        }
+    }
+}
+
+/// Guard that validates it never times out during slow event processing.
+struct SlowEventGuard {
+    heartbeat_count: Arc<AtomicUsize>,
+    last_heartbeat: Arc<Mutex<Instant>>,
+    heartbeat_timeout: Duration,
+}
+
+impl GuardTrait for SlowEventGuard {
+    fn is_valid(&self) -> bool {
+        let last = self.last_heartbeat.lock().unwrap();
+        last.elapsed() < self.heartbeat_timeout
+    }
+
+    fn heartbeat(&self) {
+        self.heartbeat_count.fetch_add(1, Ordering::SeqCst);
+        *self.last_heartbeat.lock().unwrap() = Instant::now();
+    }
+}
+
 #[tokio::test]
 async fn invalid_heartbeat_configuration_is_rejected() {
     // Given: developer attempts to create config with timeout shorter than interval
@@ -392,5 +476,52 @@ async fn invalid_heartbeat_configuration_is_rejected() {
     assert!(
         result.is_err(),
         "HeartbeatConfig should reject timeout shorter than interval"
+    );
+}
+
+#[tokio::test]
+async fn runner_handles_slow_event_processing() {
+    // Given: coordinator with 100ms heartbeat timeout
+    let heartbeat_count = Arc::new(AtomicUsize::new(0));
+    let coordinator =
+        SlowEventCoordinator::new(heartbeat_count.clone(), Duration::from_millis(100));
+
+    // Given: projector that processes events slowly (200ms per event - 2x heartbeat interval)
+    let projector = SlowEventProjector::new();
+
+    // Given: event store with 3 slow events
+    let store = InMemoryEventStore::new();
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    for i in 0..3 {
+        let event = CounterIncremented {
+            counter_id: counter_id.clone(),
+        };
+        let writes = StreamWrites::new()
+            .register_stream(counter_id.clone(), StreamVersion::new(i))
+            .expect("register stream")
+            .append(event)
+            .expect("append event");
+        store
+            .append_events(writes)
+            .await
+            .expect("append to succeed");
+    }
+
+    // When: runner processes events with heartbeat interval of 50ms (4x faster than timeout)
+    let runner = ProjectionRunner::new(projector, coordinator, &store).with_heartbeat_config(
+        HeartbeatConfig {
+            heartbeat_interval: Duration::from_millis(50),
+            heartbeat_timeout: Duration::from_millis(100),
+        },
+    );
+
+    let result = runner.run().await;
+
+    // Then: events complete successfully despite each taking 2x the heartbeat timeout
+    assert!(
+        result.is_ok(),
+        "Runner should complete slow events successfully by sending heartbeats during processing: {:?}",
+        result
     );
 }
