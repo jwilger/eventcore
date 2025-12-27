@@ -15,6 +15,12 @@ use std::time::Duration;
 pub trait GuardLike {
     /// Send a heartbeat signal.
     fn heartbeat(&self);
+
+    /// Check if this guard is still valid.
+    ///
+    /// Returns `false` if the guard has been revoked or invalidated
+    /// (e.g., due to heartbeat timeout or coordinator state change).
+    fn is_valid(&self) -> bool;
 }
 
 /// Trait for coordinators that can acquire guards.
@@ -310,6 +316,11 @@ impl GuardLike for CoordinatorGuard {
     fn heartbeat(&self) {
         // LocalCoordinator doesn't need heartbeats for single-process mode
     }
+
+    fn is_valid(&self) -> bool {
+        // LocalCoordinator guards are always valid in single-process mode
+        true
+    }
 }
 
 /// Orchestrates projector execution with event polling and coordination.
@@ -599,6 +610,13 @@ where
 
             // Apply each event to the projector
             for (event, position) in events {
+                // Check if guard is still valid before processing
+                if let Some(g) = &guard
+                    && !g.is_valid()
+                {
+                    return Err(ProjectionError::GuardInvalid);
+                }
+
                 // Send heartbeat before processing if interval elapsed
                 if let (Some(config), Some(last_hb), Some(g)) =
                     (&self.heartbeat_config, &mut last_heartbeat, &guard)
@@ -614,6 +632,13 @@ where
                 loop {
                     match self.projector.apply(event.clone(), position, &mut ctx) {
                         Ok(()) => {
+                            // Check if guard is still valid after processing
+                            if let Some(g) = &guard
+                                && !g.is_valid()
+                            {
+                                return Err(ProjectionError::GuardInvalid);
+                            }
+
                             // Event processed successfully - update and save checkpoint
                             last_checkpoint = Some(position);
                             if let Some(cs) = &self.checkpoint_store {
@@ -736,4 +761,8 @@ pub enum ProjectionError {
     /// Generic projection failure.
     #[error("projection failed: {0}")]
     Failed(String),
+
+    /// Guard became invalid during projection.
+    #[error("guard became invalid")]
+    GuardInvalid,
 }
