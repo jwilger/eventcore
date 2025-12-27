@@ -41,8 +41,9 @@ impl Default for PollConfig {
             poll_interval: Duration::from_millis(100),
             empty_poll_backoff: Duration::from_millis(50),
             poll_failure_backoff: Duration::from_millis(100),
-            max_consecutive_poll_failures: MaxConsecutiveFailures::try_new(5)
-                .expect("5 is a valid MaxConsecutiveFailures value"),
+            max_consecutive_poll_failures: MaxConsecutiveFailures::new(
+                std::num::NonZeroU32::new(5).expect("5 is non-zero"),
+            ),
         }
     }
 }
@@ -83,8 +84,7 @@ pub struct EventRetryConfig {
 impl Default for EventRetryConfig {
     fn default() -> Self {
         Self {
-            max_retry_attempts: MaxRetryAttempts::try_new(3)
-                .expect("3 is a valid MaxRetryAttempts value"),
+            max_retry_attempts: MaxRetryAttempts::new(3),
             retry_delay: Duration::from_millis(100),
             retry_backoff_multiplier: BackoffMultiplier::try_new(2.0)
                 .expect("2.0 is a valid BackoffMultiplier value"),
@@ -483,9 +483,9 @@ where
                     }
                     Err(_) => {
                         // Database error - check if retries exhausted
-                        if consecutive_failures
-                            >= self.poll_config.max_consecutive_poll_failures.into()
-                        {
+                        let max_failures: std::num::NonZeroU32 =
+                            self.poll_config.max_consecutive_poll_failures.into();
+                        if consecutive_failures >= max_failures.get() {
                             // Already failed max_consecutive_poll_failures times, no more retries allowed
                             return Err(ProjectionError::Failed(
                                 "failed to read events after max retries".to_string(),

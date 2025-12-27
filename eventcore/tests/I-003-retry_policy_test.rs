@@ -145,21 +145,21 @@ async fn metrics_hook_receives_correct_attempt_numbers() {
     // And: First retry has attempt=1
     assert_eq!(
         contexts[0].attempt,
-        eventcore::AttemptNumber::try_new(1).unwrap(),
+        eventcore::AttemptNumber::new(std::num::NonZeroU32::new(1).expect("1 is non-zero")),
         "first retry should have attempt=1"
     );
 
     // And: Second retry has attempt=2
     assert_eq!(
         contexts[1].attempt,
-        eventcore::AttemptNumber::try_new(2).unwrap(),
+        eventcore::AttemptNumber::new(std::num::NonZeroU32::new(2).expect("2 is non-zero")),
         "second retry should have attempt=2"
     );
 
     // And: Third retry has attempt=3
     assert_eq!(
         contexts[2].attempt,
-        eventcore::AttemptNumber::try_new(3).unwrap(),
+        eventcore::AttemptNumber::new(std::num::NonZeroU32::new(3).expect("3 is non-zero")),
         "third retry should have attempt=3"
     );
 

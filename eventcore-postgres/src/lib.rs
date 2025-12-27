@@ -20,27 +20,24 @@ pub enum PostgresEventStoreError {
 
 /// Maximum number of database connections in the pool.
 ///
-/// MaxConnections represents the connection pool size limit. It must be at least 1
-/// (enforced by NonZeroU32) and should not exceed reasonable database limits
-/// (typically 100-1000 depending on your database server configuration).
+/// MaxConnections represents the connection pool size limit. It must be at least 1,
+/// enforced by using NonZeroU32 as the underlying type.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// use eventcore_postgres::MaxConnections;
+/// use std::num::NonZeroU32;
 ///
-/// let small_pool = MaxConnections::try_new(5).unwrap();
-/// let standard = MaxConnections::try_new(10).unwrap();
-/// let large_pool = MaxConnections::try_new(50).unwrap();
+/// let small_pool = MaxConnections::new(NonZeroU32::new(5).expect("5 is non-zero"));
+/// let standard = MaxConnections::new(NonZeroU32::new(10).expect("10 is non-zero"));
+/// let large_pool = MaxConnections::new(NonZeroU32::new(50).expect("50 is non-zero"));
 ///
-/// // Zero connections not allowed
-/// assert!(MaxConnections::try_new(0).is_err());
+/// // Zero connections not allowed by type system
+/// // let zero = NonZeroU32::new(0); // Returns None
 /// ```
-#[nutype(
-    validate(greater = 0, less_or_equal = 1000),
-    derive(Debug, Clone, Copy, PartialEq, Eq, Display, AsRef, Into, TryFrom)
-)]
-pub struct MaxConnections(u32);
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, Display, AsRef, Into))]
+pub struct MaxConnections(std::num::NonZeroU32);
 
 /// Configuration for PostgresEventStore connection pool.
 #[derive(Debug, Clone)]
@@ -56,8 +53,9 @@ pub struct PostgresConfig {
 impl Default for PostgresConfig {
     fn default() -> Self {
         Self {
-            max_connections: MaxConnections::try_new(10)
-                .expect("10 is a valid MaxConnections value"),
+            max_connections: MaxConnections::new(
+                std::num::NonZeroU32::new(10).expect("10 is non-zero"),
+            ),
             acquire_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(600), // 10 minutes
         }
@@ -83,8 +81,9 @@ impl PostgresEventStore {
         config: PostgresConfig,
     ) -> Result<Self, PostgresEventStoreError> {
         let connection_string = connection_string.into();
+        let max_connections: std::num::NonZeroU32 = config.max_connections.into();
         let pool = PgPoolOptions::new()
-            .max_connections(config.max_connections.into())
+            .max_connections(max_connections.get())
             .acquire_timeout(config.acquire_timeout)
             .idle_timeout(config.idle_timeout)
             .connect(&connection_string)

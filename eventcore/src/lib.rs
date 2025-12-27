@@ -236,7 +236,7 @@ impl RetryPolicy {
     /// - jitter: ±20% (applied during execution)
     pub fn new() -> Self {
         Self {
-            max_retries: MaxRetries::try_new(4).expect("4 is a valid MaxRetries value"),
+            max_retries: MaxRetries::new(4),
             backoff_strategy: BackoffStrategy::Exponential {
                 base_ms: DelayMilliseconds::new(10),
             },
@@ -255,7 +255,7 @@ impl RetryPolicy {
     /// let policy = RetryPolicy::new().max_retries(2);
     /// ```
     pub fn max_retries(mut self, retries: u32) -> Self {
-        self.max_retries = MaxRetries::try_new(retries).expect("valid MaxRetries value");
+        self.max_retries = MaxRetries::new(retries);
         self
     }
 
@@ -455,7 +455,7 @@ async fn apply_retry_backoff(policy: &RetryPolicy, attempt: u32, stream_ids: &[S
     let delay_ms = compute_retry_delay_ms(&policy.backoff_strategy, attempt);
     let attempt_number = attempt + 1;
     let attempt_number_domain =
-        AttemptNumber::try_new(attempt_number).expect("attempt_number is always > 0");
+        AttemptNumber::new(NonZeroU32::new(attempt_number).expect("attempt_number is always > 0"));
 
     tracing::warn!(
         attempt = attempt_number,

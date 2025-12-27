@@ -259,25 +259,17 @@ pub struct BatchSize(usize);
 /// a failed event before escalating to a fatal error. A value of 0 means no
 /// retries are attempted.
 ///
-/// The upper bound of 100 prevents infinite retry loops and ensures reasonable
-/// resource consumption.
-///
 /// # Examples
 ///
 /// ```ignore
 /// use eventcore_types::projection::MaxRetryAttempts;
 ///
-/// let no_retries = MaxRetryAttempts::new(0).unwrap();
-/// let standard = MaxRetryAttempts::new(3).unwrap();
-/// let aggressive = MaxRetryAttempts::new(10).unwrap();
-///
-/// // Values above 100 are rejected
-/// assert!(MaxRetryAttempts::new(101).is_err());
+/// let no_retries = MaxRetryAttempts::new(0);
+/// let standard = MaxRetryAttempts::new(3);
+/// let aggressive = MaxRetryAttempts::new(10);
+/// let very_aggressive = MaxRetryAttempts::new(1000); // Library doesn't impose limits
 /// ```
-#[nutype(
-    validate(less_or_equal = 100),
-    derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display)
-)]
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into))]
 pub struct MaxRetryAttempts(u32);
 
 /// Backoff multiplier for exponential retry delays.
@@ -295,40 +287,41 @@ pub struct MaxRetryAttempts(u32);
 /// ```ignore
 /// use eventcore_types::projection::BackoffMultiplier;
 ///
-/// let constant = BackoffMultiplier::new(1.0).unwrap();  // No backoff
-/// let standard = BackoffMultiplier::new(2.0).unwrap();  // Double each time
-/// let gentle = BackoffMultiplier::new(1.5).unwrap();    // 50% increase
+/// let constant = BackoffMultiplier::try_new(1.0).expect("1.0 is valid");  // No backoff
+/// let standard = BackoffMultiplier::try_new(2.0).expect("2.0 is valid");  // Double each time
+/// let gentle = BackoffMultiplier::try_new(1.5).expect("1.5 is valid");    // 50% increase
 ///
 /// // Values below 1.0 are rejected
-/// assert!(BackoffMultiplier::new(0.5).is_err());
+/// assert!(BackoffMultiplier::try_new(0.5).is_err());
 /// ```
 #[nutype(
     validate(greater_or_equal = 1.0),
-    derive(Debug, Clone, Copy, PartialEq, PartialOrd, Display)
+    derive(Debug, Clone, Copy, PartialEq, PartialOrd, Display, Into)
 )]
 pub struct BackoffMultiplier(f64);
 
 /// Maximum number of consecutive poll failures before stopping.
 ///
 /// MaxConsecutiveFailures represents the threshold for consecutive errors
-/// during event polling. Must be at least 1 to allow for transient failures.
+/// during event polling. Must be at least 1, enforced by using NonZeroU32
+/// as the underlying type.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// use eventcore_types::projection::MaxConsecutiveFailures;
+/// use std::num::NonZeroU32;
 ///
-/// let lenient = MaxConsecutiveFailures::try_new(10).unwrap();
-/// let strict = MaxConsecutiveFailures::try_new(3).unwrap();
+/// let lenient = MaxConsecutiveFailures::new(NonZeroU32::new(10).expect("10 is non-zero"));
+/// let strict = MaxConsecutiveFailures::new(NonZeroU32::new(3).expect("3 is non-zero"));
 ///
-/// // Zero failures not allowed - must allow at least one attempt
-/// assert!(MaxConsecutiveFailures::try_new(0).is_err());
+/// // Zero failures not allowed by type system
+/// // let zero = NonZeroU32::new(0); // Returns None
 /// ```
-#[nutype(
-    validate(greater = 0, less_or_equal = 100),
-    derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into)
-)]
-pub struct MaxConsecutiveFailures(u32);
+#[nutype(derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, AsRef, Into
+))]
+pub struct MaxConsecutiveFailures(std::num::NonZeroU32);
 
 /// Maximum number of retry attempts.
 ///
@@ -340,14 +333,12 @@ pub struct MaxConsecutiveFailures(u32);
 /// ```ignore
 /// use eventcore_types::projection::MaxRetries;
 ///
-/// let no_retry = MaxRetries::try_new(0).unwrap();
-/// let standard = MaxRetries::try_new(3).unwrap();
-/// let aggressive = MaxRetries::try_new(10).unwrap();
+/// let no_retry = MaxRetries::new(0);
+/// let standard = MaxRetries::new(3);
+/// let aggressive = MaxRetries::new(10);
+/// let very_aggressive = MaxRetries::new(1000); // Library doesn't impose limits
 /// ```
-#[nutype(
-    validate(less_or_equal = 100),
-    derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into)
-)]
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into))]
 pub struct MaxRetries(u32);
 
 /// Delay in milliseconds for retry or backoff operations.
@@ -370,25 +361,25 @@ pub struct DelayMilliseconds(u64);
 /// Attempt number for retry operations (1-based).
 ///
 /// AttemptNumber represents which attempt is currently being made, starting
-/// from 1 for the first attempt. Must be at least 1 since attempt 0 doesn't
-/// make sense.
+/// from 1 for the first attempt. Must be at least 1, enforced by using NonZeroU32
+/// as the underlying type.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// use eventcore_types::projection::AttemptNumber;
+/// use std::num::NonZeroU32;
 ///
-/// let first_attempt = AttemptNumber::try_new(1).unwrap();
-/// let retry_attempt = AttemptNumber::try_new(3).unwrap();
+/// let first_attempt = AttemptNumber::new(NonZeroU32::new(1).expect("1 is non-zero"));
+/// let retry_attempt = AttemptNumber::new(NonZeroU32::new(3).expect("3 is non-zero"));
 ///
-/// // Zero attempts not allowed
-/// assert!(AttemptNumber::try_new(0).is_err());
+/// // Zero attempts not allowed by type system
+/// // let zero = NonZeroU32::new(0); // Returns None
 /// ```
-#[nutype(
-    validate(greater = 0),
-    derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into)
-)]
-pub struct AttemptNumber(u32);
+#[nutype(derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, AsRef, Into
+))]
+pub struct AttemptNumber(std::num::NonZeroU32);
 
 /// Count of retry attempts that have been made (0-based).
 ///
