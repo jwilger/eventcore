@@ -498,3 +498,108 @@ async fn developer_can_configure_custom_heartbeat_interval() {
     // (1000ms / 50ms = 20 heartbeats theoretical, allowing ~10% tolerance)
     assert!(heartbeat_count.load(Ordering::SeqCst) >= 18);
 }
+
+#[tokio::test]
+async fn developer_can_configure_custom_heartbeat_timeout() {
+    use std::sync::Mutex;
+    use tokio::time::Instant;
+
+    // Reuse SharedLeadershipCoordinator from Scenario 3
+    #[derive(Clone)]
+    struct SharedLeadershipCoordinator {
+        state: Arc<Mutex<SharedState>>,
+        heartbeat_timeout: Duration,
+    }
+
+    struct SharedState {
+        current_guard_id: Option<usize>,
+        next_guard_id: usize,
+        last_heartbeat: Option<Instant>,
+    }
+
+    impl SharedLeadershipCoordinator {
+        fn new(heartbeat_timeout: Duration) -> Self {
+            Self {
+                state: Arc::new(Mutex::new(SharedState {
+                    current_guard_id: None,
+                    next_guard_id: 0,
+                    last_heartbeat: None,
+                })),
+                heartbeat_timeout,
+            }
+        }
+    }
+
+    impl CoordinatorLike for SharedLeadershipCoordinator {
+        type Guard = SharedLeadershipGuard;
+
+        async fn try_acquire(&self) -> Option<Self::Guard> {
+            let mut state = self.state.lock().unwrap();
+
+            // Check if current guard has timed out
+            let can_acquire =
+                if let (Some(_), Some(last_hb)) = (state.current_guard_id, state.last_heartbeat) {
+                    last_hb.elapsed() >= self.heartbeat_timeout
+                } else {
+                    true // No guard exists, can acquire
+                };
+
+            if can_acquire {
+                let guard_id = state.next_guard_id;
+                state.next_guard_id += 1;
+                state.current_guard_id = Some(guard_id);
+                state.last_heartbeat = Some(Instant::now());
+
+                Some(SharedLeadershipGuard {
+                    guard_id,
+                    state: self.state.clone(),
+                    heartbeat_timeout: self.heartbeat_timeout,
+                })
+            } else {
+                None
+            }
+        }
+    }
+
+    struct SharedLeadershipGuard {
+        guard_id: usize,
+        state: Arc<Mutex<SharedState>>,
+        heartbeat_timeout: Duration,
+    }
+
+    impl GuardLike for SharedLeadershipGuard {
+        fn heartbeat(&self) {
+            let mut state = self.state.lock().unwrap();
+            // Only update heartbeat if this guard still holds leadership
+            if state.current_guard_id == Some(self.guard_id) {
+                state.last_heartbeat = Some(Instant::now());
+            }
+        }
+
+        fn is_valid(&self) -> bool {
+            let state = self.state.lock().unwrap();
+            // Valid if this guard still holds leadership AND hasn't timed out
+            if state.current_guard_id != Some(self.guard_id) {
+                return false;
+            }
+            if let Some(last_hb) = state.last_heartbeat {
+                last_hb.elapsed() < self.heartbeat_timeout
+            } else {
+                false
+            }
+        }
+    }
+
+    // Given: Developer creates HeartbeatConfig with heartbeat_timeout of 250ms
+    let custom_timeout = Duration::from_millis(250);
+    let coordinator = SharedLeadershipCoordinator::new(custom_timeout);
+
+    // When: Projector stops sending heartbeats
+    let guard = coordinator.try_acquire().await.unwrap();
+
+    // Wait beyond the custom timeout
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Then: Leadership is revoked after custom timeout elapses
+    assert!(!guard.is_valid());
+}
