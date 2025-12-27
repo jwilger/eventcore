@@ -61,8 +61,9 @@ pub use command::{
 };
 pub use errors::CommandError;
 pub use projection::{
-    BackoffMultiplier, BatchSize, EventFilter, EventPage, EventReader, FailureContext,
-    FailureStrategy, MaxRetryAttempts, Projector, StreamPosition,
+    AttemptNumber, BackoffMultiplier, BatchSize, DelayMilliseconds, EventFilter, EventPage,
+    EventReader, FailureContext, FailureStrategy, MaxConsecutiveFailures, MaxRetries,
+    MaxRetryAttempts, Projector, RetryCount, StreamPosition,
 };
 pub use store::{
     EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,

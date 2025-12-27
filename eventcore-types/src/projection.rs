@@ -308,6 +308,105 @@ pub struct MaxRetryAttempts(u32);
 )]
 pub struct BackoffMultiplier(f64);
 
+/// Maximum number of consecutive poll failures before stopping.
+///
+/// MaxConsecutiveFailures represents the threshold for consecutive errors
+/// during event polling. Must be at least 1 to allow for transient failures.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::MaxConsecutiveFailures;
+///
+/// let lenient = MaxConsecutiveFailures::try_new(10).unwrap();
+/// let strict = MaxConsecutiveFailures::try_new(3).unwrap();
+///
+/// // Zero failures not allowed - must allow at least one attempt
+/// assert!(MaxConsecutiveFailures::try_new(0).is_err());
+/// ```
+#[nutype(
+    validate(greater = 0, less_or_equal = 100),
+    derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into)
+)]
+pub struct MaxConsecutiveFailures(u32);
+
+/// Maximum number of retry attempts.
+///
+/// MaxRetries represents the maximum number of times to retry an operation
+/// before giving up. A value of 0 means no retries (fail immediately).
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::MaxRetries;
+///
+/// let no_retry = MaxRetries::try_new(0).unwrap();
+/// let standard = MaxRetries::try_new(3).unwrap();
+/// let aggressive = MaxRetries::try_new(10).unwrap();
+/// ```
+#[nutype(
+    validate(less_or_equal = 100),
+    derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into)
+)]
+pub struct MaxRetries(u32);
+
+/// Delay in milliseconds for retry or backoff operations.
+///
+/// DelayMilliseconds represents a time delay expressed in milliseconds.
+/// Used for retry delays, backoff intervals, and polling intervals.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::DelayMilliseconds;
+///
+/// let short = DelayMilliseconds::new(100);
+/// let medium = DelayMilliseconds::new(1000);
+/// let long = DelayMilliseconds::new(5000);
+/// ```
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into))]
+pub struct DelayMilliseconds(u64);
+
+/// Attempt number for retry operations (1-based).
+///
+/// AttemptNumber represents which attempt is currently being made, starting
+/// from 1 for the first attempt. Must be at least 1 since attempt 0 doesn't
+/// make sense.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::AttemptNumber;
+///
+/// let first_attempt = AttemptNumber::try_new(1).unwrap();
+/// let retry_attempt = AttemptNumber::try_new(3).unwrap();
+///
+/// // Zero attempts not allowed
+/// assert!(AttemptNumber::try_new(0).is_err());
+/// ```
+#[nutype(
+    validate(greater = 0),
+    derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into)
+)]
+pub struct AttemptNumber(u32);
+
+/// Count of retry attempts that have been made (0-based).
+///
+/// RetryCount represents how many retry attempts have been made so far.
+/// Starts at 0 on the initial failure (before any retries).
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::RetryCount;
+///
+/// let initial_failure = RetryCount::new(0);
+/// let after_first_retry = RetryCount::new(1);
+/// let after_three_retries = RetryCount::new(3);
+/// ```
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into))]
+pub struct RetryCount(u32);
+
 /// Pagination parameters for reading events.
 ///
 /// EventPage bundles together the cursor position and page size for paginating

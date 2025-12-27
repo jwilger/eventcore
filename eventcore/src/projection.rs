@@ -6,7 +6,7 @@
 
 use crate::{
     BackoffMultiplier, BatchSize, Event, EventFilter, EventPage, EventReader, FailureStrategy,
-    MaxRetryAttempts, Projector, StreamPosition,
+    MaxConsecutiveFailures, MaxRetryAttempts, Projector, StreamPosition,
 };
 use std::time::Duration;
 
@@ -32,7 +32,7 @@ pub struct PollConfig {
     /// Additional backoff delay after a poll failure.
     pub poll_failure_backoff: Duration,
     /// Maximum consecutive poll failures before stopping.
-    pub max_consecutive_poll_failures: u32,
+    pub max_consecutive_poll_failures: MaxConsecutiveFailures,
 }
 
 impl Default for PollConfig {
@@ -41,7 +41,8 @@ impl Default for PollConfig {
             poll_interval: Duration::from_millis(100),
             empty_poll_backoff: Duration::from_millis(50),
             poll_failure_backoff: Duration::from_millis(100),
-            max_consecutive_poll_failures: 5,
+            max_consecutive_poll_failures: MaxConsecutiveFailures::try_new(5)
+                .expect("5 is a valid MaxConsecutiveFailures value"),
         }
     }
 }
@@ -482,7 +483,9 @@ where
                     }
                     Err(_) => {
                         // Database error - check if retries exhausted
-                        if consecutive_failures >= self.poll_config.max_consecutive_poll_failures {
+                        if consecutive_failures
+                            >= self.poll_config.max_consecutive_poll_failures.into()
+                        {
                             // Already failed max_consecutive_poll_failures times, no more retries allowed
                             return Err(ProjectionError::Failed(
                                 "failed to read events after max retries".to_string(),

@@ -440,7 +440,8 @@ async fn custom_retry_configuration_is_respected() {
     // When: Runner with custom retry config (max_consecutive_poll_failures=2)
     let coordinator = LocalCoordinator::new();
     let poll_config = PollConfig {
-        max_consecutive_poll_failures: 2,
+        max_consecutive_poll_failures: eventcore::MaxConsecutiveFailures::try_new(2)
+            .expect("valid value"),
         poll_failure_backoff: std::time::Duration::from_millis(5),
         ..PollConfig::default()
     };
