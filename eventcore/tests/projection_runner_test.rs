@@ -863,10 +863,11 @@ impl Projector for RetryThenFatalProjector {
 
     fn on_error(&mut self, ctx: FailureContext<'_, Self::Error>) -> FailureStrategy {
         // Track the retry count we received from the runner
-        self.retry_log.lock().unwrap().push(ctx.retry_count);
+        self.retry_log.lock().unwrap().push(ctx.retry_count.into());
 
         // Return Retry until max_retries exceeded, then escalate to Fatal
-        if ctx.retry_count < self.max_retries {
+        let retry_count_u32: u32 = ctx.retry_count.into();
+        if retry_count_u32 < self.max_retries {
             FailureStrategy::Retry
         } else {
             FailureStrategy::Fatal

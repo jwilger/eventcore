@@ -4,13 +4,62 @@ use eventcore_types::{
     Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
     StreamWrites,
 };
+use nutype::nutype;
 use rand::{Rng, SeedableRng, random, rngs::StdRng};
+
+/// Probability of injecting read/write failures for chaos testing.
+///
+/// FailureProbability represents a value in the range [0.0, 1.0] where 0.0 means
+/// never inject failures and 1.0 means always inject failures.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_testing::chaos::FailureProbability;
+///
+/// let never = FailureProbability::try_new(0.0).expect("0.0 is valid");
+/// let sometimes = FailureProbability::try_new(0.5).expect("0.5 is valid");
+/// let always = FailureProbability::try_new(1.0).expect("1.0 is valid");
+///
+/// // Values outside [0.0, 1.0] are rejected
+/// assert!(FailureProbability::try_new(1.5).is_err());
+/// assert!(FailureProbability::try_new(-0.1).is_err());
+/// ```
+#[nutype(
+    validate(greater_or_equal = 0.0, less_or_equal = 1.0),
+    derive(Debug, Clone, Copy, PartialEq, PartialOrd, Display, Into)
+)]
+pub struct FailureProbability(f32);
+
+/// Probability of injecting version conflicts for chaos testing.
+///
+/// VersionConflictProbability represents a value in the range [0.0, 1.0] where 0.0
+/// means never inject conflicts and 1.0 means always inject conflicts.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_testing::chaos::VersionConflictProbability;
+///
+/// let never = VersionConflictProbability::try_new(0.0).expect("0.0 is valid");
+/// let sometimes = VersionConflictProbability::try_new(0.5).expect("0.5 is valid");
+/// let always = VersionConflictProbability::try_new(1.0).expect("1.0 is valid");
+///
+/// // Values outside [0.0, 1.0] are rejected
+/// assert!(VersionConflictProbability::try_new(1.5).is_err());
+/// assert!(VersionConflictProbability::try_new(-0.1).is_err());
+/// ```
+#[nutype(
+    validate(greater_or_equal = 0.0, less_or_equal = 1.0),
+    derive(Debug, Clone, Copy, PartialEq, PartialOrd, Display, Into)
+)]
+pub struct VersionConflictProbability(f32);
 
 #[derive(Debug, Clone)]
 pub struct ChaosConfig {
     deterministic_seed: Option<u64>,
-    failure_probability: f32,
-    version_conflict_probability: f32,
+    failure_probability: FailureProbability,
+    version_conflict_probability: VersionConflictProbability,
 }
 
 impl ChaosConfig {
@@ -22,12 +71,15 @@ impl ChaosConfig {
     }
 
     pub fn with_failure_probability(mut self, probability: f32) -> Self {
-        self.failure_probability = probability.clamp(0.0, 1.0);
+        self.failure_probability = FailureProbability::try_new(probability.clamp(0.0, 1.0))
+            .expect("clamped value is always valid");
         self
     }
 
     pub fn with_version_conflict_probability(mut self, probability: f32) -> Self {
-        self.version_conflict_probability = probability.clamp(0.0, 1.0);
+        self.version_conflict_probability =
+            VersionConflictProbability::try_new(probability.clamp(0.0, 1.0))
+                .expect("clamped value is always valid");
         self
     }
 }
@@ -36,8 +88,10 @@ impl Default for ChaosConfig {
     fn default() -> Self {
         Self {
             deterministic_seed: None,
-            failure_probability: 0.0,
-            version_conflict_probability: 0.0,
+            failure_probability: FailureProbability::try_new(0.0)
+                .expect("0.0 is valid probability"),
+            version_conflict_probability: VersionConflictProbability::try_new(0.0)
+                .expect("0.0 is valid probability"),
         }
     }
 }
@@ -66,14 +120,14 @@ impl<S> ChaosEventStore<S> {
         }
     }
 
-    fn should_inject(&self, probability: f32) -> bool {
-        let probability = probability.clamp(0.0, 1.0);
+    fn should_inject<P: Into<f32>>(&self, probability: P) -> bool {
+        let prob_f32: f32 = probability.into();
 
-        if probability <= 0.0 {
+        if prob_f32 <= 0.0 {
             return false;
         }
 
-        if probability >= 1.0 {
+        if prob_f32 >= 1.0 {
             return true;
         }
 
@@ -82,7 +136,7 @@ impl<S> ChaosEventStore<S> {
             .lock()
             .expect("chaos RNG mutex should not be poisoned");
 
-        rng.random_bool(probability as f64)
+        rng.random_bool(prob_f32 as f64)
     }
 }
 
@@ -194,6 +248,8 @@ mod tests {
             ChaosConfig::deterministic().with_failure_probability(0.5),
         );
 
-        assert!(!chaos_store.should_inject(0.5));
+        assert!(
+            !chaos_store.should_inject(FailureProbability::try_new(0.5).expect("0.5 is valid"))
+        );
     }
 }

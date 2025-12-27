@@ -143,13 +143,25 @@ async fn metrics_hook_receives_correct_attempt_numbers() {
     assert_eq!(contexts.len(), 3, "should have captured 3 retry contexts");
 
     // And: First retry has attempt=1
-    assert_eq!(contexts[0].attempt, 1, "first retry should have attempt=1");
+    assert_eq!(
+        contexts[0].attempt,
+        eventcore::AttemptNumber::new(std::num::NonZeroU32::new(1).expect("1 is non-zero")),
+        "first retry should have attempt=1"
+    );
 
     // And: Second retry has attempt=2
-    assert_eq!(contexts[1].attempt, 2, "second retry should have attempt=2");
+    assert_eq!(
+        contexts[1].attempt,
+        eventcore::AttemptNumber::new(std::num::NonZeroU32::new(2).expect("2 is non-zero")),
+        "second retry should have attempt=2"
+    );
 
     // And: Third retry has attempt=3
-    assert_eq!(contexts[2].attempt, 3, "third retry should have attempt=3");
+    assert_eq!(
+        contexts[2].attempt,
+        eventcore::AttemptNumber::new(std::num::NonZeroU32::new(3).expect("3 is non-zero")),
+        "third retry should have attempt=3"
+    );
 
     // And: All retries reference the declared streams
     assert_eq!(contexts[0].streams, vec![stream_id.clone()]);
@@ -157,9 +169,18 @@ async fn metrics_hook_receives_correct_attempt_numbers() {
     assert_eq!(contexts[2].streams, vec![stream_id]);
 
     // And: All retries have non-zero delay_ms (exponential backoff applied)
-    assert!(contexts[0].delay_ms > 0, "first retry should have delay");
-    assert!(contexts[1].delay_ms > 0, "second retry should have delay");
-    assert!(contexts[2].delay_ms > 0, "third retry should have delay");
+    assert!(
+        contexts[0].delay_ms > eventcore::DelayMilliseconds::new(0),
+        "first retry should have delay"
+    );
+    assert!(
+        contexts[1].delay_ms > eventcore::DelayMilliseconds::new(0),
+        "second retry should have delay"
+    );
+    assert!(
+        contexts[2].delay_ms > eventcore::DelayMilliseconds::new(0),
+        "third retry should have delay"
+    );
 
     // Note: We do NOT assert exponential backoff progression here because:
     // 1. Jitter (±20%) makes this assertion flaky - worst case is delay1=12ms, delay2=16ms

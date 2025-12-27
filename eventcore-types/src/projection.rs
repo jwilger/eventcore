@@ -31,7 +31,7 @@ pub struct FailureContext<'a, E> {
     /// Global stream position of the event that failed to process.
     pub position: StreamPosition,
     /// Number of retry attempts so far (0 on initial failure).
-    pub retry_count: u32,
+    pub retry_count: RetryCount,
 }
 
 /// Strategy for handling event processing failures.
@@ -252,6 +252,151 @@ pub trait Projector {
 /// ```
 #[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display))]
 pub struct BatchSize(usize);
+
+/// Maximum number of retry attempts for event processing.
+///
+/// MaxRetryAttempts represents the maximum number of times to retry processing
+/// a failed event before escalating to a fatal error. A value of 0 means no
+/// retries are attempted.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::MaxRetryAttempts;
+///
+/// let no_retries = MaxRetryAttempts::new(0);
+/// let standard = MaxRetryAttempts::new(3);
+/// let aggressive = MaxRetryAttempts::new(10);
+/// let very_aggressive = MaxRetryAttempts::new(1000); // Library doesn't impose limits
+/// ```
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into))]
+pub struct MaxRetryAttempts(u32);
+
+/// Backoff multiplier for exponential retry delays.
+///
+/// BackoffMultiplier represents the factor by which retry delays grow on each
+/// attempt. A value of 1.0 means constant delay (no backoff), while values
+/// greater than 1.0 implement exponential backoff.
+///
+/// The minimum value of 1.0 prevents decreasing delays, which would not make
+/// sense for retry backoff. Common values are 2.0 (double each time) or 1.5
+/// (50% increase).
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::BackoffMultiplier;
+///
+/// let constant = BackoffMultiplier::try_new(1.0).expect("1.0 is valid");  // No backoff
+/// let standard = BackoffMultiplier::try_new(2.0).expect("2.0 is valid");  // Double each time
+/// let gentle = BackoffMultiplier::try_new(1.5).expect("1.5 is valid");    // 50% increase
+///
+/// // Values below 1.0 are rejected
+/// assert!(BackoffMultiplier::try_new(0.5).is_err());
+/// ```
+#[nutype(
+    validate(greater_or_equal = 1.0),
+    derive(Debug, Clone, Copy, PartialEq, PartialOrd, Display, Into)
+)]
+pub struct BackoffMultiplier(f64);
+
+/// Maximum number of consecutive poll failures before stopping.
+///
+/// MaxConsecutiveFailures represents the threshold for consecutive errors
+/// during event polling. Must be at least 1, enforced by using NonZeroU32
+/// as the underlying type.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::MaxConsecutiveFailures;
+/// use std::num::NonZeroU32;
+///
+/// let lenient = MaxConsecutiveFailures::new(NonZeroU32::new(10).expect("10 is non-zero"));
+/// let strict = MaxConsecutiveFailures::new(NonZeroU32::new(3).expect("3 is non-zero"));
+///
+/// // Zero failures not allowed by type system
+/// // let zero = NonZeroU32::new(0); // Returns None
+/// ```
+#[nutype(derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, AsRef, Into
+))]
+pub struct MaxConsecutiveFailures(std::num::NonZeroU32);
+
+/// Maximum number of retry attempts.
+///
+/// MaxRetries represents the maximum number of times to retry an operation
+/// before giving up. A value of 0 means no retries (fail immediately).
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::MaxRetries;
+///
+/// let no_retry = MaxRetries::new(0);
+/// let standard = MaxRetries::new(3);
+/// let aggressive = MaxRetries::new(10);
+/// let very_aggressive = MaxRetries::new(1000); // Library doesn't impose limits
+/// ```
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into))]
+pub struct MaxRetries(u32);
+
+/// Delay in milliseconds for retry or backoff operations.
+///
+/// DelayMilliseconds represents a time delay expressed in milliseconds.
+/// Used for retry delays, backoff intervals, and polling intervals.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::DelayMilliseconds;
+///
+/// let short = DelayMilliseconds::new(100);
+/// let medium = DelayMilliseconds::new(1000);
+/// let long = DelayMilliseconds::new(5000);
+/// ```
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into))]
+pub struct DelayMilliseconds(u64);
+
+/// Attempt number for retry operations (1-based).
+///
+/// AttemptNumber represents which attempt is currently being made, starting
+/// from 1 for the first attempt. Must be at least 1, enforced by using NonZeroU32
+/// as the underlying type.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::AttemptNumber;
+/// use std::num::NonZeroU32;
+///
+/// let first_attempt = AttemptNumber::new(NonZeroU32::new(1).expect("1 is non-zero"));
+/// let retry_attempt = AttemptNumber::new(NonZeroU32::new(3).expect("3 is non-zero"));
+///
+/// // Zero attempts not allowed by type system
+/// // let zero = NonZeroU32::new(0); // Returns None
+/// ```
+#[nutype(derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, AsRef, Into
+))]
+pub struct AttemptNumber(std::num::NonZeroU32);
+
+/// Count of retry attempts that have been made (0-based).
+///
+/// RetryCount represents how many retry attempts have been made so far.
+/// Starts at 0 on the initial failure (before any retries).
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_types::projection::RetryCount;
+///
+/// let initial_failure = RetryCount::new(0);
+/// let after_first_retry = RetryCount::new(1);
+/// let after_three_retries = RetryCount::new(3);
+/// ```
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into))]
+pub struct RetryCount(u32);
 
 /// Pagination parameters for reading events.
 ///

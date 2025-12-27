@@ -41,11 +41,12 @@ mod projection;
 
 // Re-export all types from eventcore-types for backward compatibility
 pub use eventcore_types::{
-    BatchSize, CommandError, CommandLogic, CommandStreams, Event, EventFilter, EventPage,
-    EventReader, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, FailureContext,
-    FailureStrategy, NewEvents, Operation, Projector, StreamDeclarations, StreamDeclarationsError,
-    StreamId, StreamPosition, StreamPrefix, StreamResolver, StreamVersion, StreamWriteEntry,
-    StreamWrites,
+    AttemptNumber, BackoffMultiplier, BatchSize, CommandError, CommandLogic, CommandStreams,
+    DelayMilliseconds, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
+    EventStreamReader, EventStreamSlice, FailureContext, FailureStrategy, MaxConsecutiveFailures,
+    MaxRetries, MaxRetryAttempts, NewEvents, Operation, Projector, RetryCount, StreamDeclarations,
+    StreamDeclarationsError, StreamId, StreamPosition, StreamPrefix, StreamResolver, StreamVersion,
+    StreamWriteEntry, StreamWrites,
 };
 
 // Re-export projection runtime components
@@ -147,12 +148,14 @@ pub enum BackoffStrategy {
     /// # Examples
     ///
     /// ```rust
-    /// # use eventcore::BackoffStrategy;
-    /// let strategy = BackoffStrategy::Fixed { delay_ms: 50 };
+    /// # use eventcore::{BackoffStrategy, DelayMilliseconds};
+    /// let strategy = BackoffStrategy::Fixed {
+    ///     delay_ms: DelayMilliseconds::new(50),
+    /// };
     /// ```
     Fixed {
         /// Delay in milliseconds between each retry attempt
-        delay_ms: u64,
+        delay_ms: DelayMilliseconds,
     },
 
     /// Exponential backoff with base delay multiplied by 2^attempt.
@@ -160,12 +163,14 @@ pub enum BackoffStrategy {
     /// # Examples
     ///
     /// ```rust
-    /// # use eventcore::BackoffStrategy;
-    /// let strategy = BackoffStrategy::Exponential { base_ms: 10 };
+    /// # use eventcore::{BackoffStrategy, DelayMilliseconds};
+    /// let strategy = BackoffStrategy::Exponential {
+    ///     base_ms: DelayMilliseconds::new(10),
+    /// };
     /// ```
     Exponential {
         /// Base delay in milliseconds (multiplied by 2^attempt)
-        base_ms: u64,
+        base_ms: DelayMilliseconds,
     },
 }
 
@@ -190,9 +195,9 @@ pub struct RetryContext {
     /// The set of streams being retried (guaranteed non-empty)
     pub streams: Vec<StreamId>,
     /// The current retry attempt number (1-based)
-    pub attempt: u32,
+    pub attempt: AttemptNumber,
     /// The delay in milliseconds before this retry attempt
-    pub delay_ms: u64,
+    pub delay_ms: DelayMilliseconds,
 }
 
 /// Configuration for automatic retry behavior on concurrency conflicts.
@@ -204,18 +209,20 @@ pub struct RetryContext {
 /// # Examples
 ///
 /// ```rust
-/// # use eventcore::{RetryPolicy, BackoffStrategy};
+/// # use eventcore::{RetryPolicy, BackoffStrategy, DelayMilliseconds};
 /// // Custom retry policy with 2 retries (3 total attempts) instead of default 4 retries
 /// let policy = RetryPolicy::new().max_retries(2);
 ///
 /// // Custom retry policy with fixed backoff
 /// let policy = RetryPolicy::new()
 ///     .max_retries(2)
-///     .backoff_strategy(BackoffStrategy::Fixed { delay_ms: 50 });
+///     .backoff_strategy(BackoffStrategy::Fixed {
+///         delay_ms: DelayMilliseconds::new(50),
+///     });
 /// ```
 #[derive(Clone)]
 pub struct RetryPolicy {
-    max_retries: u32,
+    max_retries: MaxRetries,
     backoff_strategy: BackoffStrategy,
     metrics_hook: Option<Arc<dyn MetricsHook>>,
 }
@@ -229,8 +236,10 @@ impl RetryPolicy {
     /// - jitter: ±20% (applied during execution)
     pub fn new() -> Self {
         Self {
-            max_retries: 4,
-            backoff_strategy: BackoffStrategy::Exponential { base_ms: 10 },
+            max_retries: MaxRetries::new(4),
+            backoff_strategy: BackoffStrategy::Exponential {
+                base_ms: DelayMilliseconds::new(10),
+            },
             metrics_hook: None,
         }
     }
@@ -246,7 +255,7 @@ impl RetryPolicy {
     /// let policy = RetryPolicy::new().max_retries(2);
     /// ```
     pub fn max_retries(mut self, retries: u32) -> Self {
-        self.max_retries = retries;
+        self.max_retries = MaxRetries::new(retries);
         self
     }
 
@@ -257,9 +266,11 @@ impl RetryPolicy {
     /// # Examples
     ///
     /// ```rust
-    /// # use eventcore::{RetryPolicy, BackoffStrategy};
+    /// # use eventcore::{RetryPolicy, BackoffStrategy, DelayMilliseconds};
     /// let policy = RetryPolicy::new()
-    ///     .backoff_strategy(BackoffStrategy::Fixed { delay_ms: 50 });
+    ///     .backoff_strategy(BackoffStrategy::Fixed {
+    ///         delay_ms: DelayMilliseconds::new(50),
+    ///     });
     /// ```
     pub fn backoff_strategy(mut self, strategy: BackoffStrategy) -> Self {
         self.backoff_strategy = strategy;
@@ -424,17 +435,18 @@ fn build_stream_writes_from_events<C: CommandLogic>(
         .map_err(CommandError::EventStoreError)
 }
 
-fn compute_retry_delay_ms(strategy: &BackoffStrategy, attempt: u32) -> u64 {
+fn compute_retry_delay_ms(strategy: &BackoffStrategy, attempt: u32) -> DelayMilliseconds {
     match strategy {
         BackoffStrategy::Fixed { delay_ms } => *delay_ms,
         BackoffStrategy::Exponential { base_ms } => {
+            let base_ms_u64: u64 = (*base_ms).into();
             let base_delay = 2_u64
                 .checked_pow(attempt)
-                .and_then(|exp| base_ms.checked_mul(exp))
+                .and_then(|exp| base_ms_u64.checked_mul(exp))
                 .unwrap_or(u64::MAX);
             let random_value = rand::random::<f64>();
             let jitter_factor = calculate_jitter_factor(random_value);
-            apply_jitter(base_delay, jitter_factor)
+            DelayMilliseconds::new(apply_jitter(base_delay, jitter_factor))
         }
     }
 }
@@ -442,10 +454,12 @@ fn compute_retry_delay_ms(strategy: &BackoffStrategy, attempt: u32) -> u64 {
 async fn apply_retry_backoff(policy: &RetryPolicy, attempt: u32, stream_ids: &[StreamId]) {
     let delay_ms = compute_retry_delay_ms(&policy.backoff_strategy, attempt);
     let attempt_number = attempt + 1;
+    let attempt_number_domain =
+        AttemptNumber::new(NonZeroU32::new(attempt_number).expect("attempt_number is always > 0"));
 
     tracing::warn!(
         attempt = attempt_number,
-        delay_ms = delay_ms,
+        delay_ms = delay_ms.into_inner(),
         streams = ?stream_ids,
         "retrying command after concurrency conflict"
     );
@@ -453,13 +467,13 @@ async fn apply_retry_backoff(policy: &RetryPolicy, attempt: u32, stream_ids: &[S
     if let Some(hook) = &policy.metrics_hook {
         let ctx = RetryContext {
             streams: stream_ids.to_vec(),
-            attempt: attempt_number,
+            attempt: attempt_number_domain,
             delay_ms,
         };
         hook.on_retry_attempt(&ctx);
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(delay_ms.into())).await;
 }
 
 /// Execute a command against the event store with a custom retry policy.
@@ -497,7 +511,7 @@ where
     C: CommandLogic,
     S: EventStore,
 {
-    for attempt in 0..=policy.max_retries {
+    for attempt in 0..=policy.max_retries.into() {
         let PreparedExecution {
             state,
             stream_ids,
@@ -534,16 +548,16 @@ where
                     NonZeroU32::new(attempt + 1).expect("attempts are 1-based"),
                 ));
             }
-            Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries => {
+            Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries.into() => {
                 apply_retry_backoff(&policy, attempt, &stream_ids).await;
                 continue; // Retry
             }
             Err(CommandError::ConcurrencyError(_)) => {
                 tracing::error!(
-                    max_retries = policy.max_retries,
+                    max_retries = policy.max_retries.into_inner(),
                     streams = ?stream_ids.as_slice()
                 );
-                return Err(CommandError::ConcurrencyError(policy.max_retries));
+                return Err(CommandError::ConcurrencyError(policy.max_retries.into()));
             }
             Err(e) => return Err(e), // Other permanent errors
         }
@@ -1028,7 +1042,9 @@ mod tests {
         // Given: A retry policy with fixed 50ms backoff (not exponential)
         let policy = RetryPolicy::new()
             .max_retries(2)
-            .backoff_strategy(BackoffStrategy::Fixed { delay_ms: 50 });
+            .backoff_strategy(BackoffStrategy::Fixed {
+                delay_ms: DelayMilliseconds::new(50),
+            });
 
         // And: An event store that conflicts twice then succeeds
         let store = ConflictNTimesStore::new(2);

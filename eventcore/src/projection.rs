@@ -5,8 +5,8 @@
 //! - `ProjectionRunner`: Orchestrates projector execution with event polling
 
 use crate::{
-    BatchSize, Event, EventFilter, EventPage, EventReader, FailureStrategy, Projector,
-    StreamPosition,
+    BackoffMultiplier, BatchSize, Event, EventFilter, EventPage, EventReader, FailureStrategy,
+    MaxConsecutiveFailures, MaxRetryAttempts, Projector, StreamPosition,
 };
 use std::time::Duration;
 
@@ -32,7 +32,7 @@ pub struct PollConfig {
     /// Additional backoff delay after a poll failure.
     pub poll_failure_backoff: Duration,
     /// Maximum consecutive poll failures before stopping.
-    pub max_consecutive_poll_failures: u32,
+    pub max_consecutive_poll_failures: MaxConsecutiveFailures,
 }
 
 impl Default for PollConfig {
@@ -41,7 +41,9 @@ impl Default for PollConfig {
             poll_interval: Duration::from_millis(100),
             empty_poll_backoff: Duration::from_millis(50),
             poll_failure_backoff: Duration::from_millis(100),
-            max_consecutive_poll_failures: 5,
+            max_consecutive_poll_failures: MaxConsecutiveFailures::new(
+                std::num::NonZeroU32::new(5).expect("5 is non-zero"),
+            ),
         }
     }
 }
@@ -70,11 +72,11 @@ impl Default for PollConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventRetryConfig {
     /// Maximum number of retry attempts before escalating to Fatal.
-    pub max_retry_attempts: u32,
+    pub max_retry_attempts: MaxRetryAttempts,
     /// Initial delay between retry attempts.
     pub retry_delay: Duration,
     /// Multiplier for exponential backoff (e.g., 2.0 doubles delay each retry).
-    pub retry_backoff_multiplier: f64,
+    pub retry_backoff_multiplier: BackoffMultiplier,
     /// Maximum delay between retry attempts (caps exponential growth).
     pub max_retry_delay: Duration,
 }
@@ -82,9 +84,10 @@ pub struct EventRetryConfig {
 impl Default for EventRetryConfig {
     fn default() -> Self {
         Self {
-            max_retry_attempts: 3,
+            max_retry_attempts: MaxRetryAttempts::new(3),
             retry_delay: Duration::from_millis(100),
-            retry_backoff_multiplier: 2.0,
+            retry_backoff_multiplier: BackoffMultiplier::try_new(2.0)
+                .expect("2.0 is a valid BackoffMultiplier value"),
             max_retry_delay: Duration::from_secs(5),
         }
     }
@@ -480,7 +483,9 @@ where
                     }
                     Err(_) => {
                         // Database error - check if retries exhausted
-                        if consecutive_failures >= self.poll_config.max_consecutive_poll_failures {
+                        let max_failures: std::num::NonZeroU32 =
+                            self.poll_config.max_consecutive_poll_failures.into();
+                        if consecutive_failures >= max_failures.get() {
                             // Already failed max_consecutive_poll_failures times, no more retries allowed
                             return Err(ProjectionError::Failed(
                                 "failed to read events after max retries".to_string(),
@@ -519,7 +524,7 @@ where
                             let failure_ctx = eventcore_types::FailureContext {
                                 error: &error,
                                 position,
-                                retry_count,
+                                retry_count: eventcore_types::RetryCount::new(retry_count),
                             };
                             let strategy = self.projector.on_error(failure_ctx);
                             match strategy {
@@ -554,7 +559,9 @@ where
                                 }
                                 FailureStrategy::Retry => {
                                     // Check if we've exceeded max retry attempts
-                                    if retry_count >= self.event_retry_config.max_retry_attempts {
+                                    if retry_count
+                                        >= self.event_retry_config.max_retry_attempts.into_inner()
+                                    {
                                         // Escalate to Fatal after exhausting retries
                                         return Err(ProjectionError::Failed(
                                             "projector apply failed after max retries".to_string(),
@@ -566,8 +573,10 @@ where
                                     // Calculate delay with exponential backoff
                                     let base_delay_ms =
                                         self.event_retry_config.retry_delay.as_millis() as f64;
-                                    let multiplier =
-                                        self.event_retry_config.retry_backoff_multiplier;
+                                    let multiplier = self
+                                        .event_retry_config
+                                        .retry_backoff_multiplier
+                                        .into_inner();
                                     let delay_ms =
                                         base_delay_ms * multiplier.powi(retry_count as i32 - 1);
                                     let delay = Duration::from_millis(delay_ms as u64);
