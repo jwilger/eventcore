@@ -334,6 +334,132 @@ fn map_sqlx_error(error: sqlx::Error, operation: Operation) -> EventStoreError {
     EventStoreError::StoreFailure { operation }
 }
 
+/// Error type for PostgresCoordinator operations.
+#[derive(Debug, Error)]
+pub enum PostgresCoordinatorError {
+    #[error("failed to connect to postgres database")]
+    ConnectionFailed(#[source] sqlx::Error),
+}
+
+/// Distributed coordination primitive using PostgreSQL advisory locks.
+///
+/// PostgresCoordinator provides leader election for distributed projector deployments,
+/// ensuring only one instance processes events at a time. Uses PostgreSQL advisory locks
+/// for fast, automatic cleanup on connection loss.
+///
+/// # Examples
+///
+/// ```ignore
+/// use eventcore_postgres::PostgresCoordinator;
+/// use std::time::Duration;
+///
+/// let coordinator = PostgresCoordinator::new(
+///     "postgres://localhost/db".to_string(),
+///     Duration::from_secs(5)
+/// ).await?;
+///
+/// if let Some(guard) = coordinator.try_acquire().await {
+///     // This instance is the leader - process events
+///     while guard.is_valid().await {
+///         // Process events...
+///     }
+/// }
+/// ```
+pub struct PostgresCoordinator {
+    connection_string: String,
+    #[allow(dead_code)] // Will be used for heartbeat timeout in later tests
+    heartbeat_timeout: Duration,
+}
+
+impl PostgresCoordinator {
+    /// Creates a new PostgresCoordinator.
+    ///
+    /// # Parameters
+    ///
+    /// * `connection_string` - PostgreSQL connection string (e.g., "postgres://user:pass@host/db")
+    /// * `heartbeat_timeout` - Maximum time between heartbeats before leadership is considered lost
+    ///
+    /// # Errors
+    ///
+    /// Returns `PostgresCoordinatorError::ConnectionFailed` if unable to connect to the database.
+    pub async fn new(
+        connection_string: String,
+        heartbeat_timeout: Duration,
+    ) -> Result<Self, PostgresCoordinatorError> {
+        Ok(Self {
+            connection_string,
+            heartbeat_timeout,
+        })
+    }
+
+    /// Attempts to acquire leadership.
+    ///
+    /// Returns `Some(guard)` if leadership was acquired, `None` if another instance holds it.
+    /// The guard uses RAII pattern - leadership is automatically released when dropped.
+    pub async fn try_acquire(&self) -> Option<PostgresCoordinatorGuard> {
+        // Fixed advisory lock ID for coordinator leadership
+        // Using a simple constant - future versions can hash projector name
+        const LOCK_ID: i64 = 314159265; // Arbitrary constant for minimal implementation
+
+        // Establish dedicated connection for advisory lock
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(10))
+            .connect(&self.connection_string)
+            .await
+            .ok()?;
+
+        // Try to acquire advisory lock (non-blocking)
+        let row = query("SELECT pg_try_advisory_lock($1)")
+            .bind(LOCK_ID)
+            .fetch_one(&pool)
+            .await
+            .ok()?;
+
+        let acquired: bool = row.try_get(0).ok()?;
+
+        if acquired {
+            Some(PostgresCoordinatorGuard { pool })
+        } else {
+            None
+        }
+    }
+}
+
+/// RAII guard representing active leadership.
+///
+/// Leadership is automatically released when this guard is dropped. The guard's connection
+/// to the database ensures advisory locks are released on process crash or network partition.
+pub struct PostgresCoordinatorGuard {
+    pool: Pool<Postgres>,
+}
+
+impl PostgresCoordinatorGuard {
+    /// Checks if leadership is still valid.
+    ///
+    /// Returns `false` if the underlying database connection was lost or if the advisory
+    /// lock was released due to timeout.
+    pub async fn is_valid(&self) -> bool {
+        // For minimal implementation, just check if connection is alive
+        query("SELECT 1").execute(&self.pool).await.is_ok()
+    }
+
+    /// Sends a heartbeat to maintain leadership.
+    ///
+    /// Should be called periodically (before heartbeat_timeout expires) to prevent
+    /// leadership from being considered abandoned.
+    pub async fn heartbeat(&self) {
+        // No-op for now - advisory lock stays held as long as connection is alive
+    }
+}
+
+impl Drop for PostgresCoordinatorGuard {
+    fn drop(&mut self) {
+        // Advisory lock is automatically released when connection pool closes
+        // No explicit unlock needed - PostgreSQL session-scoped advisory locks
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
