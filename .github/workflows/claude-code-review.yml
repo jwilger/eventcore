@@ -48,6 +48,13 @@ jobs:
 
             4. **Skip the obvious** - Don't comment on things that are fine.
 
+            ## Project-Specific Context
+
+            **eventcore-testing crate:** The `eventcore-testing` crate is ALL test code.
+            For any instructions that differentiate between test code and production code,
+            treat the entire eventcore-testing crate as test code, regardless of file
+            location or naming.
+
             ## Review Process
 
             **Step 1: Check for previous reviews**
