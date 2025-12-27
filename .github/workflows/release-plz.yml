@@ -46,12 +46,24 @@ jobs:
         with:
           tool: cargo-semver-checks
 
-      - name: Run release-plz
+      - name: Update versions with release-plz
+        run: |
+          # First, let release-plz analyze commits and update versions based on semver
+          release-plz update --config ./release-plz.toml
+
+      - name: Enforce lockstep major/minor versioning
+        run: |
+          # ADR-025 requires all crates share identical major.minor versions
+          # This script adjusts versions after release-plz's semver analysis
+          ./.github/scripts/enforce-lockstep-versions.sh
+
+      - name: Create/update release PR
         env:
           # Use PAT instead of GITHUB_TOKEN to trigger CI on release PR
           # See: https://release-plz.dev/docs/github/token
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
         run: |
+          # Now create/update the PR with lockstep-enforced versions
           release-plz release-pr \
             --git-token "$GITHUB_TOKEN" \
             --backend github \

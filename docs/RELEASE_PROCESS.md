@@ -9,6 +9,7 @@ The project uses **[release-plz](https://release-plz.dev/)** for fully automated
 **Phase 1: Release PR Creation** (`.github/workflows/release-plz.yml`)
 - Triggered on push to `main` (except release PR merges)
 - Analyzes commits using conventional commits for semver detection
+- **Enforces lockstep major/minor versioning** (see ADR-025 and "Version Lockstep Enforcement" section below)
 - Creates/updates release PR with version bumps and changelog
 - PR must pass all CI quality gates before merge
 
@@ -44,6 +45,58 @@ cargo-workspaces automatically determines and uses the correct publishing order 
 **Note:** `eventcore-types` and `eventcore-testing` are not yet published to crates.io. They will be published for the first time when the automated release workflow runs.
 
 The workflow includes a 30-second delay between publishing each crate to ensure crates.io has time to index each package before dependent crates are published.
+
+### Version Lockstep Enforcement
+
+**Per ADR-025**, all workspace crates must maintain **identical major.minor versions**, while patch versions may differ independently. This ensures a clear compatibility guarantee for users: matching major/minor versions are always compatible.
+
+**The Problem:**
+release-plz analyzes each crate independently for semver bumps. When one crate has breaking changes, only that crate gets bumped to a new major/minor version, creating version skew.
+
+**Example without enforcement:**
+```
+eventcore-types: 0.2.0 → 0.3.0 (breaking change detected)
+eventcore: 0.2.0 → 0.2.1 (no changes)
+❌ Version skew: eventcore-types at 0.3.0, eventcore at 0.2.1
+```
+
+**The Solution:**
+The release workflow uses a three-step process to enforce lockstep versioning:
+
+1. **`release-plz update`** - Analyzes commits and updates versions based on semver
+2. **`enforce-lockstep-versions.sh`** - Adjusts all crates to the highest major.minor version
+3. **`release-plz release-pr`** - Creates/updates the PR with lockstep-enforced versions
+
+**Example with enforcement:**
+```
+After semver analysis:
+  eventcore-types: 0.2.0 → 0.3.0 (breaking change)
+  eventcore: 0.2.0 → 0.2.1 (no changes)
+
+After lockstep enforcement:
+  eventcore-types: 0.3.0 (unchanged)
+  eventcore: 0.2.1 → 0.3.1 (major.minor bumped, patch preserved)
+✅ All crates at 0.3.x
+```
+
+**CI Validation:**
+The `version-lockstep` CI job (`.github/workflows/ci.yml`) validates that all crates share identical major.minor versions on every PR and push. This prevents manual Cargo.toml edits from violating the lockstep policy.
+
+**Verification Scripts:**
+- `.github/scripts/enforce-lockstep-versions.sh` - Fixes version skew (used in release workflow)
+- `.github/scripts/validate-lockstep-versions.sh` - Validates lockstep compliance (used in CI)
+- `.github/scripts/test-lockstep-scripts.sh` - Integration tests for the scripts
+
+**When Major/Minor Bumps Occur:**
+When ANY crate requires a major or minor version bump (breaking change or new feature), ALL workspace crates receive the same major.minor bump. This may mean:
+- `eventcore` bumps from 0.2.0 → 0.3.0 even if only `eventcore-types` had breaking changes
+- Users see an "update" for all crates, even if some have no code changes
+- The changelog for unchanged crates will note "Version bump for workspace lockstep compliance"
+
+**Why This Matters:**
+- Users can depend on `eventcore = "0.3"` and `eventcore-postgres = "0.3"` knowing they're compatible
+- No need for a compatibility matrix or guessing which versions work together
+- Follows the same pattern as other workspace projects (e.g., tokio)
 
 ### Fallback: Manual Publishing Process
 
@@ -198,3 +251,36 @@ Always ensure pre-commit hooks pass before attempting to publish. The hooks run:
 - Linting
 - Tests
 - Type checking
+
+### Version lockstep violations
+
+If the CI `version-lockstep` job fails, it means one or more crates have major.minor versions that don't match:
+
+**Diagnosis:**
+```bash
+# Run the validation script locally
+./.github/scripts/validate-lockstep-versions.sh
+```
+
+**Fix:**
+```bash
+# Run the enforcement script to fix version skew
+./.github/scripts/enforce-lockstep-versions.sh
+
+# Review the changes
+git diff '**/Cargo.toml'
+
+# Commit the fixes
+git add '**/Cargo.toml'
+git commit -m "fix: enforce lockstep major.minor versioning (ADR-025)"
+```
+
+**Common Causes:**
+- Manual Cargo.toml edits that didn't update all crates
+- Merge conflicts resolved incorrectly
+- Cherry-picking commits that touched versions
+
+**Prevention:**
+- Let the automated release workflow manage versions
+- Avoid manual version bumps in Cargo.toml files
+- If manual edits are necessary, run the enforcement script before committing
