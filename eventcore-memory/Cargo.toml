@@ -1,13 +1,13 @@
 [package]
 name = "eventcore-memory"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "In-memory event store adapter for EventCore event sourcing library"
 license = "MIT"
 repository = "https://github.com/jwilger/eventcore"
 
 [dependencies]
-eventcore-types = { version = "0.2.0", path = "../eventcore-types" }
+eventcore-types = { version = "0.2.1", path = "../eventcore-types" }
 serde_json = "1.0"
 uuid = { version = "1.18.1", features = ["v7"] }
 

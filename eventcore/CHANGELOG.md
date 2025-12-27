@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/jwilger/eventcore/compare/eventcore-v0.2.0...eventcore-v0.3.0) - 2025-12-27
+
+### Features
+
+- add configurable poll behavior for projections ([#213](https://github.com/jwilger/eventcore/pull/213))
+- *(eventcore)* implement EventRetryConfig for event processing failures ([#215](https://github.com/jwilger/eventcore/pull/215))
+
+### Refactoring
+
+- eliminate primitive obsession across configuration structs ([#216](https://github.com/jwilger/eventcore/pull/216))
+
 ## [0.2.0](https://github.com/jwilger/eventcore/releases/tag/v0.2.0) - 2025-12-26
 
 ### Bug Fixes

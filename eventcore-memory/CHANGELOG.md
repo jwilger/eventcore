@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/jwilger/eventcore/compare/eventcore-memory-v0.2.0...eventcore-memory-v0.2.1) - 2025-12-27
+
+### Miscellaneous Tasks
+
+- updated the following local packages: eventcore-types
+
 ## [0.2.0](https://github.com/jwilger/eventcore/releases/tag/v0.2.0) - 2025-12-26
 
 ### Miscellaneous Tasks

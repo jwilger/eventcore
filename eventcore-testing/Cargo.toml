@@ -1,6 +1,6 @@
 [package]
 name = "eventcore-testing"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Testing utilities and shared test suite for EventCore event stores"
 license = "MIT"
@@ -10,7 +10,7 @@ repository = "https://github.com/jwilger/eventcore"
 warnings = "deny"
 
 [dependencies]
-eventcore-types = { version = "0.2.0", path = "../eventcore-types" }
+eventcore-types = { version = "0.2.1", path = "../eventcore-types" }
 nutype = { version = "0.6.2", features = ["serde"] }
 rand = "0.9.2"
 serde = { version = "1.0", features = ["derive"] }

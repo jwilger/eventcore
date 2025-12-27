@@ -1,13 +1,13 @@
 [package]
 name = "eventcore-postgres"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "PostgreSQL event store adapter for EventCore event sourcing library"
 license = "MIT"
 repository = "https://github.com/jwilger/eventcore"
 
 [dependencies]
-eventcore-types = { version = "0.2.0", path = "../eventcore-types" }
+eventcore-types = { version = "0.2.1", path = "../eventcore-types" }
 nutype = { version = "0.6.2", features = ["serde"] }
 serde_json = "1.0"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "macros", "migrate"] }
