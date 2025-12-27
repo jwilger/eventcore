@@ -31,7 +31,7 @@ pub struct FailureContext<'a, E> {
     /// Global stream position of the event that failed to process.
     pub position: StreamPosition,
     /// Number of retry attempts so far (0 on initial failure).
-    pub retry_count: u32,
+    pub retry_count: RetryCount,
 }
 
 /// Strategy for handling event processing failures.

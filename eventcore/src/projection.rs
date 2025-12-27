@@ -524,7 +524,7 @@ where
                             let failure_ctx = eventcore_types::FailureContext {
                                 error: &error,
                                 position,
-                                retry_count,
+                                retry_count: eventcore_types::RetryCount::new(retry_count),
                             };
                             let strategy = self.projector.on_error(failure_ctx);
                             match strategy {
