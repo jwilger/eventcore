@@ -43,8 +43,10 @@ while IFS= read -r toml; do
     version=$(grep "^version = " "$toml" | head -1 | sed 's/version = "\(.*\)"/\1/')
 
     if [ -n "$crate_name" ] && [ -n "$version" ]; then
-        # Parse version components
-        IFS='.' read -r major minor patch <<< "$version"
+        # Parse version components (strip pre-release/build metadata for comparison)
+        version_base="${version%%-*}"  # Strip pre-release (e.g., -alpha.1)
+        version_base="${version_base%%+*}"  # Strip build metadata (e.g., +build.123)
+        IFS='.' read -r major minor patch <<< "$version_base"
         major_minor="${major}.${minor}"
         major_minor_versions["$crate_name"]="$major_minor"
 

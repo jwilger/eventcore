@@ -57,6 +57,11 @@ jobs:
           # This script adjusts versions after release-plz's semver analysis
           ./.github/scripts/enforce-lockstep-versions.sh
 
+      - name: Validate lockstep enforcement
+        run: |
+          # Verify enforcement script produced valid versions
+          ./.github/scripts/validate-lockstep-versions.sh
+
       - name: Create/update release PR
         env:
           # Use PAT instead of GITHUB_TOKEN to trigger CI on release PR

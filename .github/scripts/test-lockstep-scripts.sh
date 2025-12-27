@@ -19,8 +19,14 @@ ORIGINAL_TYPES_VERSION=$(grep "^version = " eventcore-types/Cargo.toml | head -1
 cleanup() {
     echo ""
     echo "🔄 Restoring original versions..."
-    sed -i "0,/^version = \".*\"/s|^version = \".*\"|$ORIGINAL_EVENTCORE_VERSION|" eventcore/Cargo.toml
-    sed -i "0,/^version = \".*\"/s|^version = \".*\"|$ORIGINAL_TYPES_VERSION|" eventcore-types/Cargo.toml
+    # Handle macOS/Linux sed differences
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i "" "0,/^version = \".*\"/s|^version = \".*\"|$ORIGINAL_EVENTCORE_VERSION|" eventcore/Cargo.toml
+        sed -i "" "0,/^version = \".*\"/s|^version = \".*\"|$ORIGINAL_TYPES_VERSION|" eventcore-types/Cargo.toml
+    else
+        sed -i "0,/^version = \".*\"/s|^version = \".*\"|$ORIGINAL_EVENTCORE_VERSION|" eventcore/Cargo.toml
+        sed -i "0,/^version = \".*\"/s|^version = \".*\"|$ORIGINAL_TYPES_VERSION|" eventcore-types/Cargo.toml
+    fi
 }
 
 trap cleanup EXIT
@@ -39,7 +45,12 @@ echo ""
 echo "Test 2: Simulating version skew..."
 echo "  Original eventcore version: $ORIGINAL_EVENTCORE_VERSION"
 echo "  Modifying eventcore to 0.3.0..."
-sed -i "0,/^version = \".*\"/s|^version = \".*\"|version = \"0.3.0\"|" eventcore/Cargo.toml
+# Handle macOS/Linux sed differences
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i "" "0,/^version = \".*\"/s|^version = \".*\"|version = \"0.3.0\"|" eventcore/Cargo.toml
+else
+    sed -i "0,/^version = \".*\"/s|^version = \".*\"|version = \"0.3.0\"|" eventcore/Cargo.toml
+fi
 
 # Verify validation detects the skew
 echo "  Testing validation detects skew..."
