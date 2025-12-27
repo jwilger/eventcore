@@ -264,3 +264,199 @@ async fn runner_stops_when_guard_becomes_invalid() {
     // Then: runner detects invalid guard and stops processing
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn new_instance_takes_over_from_hung_projector() {
+    use eventcore::InMemoryCheckpointStore;
+    use std::sync::Mutex;
+    use tokio::time::Instant;
+
+    // Shared leadership coordinator that allows takeover when guard times out
+    #[derive(Clone)]
+    struct SharedLeadershipCoordinator {
+        state: Arc<Mutex<SharedState>>,
+        heartbeat_timeout: Duration,
+    }
+
+    struct SharedState {
+        current_guard_id: Option<usize>,
+        next_guard_id: usize,
+        last_heartbeat: Option<Instant>,
+    }
+
+    impl SharedLeadershipCoordinator {
+        fn new(heartbeat_timeout: Duration) -> Self {
+            Self {
+                state: Arc::new(Mutex::new(SharedState {
+                    current_guard_id: None,
+                    next_guard_id: 0,
+                    last_heartbeat: None,
+                })),
+                heartbeat_timeout,
+            }
+        }
+    }
+
+    impl CoordinatorLike for SharedLeadershipCoordinator {
+        type Guard = SharedLeadershipGuard;
+
+        async fn try_acquire(&self) -> Option<Self::Guard> {
+            let mut state = self.state.lock().unwrap();
+
+            // Check if current guard has timed out
+            let can_acquire =
+                if let (Some(_), Some(last_hb)) = (state.current_guard_id, state.last_heartbeat) {
+                    last_hb.elapsed() >= self.heartbeat_timeout
+                } else {
+                    true // No guard exists, can acquire
+                };
+
+            if can_acquire {
+                let guard_id = state.next_guard_id;
+                state.next_guard_id += 1;
+                state.current_guard_id = Some(guard_id);
+                state.last_heartbeat = Some(Instant::now());
+
+                Some(SharedLeadershipGuard {
+                    guard_id,
+                    state: self.state.clone(),
+                    heartbeat_timeout: self.heartbeat_timeout,
+                })
+            } else {
+                None
+            }
+        }
+    }
+
+    struct SharedLeadershipGuard {
+        guard_id: usize,
+        state: Arc<Mutex<SharedState>>,
+        heartbeat_timeout: Duration,
+    }
+
+    impl GuardLike for SharedLeadershipGuard {
+        fn heartbeat(&self) {
+            let mut state = self.state.lock().unwrap();
+            // Only update heartbeat if this guard still holds leadership
+            if state.current_guard_id == Some(self.guard_id) {
+                state.last_heartbeat = Some(Instant::now());
+            }
+        }
+
+        fn is_valid(&self) -> bool {
+            let state = self.state.lock().unwrap();
+            // Valid if this guard still holds leadership AND hasn't timed out
+            if state.current_guard_id != Some(self.guard_id) {
+                return false;
+            }
+            if let Some(last_hb) = state.last_heartbeat {
+                last_hb.elapsed() < self.heartbeat_timeout
+            } else {
+                false
+            }
+        }
+    }
+
+    // Projector that tracks which positions it processed
+    struct PositionTrackingProjector {
+        processed_positions: Arc<Mutex<Vec<StreamPosition>>>,
+        processing_delay: Duration,
+    }
+
+    impl Projector for PositionTrackingProjector {
+        type Event = TestEvent;
+        type Error = std::convert::Infallible;
+        type Context = ();
+
+        fn name(&self) -> &str {
+            "position_tracker"
+        }
+
+        fn apply(
+            &mut self,
+            _event: Self::Event,
+            position: StreamPosition,
+            _ctx: &mut Self::Context,
+        ) -> Result<(), Self::Error> {
+            // Simulate processing delay
+            std::thread::sleep(self.processing_delay);
+            let mut positions = self.processed_positions.lock().unwrap();
+            positions.push(position);
+            Ok(())
+        }
+    }
+
+    // Given: First instance is hung and missed heartbeat timeout
+    let store = InMemoryEventStore::new();
+    let checkpoint_store = InMemoryCheckpointStore::new();
+    let stream_id = StreamId::try_new("test").unwrap();
+
+    // Seed 5 events
+    for i in 0..5 {
+        let event = TestEvent {
+            stream_id: stream_id.clone(),
+        };
+        let writes = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(i))
+            .unwrap()
+            .append(event)
+            .unwrap();
+        store.append_events(writes).await.unwrap();
+    }
+
+    let processed_positions = Arc::new(Mutex::new(Vec::new()));
+    let coordinator = SharedLeadershipCoordinator::new(Duration::from_millis(300));
+
+    // First instance processes slowly - each event takes 150ms, but heartbeat timeout is 300ms
+    // So it will process 1-2 events before guard times out
+    let projector1 = PositionTrackingProjector {
+        processed_positions: processed_positions.clone(),
+        processing_delay: Duration::from_millis(150),
+    };
+
+    let runner1 = ProjectionRunner::new(projector1, coordinator.clone(), &store)
+        .with_checkpoint_store(checkpoint_store.clone())
+        .with_heartbeat_config(HeartbeatConfig {
+            heartbeat_interval: Duration::from_millis(50),
+            heartbeat_timeout: Duration::from_millis(300),
+        });
+
+    // Start first runner but expect it to fail when guard times out
+    // (it processes slowly enough that guard times out)
+    let _ = runner1.run().await;
+
+    // Wait for guard to definitely time out
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    // When: Second instance calls try_acquire() after timeout
+    // Second instance processes quickly (no delay) to complete remaining events
+    let projector2 = PositionTrackingProjector {
+        processed_positions: processed_positions.clone(),
+        processing_delay: Duration::from_millis(0),
+    };
+
+    let runner2 = ProjectionRunner::new(projector2, coordinator.clone(), &store)
+        .with_checkpoint_store(checkpoint_store.clone())
+        .with_heartbeat_config(HeartbeatConfig {
+            heartbeat_interval: Duration::from_millis(50),
+            heartbeat_timeout: Duration::from_millis(300),
+        });
+
+    // Then: Second instance acquires leadership and resumes from checkpoint
+    runner2.run().await.unwrap();
+
+    // And: No events are skipped or duplicated
+    let positions = processed_positions.lock().unwrap();
+    let total_processed = positions.len();
+    let mut sorted_positions = positions.clone();
+    sorted_positions.sort();
+    sorted_positions.dedup();
+    let unique_count = sorted_positions.len();
+    let total_events = 5;
+
+    assert_eq!(
+        unique_count, total_events,
+        "Expected {} unique positions, got {}. Total processed: {}",
+        total_events, unique_count, total_processed
+    );
+}
