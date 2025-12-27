@@ -14,7 +14,9 @@ use eventcore::{
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 /// A simple event type for testing projections.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,11 +67,15 @@ impl Projector for HeartbeatCountingProjector {
 /// Coordinator that tracks heartbeat calls.
 struct HeartbeatCountingCoordinator {
     heartbeat_count: Arc<AtomicUsize>,
+    heartbeat_timeout: Duration,
 }
 
 impl HeartbeatCountingCoordinator {
     fn new(heartbeat_count: Arc<AtomicUsize>) -> Self {
-        Self { heartbeat_count }
+        Self {
+            heartbeat_count,
+            heartbeat_timeout: Duration::from_millis(300),
+        }
     }
 }
 
@@ -80,6 +86,8 @@ impl CoordinatorTrait for HeartbeatCountingCoordinator {
         async {
             Some(HeartbeatCountingGuard {
                 heartbeat_count: self.heartbeat_count.clone(),
+                last_heartbeat: Arc::new(Mutex::new(Instant::now())),
+                heartbeat_timeout: self.heartbeat_timeout,
             })
         }
     }
@@ -88,15 +96,19 @@ impl CoordinatorTrait for HeartbeatCountingCoordinator {
 /// Guard that increments counter on heartbeat.
 struct HeartbeatCountingGuard {
     heartbeat_count: Arc<AtomicUsize>,
+    last_heartbeat: Arc<Mutex<Instant>>,
+    heartbeat_timeout: Duration,
 }
 
 impl GuardTrait for HeartbeatCountingGuard {
     fn is_valid(&self) -> bool {
-        true
+        let last = self.last_heartbeat.lock().unwrap();
+        last.elapsed() < self.heartbeat_timeout
     }
 
     fn heartbeat(&self) {
         self.heartbeat_count.fetch_add(1, Ordering::SeqCst);
+        *self.last_heartbeat.lock().unwrap() = Instant::now();
     }
 }
 
@@ -153,5 +165,27 @@ async fn runner_sends_heartbeats_during_event_processing() {
         heartbeats >= 4,
         "Expected at least 4 heartbeats during 1 second of processing with 200ms interval, got {}",
         heartbeats
+    );
+}
+
+#[tokio::test]
+async fn guard_becomes_invalid_after_heartbeat_timeout() {
+    // Given: coordinator with short heartbeat timeout (300ms)
+    let heartbeat_count = Arc::new(AtomicUsize::new(0));
+    let coordinator = HeartbeatCountingCoordinator::new(heartbeat_count.clone());
+
+    // When: projector acquires guard and stops sending heartbeats (simulating hang)
+    let guard = coordinator
+        .try_acquire()
+        .await
+        .expect("should acquire leadership");
+
+    // Wait for timeout to elapse without calling heartbeat()
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+    // Then: guard becomes invalid after timeout
+    assert!(
+        !guard.is_valid(),
+        "Guard should be invalid after heartbeat timeout elapsed without heartbeat"
     );
 }
