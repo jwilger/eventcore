@@ -8,11 +8,10 @@
 //! - And caller can decide recovery strategy (restart, alert, etc)
 
 use eventcore::{
-    Event, EventFilter, EventPage, EventReader, EventStore, InMemoryCheckpointStore,
-    LocalCoordinator, PollConfig, PollMode, ProjectionRunner, Projector, StreamId, StreamPosition,
-    StreamVersion, StreamWrites,
+    Event, EventFilter, EventPage, EventReader, EventStore, LocalCoordinator, PollConfig, PollMode,
+    ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
 };
-use eventcore_memory::InMemoryEventStore;
+use eventcore_memory::{InMemoryCheckpointStore, InMemoryEventStore};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

@@ -12,10 +12,10 @@
 
 use eventcore::{
     BatchSize, Event, EventFilter, EventPage, EventReader, EventStore, FailureContext,
-    FailureStrategy, InMemoryCheckpointStore, LocalCoordinator, PollConfig, PollMode,
-    ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
+    FailureStrategy, LocalCoordinator, PollConfig, PollMode, ProjectionRunner, Projector, StreamId,
+    StreamPosition, StreamVersion, StreamWrites,
 };
-use eventcore_memory::InMemoryEventStore;
+use eventcore_memory::{InMemoryCheckpointStore, InMemoryEventStore};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::sync::Arc;

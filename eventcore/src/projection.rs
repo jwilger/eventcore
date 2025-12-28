@@ -5,8 +5,8 @@
 //! - `ProjectionRunner`: Orchestrates projector execution with event polling
 
 use crate::{
-    BackoffMultiplier, BatchSize, Event, EventFilter, EventPage, EventReader, FailureStrategy,
-    MaxConsecutiveFailures, MaxRetryAttempts, Projector, StreamPosition,
+    BackoffMultiplier, BatchSize, CheckpointStore, Event, EventFilter, EventPage, EventReader,
+    FailureStrategy, MaxConsecutiveFailures, MaxRetryAttempts, Projector, StreamPosition,
 };
 use std::time::Duration;
 
@@ -104,60 +104,6 @@ pub enum PollMode {
     Batch,
     /// Continuously poll for new events until stopped.
     Continuous,
-}
-
-/// In-memory checkpoint store for tracking projection progress.
-///
-/// `InMemoryCheckpointStore` stores checkpoint positions in memory. It is
-/// primarily useful for testing and single-process deployments where
-/// persistence across restarts is not required.
-///
-/// For production deployments requiring durability, use a persistent
-/// checkpoint store implementation.
-///
-/// # Example
-///
-/// ```ignore
-/// let checkpoint_store = InMemoryCheckpointStore::new();
-/// let runner = ProjectionRunner::new(projector, coordinator, &store)
-///     .with_checkpoint_store(checkpoint_store);
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct InMemoryCheckpointStore {
-    checkpoints:
-        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, StreamPosition>>>,
-}
-
-impl InMemoryCheckpointStore {
-    /// Create a new in-memory checkpoint store.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Load checkpoint for the given projector name.
-    pub fn load(&self, projector_name: &str) -> Option<StreamPosition> {
-        self.checkpoints
-            .lock()
-            .ok()
-            .and_then(|guard| guard.get(projector_name).copied())
-    }
-
-    /// Save checkpoint for the given projector name.
-    pub fn save(&self, projector_name: &str, position: StreamPosition) {
-        match self.checkpoints.lock() {
-            Ok(mut guard) => {
-                let _ = guard.insert(projector_name.to_string(), position);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    projector = projector_name,
-                    position = %position,
-                    error = %e,
-                    "Failed to save checkpoint due to poisoned mutex"
-                );
-            }
-        }
-    }
 }
 
 /// Guard representing acquired leadership from a coordinator.
@@ -270,9 +216,10 @@ impl Default for LocalCoordinator {
 ///
 /// # Type Parameters
 ///
+/// - `E`: The event type implementing [`Event`]
+/// - `R`: The event reader type implementing [`EventReader`]
 /// - `P`: The projector type implementing [`Projector`]
-/// - `C`: The coordinator type (e.g., `LocalCoordinator`)
-/// - `S`: The event store type implementing [`EventReader`]
+/// - `C`: The checkpoint store type implementing [`CheckpointStore`]
 ///
 /// # Example
 ///
@@ -287,28 +234,61 @@ impl Default for LocalCoordinator {
 /// let runner = ProjectionRunner::new(projector, coordinator, &store);
 /// runner.run().await?;
 /// ```
-pub struct ProjectionRunner<P, C, S>
+pub struct ProjectionRunner<E, R, P, C>
 where
-    P: Projector,
-    S: EventReader,
+    E: Event,
+    R: EventReader,
+    P: Projector<Event = E>,
+    C: CheckpointStore,
 {
     projector: P,
-    _coordinator: C,
-    store: S,
-    checkpoint_store: Option<InMemoryCheckpointStore>,
+    _coordinator: LocalCoordinator,
+    store: R,
+    checkpoint_store: Option<C>,
     poll_mode: PollMode,
     poll_config: PollConfig,
     event_retry_config: EventRetryConfig,
+    _event: std::marker::PhantomData<E>,
 }
 
-impl<P, C, S> ProjectionRunner<P, C, S>
+/// A no-op checkpoint store that never saves or loads checkpoints.
+///
+/// Used as the default checkpoint store type when no checkpoint store is configured.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoCheckpointStore;
+
+/// Error type for NoCheckpointStore (never actually returned).
+#[derive(Debug, Clone, Copy)]
+pub struct NoCheckpointError;
+
+impl std::fmt::Display for NoCheckpointError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "no checkpoint store configured")
+    }
+}
+
+impl std::error::Error for NoCheckpointError {}
+
+impl CheckpointStore for NoCheckpointStore {
+    type Error = NoCheckpointError;
+
+    async fn load(&self, _name: &str) -> Result<Option<StreamPosition>, Self::Error> {
+        Ok(None)
+    }
+
+    async fn save(&self, _name: &str, _position: StreamPosition) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl<P, R> ProjectionRunner<P::Event, R, P, NoCheckpointStore>
 where
     P: Projector,
     P::Event: Event + Clone,
     P::Context: Default,
-    S: EventReader,
+    R: EventReader,
 {
-    /// Create a new projection runner.
+    /// Create a new projection runner without checkpoint support.
     ///
     /// # Parameters
     ///
@@ -319,7 +299,7 @@ where
     /// # Returns
     ///
     /// A new `ProjectionRunner` ready to be started with `run()`.
-    pub fn new(projector: P, coordinator: C, store: S) -> Self {
+    pub fn new(projector: P, coordinator: LocalCoordinator, store: R) -> Self {
         Self {
             projector,
             _coordinator: coordinator,
@@ -328,6 +308,7 @@ where
             poll_mode: PollMode::Batch,
             poll_config: PollConfig::default(),
             event_retry_config: EventRetryConfig::default(),
+            _event: std::marker::PhantomData,
         }
     }
 
@@ -344,12 +325,32 @@ where
     ///
     /// # Returns
     ///
-    /// Self for method chaining.
-    pub fn with_checkpoint_store(mut self, checkpoint_store: InMemoryCheckpointStore) -> Self {
-        self.checkpoint_store = Some(checkpoint_store);
-        self
+    /// A new runner with the checkpoint store configured.
+    pub fn with_checkpoint_store<C: CheckpointStore>(
+        self,
+        checkpoint_store: C,
+    ) -> ProjectionRunner<P::Event, R, P, C> {
+        ProjectionRunner {
+            projector: self.projector,
+            _coordinator: self._coordinator,
+            store: self.store,
+            checkpoint_store: Some(checkpoint_store),
+            poll_mode: self.poll_mode,
+            poll_config: self.poll_config,
+            event_retry_config: self.event_retry_config,
+            _event: std::marker::PhantomData,
+        }
     }
+}
 
+impl<E, R, P, C> ProjectionRunner<E, R, P, C>
+where
+    E: Event + Clone,
+    R: EventReader,
+    P: Projector<Event = E>,
+    P::Context: Default,
+    C: CheckpointStore,
+{
     /// Configure the polling mode for event processing.
     ///
     /// Controls whether the runner processes events once (batch mode) or
@@ -456,10 +457,10 @@ where
         P::Error: std::fmt::Debug,
     {
         // Load checkpoint if checkpoint store is configured
-        let mut last_checkpoint = self
-            .checkpoint_store
-            .as_ref()
-            .and_then(|cs| cs.load(self.projector.name()));
+        let mut last_checkpoint = match &self.checkpoint_store {
+            Some(cs) => cs.load(self.projector.name()).await.ok().flatten(),
+            None => None,
+        };
 
         let mut ctx = P::Context::default();
         let mut consecutive_failures = 0u32;
@@ -515,7 +516,8 @@ where
                             // Event processed successfully - update and save checkpoint
                             last_checkpoint = Some(position);
                             if let Some(cs) = &self.checkpoint_store {
-                                cs.save(self.projector.name(), position);
+                                // Ignore checkpoint save errors - checkpoint is best-effort
+                                let _ = cs.save(self.projector.name(), position).await;
                             }
                             break; // Move to next event
                         }
@@ -553,7 +555,8 @@ where
                                     // be retried (e.g., malformed data, unrecoverable errors).
                                     last_checkpoint = Some(position);
                                     if let Some(cs) = &self.checkpoint_store {
-                                        cs.save(self.projector.name(), position);
+                                        // Ignore checkpoint save errors - checkpoint is best-effort
+                                        let _ = cs.save(self.projector.name(), position).await;
                                     }
                                     break; // Move to next event
                                 }
