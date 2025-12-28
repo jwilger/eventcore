@@ -161,3 +161,71 @@ history/
 - ❌ Do NOT clutter repo root with planning documents
 
 For more details, see README.md and QUICKSTART.md.
+
+## Stacked PRs with git-spice
+
+This project uses **git-spice** (`gs`) for managing stacked pull requests.
+
+### Why Stacked PRs?
+
+- Break large features into reviewable chunks
+- Continue working while awaiting review
+- Each PR in a stack = one beads issue (use `discovered-from` links)
+
+### Quick Reference
+
+**Initialize (first time per repo clone):**
+
+```bash
+gs repo init
+gs auth    # Authenticate with GitHub
+```
+
+**Create a stack:**
+
+```bash
+gs branch create feature-part-1    # First branch in stack
+# ... make changes, commit ...
+gs branch create feature-part-2    # Stacks on part-1
+# ... make changes, commit ...
+```
+
+**Submit stack as PRs:**
+
+```bash
+gs stack submit    # Creates/updates all PRs in stack
+```
+
+**After a PR merges (squash-merge):**
+
+```bash
+gs repo sync       # Fetch latest main
+gs stack restack   # Rebase remaining stack on new main
+gs stack submit    # Update remaining PRs
+```
+
+**Navigation:**
+
+```bash
+gs branch checkout <name>   # or: gs bco <name>
+gs stack            # Show current stack
+gs log              # Show stack with PR status
+```
+
+### Workflow Integration
+
+1. **Create beads issue** for each PR in the stack
+2. Use `discovered-from:<parent-id>` for dependent issues
+3. **Submit stack**: `gs stack submit`
+4. **Update PRs**: After changes, `gs stack submit` again
+5. **After merge**: `gs repo sync && gs stack restack && gs stack submit`
+6. **Close beads issues** as PRs merge
+
+### Shorthand Commands
+
+| Full Command | Shorthand |
+|--------------|-----------|
+| `gs branch create` | `gs bc` |
+| `gs branch checkout` | `gs bco` |
+| `gs stack submit` | `gs ss` |
+| `gs stack restack` | `gs sr` |

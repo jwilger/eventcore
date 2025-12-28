@@ -29,6 +29,7 @@
           buildInputs = with pkgs; [
             rustToolchain
             git
+            git-spice
             pre-commit
             nodejs_22
             glow
@@ -41,6 +42,9 @@
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
 
           shellHook = ''
+            # Configure git for stacked PR workflow
+            git config --local rebase.updateRefs true 2>/dev/null || true
+
             CARGO_AUDIT_VERSION="0.22.0"
             CARGO_NEXTEST_VERSION="0.9.115"
 

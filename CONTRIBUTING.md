@@ -165,6 +165,93 @@ cargo test --test '*' --workspace
 - Use property-based testing for invariants
 - Follow the existing test patterns in the codebase
 
+## Stacked Pull Requests (Optional)
+
+For complex features, consider using stacked PRs to break work into reviewable chunks.
+
+### Setup
+
+If using Nix:
+
+```bash
+nix develop  # git-spice is included
+gs repo init
+gs auth      # Authenticate with GitHub (one-time)
+```
+
+Without Nix:
+
+```bash
+# Install git-spice (see: https://github.com/abhinav/git-spice)
+# On macOS:
+brew install git-spice
+
+# On Linux (download binary):
+# https://github.com/abhinav/git-spice/releases
+
+gs repo init
+gs auth
+```
+
+### Creating a Stack
+
+```bash
+# Start from main
+git checkout main && git pull
+
+# Create first branch
+gs branch create add-user-model
+# ... make changes, commit ...
+
+# Stack another branch on top
+gs branch create add-user-api
+# ... make changes, commit ...
+
+# Submit all PRs
+gs stack submit
+```
+
+### Maintaining a Stack
+
+```bash
+# After making changes to any branch
+gs stack submit    # Updates all PRs
+
+# After a PR is merged (squash-merge)
+gs repo sync       # Fetch and update main
+gs stack restack   # Rebase remaining branches
+gs stack submit    # Update remaining PRs
+```
+
+### Best Practices
+
+1. **Small, focused PRs** - Each PR should be independently reviewable
+2. **One beads issue per PR** - Use `discovered-from` for dependencies
+3. **Descriptive branch names** - `gs branch create meaningful-name`
+4. **Submit early** - Create draft PRs to show intent
+5. **Restack promptly** - After any PR merges, restack the remaining stack
+
+### Troubleshooting
+
+**Conflicts during restack:**
+
+```bash
+# Resolve conflicts in your editor
+git add <resolved-files>
+git rebase --continue
+# Then re-submit
+gs stack submit
+```
+
+**Detached from stack:**
+
+```bash
+gs stack    # See current stack state
+gs branch track --base <upstream-branch>  # Re-attach if needed
+```
+
+For more details, see [git-spice documentation](https://abhinav.github.io/git-spice/).
+
 ## Pull Request Process
 
 1. **Update documentation** for any changed functionality
