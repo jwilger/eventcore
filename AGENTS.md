@@ -168,9 +168,15 @@ This project uses **git-spice** (`gs`) for managing stacked pull requests.
 
 ### Why Stacked PRs?
 
+- Continue working on dependent changes without waiting for PR review/merge
 - Break large features into reviewable chunks
-- Continue working while awaiting review
 - Each PR in a stack = one beads issue (use `discovered-from` links)
+
+**Stacks are about code dependencies, not feature relationships.** Valid use cases:
+
+- A single feature broken into reviewable parts
+- **Unrelated tickets where later work depends on earlier code changes**
+- Experimental work that builds on pending changes
 
 ### Quick Reference
 
@@ -196,13 +202,14 @@ gs branch create feature-part-2    # Stacks on part-1
 gs stack submit    # Creates/updates all PRs in stack
 ```
 
-**After a PR merges (squash-merge):**
+**After ANY PR merges (run regularly):**
 
 ```bash
-gs repo sync       # Fetch latest main
-gs stack restack   # Rebase remaining stack on new main
-gs stack submit    # Update remaining PRs
+gs repo sync --restack    # Sync + restack ALL branches in one command
+gs stack submit           # Update remaining PRs
 ```
+
+Or use the alias: `gs-sync` (syncs, restacks, and submits)
 
 **Navigation:**
 
@@ -218,7 +225,7 @@ gs log              # Show stack with PR status
 2. Use `discovered-from:<parent-id>` for dependent issues
 3. **Submit stack**: `gs stack submit`
 4. **Update PRs**: After changes, `gs stack submit` again
-5. **After merge**: `gs repo sync && gs stack restack && gs stack submit`
+5. **After ANY merge**: `gs-sync` (or `gs repo sync --restack && gs stack submit`)
 6. **Close beads issues** as PRs merge
 
 ### Shorthand Commands
@@ -228,4 +235,5 @@ gs log              # Show stack with PR status
 | `gs branch create` | `gs bc` |
 | `gs branch checkout` | `gs bco` |
 | `gs stack submit` | `gs ss` |
-| `gs stack restack` | `gs sr` |
+| `gs repo sync --restack` | `gs rs --restack` |
+| Sync + restack + submit | `gs-sync` (alias) |

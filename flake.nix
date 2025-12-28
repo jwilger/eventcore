@@ -69,6 +69,9 @@
 
             # Use project-local advisory database
             alias cargo-audit='cargo audit --db "$PWD/.cargo-advisory-db"'
+
+            # git-spice workflow alias: sync, restack all branches, and submit
+            alias gs-sync='gs repo sync --restack && gs stack submit'
           '';
         };
       }
