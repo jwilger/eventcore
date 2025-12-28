@@ -97,10 +97,14 @@ async fn trigger_prevents_update_on_event_log() {
             .execute(&pool)
             .await;
 
-    // Then: Database raises error preventing the update
+    // Then: Database raises error preventing the update with clear message
+    let error =
+        update_result.expect_err("UPDATE on event log should be prevented by database trigger");
+    let error_message = error.to_string();
     assert!(
-        update_result.is_err(),
-        "UPDATE on event log should be prevented by database trigger"
+        error_message.contains("immutable"),
+        "Error message should clearly indicate immutability violation, got: {}",
+        error_message
     );
 }
 
@@ -145,9 +149,13 @@ async fn trigger_prevents_delete_on_event_log() {
         .execute(&pool)
         .await;
 
-    // Then: Database raises error preventing the deletion
+    // Then: Database raises error preventing the deletion with clear message
+    let error =
+        delete_result.expect_err("DELETE on event log should be prevented by database trigger");
+    let error_message = error.to_string();
     assert!(
-        delete_result.is_err(),
-        "DELETE on event log should be prevented by database trigger"
+        error_message.contains("immutable"),
+        "Error message should clearly indicate immutability violation, got: {}",
+        error_message
     );
 }
