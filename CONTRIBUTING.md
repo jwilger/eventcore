@@ -167,7 +167,13 @@ cargo test --test '*' --workspace
 
 ## Stacked Pull Requests (Optional)
 
-For complex features, consider using stacked PRs to break work into reviewable chunks.
+Stacked PRs let you continue working on dependent changes without waiting for earlier PRs to merge.
+
+**Stacks are about code dependencies, not feature relationships.** You can use stacks for:
+
+- Breaking a large feature into reviewable chunks
+- Working on unrelated tickets where one depends on another's code changes
+- Experimental work that builds on pending changes
 
 ### Setup
 
@@ -203,7 +209,7 @@ git checkout main && git pull
 gs branch create add-user-model
 # ... make changes, commit ...
 
-# Stack another branch on top
+# Stack another branch on top (can be related OR unrelated work)
 gs branch create add-user-api
 # ... make changes, commit ...
 
@@ -217,11 +223,15 @@ gs stack submit
 # After making changes to any branch
 gs stack submit    # Updates all PRs
 
-# After a PR is merged (squash-merge)
-gs repo sync       # Fetch and update main
-gs stack restack   # Rebase remaining branches
-gs stack submit    # Update remaining PRs
+# After ANY PR merges (run this regularly!)
+gs repo sync --restack   # Sync + restack in one command
+gs stack submit          # Update remaining PRs
+
+# Or use the alias (if using nix develop):
+gs-sync    # Does sync --restack + submit
 ```
+
+When a PR merges, its branch is deleted and dependent branches are rebased onto main. Run `gs-sync` regularly to keep your stacks up to date.
 
 ### Best Practices
 
@@ -229,7 +239,7 @@ gs stack submit    # Update remaining PRs
 2. **One beads issue per PR** - Use `discovered-from` for dependencies
 3. **Descriptive branch names** - `gs branch create meaningful-name`
 4. **Submit early** - Create draft PRs to show intent
-5. **Restack promptly** - After any PR merges, restack the remaining stack
+5. **Sync often** - Run `gs-sync` after any PR merges (yours or others')
 
 ### Troubleshooting
 
