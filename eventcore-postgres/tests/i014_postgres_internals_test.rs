@@ -53,3 +53,109 @@ async fn trigger_assigns_sequential_versions() {
         Err(e) => panic!("insert failed: {}", e),
     }
 }
+
+#[tokio::test]
+async fn trigger_prevents_update_on_event_log() {
+    // Given: A Postgres database with events appended to a stream
+    let fixture = PostgresTestFixture::new().await;
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&fixture.connection_string)
+        .await
+        .expect("should connect to test database");
+
+    let stream_id = format!("immutability-test-{}", Uuid::now_v7());
+
+    // Insert an event to have something to update
+    sqlx::query(&format!(
+        "SELECT set_config('eventcore.expected_versions', '{{\"{}\":0}}', true)",
+        stream_id
+    ))
+    .execute(&pool)
+    .await
+    .expect("should set expected versions");
+
+    let event_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(event_id)
+    .bind(&stream_id)
+    .bind("TestEvent")
+    .bind(serde_json::json!({"original": true}))
+    .bind(serde_json::json!({}))
+    .execute(&pool)
+    .await
+    .expect("should insert event");
+
+    // When: User attempts UPDATE on the events table via raw SQL
+    let update_result =
+        sqlx::query("UPDATE eventcore_events SET event_data = $1 WHERE event_id = $2")
+            .bind(serde_json::json!({"tampered": true}))
+            .bind(event_id)
+            .execute(&pool)
+            .await;
+
+    // Then: Database raises error preventing the update with clear message
+    let error =
+        update_result.expect_err("UPDATE on event log should be prevented by database trigger");
+    let error_message = error.to_string();
+    assert!(
+        error_message.contains("immutable"),
+        "Error message should clearly indicate immutability violation, got: {}",
+        error_message
+    );
+}
+
+#[tokio::test]
+async fn trigger_prevents_delete_on_event_log() {
+    // Given: A Postgres database with events appended to a stream
+    let fixture = PostgresTestFixture::new().await;
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&fixture.connection_string)
+        .await
+        .expect("should connect to test database");
+
+    let stream_id = format!("delete-prevention-test-{}", Uuid::now_v7());
+
+    // Insert an event to have something to delete
+    sqlx::query(&format!(
+        "SELECT set_config('eventcore.expected_versions', '{{\"{}\":0}}', true)",
+        stream_id
+    ))
+    .execute(&pool)
+    .await
+    .expect("should set expected versions");
+
+    let event_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(event_id)
+    .bind(&stream_id)
+    .bind("TestEvent")
+    .bind(serde_json::json!({"data": "to be deleted"}))
+    .bind(serde_json::json!({}))
+    .execute(&pool)
+    .await
+    .expect("should insert event");
+
+    // When: User attempts DELETE on the events table via raw SQL
+    let delete_result = sqlx::query("DELETE FROM eventcore_events WHERE event_id = $1")
+        .bind(event_id)
+        .execute(&pool)
+        .await;
+
+    // Then: Database raises error preventing the deletion with clear message
+    let error =
+        delete_result.expect_err("DELETE on event log should be prevented by database trigger");
+    let error_message = error.to_string();
+    assert!(
+        error_message.contains("immutable"),
+        "Error message should clearly indicate immutability violation, got: {}",
+        error_message
+    );
+}

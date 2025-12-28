@@ -133,6 +133,22 @@ impl Default for StreamWrites {
 /// Implementations include:
 /// - `eventcore-postgres`: Production PostgreSQL backend with ACID guarantees
 /// - `eventcore-memory`: In-memory backend for testing
+///
+/// # Immutability Guarantee
+///
+/// Event stores are append-only. Once an event is written, it must never be
+/// modified or deleted. This is a fundamental invariant of event sourcing:
+/// events represent facts that have already occurred in the business domain.
+///
+/// Implementations MUST ensure this immutability through whatever mechanisms
+/// their storage backend provides:
+/// - SQL databases: Use triggers/rules to reject UPDATE/DELETE operations
+/// - Purpose-built event stores (e.g., Kurrent/EventStoreDB): Rely on native
+///   append-only semantics
+/// - In-memory stores: May omit enforcement (test-only, ephemeral)
+///
+/// The `eventcore-postgres` backend enforces immutability via database triggers
+/// that raise errors on any attempt to UPDATE or DELETE event records.
 pub trait EventStore {
     /// Read all events from a stream.
     ///
