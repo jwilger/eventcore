@@ -1,7 +1,7 @@
 # EventCore Architecture
 
-**Document Version:** 2.4
-**Date:** 2025-12-25
+**Document Version:** 2.5
+**Date:** 2025-12-27
 **Phase:** 4 - Architecture Synthesis
 
 ## Overview
@@ -430,9 +430,10 @@ This design eliminates the coordination problems of separate checkpoint manageme
 The projector execution follows a simple pattern with required coordination:
 
 ```rust
+// Acquire leadership - blocks until acquired or fails
 guard = coordinator.acquire(projector.name())
-while guard.is_valid() {
-    guard.heartbeat()
+
+loop {
     events = poll_events_after(checkpoint)
     for event in events {
         apply_event_in_transaction(event)
@@ -440,10 +441,10 @@ while guard.is_valid() {
     }
     sleep_if_no_events()
 }
-// guard dropped - leadership released
+// guard dropped - leadership released automatically
 ```
 
-The coordinator is a required parameter to the projection runner, ensuring that distributed deployments cannot accidentally run uncoordinated projectors.
+The coordinator is a required parameter to the projection runner, ensuring that distributed deployments cannot accidentally run uncoordinated projectors. Leadership is held via the guard's lifetime - when the guard is dropped (process exit, panic, scope end), leadership is released automatically.
 
 ### Projector Configuration
 
@@ -468,7 +469,7 @@ See the Error Handling Strategies section for event retry configuration details.
 
 #### Heartbeat Configuration (Coordination Level)
 
-See the Heartbeat and Liveness Detection section under Projector Coordination for heartbeat configuration details.
+Heartbeat configuration is specific to the coordinator implementation being used. See the Projector Coordination section for details on how different backends implement liveness detection.
 
 #### Per-Projector Tuning
 
@@ -516,38 +517,68 @@ This is a hard constraint: events are never processed out of order.
 
 ### Projector Coordination for Distributed Deployments
 
-Production systems typically run multiple application instances for availability and load distribution. The `ProjectorCoordinator` trait ensures correct operation by providing leader election for projectors.
+Production systems typically run multiple application instances for availability and load distribution. Without coordination, multiple instances would process the same events concurrently, causing checkpoint races, read model corruption, and ordering violations.
+
+EventCore uses a subscription table combined with session-scoped advisory locks for coordination. This pattern, proven in production by Commanded/EventStore (Elixir), aligns three critical lifecycles: projector process lifetime, database connection lifetime, and leadership lock lifetime.
+
+#### Subscriptions Table and Advisory Locks
+
+The coordination mechanism separates two concerns:
+
+**Subscriptions Table** - Tracks checkpoint state:
+- Schema: `(subscription_name TEXT PRIMARY KEY, last_position BIGINT, updated_at TIMESTAMPTZ)`
+- Purpose: WHERE did we process up to?
+- Updated transactionally with projection writes
+
+**Advisory Locks** - Coordinates WHO is processing:
+- Acquired via `SELECT pg_advisory_lock(hash(subscription_name))` on dedicated connection
+- Lock ID derived from subscription name for uniqueness
+- Held for session duration (connection open)
+- Released automatically when connection closes
+
+#### Dedicated Connections Not Pooled
+
+Each projector owns a dedicated database connection for its entire lifetime, not a connection from a pool. This is essential because:
+
+- Advisory locks are session-scoped - tied to a specific database connection
+- Connection lifetime = projector lifetime = lock lifetime
+- When the process crashes or exits, the connection closes and the lock releases automatically
+- No separate heartbeat table or validity checking needed - connection alive implies lock held
+
+Typical application: 5-20 projectors, each with 1 dedicated connection (well within PostgreSQL limits). This is fundamentally different from connection-per-request web applications where pooling is essential.
+
+#### Simplified Coordination API
+
+The coordination contract is minimal:
 
 ```rust
 pub trait ProjectorCoordinator: Send + Sync + 'static {
     type Guard: CoordinatorGuard;
 
     /// Attempt to acquire leadership for the named projector.
-    /// Returns a guard that releases leadership when dropped.
+    /// Blocks until acquired or fails.
     async fn acquire(&self, projector_name: &str) -> Result<Self::Guard, CoordinationError>;
 }
 
 pub trait CoordinatorGuard: Send + 'static {
-    /// Check if leadership is still held (including heartbeat validity).
-    fn is_valid(&self) -> bool;
-
-    /// Renew leadership by updating heartbeat.
-    fn heartbeat(&self) -> Result<(), CoordinationError>;
+    // Guard released on drop - no explicit release needed
 }
 ```
 
-Key design principles:
+Key simplifications compared to heartbeat-table approaches:
 
-- **Required Parameter**: The projection runner requires a coordinator. This makes coordination failures compile-time errors rather than production incidents. Single-process deployments use an explicit `LocalCoordinator` rather than having "no coordination" as an invisible default.
+- No `is_valid()` checks in the projection loop - connection lifecycle handles it
+- No `heartbeat()` calls - connection alive = leadership held
+- No heartbeat timeout configuration - session lifetime is sufficient
+- Fewer failure modes - connection close is the only release mechanism
 
-- **RAII Guard Pattern**: Leadership acquisition returns a guard that releases leadership when dropped. This ensures crash safety: if the process terminates unexpectedly, leadership is released automatically (via database connection close, process termination, etc.).
+#### Backend Implementations
 
-- **Leadership Validity Checking**: Guards must be checkable for continued validity. Leadership can be lost unexpectedly due to network partitions or database failover. The projection loop exits gracefully when leadership is lost rather than corrupting state.
+- **PostgreSQL**: Session-scoped advisory locks on dedicated connections. Lock acquired via `pg_advisory_lock(hash(subscription_name))`. Released automatically on connection close (crash, shutdown, network partition).
 
-- **Backend-Specific Implementations**:
-  - PostgreSQL uses session-scoped advisory locks (released automatically on disconnect)
-  - In-memory uses process-local mutexes (for testing and single-process deployments)
-  - Future backends use their natural primitives
+- **In-Memory**: Process-local mutexes for testing and single-process deployments. Simulates the same semantics without requiring a database.
+
+- **Future Backends**: MySQL `GET_LOCK()`, Redis `SETNX` with TTL, or similar primitives following the same pattern.
 
 #### LocalCoordinator for Single-Process
 
@@ -558,37 +589,40 @@ let coordinator = LocalCoordinator::new();
 run_projector(projector, event_reader, coordinator).await;
 ```
 
+#### Crash Safety and Leadership Release
+
+The key insight is aligning three lifecycles: projector process, database connection, and advisory lock. When any of these terminates, the others follow:
+
+- **Process crashes**: Connection closes, lock released automatically
+- **Network partition**: Connection times out, lock released automatically
+- **Graceful shutdown**: Guard dropped, connection closed, lock released
+
+No separate heartbeat mechanism is needed because the database session itself provides the liveness signal. This is simpler and more reliable than heartbeat-table approaches.
+
+#### Stuck Projector Detection
+
+Hung projectors (infinite loops, deadlocks with connection alive) are detected via application monitoring (metrics, health checks) rather than infrastructure coordination primitives. The subscriptions table's `updated_at` timestamp provides visibility into processing progress:
+
+- Monitor time since last checkpoint update
+- Alert if a projector hasn't made progress in N minutes
+- Coordinate restart via orchestration layer (Kubernetes, systemd)
+
+This separates concerns: coordination ensures mutual exclusion; monitoring detects stuck processes.
+
 #### Why Leader Election, Not Partition Assignment
 
 Sequential processing (a hard constraint for ordering preservation) eliminates the need for partition assignment. The question is not "which instance processes which subset of events" but rather "which single instance processes events for this projector."
 
 For users who need Kafka-style partition-based scaling, an escape hatch exists: create a single-threaded projector that pushes events onto a Kafka (or similar) log, then let that external system handle partitioning and parallel consumption. EventCore handles the leader-elected, sequential projection to the external system; that external system provides the partition assignment semantics.
 
-#### Heartbeat and Liveness Detection
-
-Heartbeat configuration is part of ProjectorCoordinator because liveness is a coordination concern, not a projection concern:
-
-- **heartbeat_interval** - How often the leader must renew leadership (default: 5 seconds)
-- **heartbeat_timeout** - How long before missed heartbeat causes leadership loss (default: 15 seconds, must be > heartbeat_interval)
-
-The projection runner calls `guard.heartbeat()` periodically. The coordinator implementation decides what that means (e.g., updating a timestamp in the checkpoint table, renewing an advisory lock with timeout). Guard validity (`guard.is_valid()`) returns false if heartbeat has been missed, causing the projection loop to exit gracefully.
-
-Heartbeat timeout should be 2-3x the heartbeat interval to tolerate transient delays (network jitter, GC pauses) while still detecting truly hung projectors. A hung projector (infinite loop, deadlock, network partition with connection alive) would otherwise block failover indefinitely since the advisory lock remains held.
-
-Backend implementations use their natural primitives:
-- PostgreSQL can use `pg_advisory_lock` with timeout, or update a timestamp column
-- In-memory can use tokio timeout on mutex
-- External coordinators (etcd, Consul) have built-in TTL mechanisms
-
 #### Contract Tests for Coordinators
 
-Per the contract testing pattern, coordinators have contract tests verifying:
+Per the contract testing pattern (eventcore-testing crate), coordinators have contract tests verifying:
 
 - Mutual exclusion (only one leader at a time)
 - Crash-safe release (leadership released when connection drops)
-- Blocking/non-blocking acquisition semantics
-- Guard validity detection after leadership loss
-- Heartbeat timeout enforcement
+- Blocking acquisition semantics (waits for leadership to become available)
+- Automatic release on guard drop
 
 ## Type System Patterns
 
@@ -857,8 +891,8 @@ EventCore provides a cohesive architecture for event-sourced applications:
 2. **Deterministic, atomic execution** of complex multi-stream business operations
 3. **Automatic concurrency management** and retry behavior that keeps business code simple
 4. **Poll-based projections** with integrated checkpoint management for correct read models
-5. **Distributed deployment support** via ProjectorCoordinator for leader election with heartbeat-based liveness detection
-6. **Per-projector configuration** with three orthogonal concerns: poll (infrastructure), event retry (application), and heartbeat (coordination)
+5. **Subscription table + advisory lock coordination** for distributed deployments using session-scoped locks on dedicated connections
+6. **Per-projector configuration** with three orthogonal concerns: poll (infrastructure), event retry (application), and monitoring (stuck process detection)
 7. **Rich metadata and observability** hooks for auditing, compliance, and debugging
 8. **Pluggable storage backends** validated by a shared contract suite
 9. **Feature flag ergonomics** for adapter configuration matching Rust ecosystem patterns
