@@ -4,11 +4,12 @@
 //! storage backend for EventCore integration tests and development.
 
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use eventcore_types::{
-    Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, EventStreamReader,
-    EventStreamSlice, Operation, StreamId, StreamPosition, StreamVersion, StreamWriteEntry,
-    StreamWrites,
+    CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
+    EventStreamReader, EventStreamSlice, Operation, StreamId, StreamPosition, StreamVersion,
+    StreamWriteEntry, StreamWrites,
 };
 use uuid::Uuid;
 
@@ -207,6 +208,77 @@ impl EventReader for InMemoryEventStore {
             .collect();
 
         Ok(events)
+    }
+}
+
+/// In-memory checkpoint store for tracking projection progress.
+///
+/// `InMemoryCheckpointStore` stores checkpoint positions in memory using a
+/// thread-safe `Arc<RwLock<HashMap>>`. It is primarily useful for testing
+/// and single-process deployments where persistence across restarts is not required.
+///
+/// For production deployments requiring durability, use a persistent
+/// checkpoint store implementation.
+///
+/// # Example
+///
+/// ```ignore
+/// use eventcore_memory::InMemoryCheckpointStore;
+///
+/// let checkpoint_store = InMemoryCheckpointStore::new();
+/// // Use with ProjectionRunner
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryCheckpointStore {
+    checkpoints: Arc<RwLock<HashMap<String, StreamPosition>>>,
+}
+
+impl InMemoryCheckpointStore {
+    /// Create a new in-memory checkpoint store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Error type for in-memory checkpoint store operations.
+///
+/// Since the in-memory store uses an `RwLock`, the only possible error
+/// is a poisoned lock from a panic in another thread.
+#[derive(Debug, Clone)]
+pub struct InMemoryCheckpointError {
+    message: String,
+}
+
+impl std::fmt::Display for InMemoryCheckpointError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for InMemoryCheckpointError {}
+
+impl CheckpointStore for InMemoryCheckpointStore {
+    type Error = InMemoryCheckpointError;
+
+    async fn load(&self, name: &str) -> Result<Option<StreamPosition>, Self::Error> {
+        let guard = self
+            .checkpoints
+            .read()
+            .map_err(|e| InMemoryCheckpointError {
+                message: format!("failed to acquire read lock: {}", e),
+            })?;
+        Ok(guard.get(name).copied())
+    }
+
+    async fn save(&self, name: &str, position: StreamPosition) -> Result<(), Self::Error> {
+        let mut guard = self
+            .checkpoints
+            .write()
+            .map_err(|e| InMemoryCheckpointError {
+                message: format!("failed to acquire write lock: {}", e),
+            })?;
+        let _ = guard.insert(name.to_string(), position);
+        Ok(())
     }
 }
 

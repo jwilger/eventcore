@@ -621,6 +621,75 @@ impl<T: EventReader + Sync> EventReader for &T {
     }
 }
 
+/// Trait for persisting and retrieving projection checkpoints.
+///
+/// CheckpointStore provides durable storage for projection progress, enabling
+/// projections to resume from their last known position after restarts or failures.
+///
+/// # Type Parameters
+///
+/// - `Error`: The error type returned by checkpoint operations
+///
+/// # Required Methods
+///
+/// - `load`: Retrieve the last saved position for a subscription
+/// - `save`: Persist the current position for a subscription
+///
+/// # Example
+///
+/// ```ignore
+/// impl CheckpointStore for MyCheckpointStore {
+///     type Error = MyError;
+///
+///     async fn load(&self, name: &str) -> Result<Option<StreamPosition>, Self::Error> {
+///         // Load from database, file, etc.
+///     }
+///
+///     async fn save(&self, name: &str, position: StreamPosition) -> Result<(), Self::Error> {
+///         // Persist to database, file, etc.
+///     }
+/// }
+/// ```
+pub trait CheckpointStore: Send + Sync {
+    /// Error type returned by checkpoint operations.
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Load the last saved checkpoint position for a subscription.
+    ///
+    /// # Parameters
+    ///
+    /// - `name`: The unique name identifying the subscription/projector
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(position))`: The last saved position
+    /// - `Ok(None)`: No checkpoint exists for this subscription
+    /// - `Err(Self::Error)`: If the load operation fails
+    fn load(
+        &self,
+        name: &str,
+    ) -> impl Future<Output = Result<Option<StreamPosition>, Self::Error>> + Send;
+
+    /// Save a checkpoint position for a subscription.
+    ///
+    /// This overwrites any previously saved position for the same subscription.
+    ///
+    /// # Parameters
+    ///
+    /// - `name`: The unique name identifying the subscription/projector
+    /// - `position`: The stream position to save
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())`: The checkpoint was saved successfully
+    /// - `Err(Self::Error)`: If the save operation fails
+    fn save(
+        &self,
+        name: &str,
+        position: StreamPosition,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

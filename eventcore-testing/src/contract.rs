@@ -1,6 +1,6 @@
 use eventcore_types::{
-    BatchSize, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, StreamId,
-    StreamPrefix, StreamVersion, StreamWrites,
+    BatchSize, CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore,
+    EventStoreError, StreamId, StreamPosition, StreamPrefix, StreamVersion, StreamWrites,
 };
 use std::fmt;
 
@@ -418,19 +418,24 @@ where
 /// backend_contract_tests! {
 ///     suite = my_backend,
 ///     make_store = || MyEventStore::new(),
+///     make_checkpoint_store = || MyCheckpointStore::new(),
 /// }
 /// ```
 ///
 /// # Requirements
 ///
 /// The store type must implement both `EventStore` and `EventReader` traits.
+/// The checkpoint store type must implement `CheckpointStore` trait.
 #[macro_export]
 macro_rules! backend_contract_tests {
-    (suite = $suite:ident, make_store = $make_store:expr $(,)?) => {
+    (suite = $suite:ident, make_store = $make_store:expr, make_checkpoint_store = $make_checkpoint_store:expr $(,)?) => {
         #[allow(non_snake_case)]
         mod $suite {
             use $crate::contract::{
-                test_basic_read_write, test_batch_limiting, test_concurrent_version_conflicts,
+                test_basic_read_write, test_batch_limiting,
+                test_checkpoint_independent_subscriptions,
+                test_checkpoint_load_missing_returns_none, test_checkpoint_save_and_load,
+                test_checkpoint_update_overwrites, test_concurrent_version_conflicts,
                 test_conflict_preserves_atomicity, test_event_ordering_across_streams,
                 test_missing_stream_reads, test_position_based_resumption, test_stream_isolation,
                 test_stream_prefix_filtering, test_stream_prefix_requires_prefix_match,
@@ -504,6 +509,35 @@ macro_rules! backend_contract_tests {
                 test_batch_limiting($make_store)
                     .await
                     .expect("event reader contract failed");
+            }
+
+            // CheckpointStore contract tests
+            #[tokio::test(flavor = "multi_thread")]
+            async fn checkpoint_save_and_load_contract() {
+                test_checkpoint_save_and_load($make_checkpoint_store)
+                    .await
+                    .expect("checkpoint store contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn checkpoint_update_overwrites_contract() {
+                test_checkpoint_update_overwrites($make_checkpoint_store)
+                    .await
+                    .expect("checkpoint store contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn checkpoint_load_missing_returns_none_contract() {
+                test_checkpoint_load_missing_returns_none($make_checkpoint_store)
+                    .await
+                    .expect("checkpoint store contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn checkpoint_independent_subscriptions_contract() {
+                test_checkpoint_independent_subscriptions($make_checkpoint_store)
+                    .await
+                    .expect("checkpoint store contract failed");
             }
         }
     };
@@ -949,6 +983,196 @@ where
     // And: Events are the FIRST 10 in global order
     // (We verify this by checking we got exactly 10 events - the implementation
     // must return events in order, so if we got 10 events they must be the first 10)
+
+    Ok(())
+}
+
+// ============================================================================
+// CheckpointStore Contract Tests
+// ============================================================================
+
+/// Contract test: Save a checkpoint and load it back
+pub async fn test_checkpoint_save_and_load<F, CS>(make_checkpoint_store: F) -> ContractTestResult
+where
+    F: Fn() -> CS + Send + Sync + Clone + 'static,
+    CS: CheckpointStore + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "checkpoint_save_and_load";
+
+    let store = make_checkpoint_store();
+
+    // Given: A subscription name and position
+    let subscription_name = format!("contract::{}::{}", SCENARIO, Uuid::now_v7());
+    let position = StreamPosition::new(Uuid::now_v7());
+
+    // When: Saving the checkpoint
+    store
+        .save(&subscription_name, position)
+        .await
+        .map_err(|_| ContractTestFailure::assertion(SCENARIO, "save failed"))?;
+
+    // Then: Loading returns the saved position
+    let loaded = store
+        .load(&subscription_name)
+        .await
+        .map_err(|_| ContractTestFailure::assertion(SCENARIO, "load failed"))?;
+
+    if loaded != Some(position) {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected loaded position {:?} but got {:?}",
+                Some(position),
+                loaded
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Contract test: Saving a checkpoint overwrites the previous value
+pub async fn test_checkpoint_update_overwrites<F, CS>(
+    make_checkpoint_store: F,
+) -> ContractTestResult
+where
+    F: Fn() -> CS + Send + Sync + Clone + 'static,
+    CS: CheckpointStore + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "checkpoint_update_overwrites";
+
+    let store = make_checkpoint_store();
+
+    // Given: A subscription with an initial checkpoint
+    let subscription_name = format!("contract::{}::{}", SCENARIO, Uuid::now_v7());
+    let first_position = StreamPosition::new(Uuid::now_v7());
+
+    store
+        .save(&subscription_name, first_position)
+        .await
+        .map_err(|_| ContractTestFailure::assertion(SCENARIO, "first save failed"))?;
+
+    // When: Saving a new position
+    let second_position = StreamPosition::new(Uuid::now_v7());
+    store
+        .save(&subscription_name, second_position)
+        .await
+        .map_err(|_| ContractTestFailure::assertion(SCENARIO, "second save failed"))?;
+
+    // Then: Loading returns the new position, not the old one
+    let loaded = store
+        .load(&subscription_name)
+        .await
+        .map_err(|_| ContractTestFailure::assertion(SCENARIO, "load failed"))?;
+
+    if loaded != Some(second_position) {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected updated position {:?} but got {:?}",
+                Some(second_position),
+                loaded
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Contract test: Loading a non-existent checkpoint returns None
+pub async fn test_checkpoint_load_missing_returns_none<F, CS>(
+    make_checkpoint_store: F,
+) -> ContractTestResult
+where
+    F: Fn() -> CS + Send + Sync + Clone + 'static,
+    CS: CheckpointStore + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "checkpoint_load_missing_returns_none";
+
+    let store = make_checkpoint_store();
+
+    // Given: A subscription name that has never been saved
+    let subscription_name = format!("contract::{}::ghost::{}", SCENARIO, Uuid::now_v7());
+
+    // When: Loading the checkpoint
+    let loaded = store
+        .load(&subscription_name)
+        .await
+        .map_err(|_| ContractTestFailure::assertion(SCENARIO, "load failed"))?;
+
+    // Then: None is returned
+    if loaded.is_some() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!("expected None for missing checkpoint but got {:?}", loaded),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Contract test: Different subscription names have independent checkpoints
+pub async fn test_checkpoint_independent_subscriptions<F, CS>(
+    make_checkpoint_store: F,
+) -> ContractTestResult
+where
+    F: Fn() -> CS + Send + Sync + Clone + 'static,
+    CS: CheckpointStore + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "checkpoint_independent_subscriptions";
+
+    let store = make_checkpoint_store();
+
+    // Given: Two subscription names
+    let subscription_a = format!("contract::{}::sub-a::{}", SCENARIO, Uuid::now_v7());
+    let subscription_b = format!("contract::{}::sub-b::{}", SCENARIO, Uuid::now_v7());
+
+    let position_a = StreamPosition::new(Uuid::now_v7());
+    let position_b = StreamPosition::new(Uuid::now_v7());
+
+    // When: Saving different positions for each
+    store
+        .save(&subscription_a, position_a)
+        .await
+        .map_err(|_| ContractTestFailure::assertion(SCENARIO, "save A failed"))?;
+
+    store
+        .save(&subscription_b, position_b)
+        .await
+        .map_err(|_| ContractTestFailure::assertion(SCENARIO, "save B failed"))?;
+
+    // Then: Each subscription loads its own position
+    let loaded_a = store
+        .load(&subscription_a)
+        .await
+        .map_err(|_| ContractTestFailure::assertion(SCENARIO, "load A failed"))?;
+
+    let loaded_b = store
+        .load(&subscription_b)
+        .await
+        .map_err(|_| ContractTestFailure::assertion(SCENARIO, "load B failed"))?;
+
+    if loaded_a != Some(position_a) {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "subscription A: expected {:?} but got {:?}",
+                Some(position_a),
+                loaded_a
+            ),
+        ));
+    }
+
+    if loaded_b != Some(position_b) {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "subscription B: expected {:?} but got {:?}",
+                Some(position_b),
+                loaded_b
+            ),
+        ));
+    }
 
     Ok(())
 }

@@ -8,4 +8,5 @@ use eventcore_testing::contract::backend_contract_tests;
 backend_contract_tests! {
     suite = in_memory,
     make_store = eventcore_memory::InMemoryEventStore::new,
+    make_checkpoint_store = eventcore_memory::InMemoryCheckpointStore::new,
 }

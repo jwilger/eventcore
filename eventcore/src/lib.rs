@@ -41,18 +41,18 @@ mod projection;
 
 // Re-export all types from eventcore-types for backward compatibility
 pub use eventcore_types::{
-    AttemptNumber, BackoffMultiplier, BatchSize, CommandError, CommandLogic, CommandStreams,
-    DelayMilliseconds, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, FailureContext, FailureStrategy, MaxConsecutiveFailures,
-    MaxRetries, MaxRetryAttempts, NewEvents, Operation, Projector, RetryCount, StreamDeclarations,
-    StreamDeclarationsError, StreamId, StreamPosition, StreamPrefix, StreamResolver, StreamVersion,
-    StreamWriteEntry, StreamWrites,
+    AttemptNumber, BackoffMultiplier, BatchSize, CheckpointStore, CommandError, CommandLogic,
+    CommandStreams, DelayMilliseconds, Event, EventFilter, EventPage, EventReader, EventStore,
+    EventStoreError, EventStreamReader, EventStreamSlice, FailureContext, FailureStrategy,
+    MaxConsecutiveFailures, MaxRetries, MaxRetryAttempts, NewEvents, Operation, Projector,
+    RetryCount, StreamDeclarations, StreamDeclarationsError, StreamId, StreamPosition,
+    StreamPrefix, StreamResolver, StreamVersion, StreamWriteEntry, StreamWrites,
 };
 
 // Re-export projection runtime components
 pub use projection::{
-    CoordinatorGuard, EventRetryConfig, InMemoryCheckpointStore, LocalCoordinator, PollConfig,
-    PollMode, ProjectionRunner,
+    CoordinatorGuard, EventRetryConfig, LocalCoordinator, NoCheckpointStore, PollConfig, PollMode,
+    ProjectionError, ProjectionRunner,
 };
 
 // Re-export Command derive macro when the "macros" feature is enabled (default)

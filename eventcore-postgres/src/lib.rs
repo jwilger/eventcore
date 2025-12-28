@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use eventcore_types::{
-    Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, EventStreamReader,
-    EventStreamSlice, Operation, StreamId, StreamPosition, StreamWriteEntry, StreamWrites,
+    CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
+    EventStreamReader, EventStreamSlice, Operation, StreamId, StreamPosition, StreamWriteEntry,
+    StreamWrites,
 };
 use nutype::nutype;
 use serde_json::{Value, json};
@@ -332,4 +333,112 @@ fn map_sqlx_error(error: sqlx::Error, operation: Operation) -> EventStoreError {
         "[postgres.database_error] database operation failed"
     );
     EventStoreError::StoreFailure { operation }
+}
+
+/// Error type for PostgresCheckpointStore operations.
+#[derive(Debug, Error)]
+pub enum PostgresCheckpointError {
+    /// Failed to create connection pool.
+    #[error("failed to create postgres connection pool")]
+    ConnectionFailed(#[source] sqlx::Error),
+
+    /// Database operation failed.
+    #[error("database operation failed: {0}")]
+    DatabaseError(#[source] sqlx::Error),
+}
+
+/// Postgres-backed checkpoint store for tracking projection progress.
+///
+/// `PostgresCheckpointStore` stores checkpoint positions in a PostgreSQL table,
+/// providing durability across process restarts. It implements the `CheckpointStore`
+/// trait from eventcore-types.
+///
+/// # Schema
+///
+/// The store uses the `eventcore_subscription_versions` table with:
+/// - `subscription_name`: Unique identifier for each projector/subscription
+/// - `last_position`: UUID7 representing the global stream position
+/// - `updated_at`: Timestamp of the last checkpoint update
+#[derive(Debug, Clone)]
+pub struct PostgresCheckpointStore {
+    pool: Pool<Postgres>,
+}
+
+impl PostgresCheckpointStore {
+    /// Create a new PostgresCheckpointStore with default configuration.
+    pub async fn new<S: Into<String>>(
+        connection_string: S,
+    ) -> Result<Self, PostgresCheckpointError> {
+        Self::with_config(connection_string, PostgresConfig::default()).await
+    }
+
+    /// Create a new PostgresCheckpointStore with custom configuration.
+    pub async fn with_config<S: Into<String>>(
+        connection_string: S,
+        config: PostgresConfig,
+    ) -> Result<Self, PostgresCheckpointError> {
+        let connection_string = connection_string.into();
+        let max_connections: std::num::NonZeroU32 = config.max_connections.into();
+        let pool = PgPoolOptions::new()
+            .max_connections(max_connections.get())
+            .acquire_timeout(config.acquire_timeout)
+            .idle_timeout(config.idle_timeout)
+            .connect(&connection_string)
+            .await
+            .map_err(PostgresCheckpointError::ConnectionFailed)?;
+
+        // Run migrations to ensure table exists
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .map_err(|e| {
+                PostgresCheckpointError::DatabaseError(sqlx::Error::Migrate(Box::new(e)))
+            })?;
+
+        Ok(Self { pool })
+    }
+
+    /// Create a PostgresCheckpointStore from an existing connection pool.
+    ///
+    /// Use this when you need full control over pool configuration or want to
+    /// share a pool across multiple components.
+    pub fn from_pool(pool: Pool<Postgres>) -> Self {
+        Self { pool }
+    }
+}
+
+impl CheckpointStore for PostgresCheckpointStore {
+    type Error = PostgresCheckpointError;
+
+    async fn load(&self, name: &str) -> Result<Option<StreamPosition>, Self::Error> {
+        let row = query("SELECT last_position FROM eventcore_subscription_versions WHERE subscription_name = $1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(PostgresCheckpointError::DatabaseError)?;
+
+        match row {
+            Some(row) => {
+                let position: Uuid = row.get("last_position");
+                Ok(Some(StreamPosition::new(position)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn save(&self, name: &str, position: StreamPosition) -> Result<(), Self::Error> {
+        let position_uuid: Uuid = position.into_inner();
+        query(
+            "INSERT INTO eventcore_subscription_versions (subscription_name, last_position, updated_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (subscription_name) DO UPDATE SET last_position = $2, updated_at = NOW()",
+        )
+        .bind(name)
+        .bind(position_uuid)
+        .execute(&self.pool)
+        .await
+        .map_err(PostgresCheckpointError::DatabaseError)?;
+
+        Ok(())
+    }
 }
