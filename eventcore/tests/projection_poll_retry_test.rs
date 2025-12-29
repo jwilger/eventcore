@@ -8,8 +8,8 @@
 //! - And caller can decide recovery strategy (restart, alert, etc)
 
 use eventcore::{
-    Event, EventFilter, EventPage, EventReader, EventStore, LocalCoordinator, PollConfig, PollMode,
-    ProjectionRunner, Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
+    Event, EventFilter, EventPage, EventReader, EventStore, PollConfig, PollMode, ProjectionRunner,
+    Projector, StreamId, StreamPosition, StreamVersion, StreamWrites,
 };
 use eventcore_memory::{InMemoryCheckpointStore, InMemoryEventStore};
 use serde::{Deserialize, Serialize};
@@ -138,12 +138,11 @@ async fn runner_retries_transient_database_errors_with_exponential_backoff() {
     };
 
     // When: Runner processes with failing reader using custom poll_failure_backoff
-    let coordinator = LocalCoordinator::new();
     let poll_config = PollConfig {
         poll_failure_backoff: std::time::Duration::from_millis(10),
         ..PollConfig::default()
     };
-    let runner = ProjectionRunner::new(projector, coordinator, reader)
+    let runner = ProjectionRunner::new(projector, reader)
         .with_poll_mode(PollMode::Batch)
         .with_poll_config(poll_config);
 
@@ -211,9 +210,7 @@ async fn runner_propagates_error_after_max_consecutive_poll_failures() {
     };
 
     // When: Runner processes with perpetually failing reader
-    let coordinator = LocalCoordinator::new();
-    let runner =
-        ProjectionRunner::new(projector, coordinator, reader).with_poll_mode(PollMode::Batch);
+    let runner = ProjectionRunner::new(projector, reader).with_poll_mode(PollMode::Batch);
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), runner.run())
         .await
@@ -270,8 +267,7 @@ async fn runner_resets_consecutive_failure_count_on_successful_poll() {
     };
 
     // When: First run with failures then success
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, reader)
+    let runner = ProjectionRunner::new(projector, reader)
         .with_poll_mode(PollMode::Batch)
         .with_checkpoint_store(checkpoint_store.clone());
 
@@ -314,8 +310,7 @@ async fn runner_resets_consecutive_failure_count_on_successful_poll() {
     };
 
     // When: Second run with failures then success
-    let coordinator2 = LocalCoordinator::new();
-    let runner2 = ProjectionRunner::new(projector2, coordinator2, reader2)
+    let runner2 = ProjectionRunner::new(projector2, reader2)
         .with_poll_mode(PollMode::Batch)
         .with_checkpoint_store(checkpoint_store.clone());
 
@@ -381,9 +376,7 @@ async fn batch_mode_exits_after_single_poll() {
     };
 
     // When: Runner processes in Batch mode (should exit after one pass)
-    let coordinator = LocalCoordinator::new();
-    let runner =
-        ProjectionRunner::new(projector, coordinator, reader).with_poll_mode(PollMode::Batch);
+    let runner = ProjectionRunner::new(projector, reader).with_poll_mode(PollMode::Batch);
 
     // Use timeout to catch infinite loop mutants quickly
     let result = tokio::time::timeout(std::time::Duration::from_millis(200), runner.run()).await;
@@ -437,7 +430,6 @@ async fn custom_retry_configuration_is_respected() {
     };
 
     // When: Runner with custom retry config (max_consecutive_poll_failures=2)
-    let coordinator = LocalCoordinator::new();
     let poll_config = PollConfig {
         max_consecutive_poll_failures: eventcore::MaxConsecutiveFailures::new(
             std::num::NonZeroU32::new(2).expect("2 is non-zero"),
@@ -445,7 +437,7 @@ async fn custom_retry_configuration_is_respected() {
         poll_failure_backoff: std::time::Duration::from_millis(5),
         ..PollConfig::default()
     };
-    let runner = ProjectionRunner::new(projector, coordinator, reader)
+    let runner = ProjectionRunner::new(projector, reader)
         .with_poll_mode(PollMode::Batch)
         .with_poll_config(poll_config);
 

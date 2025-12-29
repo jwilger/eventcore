@@ -10,8 +10,8 @@
 
 use eventcore::{
     BackoffMultiplier, Event, EventRetryConfig, EventStore, FailureContext, FailureStrategy,
-    LocalCoordinator, MaxRetryAttempts, PollMode, ProjectionRunner, Projector, StreamId,
-    StreamPosition, StreamVersion, StreamWrites,
+    MaxRetryAttempts, PollMode, ProjectionRunner, Projector, StreamId, StreamPosition,
+    StreamVersion, StreamWrites,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
@@ -100,8 +100,7 @@ async fn event_retry_config_limits_retries_and_escalates_to_fatal() {
     };
 
     // When: Run the projector with EventRetryConfig
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, &store)
+    let runner = ProjectionRunner::new(projector, &store)
         .with_poll_mode(PollMode::Batch)
         .with_event_retry_config(retry_config);
 
@@ -188,9 +187,7 @@ async fn default_retry_config_allows_retries_without_explicit_configuration() {
 
     // When: Run the projector WITHOUT calling with_event_retry_config()
     // This should use EventRetryConfig::default() internally
-    let coordinator = LocalCoordinator::new();
-    let runner =
-        ProjectionRunner::new(projector, coordinator, &store).with_poll_mode(PollMode::Batch);
+    let runner = ProjectionRunner::new(projector, &store).with_poll_mode(PollMode::Batch);
 
     let result = tokio::time::timeout(Duration::from_secs(5), runner.run()).await;
 
@@ -275,8 +272,7 @@ async fn retry_delay_is_respected_during_retry() {
     };
 
     // When: Run the projector and measure elapsed time
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, &store)
+    let runner = ProjectionRunner::new(projector, &store)
         .with_poll_mode(PollMode::Batch)
         .with_event_retry_config(retry_config);
 
@@ -388,8 +384,7 @@ async fn exponential_backoff_is_applied_during_retries() {
     };
 
     // When: Run the projector and measure timing
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, &store)
+    let runner = ProjectionRunner::new(projector, &store)
         .with_poll_mode(PollMode::Batch)
         .with_event_retry_config(retry_config);
 
@@ -475,8 +470,7 @@ async fn max_retry_delay_caps_exponential_backoff() {
     };
 
     // When: Run the projector and measure timing
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, &store)
+    let runner = ProjectionRunner::new(projector, &store)
         .with_poll_mode(PollMode::Batch)
         .with_event_retry_config(retry_config);
 
@@ -610,8 +604,7 @@ async fn on_error_decides_retry_eligibility_config_only_applies_when_retry() {
     let transient_projector =
         ErrorTypeAwareProjector::new(transient_count.clone(), ErrorType::Transient);
 
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(transient_projector, coordinator, &store)
+    let runner = ProjectionRunner::new(transient_projector, &store)
         .with_poll_mode(PollMode::Batch)
         .with_event_retry_config(retry_config.clone());
 
@@ -633,8 +626,7 @@ async fn on_error_decides_retry_eligibility_config_only_applies_when_retry() {
     let permanent_projector =
         ErrorTypeAwareProjector::new(permanent_count.clone(), ErrorType::Permanent);
 
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(permanent_projector, coordinator, &store)
+    let runner = ProjectionRunner::new(permanent_projector, &store)
         .with_poll_mode(PollMode::Batch)
         .with_event_retry_config(retry_config);
 
