@@ -2,7 +2,11 @@
 
 ## Status
 
-accepted
+superseded
+
+**Superseded by:** ADR-027 (Projector Poll and Retry Configuration) and ADR-026 (Subscription Table + Advisory Lock Coordination)
+
+> **Note:** This ADR is retained for historical context. ADR-027 captures the still-valid poll and event retry configuration. ADR-026 eliminated heartbeat configuration entirely by adopting session-scoped advisory locks on dedicated connections. See ARCHITECTURE.md for current authoritative guidance.
 
 ## Context
 

@@ -54,7 +54,7 @@ impl Default for PollConfig {
 /// retry; this configuration controls the retry mechanics.
 ///
 /// Per ADR-024, event retry is an application-level concern, separate from
-/// poll retry (infrastructure) and heartbeat (coordination).
+/// poll retry (infrastructure).
 ///
 /// # Example
 ///
@@ -299,7 +299,7 @@ where
     /// this configuration controls retry mechanics (delays, backoff, limits).
     ///
     /// Per ADR-024, event retry is application-level configuration, separate
-    /// from poll retry (infrastructure) and heartbeat (coordination).
+    /// from poll retry (infrastructure).
     ///
     /// # Parameters
     ///
