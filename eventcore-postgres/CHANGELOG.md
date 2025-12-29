@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.3.0...eventcore-postgres-v0.4.0) - 2025-12-29
+
+### Features
+
+- *(eventcore-postgres)* add database triggers to enforce event log immutability ([#229](https://github.com/jwilger/eventcore/pull/229))
+- *(testing)* contract-first CheckpointStore with unified backend verification ([#234](https://github.com/jwilger/eventcore/pull/234))
+
+### Refactoring
+
+- *(eventcore-postgres)* replace testcontainers with docker-compose ([#224](https://github.com/jwilger/eventcore/pull/224))
+- *(testing)* unify contract test macros into backend_contract_tests! ([#233](https://github.com/jwilger/eventcore/pull/233))
+
 ## [0.3.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.2.0...eventcore-postgres-v0.3.0) - 2025-12-27
 
 ### Refactoring
