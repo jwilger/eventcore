@@ -1,7 +1,6 @@
 //! Projection runtime components for building and running read models.
 //!
 //! This module provides the runtime infrastructure for event projection:
-//! - `LocalCoordinator`: Single-process coordination for projector leadership
 //! - `ProjectionRunner`: Orchestrates projector execution with event polling
 
 use crate::{
@@ -20,7 +19,7 @@ use std::time::Duration;
 ///
 /// ```ignore
 /// let config = PollConfig::default();
-/// let runner = ProjectionRunner::new(projector, coordinator, &store)
+/// let runner = ProjectionRunner::new(projector, &store)
 ///     .with_poll_config(config);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +65,7 @@ impl Default for PollConfig {
 ///     retry_backoff_multiplier: 2.0,
 ///     max_retry_delay: Duration::from_secs(5),
 /// };
-/// let runner = ProjectionRunner::new(projector, coordinator, &store)
+/// let runner = ProjectionRunner::new(projector, &store)
 ///     .with_event_retry_config(retry_config);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -106,109 +105,9 @@ pub enum PollMode {
     Continuous,
 }
 
-/// Guard representing acquired leadership from a coordinator.
-///
-/// `CoordinatorGuard` uses RAII pattern to automatically release leadership
-/// when dropped. While the guard is held, the projector has exclusive rights
-/// to process events.
-///
-/// # Example
-///
-/// ```ignore
-/// let guard = coordinator.try_acquire().await?;
-/// if guard.is_valid() {
-///     // Process events while holding leadership
-/// }
-/// // Guard dropped here - leadership automatically released
-/// ```
-pub struct CoordinatorGuard {
-    // Guard state placeholder
-}
-
-impl CoordinatorGuard {
-    /// Check if this guard represents valid leadership.
-    ///
-    /// Returns `true` if the guard still holds valid leadership rights.
-    /// For `LocalCoordinator`, this always returns `true` since leadership
-    /// cannot be revoked in single-process mode.
-    ///
-    /// # Returns
-    ///
-    /// `true` if leadership is valid, `false` otherwise.
-    pub fn is_valid(&self) -> bool {
-        true
-    }
-}
-
-impl Drop for CoordinatorGuard {
-    fn drop(&mut self) {
-        // For LocalCoordinator, dropping the guard releases leadership.
-        // No cleanup needed for the minimal single-process implementation.
-    }
-}
-
-/// Single-process coordinator for projector leadership.
-///
-/// `LocalCoordinator` provides a simple coordination mechanism for single-process
-/// deployments where only one projector instance runs at a time. It uses an
-/// in-memory mutex to ensure exclusive access.
-///
-/// For distributed deployments with multiple application instances, use
-/// `eventcore-postgres::PostgresCoordinator` which uses advisory locks for
-/// cross-process coordination.
-///
-/// # Example
-///
-/// ```ignore
-/// let coordinator = LocalCoordinator::new();
-/// let runner = ProjectionRunner::new(projector, coordinator, &store);
-/// runner.run().await?;
-/// ```
-pub struct LocalCoordinator {
-    // Coordination state placeholder
-}
-
-impl LocalCoordinator {
-    /// Create a new local coordinator with sensible defaults.
-    ///
-    /// The coordinator is immediately ready for use. No configuration is
-    /// required for single-process deployments.
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    /// Try to acquire leadership for projection processing.
-    ///
-    /// For `LocalCoordinator`, this always succeeds immediately since there
-    /// is no contention in single-process deployments. The returned guard
-    /// uses RAII pattern to release leadership when dropped.
-    ///
-    /// # Returns
-    ///
-    /// `Some(guard)` if leadership was acquired (always for LocalCoordinator).
-    /// `None` would indicate leadership is held elsewhere (never for LocalCoordinator).
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let guard = coordinator.try_acquire().await
-    ///     .expect("LocalCoordinator always grants leadership");
-    /// ```
-    pub async fn try_acquire(&self) -> Option<CoordinatorGuard> {
-        Some(CoordinatorGuard {})
-    }
-}
-
-impl Default for LocalCoordinator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Orchestrates projector execution with event polling and coordination.
+/// Orchestrates projector execution with event polling.
 ///
 /// `ProjectionRunner` is the main entry point for running projections. It:
-/// - Acquires leadership via the coordinator before processing
 /// - Polls the event store for new events
 /// - Applies events to the projector in order
 /// - Handles errors according to the projector's error strategy
@@ -227,11 +126,8 @@ impl Default for LocalCoordinator {
 /// // Create a minimal projector
 /// let projector = EventCounterProjector::new();
 ///
-/// // Use local coordination for single-process deployment
-/// let coordinator = LocalCoordinator::new();
-///
 /// // Create and run the projection
-/// let runner = ProjectionRunner::new(projector, coordinator, &store);
+/// let runner = ProjectionRunner::new(projector, &store);
 /// runner.run().await?;
 /// ```
 pub struct ProjectionRunner<E, R, P, C>
@@ -242,7 +138,6 @@ where
     C: CheckpointStore,
 {
     projector: P,
-    _coordinator: LocalCoordinator,
     store: R,
     checkpoint_store: Option<C>,
     poll_mode: PollMode,
@@ -293,16 +188,14 @@ where
     /// # Parameters
     ///
     /// - `projector`: The projector that will process events
-    /// - `coordinator`: The coordination mechanism for leadership
-    /// - `store`: Reference to the event store to poll for events
+    /// - `store`: The event store to poll for events
     ///
     /// # Returns
     ///
     /// A new `ProjectionRunner` ready to be started with `run()`.
-    pub fn new(projector: P, coordinator: LocalCoordinator, store: R) -> Self {
+    pub fn new(projector: P, store: R) -> Self {
         Self {
             projector,
-            _coordinator: coordinator,
             store,
             checkpoint_store: None,
             poll_mode: PollMode::Batch,
@@ -332,7 +225,6 @@ where
     ) -> ProjectionRunner<P::Event, R, P, C> {
         ProjectionRunner {
             projector: self.projector,
-            _coordinator: self._coordinator,
             store: self.store,
             checkpoint_store: Some(checkpoint_store),
             poll_mode: self.poll_mode,
@@ -367,7 +259,7 @@ where
     /// # Example
     ///
     /// ```ignore
-    /// let runner = ProjectionRunner::new(projector, coordinator, &store)
+    /// let runner = ProjectionRunner::new(projector, &store)
     ///     .with_poll_mode(PollMode::Continuous);
     /// ```
     pub fn with_poll_mode(mut self, mode: PollMode) -> Self {
@@ -392,7 +284,7 @@ where
     ///
     /// ```ignore
     /// let config = PollConfig::default();
-    /// let runner = ProjectionRunner::new(projector, coordinator, &store)
+    /// let runner = ProjectionRunner::new(projector, &store)
     ///     .with_poll_config(config);
     /// ```
     pub fn with_poll_config(mut self, config: PollConfig) -> Self {
@@ -426,7 +318,7 @@ where
     ///     retry_backoff_multiplier: 2.0,
     ///     max_retry_delay: Duration::from_secs(10),
     /// };
-    /// let runner = ProjectionRunner::new(projector, coordinator, &store)
+    /// let runner = ProjectionRunner::new(projector, &store)
     ///     .with_event_retry_config(retry_config);
     /// ```
     pub fn with_event_retry_config(mut self, config: EventRetryConfig) -> Self {

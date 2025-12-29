@@ -45,11 +45,11 @@ eventcore/                    (workspace root, virtual manifest)
 
 | Crate | Purpose | Dependencies |
 |-------|---------|--------------|
-| `eventcore-types` | Shared vocabulary: traits (`EventStore`, `Event`, `CommandLogic`, `ProjectorCoordinator`) and types (`StreamId`, `StreamWrites`, errors) | Minimal |
-| `eventcore` | Main entry point: `execute()`, `InMemoryEventStore`, `LocalCoordinator`, retry logic, re-exports from `eventcore-types` | `eventcore-types`, optionally `eventcore-postgres` via feature |
+| `eventcore-types` | Shared vocabulary: traits (`EventStore`, `Event`, `CommandLogic`) and types (`StreamId`, `StreamWrites`, errors) | Minimal |
+| `eventcore` | Main entry point: `execute()`, `InMemoryEventStore`, retry logic, re-exports from `eventcore-types` | `eventcore-types`, optionally `eventcore-postgres` via feature |
 | `eventcore-macros` | Procedural macros: `#[derive(Command)]`, `require!` | syn, quote, proc-macro2 |
-| `eventcore-postgres` | PostgreSQL backend implementing `EventStore`, `EventReader`, and `ProjectorCoordinator` | `eventcore-types`, sqlx |
-| `eventcore-testing` | Contract tests (storage, reader, coordinator), chaos harness, test fixtures (dev-dependency) | `eventcore-types` |
+| `eventcore-postgres` | PostgreSQL backend implementing `EventStore` and `EventReader` | `eventcore-types`, sqlx |
+| `eventcore-testing` | Contract tests (storage, reader), chaos harness, test fixtures (dev-dependency) | `eventcore-types` |
 
 ### Feature Flag Ergonomics
 
@@ -548,25 +548,9 @@ Each projector owns a dedicated database connection for its entire lifetime, not
 
 Typical application: 5-20 projectors, each with 1 dedicated connection (well within PostgreSQL limits). This is fundamentally different from connection-per-request web applications where pooling is essential.
 
-#### Simplified Coordination API
+#### Coordination Approach
 
-The coordination contract is minimal:
-
-```rust
-pub trait ProjectorCoordinator: Send + Sync + 'static {
-    type Guard: CoordinatorGuard;
-
-    /// Attempt to acquire leadership for the named projector.
-    /// Blocks until acquired or fails.
-    async fn acquire(&self, projector_name: &str) -> Result<Self::Guard, CoordinationError>;
-}
-
-pub trait CoordinatorGuard: Send + 'static {
-    // Guard released on drop - no explicit release needed
-}
-```
-
-Key simplifications compared to heartbeat-table approaches:
+Per ADR-026, coordination uses direct advisory locks rather than a trait abstraction. Key simplifications compared to heartbeat-table approaches:
 
 - No `is_valid()` checks in the projection loop - connection lifecycle handles it
 - No `heartbeat()` calls - connection alive = leadership held
@@ -577,18 +561,9 @@ Key simplifications compared to heartbeat-table approaches:
 
 - **PostgreSQL**: Session-scoped advisory locks on dedicated connections. Lock acquired via `pg_advisory_lock(hash(subscription_name))`. Released automatically on connection close (crash, shutdown, network partition).
 
-- **In-Memory**: Process-local mutexes for testing and single-process deployments. Simulates the same semantics without requiring a database.
+- **Single-Process**: No coordination needed - only one projector instance runs. The ProjectionRunner operates without coordination overhead.
 
 - **Future Backends**: MySQL `GET_LOCK()`, Redis `SETNX` with TTL, or similar primitives following the same pattern.
-
-#### LocalCoordinator for Single-Process
-
-A coordinator implementation that always grants leadership immediately. Usage is explicit, making "I am running single-process and accept the risks" a deliberate choice:
-
-```rust
-let coordinator = LocalCoordinator::new();
-run_projector(projector, event_reader, coordinator).await;
-```
 
 #### Crash Safety and Leadership Release
 
@@ -615,15 +590,6 @@ This separates concerns: coordination ensures mutual exclusion; monitoring detec
 Sequential processing (a hard constraint for ordering preservation) eliminates the need for partition assignment. The question is not "which instance processes which subset of events" but rather "which single instance processes events for this projector."
 
 For users who need Kafka-style partition-based scaling, an escape hatch exists: create a single-threaded projector that pushes events onto a Kafka (or similar) log, then let that external system handle partitioning and parallel consumption. EventCore handles the leader-elected, sequential projection to the external system; that external system provides the partition assignment semantics.
-
-#### Contract Tests for Coordinators
-
-Per the contract testing pattern (eventcore-testing crate), coordinators have contract tests verifying:
-
-- Mutual exclusion (only one leader at a time)
-- Crash-safe release (leadership released when connection drops)
-- Blocking acquisition semantics (waits for leadership to become available)
-- Automatic release on guard drop
 
 ## Type System Patterns
 
@@ -657,7 +623,6 @@ Narrow traits keep responsibilities focused:
 - `EventStore` - Storage operations (implemented by backends)
 - `EventReader` - Event polling for projections
 - `Projector` - Read model construction
-- `ProjectorCoordinator` - Leader election for distributed deployments
 
 ## Error Handling
 
@@ -670,8 +635,6 @@ Narrow traits keep responsibilities focused:
 - **ValidationError** - Raised by newtype constructors and automatically bubbled up through `CommandError`.
 
 - **SubscriptionError** - Covers projection failures (deserialization, unknown event types).
-
-- **CoordinationError** - Represents coordination failures (leadership acquisition failure, lost leadership, backend communication errors).
 
 ### Retry Classification
 
@@ -692,22 +655,20 @@ Errors carry diagnostic information:
 
 ## Reference Implementations and Tooling
 
-### InMemoryEventStore and LocalCoordinator
+### InMemoryEventStore
 
 Included in `eventcore` with zero third-party dependencies:
 
 - **InMemoryEventStore**: Full EventStore and EventReader implementation for testing and development
-- **LocalCoordinator**: Process-local mutex-based coordination for single-instance deployments
 - Optional chaos hooks (ConflictOnceStore, CountingEventStore)
-- Full contract test compliance for both storage and coordination
+- Full contract test compliance for storage
 
 ### External Backends
 
 Production backends (e.g., `eventcore-postgres`) implement the same traits:
 
 - Full EventStore and EventReader support
-- ProjectorCoordinator implementation using backend-native primitives
-- Contract test suite integration in CI (storage, reader, and coordinator)
+- Contract test suite integration in CI (storage and reader)
 - Additional observability and operational features
 
 ### Testing Utilities
@@ -716,7 +677,6 @@ The `eventcore-testing` crate provides:
 
 - Contract test suite for EventStore implementations
 - Projector contract tests for EventReader implementations
-- Coordinator contract tests for ProjectorCoordinator implementations
 - Property-based testing helpers
 - Integration scenario utilities
 
@@ -735,13 +695,12 @@ graph TB
         ES[EventStore Trait]
         ER[EventReader Trait]
         PT[Projector Trait]
-        PC[ProjectorCoordinator Trait]
     end
 
     subgraph Storage Backend
         PG[PostgreSQL / InMemory]
         Schema[Event Schema]
-        Locks[Advisory Locks / Mutex]
+        Locks[Advisory Locks]
     end
 
     Cmd --> Exec
@@ -750,9 +709,7 @@ graph TB
 
     Proj --> PT
     PT --> ER
-    PT --> PC
     ER --> PG
-    PC --> Locks
 
     Domain --> Cmd
     Domain --> Proj
@@ -760,7 +717,6 @@ graph TB
     style Exec fill:#e1f5ff
     style ES fill:#e1ffe1
     style ER fill:#f5e1ff
-    style PC fill:#ffe1f5
 ```
 
 ### Single-Process Deployment
@@ -769,16 +725,16 @@ For simpler deployments:
 
 - InMemoryEventStore for development and testing
 - Single projector instance per projection type
-- LocalCoordinator for explicit single-process opt-in
+- No coordination overhead needed
 
 ### Production Deployment
 
 For production systems:
 
 - PostgreSQL backend with ACID guarantees
-- PostgreSQL advisory locks for projector coordination (via `PostgresCoordinator`)
+- PostgreSQL advisory locks for projector coordination (dedicated connections)
 - Multiple application instances for availability - projectors automatically elect leaders
-- Contract tests verify backend and coordinator compliance
+- Contract tests verify backend compliance
 - Observability via structured logging and metrics
 
 ### Dependency Configuration

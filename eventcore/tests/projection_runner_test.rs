@@ -1,10 +1,9 @@
-//! Integration test for eventcore-dvp: Projection Runner with Local Coordinator
+//! Integration test for eventcore-dvp: Projection Runner
 //!
 //! Scenario: Developer creates minimal working projector
 //! - Given developer implements Projector trait with only apply() and name() methods
 //! - And developer has an EventStore that implements EventReader
-//! - When developer creates LocalCoordinator::new()
-//! - And developer creates ProjectionRunner with projector, coordinator, and event store
+//! - When developer creates ProjectionRunner with projector and event store
 //! - And developer calls runner.run()
 //! - Then projector starts and processes events
 //! - And all configuration uses sensible defaults
@@ -12,8 +11,8 @@
 
 use eventcore::{
     BatchSize, Event, EventFilter, EventPage, EventReader, EventStore, FailureContext,
-    FailureStrategy, LocalCoordinator, PollConfig, PollMode, ProjectionRunner, Projector, StreamId,
-    StreamPosition, StreamVersion, StreamWrites,
+    FailureStrategy, PollConfig, PollMode, ProjectionRunner, Projector, StreamId, StreamPosition,
+    StreamVersion, StreamWrites,
 };
 use eventcore_memory::{InMemoryCheckpointStore, InMemoryEventStore};
 use serde::{Deserialize, Serialize};
@@ -138,11 +137,8 @@ async fn minimal_projector_processes_events_with_sensible_defaults() {
     let event_count = Arc::new(AtomicUsize::new(0));
     let projector = EventCounterProjector::new(event_count.clone());
 
-    // When: Developer creates LocalCoordinator with sensible defaults
-    let coordinator = LocalCoordinator::new();
-
-    // And: Developer creates ProjectionRunner with minimal configuration
-    let runner = ProjectionRunner::new(projector, coordinator, &store);
+    // When: Developer creates ProjectionRunner with minimal configuration
+    let runner = ProjectionRunner::new(projector, &store);
 
     // And: Developer runs the projection (with timeout for test)
     tokio::time::timeout(std::time::Duration::from_secs(1), runner.run())
@@ -193,9 +189,8 @@ async fn projector_resumes_from_checkpoint_after_restart() {
     let projector = TrackingProjector::new(processed_events.clone());
 
     // When: Developer runs the projector the first time with checkpoint store
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, &store)
-        .with_checkpoint_store(checkpoint_store.clone());
+    let runner =
+        ProjectionRunner::new(projector, &store).with_checkpoint_store(checkpoint_store.clone());
 
     tokio::time::timeout(std::time::Duration::from_secs(1), runner.run())
         .await
@@ -211,11 +206,10 @@ async fn projector_resumes_from_checkpoint_after_restart() {
     // When: Developer "restarts" - creates a new projector instance and runs again
     // The checkpoint store persists across restarts
     let restarted_projector = TrackingProjector::new(processed_events.clone());
-    let coordinator2 = LocalCoordinator::new();
 
     // Use the same checkpoint store - it remembers where we left off
-    let runner2 = ProjectionRunner::new(restarted_projector, coordinator2, &store)
-        .with_checkpoint_store(checkpoint_store);
+    let runner2 =
+        ProjectionRunner::new(restarted_projector, &store).with_checkpoint_store(checkpoint_store);
 
     tokio::time::timeout(std::time::Duration::from_secs(1), runner2.run())
         .await
@@ -251,9 +245,8 @@ async fn runner_waits_before_polling_again_when_no_events() {
     let counting_reader = PollCountingReader::new(store.clone(), poll_count.clone());
 
     // When: Developer creates runner in continuous polling mode
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, counting_reader)
-        .with_poll_mode(PollMode::Continuous);
+    let runner =
+        ProjectionRunner::new(projector, counting_reader).with_poll_mode(PollMode::Continuous);
 
     // And: Runner runs for a short time with empty store
     // Use a cancellation token to stop after observing behavior
@@ -385,44 +378,6 @@ impl Projector for TrackingProjector {
     }
 }
 
-/// Integration test for eventcore-dvp: LocalCoordinator for single-process leadership
-///
-/// Scenario: Developer uses LocalCoordinator for single-process deployment
-/// - Given developer creates LocalCoordinator::new()
-/// - When developer calls try_acquire()
-/// - Then it returns Some(guard) (leadership always granted in single-process)
-/// - And guard.is_valid() returns true
-/// - When guard is dropped
-/// - Then subsequent try_acquire() succeeds
-#[tokio::test]
-async fn local_coordinator_grants_leadership_without_contention() {
-    // Given: Developer creates a LocalCoordinator for single-process deployment
-    let coordinator = LocalCoordinator::new();
-
-    // When: Developer tries to acquire leadership
-    let guard = coordinator
-        .try_acquire()
-        .await
-        .expect("LocalCoordinator should always grant leadership");
-
-    // Then: Leadership is granted
-    assert!(
-        guard.is_valid(),
-        "acquired guard should indicate valid leadership"
-    );
-
-    // When: Guard is dropped (RAII pattern releases leadership)
-    drop(guard);
-
-    // Then: Subsequent acquire succeeds (leadership can be re-acquired)
-    let guard2 = coordinator
-        .try_acquire()
-        .await
-        .expect("LocalCoordinator should grant leadership again after release");
-
-    assert!(guard2.is_valid(), "re-acquired guard should also be valid");
-}
-
 /// Integration test for eventcore-dvp: Fatal error handling in projection runner
 ///
 /// Scenario: Projector encounters fatal error and stops processing
@@ -452,9 +407,8 @@ async fn runner_stops_on_fatal_error_and_preserves_checkpoint() {
     );
 
     // When: Developer runs the projector with checkpoint store
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, &store)
-        .with_checkpoint_store(checkpoint_store.clone());
+    let runner =
+        ProjectionRunner::new(projector, &store).with_checkpoint_store(checkpoint_store.clone());
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(1), runner.run()).await;
 
@@ -487,9 +441,8 @@ async fn runner_stops_on_fatal_error_and_preserves_checkpoint() {
         positions[2], // Same failure point
     );
 
-    let coordinator2 = LocalCoordinator::new();
-    let runner2 = ProjectionRunner::new(restarted_projector, coordinator2, &store)
-        .with_checkpoint_store(checkpoint_store);
+    let runner2 =
+        ProjectionRunner::new(restarted_projector, &store).with_checkpoint_store(checkpoint_store);
 
     let result2 = tokio::time::timeout(std::time::Duration::from_secs(1), runner2.run()).await;
 
@@ -585,9 +538,8 @@ async fn runner_skips_failed_event_and_continues_processing() {
     );
 
     // When: Developer runs the projector with checkpoint store
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, &store)
-        .with_checkpoint_store(checkpoint_store.clone());
+    let runner =
+        ProjectionRunner::new(projector, &store).with_checkpoint_store(checkpoint_store.clone());
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(1), runner.run()).await;
 
@@ -636,9 +588,8 @@ async fn runner_skips_failed_event_and_continues_processing() {
         positions[2], // Same failure point (but won't be reached on restart)
     );
 
-    let coordinator2 = LocalCoordinator::new();
-    let runner2 = ProjectionRunner::new(restarted_projector, coordinator2, &store)
-        .with_checkpoint_store(checkpoint_store);
+    let runner2 =
+        ProjectionRunner::new(restarted_projector, &store).with_checkpoint_store(checkpoint_store);
 
     let result2 = tokio::time::timeout(std::time::Duration::from_secs(1), runner2.run()).await;
 
@@ -738,9 +689,8 @@ async fn runner_retries_failed_event_then_escalates_to_fatal() {
     );
 
     // When: Developer runs the projector with checkpoint store
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, &store)
-        .with_checkpoint_store(checkpoint_store.clone());
+    let runner =
+        ProjectionRunner::new(projector, &store).with_checkpoint_store(checkpoint_store.clone());
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), runner.run()).await;
 
@@ -791,9 +741,8 @@ async fn runner_retries_failed_event_then_escalates_to_fatal() {
         3,
     );
 
-    let coordinator2 = LocalCoordinator::new();
-    let runner2 = ProjectionRunner::new(restarted_projector, coordinator2, &store)
-        .with_checkpoint_store(checkpoint_store);
+    let runner2 =
+        ProjectionRunner::new(restarted_projector, &store).with_checkpoint_store(checkpoint_store);
 
     let result2 = tokio::time::timeout(std::time::Duration::from_secs(5), runner2.run()).await;
 
@@ -907,10 +856,8 @@ async fn runner_uses_default_poll_config_when_not_specified() {
 
     // When: Developer creates ProjectionRunner WITHOUT specifying PollConfig
     // (relying on default configuration via PollConfig::default())
-    let coordinator = LocalCoordinator::new();
     let default_config = PollConfig::default();
-    let runner =
-        ProjectionRunner::new(projector, coordinator, &store).with_poll_config(default_config);
+    let runner = ProjectionRunner::new(projector, &store).with_poll_config(default_config);
 
     // And: Runner executes
     tokio::time::timeout(std::time::Duration::from_secs(1), runner.run())
@@ -1011,8 +958,7 @@ async fn runner_respects_custom_poll_interval_when_events_found() {
         poll_interval: Duration::from_millis(500),
         ..Default::default()
     };
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, counting_reader)
+    let runner = ProjectionRunner::new(projector, counting_reader)
         .with_poll_config(config)
         .with_poll_mode(PollMode::Continuous);
 
@@ -1076,8 +1022,7 @@ async fn runner_respects_custom_empty_poll_backoff_when_no_events() {
         empty_poll_backoff: Duration::from_secs(1),
         ..Default::default()
     };
-    let coordinator = LocalCoordinator::new();
-    let runner = ProjectionRunner::new(projector, coordinator, counting_reader)
+    let runner = ProjectionRunner::new(projector, counting_reader)
         .with_poll_config(config)
         .with_poll_mode(PollMode::Continuous);
 
