@@ -1,5 +1,14 @@
 # EventCore Agent Cheatsheet
 
+## Project Configuration
+
+- **Mutation testing threshold**: 80%
+- **Event model location**: `docs/event_model/` (to be created as needed)
+- **Architecture docs**: `docs/ARCHITECTURE.md`
+- **ADRs**: `docs/adr/`
+
+## Development Rules
+
 1. Enter `nix develop` for pinned toolchains; start Postgres via `docker-compose up -d` only when persistence is required.
 2. Format every change with `cargo fmt --all` before attempting a commit or PR.
 3. Run `cargo clippy --all-targets --all-features -- -D warnings` to satisfy the lint gate.
