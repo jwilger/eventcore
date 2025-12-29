@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/jwilger/eventcore/compare/eventcore-v0.3.0...eventcore-v0.4.0) - 2025-12-29
+
+### Features
+
+- *(testing)* contract-first CheckpointStore with unified backend verification ([#234](https://github.com/jwilger/eventcore/pull/234))
+
+### Refactoring
+
+- remove vestigial LocalCoordinator and CoordinatorGuard ([#255](https://github.com/jwilger/eventcore/pull/255))
+
 ## [0.3.0](https://github.com/jwilger/eventcore/compare/eventcore-v0.2.0...eventcore-v0.3.0) - 2025-12-27
 
 ### Features
