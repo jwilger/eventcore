@@ -137,9 +137,7 @@ async fn minimal_projector_processes_events_with_sensible_defaults() {
     let event_count = Arc::new(AtomicUsize::new(0));
     let projector = EventCounterProjector::new(event_count.clone());
 
-    // When: Developer creates LocalCoordinator with sensible defaults
-
-    // And: Developer creates ProjectionRunner with minimal configuration
+    // When: Developer creates ProjectionRunner with minimal configuration
     let runner = ProjectionRunner::new(projector, &store);
 
     // And: Developer runs the projection (with timeout for test)
