@@ -211,7 +211,7 @@ Every backend (first-party or third-party) integrates these tests into its CI pi
 Domain events implement the simple `Event` trait:
 
 ```rust
-pub trait Event: Clone + Send + 'static {
+pub trait Event: Clone + Send + Serialize + DeserializeOwned + 'static {
     fn stream_id(&self) -> &StreamId;
 }
 ```
@@ -219,6 +219,7 @@ pub trait Event: Clone + Send + 'static {
 Key characteristics:
 
 - Developers model events as plain structs with owned data
+- `Serialize + DeserializeOwned` bounds enable JSON/binary storage without infrastructure wrappers
 - The `'static` bound ensures events are self-contained values suitable for storage, async boundaries, and cross-thread movement
 - StreamId represents aggregate identity - a domain concept, not purely infrastructure
 - No infrastructure wrapper is required; domain types ARE events by implementing the trait
@@ -228,7 +229,7 @@ Key characteristics:
 Events carry type identity through the `EventTypeName` mechanism:
 
 - Each event type has a string name (e.g., "MoneyDeposited")
-- The Event trait provides `event_type_name()` and `all_type_names()` methods
+- The `Subscribable` trait provides `subscribable_type_names()` for filtering by type
 - Type names enable filtering, routing, and cross-language interoperability
 
 ### StreamId Character Restrictions
