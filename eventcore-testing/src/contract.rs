@@ -440,6 +440,7 @@ macro_rules! backend_contract_tests {
                 test_checkpoint_update_overwrites, test_concurrent_version_conflicts,
                 test_conflict_preserves_atomicity, test_coordination_acquire_leadership,
                 test_coordination_independent_subscriptions,
+                test_coordination_leadership_released_on_guard_drop,
                 test_coordination_second_instance_blocked, test_event_ordering_across_streams,
                 test_missing_stream_reads, test_position_based_resumption, test_stream_isolation,
                 test_stream_prefix_filtering, test_stream_prefix_requires_prefix_match,
@@ -562,6 +563,13 @@ macro_rules! backend_contract_tests {
             #[tokio::test(flavor = "multi_thread")]
             async fn coordination_independent_subscriptions_contract() {
                 test_coordination_independent_subscriptions($make_coordinator)
+                    .await
+                    .expect("coordinator contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn coordination_leadership_released_on_guard_drop_contract() {
+                test_coordination_leadership_released_on_guard_drop($make_coordinator)
                     .await
                     .expect("coordinator contract failed");
             }
@@ -1317,6 +1325,53 @@ where
         return Err(ContractTestFailure::assertion(
             SCENARIO,
             "expected projector-B to acquire leadership for its own subscription, but try_acquire failed - different projectors should have independent coordination",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Contract test: Leadership is released when guard is dropped (crash/disconnect recovery)
+///
+/// Observable behavior: When an instance holding leadership drops its guard (simulating
+/// process exit, crash, or connection close), the lock is released and another instance
+/// can acquire leadership for the same subscription.
+pub async fn test_coordination_leadership_released_on_guard_drop<F, C>(
+    make_coordinator: F,
+) -> ContractTestResult
+where
+    F: Fn() -> C + Send + Sync + Clone + 'static,
+    C: ProjectorCoordinator + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "coordination_leadership_released_on_guard_drop";
+
+    let coordinator = make_coordinator();
+
+    // Given: A unique subscription name
+    let subscription_name = format!("contract::{}::{}", SCENARIO, Uuid::now_v7());
+
+    // And: First instance acquires leadership, then drops the guard
+    {
+        let _first_guard = coordinator
+            .try_acquire(&subscription_name)
+            .await
+            .map_err(|_| {
+                ContractTestFailure::assertion(
+                    SCENARIO,
+                    "first instance failed to acquire leadership",
+                )
+            })?;
+        // Guard is dropped here when scope ends (simulates process exit/crash)
+    }
+
+    // When: Second instance attempts to acquire leadership after first guard dropped
+    let second_result = coordinator.try_acquire(&subscription_name).await;
+
+    // Then: Second acquisition succeeds (leadership was released)
+    if second_result.is_err() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "expected second instance to acquire leadership after first guard dropped, but try_acquire failed - leadership should be released when guard is dropped",
         ));
     }
 

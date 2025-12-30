@@ -461,10 +461,32 @@ pub enum CoordinationError {
 
 /// Guard type that releases leadership when dropped.
 ///
-/// This is a placeholder - the actual implementation will hold lock state.
-#[derive(Debug)]
+/// Holds the advisory lock key and pool reference needed to release
+/// the PostgreSQL advisory lock on drop.
 pub struct CoordinationGuard {
-    _private: (),
+    lock_key: i64,
+    pool: Pool<Postgres>,
+}
+
+impl std::fmt::Debug for CoordinationGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CoordinationGuard")
+            .field("lock_key", &self.lock_key)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for CoordinationGuard {
+    fn drop(&mut self) {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+                    .bind(self.lock_key)
+                    .execute(&self.pool)
+                    .await;
+            });
+        });
+    }
 }
 
 /// Postgres-backed projector coordinator for distributed leadership.
@@ -530,7 +552,10 @@ impl ProjectorCoordinator for PostgresProjectorCoordinator {
         let acquired: bool = row.get(0);
 
         if acquired {
-            Ok(CoordinationGuard { _private: () })
+            Ok(CoordinationGuard {
+                lock_key,
+                pool: self.pool.clone(),
+            })
         } else {
             Err(CoordinationError::LeadershipNotAcquired)
         }
