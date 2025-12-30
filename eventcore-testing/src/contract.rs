@@ -439,8 +439,9 @@ macro_rules! backend_contract_tests {
                 test_checkpoint_load_missing_returns_none, test_checkpoint_save_and_load,
                 test_checkpoint_update_overwrites, test_concurrent_version_conflicts,
                 test_conflict_preserves_atomicity, test_coordination_acquire_leadership,
-                test_event_ordering_across_streams, test_missing_stream_reads,
-                test_position_based_resumption, test_stream_isolation,
+                test_coordination_independent_subscriptions,
+                test_coordination_second_instance_blocked, test_event_ordering_across_streams,
+                test_missing_stream_reads, test_position_based_resumption, test_stream_isolation,
                 test_stream_prefix_filtering, test_stream_prefix_requires_prefix_match,
             };
 
@@ -547,6 +548,20 @@ macro_rules! backend_contract_tests {
             #[tokio::test(flavor = "multi_thread")]
             async fn coordination_acquire_leadership_contract() {
                 test_coordination_acquire_leadership($make_coordinator)
+                    .await
+                    .expect("coordinator contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn coordination_second_instance_blocked_contract() {
+                test_coordination_second_instance_blocked($make_coordinator)
+                    .await
+                    .expect("coordinator contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn coordination_independent_subscriptions_contract() {
+                test_coordination_independent_subscriptions($make_coordinator)
                     .await
                     .expect("coordinator contract failed");
             }
@@ -1216,6 +1231,92 @@ where
         return Err(ContractTestFailure::assertion(
             SCENARIO,
             "expected first instance to acquire leadership successfully, but try_acquire failed",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Contract test: Second instance returns error when leadership unavailable
+///
+/// Observable behavior: When one instance holds leadership for a subscription,
+/// a second attempt to acquire leadership for the same subscription returns an error.
+pub async fn test_coordination_second_instance_blocked<F, C>(
+    make_coordinator: F,
+) -> ContractTestResult
+where
+    F: Fn() -> C + Send + Sync + Clone + 'static,
+    C: ProjectorCoordinator + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "coordination_second_instance_blocked";
+
+    let coordinator = make_coordinator();
+
+    // Given: A unique subscription name
+    let subscription_name = format!("contract::{}::{}", SCENARIO, Uuid::now_v7());
+
+    // And: First instance acquires leadership
+    let _first_guard = coordinator
+        .try_acquire(&subscription_name)
+        .await
+        .map_err(|_| {
+            ContractTestFailure::assertion(SCENARIO, "first instance failed to acquire leadership")
+        })?;
+
+    // When: Second instance attempts to acquire leadership while first holds it
+    let second_result = coordinator.try_acquire(&subscription_name).await;
+
+    // Then: Second attempt returns an error (leadership unavailable)
+    if second_result.is_ok() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "expected second instance to be blocked but try_acquire succeeded",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Contract test: Different projectors have independent coordination (different lock keys)
+///
+/// Observable behavior: Leadership for one subscription does not block leadership
+/// acquisition for a different subscription. Each subscription/projector has its own
+/// independent coordination scope.
+pub async fn test_coordination_independent_subscriptions<F, C>(
+    make_coordinator: F,
+) -> ContractTestResult
+where
+    F: Fn() -> C + Send + Sync + Clone + 'static,
+    C: ProjectorCoordinator + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "coordination_independent_subscriptions";
+
+    let coordinator = make_coordinator();
+
+    // Given: Two unique subscription names (different projectors)
+    let subscription_a = format!("contract::{}::projector-A::{}", SCENARIO, Uuid::now_v7());
+    let subscription_b = format!("contract::{}::projector-B::{}", SCENARIO, Uuid::now_v7());
+
+    // And: First projector acquires leadership for subscription A
+    let _guard_a = coordinator
+        .try_acquire(&subscription_a)
+        .await
+        .map_err(|_| {
+            ContractTestFailure::assertion(
+                SCENARIO,
+                "projector-A failed to acquire leadership for its subscription",
+            )
+        })?;
+
+    // When: Second projector attempts to acquire leadership for subscription B
+    // (while first projector still holds leadership for A)
+    let result_b = coordinator.try_acquire(&subscription_b).await;
+
+    // Then: Second acquisition succeeds (different subscriptions are independent)
+    if result_b.is_err() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "expected projector-B to acquire leadership for its own subscription, but try_acquire failed - different projectors should have independent coordination",
         ));
     }
 
