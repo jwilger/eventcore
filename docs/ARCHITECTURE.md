@@ -1,7 +1,7 @@
 # EventCore Architecture
 
-**Document Version:** 2.5
-**Date:** 2025-12-27
+**Document Version:** 2.6
+**Date:** 2025-12-29
 **Phase:** 4 - Architecture Synthesis
 
 ## Overview
@@ -431,8 +431,8 @@ This design eliminates the coordination problems of separate checkpoint manageme
 The projector execution follows a simple pattern with required coordination:
 
 ```rust
-// Acquire leadership - blocks until acquired or fails
-guard = coordinator.acquire(projector.name())
+// Acquire leadership - returns error if lock already held
+guard = coordinator.try_acquire(projector.name())?;  // Returns LockNotAcquired if unavailable
 
 loop {
     events = poll_events_after(checkpoint)
@@ -444,6 +444,12 @@ loop {
 }
 // guard dropped - leadership released automatically
 ```
+
+Leadership acquisition uses `pg_try_advisory_lock()` (non-blocking). If another instance already holds the lock, `LockNotAcquired` is returned immediately - the library does not block or retry. Callers decide how to handle this:
+
+- **Exit the process** (recommended) - Let Kubernetes, systemd, or similar orchestrators handle restart with backoff
+- **Sleep and retry** - For environments without restart orchestration
+- **Continue without this projector** - For degraded-mode operation
 
 The coordinator is a required parameter to the projection runner, ensuring that distributed deployments cannot accidentally run uncoordinated projectors. Leadership is held via the guard's lifetime - when the guard is dropped (process exit, panic, scope end), leadership is released automatically.
 
@@ -532,7 +538,8 @@ The coordination mechanism separates two concerns:
 - Updated transactionally with projection writes
 
 **Advisory Locks** - Coordinates WHO is processing:
-- Acquired via `SELECT pg_advisory_lock(hash(subscription_name))` on dedicated connection
+- Acquired via `SELECT pg_try_advisory_lock(hash(subscription_name))` on dedicated connection (non-blocking)
+- Returns immediately with success/failure - does not block if lock unavailable
 - Lock ID derived from subscription name for uniqueness
 - Held for session duration (connection open)
 - Released automatically when connection closes
@@ -559,11 +566,11 @@ Per ADR-026, coordination uses direct advisory locks rather than a trait abstrac
 
 #### Backend Implementations
 
-- **PostgreSQL**: Session-scoped advisory locks on dedicated connections. Lock acquired via `pg_advisory_lock(hash(subscription_name))`. Released automatically on connection close (crash, shutdown, network partition).
+- **PostgreSQL**: Session-scoped advisory locks on dedicated connections. Lock acquisition uses `pg_try_advisory_lock(hash(subscription_name))` (non-blocking). Returns `LockNotAcquired` error immediately if another instance holds the lock. Released automatically on connection close (crash, shutdown, network partition).
 
 - **Single-Process**: No coordination needed - only one projector instance runs. The ProjectionRunner operates without coordination overhead.
 
-- **Future Backends**: MySQL `GET_LOCK()`, Redis `SETNX` with TTL, or similar primitives following the same pattern.
+- **Future Backends**: MySQL `GET_LOCK()`, Redis `SETNX` with TTL, or similar primitives following the same pattern (non-blocking try-acquire semantics).
 
 #### Crash Safety and Leadership Release
 
