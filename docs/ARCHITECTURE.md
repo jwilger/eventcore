@@ -1,7 +1,7 @@
 # EventCore Architecture
 
-**Document Version:** 2.6
-**Date:** 2025-12-29
+**Document Version:** 2.7
+**Date:** 2025-12-30
 **Phase:** 4 - Architecture Synthesis
 
 ## Overview
@@ -18,7 +18,7 @@ The architecture follows a clear separation between infrastructure concerns (han
 
 3. **Infrastructure Neutrality** - The library owns infrastructure concerns (stream management, retries, metadata, storage abstraction) and never assumes a particular business domain. Applications own their domain events, metadata schemas, and business rules.
 
-4. **Free-Function APIs** - Public entry points are free functions with explicit dependencies (`execute(command, store)`), keeping the API surface minimal and composable. Structs exist only when grouping configuration or results adds clarity.
+4. **Free-Function APIs** - Public entry points are free functions with explicit dependencies (`execute(command, &store)`, `run_projection(projector, &backend)`), keeping the API surface minimal and composable. Structs exist only when grouping configuration or results adds clarity.
 
 5. **Developer Ergonomics** - The `#[derive(Command)]` macro generates all infrastructure boilerplate. Developers write only domain code (state reconstruction + business logic). Automatic retries, contract-test tooling, and in-memory storage support a "working command in 30 minutes" onboarding goal.
 
@@ -426,9 +426,53 @@ Checkpoints are managed within the projection transaction, not as a separate con
 
 This design eliminates the coordination problems of separate checkpoint management.
 
+### Projection Runner API
+
+The projection runner uses a free function matching the command execution pattern:
+
+```rust
+/// Runs a projector against a backend that provides events, checkpoints, and coordination.
+pub async fn run_projection<P, B>(
+    projector: P,
+    backend: &B,
+) -> Result<(), ProjectionError>
+where
+    P: Projector,
+    B: EventReader + CheckpointStore + ProjectorCoordinator,
+```
+
+This design optimizes for the common case where a single backend (e.g., PostgreSQL) provides all three capabilities:
+
+```rust
+// Simple case (99.9% of deployments) - everything from PostgreSQL
+run_projection(my_projector, &postgres_store).await?;
+```
+
+For deployments where events come from one source but coordination belongs in another (e.g., events from EventStoreDB, projections and coordination in PostgreSQL), users create a wrapper struct:
+
+```rust
+struct MyBackend<'a> {
+    events: &'a EventStoreDbClient,
+    postgres: &'a PgPool,
+}
+
+impl EventReader for MyBackend<'_> { /* delegate to self.events */ }
+impl CheckpointStore for MyBackend<'_> { /* delegate to self.postgres */ }
+impl ProjectorCoordinator for MyBackend<'_> { /* delegate to self.postgres */ }
+
+// Usage
+run_projection(my_projector, &my_backend).await?;
+```
+
+The three traits remain separate (not consolidated) for:
+
+- **Single responsibility** - Each trait has one job
+- **Independent unit testing** - Test each implementation in isolation
+- **Reusability** - Individual traits may be used elsewhere
+
 ### Projection Execution Loop
 
-The projector execution follows a simple pattern with required coordination:
+Internally, `run_projection` follows this pattern:
 
 ```rust
 // Acquire leadership - returns error if lock already held
@@ -451,7 +495,7 @@ Leadership acquisition uses `pg_try_advisory_lock()` (non-blocking). If another 
 - **Sleep and retry** - For environments without restart orchestration
 - **Continue without this projector** - For degraded-mode operation
 
-The coordinator is a required parameter to the projection runner, ensuring that distributed deployments cannot accidentally run uncoordinated projectors. Leadership is held via the guard's lifetime - when the guard is dropped (process exit, panic, scope end), leadership is released automatically.
+Leadership is held via the guard's lifetime - when the guard is dropped (process exit, panic, scope end), leadership is released automatically.
 
 ### Projector Configuration
 
@@ -854,12 +898,13 @@ EventCore provides a cohesive architecture for event-sourced applications:
 1. **Type-safe domain modeling** with zero boilerplate for infrastructure
 2. **Deterministic, atomic execution** of complex multi-stream business operations
 3. **Automatic concurrency management** and retry behavior that keeps business code simple
-4. **Poll-based projections** with integrated checkpoint management for correct read models
-5. **Subscription table + advisory lock coordination** for distributed deployments using session-scoped locks on dedicated connections
-6. **Per-projector configuration** with three orthogonal concerns: poll (infrastructure), event retry (application), and monitoring (stuck process detection)
-7. **Rich metadata and observability** hooks for auditing, compliance, and debugging
-8. **Pluggable storage backends** validated by a shared contract suite
-9. **Feature flag ergonomics** for adapter configuration matching Rust ecosystem patterns
-10. **Lockstep versioning policy** with automated release management for clear compatibility guarantees
+4. **Poll-based projections** via `run_projection(projector, &backend)` with integrated checkpoint management for correct read models
+5. **Unified backend traits** - backends implement `EventReader + CheckpointStore + ProjectorCoordinator`, with wrapper structs for mixed-backend deployments
+6. **Subscription table + advisory lock coordination** for distributed deployments using session-scoped locks on dedicated connections
+7. **Per-projector configuration** with three orthogonal concerns: poll (infrastructure), event retry (application), and monitoring (stuck process detection)
+8. **Rich metadata and observability** hooks for auditing, compliance, and debugging
+9. **Pluggable storage backends** validated by a shared contract suite
+10. **Feature flag ergonomics** for adapter configuration matching Rust ecosystem patterns
+11. **Lockstep versioning policy** with automated release management for clear compatibility guarantees
 
 This document is the single source of truth for EventCore's architecture and serves as the working reference for all implementation work.
