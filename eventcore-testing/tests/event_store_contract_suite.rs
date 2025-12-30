@@ -9,4 +9,5 @@ backend_contract_tests! {
     suite = in_memory,
     make_store = eventcore_memory::InMemoryEventStore::new,
     make_checkpoint_store = eventcore_memory::InMemoryCheckpointStore::new,
+    make_coordinator = eventcore_memory::InMemoryProjectorCoordinator::new,
 }

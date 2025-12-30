@@ -1,6 +1,7 @@
 use eventcore_types::{
     BatchSize, CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore,
-    EventStoreError, StreamId, StreamPosition, StreamPrefix, StreamVersion, StreamWrites,
+    EventStoreError, ProjectorCoordinator, StreamId, StreamPosition, StreamPrefix, StreamVersion,
+    StreamWrites,
 };
 use std::fmt;
 
@@ -426,9 +427,10 @@ where
 ///
 /// The store type must implement both `EventStore` and `EventReader` traits.
 /// The checkpoint store type must implement `CheckpointStore` trait.
+/// The coordinator type must implement `ProjectorCoordinator` trait.
 #[macro_export]
 macro_rules! backend_contract_tests {
-    (suite = $suite:ident, make_store = $make_store:expr, make_checkpoint_store = $make_checkpoint_store:expr $(,)?) => {
+    (suite = $suite:ident, make_store = $make_store:expr, make_checkpoint_store = $make_checkpoint_store:expr, make_coordinator = $make_coordinator:expr $(,)?) => {
         #[allow(non_snake_case)]
         mod $suite {
             use $crate::contract::{
@@ -436,7 +438,10 @@ macro_rules! backend_contract_tests {
                 test_checkpoint_independent_subscriptions,
                 test_checkpoint_load_missing_returns_none, test_checkpoint_save_and_load,
                 test_checkpoint_update_overwrites, test_concurrent_version_conflicts,
-                test_conflict_preserves_atomicity, test_event_ordering_across_streams,
+                test_conflict_preserves_atomicity, test_coordination_acquire_leadership,
+                test_coordination_independent_subscriptions,
+                test_coordination_leadership_released_on_guard_drop,
+                test_coordination_second_instance_blocked, test_event_ordering_across_streams,
                 test_missing_stream_reads, test_position_based_resumption, test_stream_isolation,
                 test_stream_prefix_filtering, test_stream_prefix_requires_prefix_match,
             };
@@ -538,6 +543,35 @@ macro_rules! backend_contract_tests {
                 test_checkpoint_independent_subscriptions($make_checkpoint_store)
                     .await
                     .expect("checkpoint store contract failed");
+            }
+
+            // ProjectorCoordinator contract tests
+            #[tokio::test(flavor = "multi_thread")]
+            async fn coordination_acquire_leadership_contract() {
+                test_coordination_acquire_leadership($make_coordinator)
+                    .await
+                    .expect("coordinator contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn coordination_second_instance_blocked_contract() {
+                test_coordination_second_instance_blocked($make_coordinator)
+                    .await
+                    .expect("coordinator contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn coordination_independent_subscriptions_contract() {
+                test_coordination_independent_subscriptions($make_coordinator)
+                    .await
+                    .expect("coordinator contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn coordination_leadership_released_on_guard_drop_contract() {
+                test_coordination_leadership_released_on_guard_drop($make_coordinator)
+                    .await
+                    .expect("coordinator contract failed");
             }
         }
     };
@@ -1171,6 +1205,173 @@ where
                 Some(position_b),
                 loaded_b
             ),
+        ));
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// ProjectorCoordinator Contract Tests
+// ============================================================================
+
+/// Contract test: First instance can acquire leadership successfully
+///
+/// Observable behavior: When no other instance holds leadership for a subscription,
+/// calling try_acquire returns a guard indicating successful acquisition.
+pub async fn test_coordination_acquire_leadership<F, C>(make_coordinator: F) -> ContractTestResult
+where
+    F: Fn() -> C + Send + Sync + Clone + 'static,
+    C: ProjectorCoordinator + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "coordination_acquire_leadership";
+
+    let coordinator = make_coordinator();
+
+    // Given: A unique subscription name (no existing leadership)
+    let subscription_name = format!("contract::{}::{}", SCENARIO, Uuid::now_v7());
+
+    // When: Attempting to acquire leadership
+    let result = coordinator.try_acquire(&subscription_name).await;
+
+    // Then: Acquisition succeeds (returns Ok with guard)
+    if result.is_err() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "expected first instance to acquire leadership successfully, but try_acquire failed",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Contract test: Second instance returns error when leadership unavailable
+///
+/// Observable behavior: When one instance holds leadership for a subscription,
+/// a second attempt to acquire leadership for the same subscription returns an error.
+pub async fn test_coordination_second_instance_blocked<F, C>(
+    make_coordinator: F,
+) -> ContractTestResult
+where
+    F: Fn() -> C + Send + Sync + Clone + 'static,
+    C: ProjectorCoordinator + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "coordination_second_instance_blocked";
+
+    let coordinator = make_coordinator();
+
+    // Given: A unique subscription name
+    let subscription_name = format!("contract::{}::{}", SCENARIO, Uuid::now_v7());
+
+    // And: First instance acquires leadership
+    let _first_guard = coordinator
+        .try_acquire(&subscription_name)
+        .await
+        .map_err(|_| {
+            ContractTestFailure::assertion(SCENARIO, "first instance failed to acquire leadership")
+        })?;
+
+    // When: Second instance attempts to acquire leadership while first holds it
+    let second_result = coordinator.try_acquire(&subscription_name).await;
+
+    // Then: Second attempt returns an error (leadership unavailable)
+    if second_result.is_ok() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "expected second instance to be blocked but try_acquire succeeded",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Contract test: Different projectors have independent coordination (different lock keys)
+///
+/// Observable behavior: Leadership for one subscription does not block leadership
+/// acquisition for a different subscription. Each subscription/projector has its own
+/// independent coordination scope.
+pub async fn test_coordination_independent_subscriptions<F, C>(
+    make_coordinator: F,
+) -> ContractTestResult
+where
+    F: Fn() -> C + Send + Sync + Clone + 'static,
+    C: ProjectorCoordinator + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "coordination_independent_subscriptions";
+
+    let coordinator = make_coordinator();
+
+    // Given: Two unique subscription names (different projectors)
+    let subscription_a = format!("contract::{}::projector-A::{}", SCENARIO, Uuid::now_v7());
+    let subscription_b = format!("contract::{}::projector-B::{}", SCENARIO, Uuid::now_v7());
+
+    // And: First projector acquires leadership for subscription A
+    let _guard_a = coordinator
+        .try_acquire(&subscription_a)
+        .await
+        .map_err(|_| {
+            ContractTestFailure::assertion(
+                SCENARIO,
+                "projector-A failed to acquire leadership for its subscription",
+            )
+        })?;
+
+    // When: Second projector attempts to acquire leadership for subscription B
+    // (while first projector still holds leadership for A)
+    let result_b = coordinator.try_acquire(&subscription_b).await;
+
+    // Then: Second acquisition succeeds (different subscriptions are independent)
+    if result_b.is_err() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "expected projector-B to acquire leadership for its own subscription, but try_acquire failed - different projectors should have independent coordination",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Contract test: Leadership is released when guard is dropped (crash/disconnect recovery)
+///
+/// Observable behavior: When an instance holding leadership drops its guard (simulating
+/// process exit, crash, or connection close), the lock is released and another instance
+/// can acquire leadership for the same subscription.
+pub async fn test_coordination_leadership_released_on_guard_drop<F, C>(
+    make_coordinator: F,
+) -> ContractTestResult
+where
+    F: Fn() -> C + Send + Sync + Clone + 'static,
+    C: ProjectorCoordinator + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "coordination_leadership_released_on_guard_drop";
+
+    let coordinator = make_coordinator();
+
+    // Given: A unique subscription name
+    let subscription_name = format!("contract::{}::{}", SCENARIO, Uuid::now_v7());
+
+    // And: First instance acquires leadership, then drops the guard
+    {
+        let _first_guard = coordinator
+            .try_acquire(&subscription_name)
+            .await
+            .map_err(|_| {
+                ContractTestFailure::assertion(
+                    SCENARIO,
+                    "first instance failed to acquire leadership",
+                )
+            })?;
+        // Guard is dropped here when scope ends (simulates process exit/crash)
+    }
+
+    // When: Second instance attempts to acquire leadership after first guard dropped
+    let second_result = coordinator.try_acquire(&subscription_name).await;
+
+    // Then: Second acquisition succeeds (leadership was released)
+    if second_result.is_err() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "expected second instance to acquire leadership after first guard dropped, but try_acquire failed - leadership should be released when guard is dropped",
         ));
     }
 

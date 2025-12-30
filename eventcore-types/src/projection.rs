@@ -690,6 +690,79 @@ pub trait CheckpointStore: Send + Sync {
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
+/// Trait for coordinating projector leadership across multiple instances.
+///
+/// ProjectorCoordinator enables single-leader projector execution in distributed
+/// deployments. Only one instance at a time should process events for a given
+/// subscription to prevent duplicate processing and ensure ordering guarantees.
+///
+/// # Design
+///
+/// This trait uses a non-blocking, try-acquire pattern (per ADR-028):
+/// - `try_acquire` returns immediately, never blocks
+/// - Returns a guard on success; dropping the guard releases leadership
+/// - Returns an error if another instance holds leadership
+///
+/// Callers decide how to handle acquisition failure:
+/// - Exit the process (recommended for Kubernetes/systemd deployments)
+/// - Sleep and retry (for environments without restart orchestration)
+/// - Continue without this projector (for degraded-mode operation)
+///
+/// # Type Parameters
+///
+/// - `Error`: Error type returned when acquisition fails
+/// - `Guard`: Guard type that releases leadership when dropped (must be Send)
+///
+/// # Example
+///
+/// ```ignore
+/// let result = coordinator.try_acquire("my-projector").await;
+/// match result {
+///     Ok(guard) => {
+///         // We have leadership - run the projector
+///         run_projector().await;
+///         // Guard is dropped when we're done, releasing leadership
+///     }
+///     Err(_) => {
+///         // Another instance has leadership - exit or retry
+///         std::process::exit(0);
+///     }
+/// }
+/// ```
+pub trait ProjectorCoordinator {
+    /// Error type returned when leadership acquisition fails.
+    ///
+    /// Should distinguish between:
+    /// - Lock not acquired (another instance has leadership)
+    /// - Infrastructure errors (database connectivity, etc.)
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Guard type that releases leadership when dropped.
+    ///
+    /// The guard must be Send to support async workflows where the guard
+    /// may be held across await points.
+    type Guard: Send;
+
+    /// Attempt to acquire leadership for a subscription.
+    ///
+    /// This method is non-blocking per ADR-028. It returns immediately with
+    /// either a guard (success) or an error (failure).
+    ///
+    /// # Parameters
+    ///
+    /// - `subscription_name`: Unique identifier for the projector/subscription
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Guard)`: Leadership acquired; dropping the guard releases it
+    /// - `Err(Self::Error)`: Leadership not acquired (held by another instance)
+    ///   or infrastructure error
+    fn try_acquire(
+        &self,
+        subscription_name: &str,
+    ) -> impl Future<Output = Result<Self::Guard, Self::Error>> + Send;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
