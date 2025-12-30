@@ -8,8 +8,8 @@ use std::sync::{Arc, RwLock};
 
 use eventcore_types::{
     CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, Operation, StreamId, StreamPosition, StreamVersion,
-    StreamWriteEntry, StreamWrites,
+    EventStreamReader, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
+    StreamVersion, StreamWriteEntry, StreamWrites,
 };
 use uuid::Uuid;
 
@@ -256,6 +256,94 @@ impl std::fmt::Display for InMemoryCheckpointError {
 }
 
 impl std::error::Error for InMemoryCheckpointError {}
+
+/// Error type for in-memory coordinator operations.
+#[derive(Debug, Clone)]
+pub enum InMemoryCoordinationError {
+    /// Leadership is already held by another instance.
+    LeadershipNotAcquired { subscription_name: String },
+    /// Lock was poisoned by a panic in another thread.
+    LockPoisoned { message: String },
+}
+
+impl std::fmt::Display for InMemoryCoordinationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LeadershipNotAcquired { subscription_name } => {
+                write!(
+                    f,
+                    "leadership not acquired for subscription: {}",
+                    subscription_name
+                )
+            }
+            Self::LockPoisoned { message } => write!(f, "lock poisoned: {}", message),
+        }
+    }
+}
+
+impl std::error::Error for InMemoryCoordinationError {}
+
+/// Guard that releases leadership when dropped.
+#[derive(Debug)]
+pub struct InMemoryCoordinationGuard {
+    subscription_name: String,
+    locks: Arc<RwLock<HashMap<String, ()>>>,
+}
+
+impl Drop for InMemoryCoordinationGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.locks.write() {
+            let _ = guard.remove(&self.subscription_name);
+        }
+    }
+}
+
+/// In-memory projector coordinator for single-process deployments.
+///
+/// `InMemoryProjectorCoordinator` provides coordination for projectors within a single
+/// process using an in-memory lock table. This is suitable for testing and single-process
+/// deployments where distributed coordination is not required.
+///
+/// For distributed deployments with multiple process instances, use a database-backed
+/// coordinator implementation (e.g., PostgreSQL advisory locks).
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryProjectorCoordinator {
+    locks: Arc<RwLock<HashMap<String, ()>>>,
+}
+
+impl InMemoryProjectorCoordinator {
+    /// Create a new in-memory projector coordinator.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl ProjectorCoordinator for InMemoryProjectorCoordinator {
+    type Error = InMemoryCoordinationError;
+    type Guard = InMemoryCoordinationGuard;
+
+    async fn try_acquire(&self, subscription_name: &str) -> Result<Self::Guard, Self::Error> {
+        let mut guard =
+            self.locks
+                .write()
+                .map_err(|e| InMemoryCoordinationError::LockPoisoned {
+                    message: e.to_string(),
+                })?;
+
+        if guard.contains_key(subscription_name) {
+            return Err(InMemoryCoordinationError::LeadershipNotAcquired {
+                subscription_name: subscription_name.to_string(),
+            });
+        }
+
+        let _ = guard.insert(subscription_name.to_string(), ());
+
+        Ok(InMemoryCoordinationGuard {
+            subscription_name: subscription_name.to_string(),
+            locks: Arc::clone(&self.locks),
+        })
+    }
+}
 
 impl CheckpointStore for InMemoryCheckpointStore {
     type Error = InMemoryCheckpointError;

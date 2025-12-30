@@ -1,6 +1,7 @@
 use eventcore_types::{
     BatchSize, CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore,
-    EventStoreError, StreamId, StreamPosition, StreamPrefix, StreamVersion, StreamWrites,
+    EventStoreError, ProjectorCoordinator, StreamId, StreamPosition, StreamPrefix, StreamVersion,
+    StreamWrites,
 };
 use std::fmt;
 
@@ -426,9 +427,10 @@ where
 ///
 /// The store type must implement both `EventStore` and `EventReader` traits.
 /// The checkpoint store type must implement `CheckpointStore` trait.
+/// The coordinator type must implement `ProjectorCoordinator` trait.
 #[macro_export]
 macro_rules! backend_contract_tests {
-    (suite = $suite:ident, make_store = $make_store:expr, make_checkpoint_store = $make_checkpoint_store:expr $(,)?) => {
+    (suite = $suite:ident, make_store = $make_store:expr, make_checkpoint_store = $make_checkpoint_store:expr, make_coordinator = $make_coordinator:expr $(,)?) => {
         #[allow(non_snake_case)]
         mod $suite {
             use $crate::contract::{
@@ -436,8 +438,9 @@ macro_rules! backend_contract_tests {
                 test_checkpoint_independent_subscriptions,
                 test_checkpoint_load_missing_returns_none, test_checkpoint_save_and_load,
                 test_checkpoint_update_overwrites, test_concurrent_version_conflicts,
-                test_conflict_preserves_atomicity, test_event_ordering_across_streams,
-                test_missing_stream_reads, test_position_based_resumption, test_stream_isolation,
+                test_conflict_preserves_atomicity, test_coordination_acquire_leadership,
+                test_event_ordering_across_streams, test_missing_stream_reads,
+                test_position_based_resumption, test_stream_isolation,
                 test_stream_prefix_filtering, test_stream_prefix_requires_prefix_match,
             };
 
@@ -538,6 +541,14 @@ macro_rules! backend_contract_tests {
                 test_checkpoint_independent_subscriptions($make_checkpoint_store)
                     .await
                     .expect("checkpoint store contract failed");
+            }
+
+            // ProjectorCoordinator contract tests
+            #[tokio::test(flavor = "multi_thread")]
+            async fn coordination_acquire_leadership_contract() {
+                test_coordination_acquire_leadership($make_coordinator)
+                    .await
+                    .expect("coordinator contract failed");
             }
         }
     };
@@ -1171,6 +1182,40 @@ where
                 Some(position_b),
                 loaded_b
             ),
+        ));
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// ProjectorCoordinator Contract Tests
+// ============================================================================
+
+/// Contract test: First instance can acquire leadership successfully
+///
+/// Observable behavior: When no other instance holds leadership for a subscription,
+/// calling try_acquire returns a guard indicating successful acquisition.
+pub async fn test_coordination_acquire_leadership<F, C>(make_coordinator: F) -> ContractTestResult
+where
+    F: Fn() -> C + Send + Sync + Clone + 'static,
+    C: ProjectorCoordinator + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "coordination_acquire_leadership";
+
+    let coordinator = make_coordinator();
+
+    // Given: A unique subscription name (no existing leadership)
+    let subscription_name = format!("contract::{}::{}", SCENARIO, Uuid::now_v7());
+
+    // When: Attempting to acquire leadership
+    let result = coordinator.try_acquire(&subscription_name).await;
+
+    // Then: Acquisition succeeds (returns Ok with guard)
+    if result.is_err() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "expected first instance to acquire leadership successfully, but try_acquire failed",
         ));
     }
 

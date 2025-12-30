@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use eventcore_types::{
     CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, Operation, StreamId, StreamPosition, StreamWriteEntry,
-    StreamWrites,
+    EventStreamReader, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
+    StreamWriteEntry, StreamWrites,
 };
 use nutype::nutype;
 use serde_json::{Value, json};
@@ -440,5 +440,99 @@ impl CheckpointStore for PostgresCheckpointStore {
         .map_err(PostgresCheckpointError::DatabaseError)?;
 
         Ok(())
+    }
+}
+
+// ============================================================================
+// PostgresProjectorCoordinator - Distributed projector coordination via Postgres
+// ============================================================================
+
+/// Error type for projector coordination operations.
+#[derive(Debug, Error)]
+pub enum CoordinationError {
+    /// Leadership could not be acquired (another instance holds the lock).
+    #[error("leadership not acquired: another instance holds the lock")]
+    LeadershipNotAcquired,
+
+    /// Database operation failed.
+    #[error("database operation failed: {0}")]
+    DatabaseError(#[source] sqlx::Error),
+}
+
+/// Guard type that releases leadership when dropped.
+///
+/// This is a placeholder - the actual implementation will hold lock state.
+#[derive(Debug)]
+pub struct CoordinationGuard {
+    _private: (),
+}
+
+/// Postgres-backed projector coordinator for distributed leadership.
+///
+/// `PostgresProjectorCoordinator` uses PostgreSQL advisory locks to ensure
+/// only one projector instance processes events for a given subscription
+/// at a time, preventing duplicate processing in distributed deployments.
+#[derive(Debug, Clone)]
+pub struct PostgresProjectorCoordinator {
+    pool: Pool<Postgres>,
+}
+
+impl PostgresProjectorCoordinator {
+    /// Create a new PostgresProjectorCoordinator with default configuration.
+    pub async fn new<S: Into<String>>(connection_string: S) -> Result<Self, CoordinationError> {
+        Self::with_config(connection_string, PostgresConfig::default()).await
+    }
+
+    /// Create a new PostgresProjectorCoordinator with custom configuration.
+    pub async fn with_config<S: Into<String>>(
+        connection_string: S,
+        config: PostgresConfig,
+    ) -> Result<Self, CoordinationError> {
+        let connection_string = connection_string.into();
+        let max_connections: std::num::NonZeroU32 = config.max_connections.into();
+        let pool = PgPoolOptions::new()
+            .max_connections(max_connections.get())
+            .acquire_timeout(config.acquire_timeout)
+            .idle_timeout(config.idle_timeout)
+            .connect(&connection_string)
+            .await
+            .map_err(CoordinationError::DatabaseError)?;
+
+        Ok(Self { pool })
+    }
+
+    /// Create a PostgresProjectorCoordinator from an existing connection pool.
+    pub fn from_pool(pool: Pool<Postgres>) -> Self {
+        Self { pool }
+    }
+}
+
+impl ProjectorCoordinator for PostgresProjectorCoordinator {
+    type Error = CoordinationError;
+    type Guard = CoordinationGuard;
+
+    async fn try_acquire(&self, subscription_name: &str) -> Result<Self::Guard, Self::Error> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // Derive advisory lock key from subscription name
+        let mut hasher = DefaultHasher::new();
+        subscription_name.hash(&mut hasher);
+        let lock_key = hasher.finish() as i64;
+
+        // Attempt to acquire advisory lock (non-blocking)
+        let row = sqlx::query("SELECT pg_try_advisory_lock($1)")
+            .bind(lock_key)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(CoordinationError::DatabaseError)?;
+
+        let acquired: bool = row.get(0);
+
+        if acquired {
+            Ok(CoordinationGuard { _private: () })
+        } else {
+            Err(CoordinationError::LeadershipNotAcquired)
+        }
     }
 }
