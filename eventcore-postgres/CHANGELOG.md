@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.4.0...eventcore-postgres-v0.5.0) - 2025-12-31
+
+### Features
+
+- add ProjectorCoordinator trait and PostgreSQL advisory lock implementation ([#259](https://github.com/jwilger/eventcore/pull/259))
+- implement run_projection free function (ADR-029) ([#263](https://github.com/jwilger/eventcore/pull/263))
+
 ## [0.4.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.3.0...eventcore-postgres-v0.4.0) - 2025-12-29
 
 ### Features
