@@ -228,6 +228,42 @@ impl EventStore for PostgresEventStore {
     }
 }
 
+impl CheckpointStore for PostgresEventStore {
+    type Error = PostgresCheckpointError;
+
+    async fn load(&self, name: &str) -> Result<Option<StreamPosition>, Self::Error> {
+        let row = query("SELECT last_position FROM eventcore_subscription_versions WHERE subscription_name = $1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(PostgresCheckpointError::DatabaseError)?;
+
+        match row {
+            Some(row) => {
+                let position: Uuid = row.get("last_position");
+                Ok(Some(StreamPosition::new(position)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn save(&self, name: &str, position: StreamPosition) -> Result<(), Self::Error> {
+        let position_uuid: Uuid = position.into_inner();
+        query(
+            "INSERT INTO eventcore_subscription_versions (subscription_name, last_position, updated_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (subscription_name) DO UPDATE SET last_position = $2, updated_at = NOW()",
+        )
+        .bind(name)
+        .bind(position_uuid)
+        .execute(&self.pool)
+        .await
+        .map_err(PostgresCheckpointError::DatabaseError)?;
+
+        Ok(())
+    }
+}
+
 impl EventReader for PostgresEventStore {
     type Error = EventStoreError;
 
@@ -464,6 +500,30 @@ pub enum CoordinationError {
 /// Holds the advisory lock key and the actual database connection that acquired
 /// the lock. This is critical because PostgreSQL advisory locks are session-scoped:
 /// the unlock must happen on the same connection that acquired the lock.
+///
+/// # Lock Release Behavior
+///
+/// The guard attempts to explicitly release the advisory lock when dropped:
+///
+/// - **Multi-threaded runtime**: Uses `block_in_place` to synchronously release
+///   the lock before the guard is fully dropped.
+///
+/// - **Single-threaded runtime**: Spawns a task to release the lock asynchronously.
+///   This task may not execute before process shutdown, in which case the lock is
+///   released when the PostgreSQL session ends (connection closes).
+///
+/// # PostgreSQL Session-Scoped Locks
+///
+/// PostgreSQL advisory locks acquired with `pg_try_advisory_lock` are session-scoped
+/// and automatically released when the database connection closes. This provides a
+/// safety net: even if explicit unlock fails or is skipped, the lock will be released
+/// when:
+/// - The connection is returned to the pool and recycled
+/// - The connection pool is shut down
+/// - The database connection times out
+///
+/// For production deployments, configure appropriate connection pool idle timeouts
+/// to ensure timely lock release on ungraceful shutdown.
 pub struct CoordinationGuard {
     lock_key: i64,
     /// The actual connection that holds the advisory lock.
@@ -483,16 +543,38 @@ impl Drop for CoordinationGuard {
     fn drop(&mut self) {
         // Take ownership of the connection - we need the same connection that acquired the lock
         if let Some(mut connection) = self.connection.take() {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    // Unlock on the SAME connection that acquired the lock
+            let lock_key = self.lock_key;
+
+            // Check runtime flavor to determine the appropriate unlock strategy.
+            // block_in_place panics on single-threaded runtimes, so we must check first.
+            let handle = tokio::runtime::Handle::current();
+            let is_multi_thread =
+                handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread;
+
+            if is_multi_thread {
+                // Multi-threaded runtime: use block_in_place for synchronous unlock
+                tokio::task::block_in_place(|| {
+                    handle.block_on(async {
+                        // Unlock on the SAME connection that acquired the lock
+                        let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+                            .bind(lock_key)
+                            .execute(&mut *connection)
+                            .await;
+                        // Connection is returned to pool when dropped here
+                    });
+                });
+            } else {
+                // Single-threaded runtime: spawn a task for async unlock.
+                // Note: This task may not execute before process shutdown. In that case,
+                // the advisory lock is released when the PostgreSQL session ends (the
+                // connection closes). See struct-level documentation for details.
+                tokio::spawn(async move {
                     let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
-                        .bind(self.lock_key)
+                        .bind(lock_key)
                         .execute(&mut *connection)
                         .await;
-                    // Connection is returned to pool when dropped here
                 });
-            });
+            }
         }
     }
 }
@@ -538,6 +620,49 @@ impl PostgresProjectorCoordinator {
 }
 
 impl ProjectorCoordinator for PostgresProjectorCoordinator {
+    type Error = CoordinationError;
+    type Guard = CoordinationGuard;
+
+    async fn try_acquire(&self, subscription_name: &str) -> Result<Self::Guard, Self::Error> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // Derive advisory lock key from subscription name
+        let mut hasher = DefaultHasher::new();
+        subscription_name.hash(&mut hasher);
+        let lock_key = hasher.finish() as i64;
+
+        // Acquire a dedicated connection from the pool.
+        // This connection MUST be kept for the lifetime of the guard because
+        // PostgreSQL advisory locks are session-scoped.
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .map_err(CoordinationError::DatabaseError)?;
+
+        // Attempt to acquire advisory lock (non-blocking) on this specific connection
+        let row = sqlx::query("SELECT pg_try_advisory_lock($1)")
+            .bind(lock_key)
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(CoordinationError::DatabaseError)?;
+
+        let acquired: bool = row.get(0);
+
+        if acquired {
+            Ok(CoordinationGuard {
+                lock_key,
+                connection: Some(connection),
+            })
+        } else {
+            // Lock not acquired - connection will be returned to pool here
+            Err(CoordinationError::LeadershipNotAcquired)
+        }
+    }
+}
+
+impl ProjectorCoordinator for PostgresEventStore {
     type Error = CoordinationError;
     type Guard = CoordinationGuard;
 

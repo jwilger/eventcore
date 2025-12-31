@@ -690,6 +690,23 @@ pub trait CheckpointStore: Send + Sync {
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
+/// Blanket implementation allowing CheckpointStore trait to work with references.
+///
+/// This is a trivial forwarding implementation that cannot be meaningfully tested
+/// in isolation - mutations here would break all CheckpointStore usage through references.
+// cargo-mutants: skip (trivial forwarding impl)
+impl<T: CheckpointStore + Sync> CheckpointStore for &T {
+    type Error = T::Error;
+
+    async fn load(&self, name: &str) -> Result<Option<StreamPosition>, Self::Error> {
+        (*self).load(name).await
+    }
+
+    async fn save(&self, name: &str, position: StreamPosition) -> Result<(), Self::Error> {
+        (*self).save(name, position).await
+    }
+}
+
 /// Trait for coordinating projector leadership across multiple instances.
 ///
 /// ProjectorCoordinator enables single-leader projector execution in distributed

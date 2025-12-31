@@ -107,11 +107,17 @@ pub enum PollMode {
 
 /// Orchestrates projector execution with event polling.
 ///
-/// `ProjectionRunner` is the main entry point for running projections. It:
+/// **Note:** For most use cases, prefer the [`run_projection`] free function which
+/// provides a simpler API and automatic leadership coordination via `ProjectorCoordinator`.
+///
+/// `ProjectionRunner` is the low-level building block for running projections. It:
 /// - Polls the event store for new events
 /// - Applies events to the projector in order
 /// - Handles errors according to the projector's error strategy
 /// - Checkpoints progress for resumable processing
+///
+/// Use `ProjectionRunner` directly only when you need fine-grained control over
+/// polling configuration, event retry behavior, or when not using leadership coordination.
 ///
 /// # Type Parameters
 ///
@@ -123,11 +129,13 @@ pub enum PollMode {
 /// # Example
 ///
 /// ```ignore
-/// // Create a minimal projector
-/// let projector = EventCounterProjector::new();
+/// // Preferred: Use run_projection for simple cases with automatic coordination
+/// run_projection(projector, &backend).await?;
 ///
-/// // Create and run the projection
-/// let runner = ProjectionRunner::new(projector, &store);
+/// // Advanced: Use ProjectionRunner for custom configuration
+/// let runner = ProjectionRunner::new(projector, &store)
+///     .with_poll_config(custom_config)
+///     .with_event_retry_config(retry_config);
 /// runner.run().await?;
 /// ```
 pub struct ProjectionRunner<E, R, P, C>
@@ -518,4 +526,51 @@ pub enum ProjectionError {
     /// Generic projection failure.
     #[error("projection failed: {0}")]
     Failed(String),
+
+    /// Leadership acquisition failed.
+    #[error("failed to acquire leadership: {0}")]
+    LeadershipError(String),
+}
+
+/// Runs a projector against a backend that provides events, checkpoints, and coordination.
+///
+/// This is the primary entry point for running projections in EventCore. It orchestrates:
+/// - Leadership acquisition via `ProjectorCoordinator`
+/// - Event reading via `EventReader`
+/// - Checkpoint management via `CheckpointStore`
+///
+/// # Arguments
+///
+/// * `projector` - The projector implementation to run
+/// * `backend` - A reference to a backend implementing EventReader, CheckpointStore, and ProjectorCoordinator
+///
+/// # Returns
+///
+/// Returns when the projector completes processing all events (batch mode), is cancelled,
+/// or encounters a fatal error.
+///
+/// # Example
+///
+/// ```ignore
+/// // PostgreSQL provides all three traits
+/// run_projection(my_projector, &postgres_store).await?;
+/// ```
+pub async fn run_projection<P, B>(projector: P, backend: &B) -> Result<(), ProjectionError>
+where
+    P: Projector,
+    P::Event: Event + Clone,
+    P::Context: Default,
+    P::Error: std::fmt::Debug,
+    B: EventReader + CheckpointStore + eventcore_types::ProjectorCoordinator,
+{
+    // Acquire leadership for this projector
+    let _guard = backend
+        .try_acquire(projector.name())
+        .await
+        .map_err(|e| ProjectionError::LeadershipError(e.to_string()))?;
+
+    // Build and run the projection using the existing ProjectionRunner
+    let runner = ProjectionRunner::new(projector, backend).with_checkpoint_store(backend);
+
+    runner.run().await
 }

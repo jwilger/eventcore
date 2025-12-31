@@ -56,6 +56,10 @@ struct StoreData {
     streams: HashMap<StreamId, StreamData>,
     /// Global log with indexed stream_id for efficient EventReader queries
     global_log: Vec<GlobalLogEntry>,
+    /// Checkpoint storage for projection progress tracking
+    checkpoints: HashMap<String, StreamPosition>,
+    /// Coordination locks for projector leadership
+    locks: Arc<RwLock<HashMap<String, ()>>>,
 }
 
 pub struct InMemoryEventStore {
@@ -72,6 +76,8 @@ impl InMemoryEventStore {
             data: std::sync::Mutex::new(StoreData {
                 streams: HashMap::new(),
                 global_log: Vec::new(),
+                checkpoints: HashMap::new(),
+                locks: Arc::new(RwLock::new(HashMap::new())),
             }),
         }
     }
@@ -208,6 +214,59 @@ impl EventReader for InMemoryEventStore {
             .collect();
 
         Ok(events)
+    }
+}
+
+impl CheckpointStore for InMemoryEventStore {
+    type Error = InMemoryCheckpointError;
+
+    async fn load(&self, name: &str) -> Result<Option<StreamPosition>, Self::Error> {
+        let data = self.data.lock().map_err(|e| InMemoryCheckpointError {
+            message: format!("failed to acquire lock: {}", e),
+        })?;
+        Ok(data.checkpoints.get(name).copied())
+    }
+
+    async fn save(&self, name: &str, position: StreamPosition) -> Result<(), Self::Error> {
+        let mut data = self.data.lock().map_err(|e| InMemoryCheckpointError {
+            message: format!("failed to acquire lock: {}", e),
+        })?;
+        let _ = data.checkpoints.insert(name.to_string(), position);
+        Ok(())
+    }
+}
+
+impl ProjectorCoordinator for InMemoryEventStore {
+    type Error = InMemoryCoordinationError;
+    type Guard = InMemoryCoordinationGuard;
+
+    async fn try_acquire(&self, subscription_name: &str) -> Result<Self::Guard, Self::Error> {
+        let data = self
+            .data
+            .lock()
+            .map_err(|e| InMemoryCoordinationError::LockPoisoned {
+                message: e.to_string(),
+            })?;
+
+        let mut guard =
+            data.locks
+                .write()
+                .map_err(|e| InMemoryCoordinationError::LockPoisoned {
+                    message: e.to_string(),
+                })?;
+
+        if guard.contains_key(subscription_name) {
+            return Err(InMemoryCoordinationError::LeadershipNotAcquired {
+                subscription_name: subscription_name.to_string(),
+            });
+        }
+
+        let _ = guard.insert(subscription_name.to_string(), ());
+
+        Ok(InMemoryCoordinationGuard {
+            subscription_name: subscription_name.to_string(),
+            locks: Arc::clone(&data.locks),
+        })
     }
 }
 
@@ -752,5 +811,35 @@ mod tests {
                 first_position
             );
         }
+    }
+
+    #[tokio::test]
+    async fn in_memory_event_store_implements_checkpoint_store() {
+        // Given: An InMemoryEventStore
+        let store = InMemoryEventStore::new();
+
+        // When: We save a checkpoint
+        let position = StreamPosition::new(Uuid::now_v7());
+        CheckpointStore::save(&store, "test-projector", position)
+            .await
+            .expect("save should succeed");
+
+        // Then: We can load it back
+        let loaded = CheckpointStore::load(&store, "test-projector")
+            .await
+            .expect("load should succeed");
+        assert_eq!(loaded, Some(position));
+    }
+
+    #[tokio::test]
+    async fn in_memory_event_store_implements_projector_coordinator() {
+        // Given: An InMemoryEventStore
+        let store = InMemoryEventStore::new();
+
+        // When: We try to acquire leadership
+        let guard = ProjectorCoordinator::try_acquire(&store, "test-projector").await;
+
+        // Then: It should succeed
+        assert!(guard.is_ok(), "should acquire leadership");
     }
 }
