@@ -500,6 +500,30 @@ pub enum CoordinationError {
 /// Holds the advisory lock key and the actual database connection that acquired
 /// the lock. This is critical because PostgreSQL advisory locks are session-scoped:
 /// the unlock must happen on the same connection that acquired the lock.
+///
+/// # Lock Release Behavior
+///
+/// The guard attempts to explicitly release the advisory lock when dropped:
+///
+/// - **Multi-threaded runtime**: Uses `block_in_place` to synchronously release
+///   the lock before the guard is fully dropped.
+///
+/// - **Single-threaded runtime**: Spawns a task to release the lock asynchronously.
+///   This task may not execute before process shutdown, in which case the lock is
+///   released when the PostgreSQL session ends (connection closes).
+///
+/// # PostgreSQL Session-Scoped Locks
+///
+/// PostgreSQL advisory locks acquired with `pg_try_advisory_lock` are session-scoped
+/// and automatically released when the database connection closes. This provides a
+/// safety net: even if explicit unlock fails or is skipped, the lock will be released
+/// when:
+/// - The connection is returned to the pool and recycled
+/// - The connection pool is shut down
+/// - The database connection times out
+///
+/// For production deployments, configure appropriate connection pool idle timeouts
+/// to ensure timely lock release on ungraceful shutdown.
 pub struct CoordinationGuard {
     lock_key: i64,
     /// The actual connection that holds the advisory lock.
@@ -541,7 +565,9 @@ impl Drop for CoordinationGuard {
                 });
             } else {
                 // Single-threaded runtime: spawn a task for async unlock.
-                // The lock will be released when the spawned task executes.
+                // Note: This task may not execute before process shutdown. In that case,
+                // the advisory lock is released when the PostgreSQL session ends (the
+                // connection closes). See struct-level documentation for details.
                 tokio::spawn(async move {
                     let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
                         .bind(lock_key)
