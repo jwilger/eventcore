@@ -521,11 +521,16 @@ impl Drop for CoordinationGuard {
         if let Some(mut connection) = self.connection.take() {
             let lock_key = self.lock_key;
 
-            // Try block_in_place first (works on multi-threaded runtime).
-            // Fall back to spawn if we're on single-threaded runtime.
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Check runtime flavor to determine the appropriate unlock strategy.
+            // block_in_place panics on single-threaded runtimes, so we must check first.
+            let handle = tokio::runtime::Handle::current();
+            let is_multi_thread =
+                handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread;
+
+            if is_multi_thread {
+                // Multi-threaded runtime: use block_in_place for synchronous unlock
                 tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
+                    handle.block_on(async {
                         // Unlock on the SAME connection that acquired the lock
                         let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
                             .bind(lock_key)
@@ -534,11 +539,9 @@ impl Drop for CoordinationGuard {
                         // Connection is returned to pool when dropped here
                     });
                 });
-            }));
-
-            if result.is_err() {
-                // On single-threaded runtime, block_in_place panics.
-                // Use spawn as fallback (lock will be released when connection is dropped by spawn task)
+            } else {
+                // Single-threaded runtime: spawn a task for async unlock.
+                // The lock will be released when the spawned task executes.
                 tokio::spawn(async move {
                     let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
                         .bind(lock_key)
