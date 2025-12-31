@@ -8,7 +8,7 @@ mod common;
 
 use common::PostgresTestFixture;
 use eventcore_postgres::PostgresProjectorCoordinator;
-use eventcore_types::ProjectorCoordinator;
+use eventcore_types::{ProjectorCoordinator, StreamPosition};
 use sqlx::Row;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -242,6 +242,30 @@ async fn advisory_lock_released_on_guard_drop_verifies_pg_locks() {
     );
 }
 
+#[tokio::test]
+async fn postgres_event_store_saves_and_loads_checkpoint() {
+    // Given: A PostgresEventStore instance
+    use eventcore_types::CheckpointStore;
+    let fixture = PostgresTestFixture::new().await;
+
+    // When: We save a checkpoint position through the CheckpointStore trait
+    let position = StreamPosition::new(Uuid::now_v7());
+    let subscription_name = format!("event-store-checkpoint-test-{}", Uuid::now_v7());
+    fixture
+        .store
+        .save(&subscription_name, position)
+        .await
+        .expect("should save checkpoint");
+
+    // Then: We can load the same position back
+    let loaded = fixture
+        .store
+        .load(&subscription_name)
+        .await
+        .expect("should load checkpoint");
+    assert_eq!(loaded, Some(position));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn advisory_lock_held_blocks_second_acquisition_verified_via_pg_locks() {
     // This test verifies advisory lock behavior by checking pg_locks directly
@@ -300,4 +324,17 @@ async fn advisory_lock_held_blocks_second_acquisition_verified_via_pg_locks() {
 
     // Cleanup
     drop(third_guard);
+}
+
+#[tokio::test]
+async fn postgres_event_store_implements_projector_coordinator() {
+    // Given: A PostgresEventStore instance
+    use eventcore_types::ProjectorCoordinator;
+    let fixture = PostgresTestFixture::new().await;
+
+    // When: We try to acquire leadership through the store
+    let guard = fixture.store.try_acquire("test-projector").await;
+
+    // Then: It should succeed
+    assert!(guard.is_ok(), "should acquire leadership");
 }
