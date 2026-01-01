@@ -1,8 +1,7 @@
 # EventCore Architecture
 
-**Document Version:** 2.8
-**Date:** 2025-12-31
-**Phase:** 4 - Architecture Synthesis
+**Document Version:** 3.0
+**Date:** 2026-01-01
 
 ## Overview
 
@@ -10,21 +9,108 @@ EventCore is a type-driven event sourcing library for Rust that delivers atomic 
 
 The architecture follows a clear separation between infrastructure concerns (handled by the library) and domain concerns (implemented by applications). Commands define business operations, events capture state changes as immutable facts, and projections build read models from event streams.
 
-## Architectural Principles
+```mermaid
+graph TB
+    subgraph Application Layer
+        Cmd[Commands]
+        Proj[Projectors]
+        Domain[Domain Events]
+    end
 
-1. **Type-Driven Development** - All externally visible APIs express domain constraints in their signatures. Domain concepts use validated newtypes (StreamId, EventId, CorrelationId) constructed via smart constructors, ensuring "parse, don't validate" semantics. Phantom types and typestate patterns make illegal states unrepresentable. Total functions and structured errors replace panics.
+    subgraph EventCore Library
+        Exec[execute function]
+        RunProj[run_projection function]
+        ES[EventStore Trait]
+        ER[EventReader Trait]
+        CS[CheckpointStore Trait]
+        PC[ProjectorCoordinator Trait]
+    end
 
-2. **Correctness over Throughput** - Multi-stream atomicity, optimistic concurrency detection, and immutability are non-negotiable. Performance optimizations must preserve these guarantees and therefore happen within atomic transaction boundaries provided by the backing store.
+    subgraph Storage Backend
+        PG[PostgreSQL / InMemory]
+        Schema[Event Schema]
+        Locks[Advisory Locks]
+        Checkpoints[Checkpoint Table]
+    end
 
-3. **Infrastructure Neutrality** - The library owns infrastructure concerns (stream management, retries, metadata, storage abstraction) and never assumes a particular business domain. Applications own their domain events, metadata schemas, and business rules.
+    Cmd --> Exec
+    Exec --> ES
+    ES --> PG
 
-4. **Free-Function APIs** - Public entry points are free functions with explicit dependencies (`execute(command, &store)`, `run_projection(projector, &backend)`), keeping the API surface minimal and composable. Structs exist only when grouping configuration or results adds clarity.
+    Proj --> RunProj
+    RunProj --> ER
+    RunProj --> CS
+    RunProj --> PC
+    ER --> PG
+    CS --> Checkpoints
+    PC --> Locks
 
-5. **Developer Ergonomics** - The `#[derive(Command)]` macro generates all infrastructure boilerplate. Developers write only domain code (state reconstruction + business logic). Automatic retries, contract-test tooling, and in-memory storage support a "working command in 30 minutes" onboarding goal.
+    Domain --> Cmd
+    Domain --> Proj
+
+    style Exec fill:#e1f5ff
+    style RunProj fill:#f5e1ff
+    style ES fill:#e1ffe1
+```
+
+## Design Principles
+
+### Type-Driven Development
+
+All externally visible APIs express domain constraints in their signatures. Domain concepts use validated newtypes (StreamId, EventId, CorrelationId) constructed via smart constructors, ensuring "parse, don't validate" semantics. Types are validated at construction time and guaranteed valid thereafter. Total functions return Result types with descriptive errors rather than panicking.
+
+The library uses the `nutype` crate for domain type validation at boundaries, with types implementing standard traits (Debug, Clone, Serialize, AsRef). Phantom types and typestate patterns make illegal states unrepresentable at compile time.
+
+### Correctness Over Throughput
+
+Multi-stream atomicity, optimistic concurrency detection, and immutability are non-negotiable. Performance optimizations must preserve these guarantees and therefore happen within atomic transaction boundaries provided by the backing store.
+
+### Infrastructure Neutrality
+
+The library owns infrastructure concerns (stream management, retries, metadata, storage abstraction) and never assumes a particular business domain. Applications own their domain events, metadata schemas, and business rules. EventCore does not impose assumptions about "users" or "actors" - applications add business-specific metadata as needed.
+
+### Free-Function APIs
+
+Public entry points are free functions with explicit dependencies (`execute(command, &store)`, `run_projection(projector, &backend)`), keeping the API surface minimal and composable. Structs exist only when grouping configuration or results adds clarity. This design provides:
+
+- Explicit dependencies visible in signatures
+- Composable and testable functions
+- Alignment with Rust ecosystem patterns (tokio::spawn, serde_json::to_string)
+- No unnecessary intermediate structs
+
+### Developer Ergonomics
+
+The `#[derive(Command)]` macro generates all infrastructure boilerplate. Developers write only domain code (state reconstruction and business logic). Automatic retries, contract-test tooling, and in-memory storage support a "working command in 30 minutes" onboarding goal.
 
 ## Crate Organization
 
 EventCore uses a multi-crate workspace with a layered public API design that serves two distinct audiences.
+
+```mermaid
+graph TD
+    examples[eventcore-examples]
+    core[eventcore]
+    memory[eventcore-memory]
+    testing[eventcore-testing]
+    postgres[eventcore-postgres]
+    types[eventcore-types]
+    macros[eventcore-macros]
+
+    examples --> core
+    examples --> memory
+    examples --> testing
+    examples --> types
+
+    core --> types
+    core -.->|feature: macros| macros
+    core -.->|feature: postgres| postgres
+
+    memory --> types
+    testing --> core
+    testing --> types
+    postgres --> types
+    macros
+```
 
 ### Audience Separation
 
@@ -32,24 +118,19 @@ EventCore uses a multi-crate workspace with a layered public API design that ser
 
 **Backend Implementers** (secondary audience) use the `eventcore-types` crate to build storage backends. They need access to all traits and types required to implement `EventStore`, `EventReader`, `CheckpointStore`, and `ProjectorCoordinator`.
 
-This separation keeps the primary API surface small while providing backend authors with everything they need. Since EventCore is pre-1.0.0, breaking changes are expected and require only minor version bumps.
+### Crate Responsibilities
 
-### Workspace Structure
+| Crate | Audience | Purpose |
+|-------|----------|---------|
+| `eventcore` | Application developers | `execute()`, `run_projection()`, macros, minimal types for commands/projectors |
+| `eventcore-types` | Backend implementers | All traits (`EventStore`, `EventReader`, etc.) and types for implementations |
+| `eventcore-macros` | Application developers | `#[derive(Command)]`, `require!` |
+| `eventcore-postgres` | Both | PostgreSQL backend implementing all storage traits |
+| `eventcore-testing` | Backend implementers | Contract tests, chaos harness, test fixtures |
+| `eventcore-memory` | Both | In-memory storage for testing and development |
+| `eventcore-examples` | Application developers | Integration tests and demo applications |
 
-```
-eventcore/                    (workspace root, virtual manifest)
-  eventcore/                  (main crate - application developer API)
-    Cargo.toml
-    src/lib.rs               (execute(), run_projection(), minimal re-exports)
-  eventcore-types/           (backend implementer API - all traits and types)
-    Cargo.toml
-    src/                     (EventStore, EventReader, CheckpointStore, etc.)
-  eventcore-macros/          (all macros: #[derive(Command)], require!)
-  eventcore-postgres/        (PostgreSQL backend, depends on eventcore-types)
-  eventcore-testing/         (dev-dependency testing utilities)
-```
-
-### Layer 1: `eventcore` Crate (Application Developers)
+### Layer 1: Application Developer API (`eventcore`)
 
 The main crate exports only what application developers need:
 
@@ -63,10 +144,10 @@ The main crate exports only what application developers need:
 - `MetricsHook`, `RetryContext` - Metrics integration
 
 **Macros:**
-- `Command` derive macro (via `eventcore-macros`)
+- `Command` derive macro
 - `require!` macro for business rule validation
 
-**Minimal Re-exports for Command/Projector Implementation:**
+**Minimal Re-exports:**
 - `CommandLogic`, `CommandStreams`, `CommandError`, `Event`, `StreamId`
 - `StreamDeclarations`, `NewEvents`, `StreamResolver`
 - `Projector`, `FailureContext`, `FailureStrategy`, `StreamPosition`
@@ -75,9 +156,8 @@ The main crate exports only what application developers need:
 - `ProjectionRunner` - Use `run_projection()` instead
 - `PollMode`, `PollConfig` - Operational tuning, not application code
 - `EventRetryConfig` - Controlled by `Projector::on_error()` return values
-- `NoCheckpointStore` - Internal null object pattern
 
-### Layer 2: `eventcore-types` Crate (Backend Implementers)
+### Layer 2: Backend Implementer API (`eventcore-types`)
 
 This crate exports everything needed to implement storage backends:
 
@@ -94,112 +174,16 @@ This crate exports everything needed to implement storage backends:
 - `EventFilter`, `EventPage` - Event querying
 - `StreamPrefix` - Stream pattern matching
 
-### Crate Responsibilities
-
-| Crate | Audience | Purpose |
-|-------|----------|---------|
-| `eventcore` | Application developers | `execute()`, `run_projection()`, macros, minimal types for commands/projectors |
-| `eventcore-types` | Backend implementers | All traits (`EventStore`, `EventReader`, etc.) and types for implementations |
-| `eventcore-macros` | Application developers | `#[derive(Command)]`, `require!` |
-| `eventcore-postgres` | Both | PostgreSQL backend implementing all storage traits |
-| `eventcore-testing` | Backend implementers | Contract tests, chaos harness, test fixtures |
-
 ### Feature Flag Ergonomics
 
 Users enable storage adapters via feature flags on the main crate:
 
 ```toml
 [dependencies]
-eventcore = { version = "0.1", features = ["postgres"] }
+eventcore = { version = "0.5", features = ["postgres"] }
 ```
 
-The main crate provides selective re-exports (not a blanket `pub use eventcore_types::*`):
-
-```rust
-// Primary API
-pub use crate::execute::execute;
-pub use crate::projection::run_projection;
-
-// Macros (feature-gated)
-#[cfg(feature = "macros")]
-pub use eventcore_macros::{Command, require};
-
-// Minimal re-exports for command/projector implementation
-pub use eventcore_types::{CommandLogic, CommandError, Event, StreamId, /* ... */};
-
-// Backends (feature-gated)
-#[cfg(feature = "postgres")]
-pub use eventcore_postgres as postgres;
-```
-
-This pattern matches Rust ecosystem norms while keeping the API surface minimal and evolution-friendly.
-
-### Dependency Flow
-
-```
-eventcore-types  <--  eventcore-postgres
-       ^                    |
-       |                    | (via feature flag)
-       +---  eventcore  <---+
-                ^
-                |
-       eventcore-macros (feature gated)
-```
-
-The `eventcore-types` crate breaks potential circular dependencies by providing the shared vocabulary that both `eventcore` and adapter crates depend on. Backend implementations depend on `eventcore-types` rather than the full `eventcore` crate, keeping their dependency footprint minimal.
-
-## System Blueprint
-
-```mermaid
-graph TB
-    App[Application Code]
-    ExecFn[execute function]
-    Cmd[Command System]
-    Events[Event System]
-    Store[Event Store Abstraction]
-    Backend[Storage Backend]
-    Proj[Projector System]
-    Reader[EventReader]
-
-    App -->|execute command, store| ExecFn
-    ExecFn -->|resolve and queue streams| Cmd
-    ExecFn -->|fold domain events| Events
-    Events -->|trait bounds| Store
-    Store -->|atomic append| Backend
-    Cmd -->|apply/handle| App
-
-    Backend -->|poll events| Reader
-    Reader -->|deliver events| Proj
-    Proj -->|update read model| App
-
-    subgraph Write Path
-        ExecFn
-        Cmd
-        Store
-    end
-
-    subgraph Read Path
-        Reader
-        Proj
-    end
-
-    subgraph Type System
-        Types[Validated Domain Types]
-        Errors[Error Hierarchy]
-        Meta[Event Metadata]
-    end
-
-    ExecFn -.->|uses| Types
-    ExecFn -.->|emits| Errors
-    Store -.->|preserves| Meta
-    Events -.->|domain types implement| Types
-
-    style ExecFn fill:#e1f5ff
-    style Store fill:#e1ffe1
-    style Cmd fill:#ffe1e1
-    style Events fill:#fff3cd
-    style Proj fill:#f5e1ff
-```
+This pattern matches Rust ecosystem norms (tokio, sqlx, reqwest) while keeping the API surface minimal.
 
 ## Event Store Abstraction
 
@@ -230,7 +214,7 @@ Version-based conflict detection ensures concurrent commands cannot corrupt stat
 - During execution, the executor captures versions for each stream it reads
 - `append_events` receives the map of expected versions and atomically verifies all of them
 - A mismatch on any stream yields `EventStoreError::VersionConflict` (retriable)
-- Version verification occurs inside the backend transaction to eliminate TOCTOU races
+- Version verification occurs inside the backend transaction to eliminate time-of-check-to-time-of-use races
 
 ### Event Metadata
 
@@ -245,13 +229,13 @@ All persisted events carry immutable metadata:
 | `CausationId` | Immediate trigger of the event (usually the command) |
 | `CustomMetadata<M>` | Application-defined, strongly typed metadata payload |
 
-Metadata is validated at construction time, persisted verbatim by every backend, and never mutated after commit.
+UUIDv7 provides time-based ordering while maintaining uniqueness guarantees without coordination. Metadata is validated at construction time, persisted verbatim by every backend, and never mutated after commit.
 
 ### Storage Implementations
 
 - **InMemoryEventStore** ships inside the main crate with zero third-party dependencies. It is the default for tests, tutorials, and quickstarts.
 - **Production backends** (e.g., PostgreSQL via `eventcore-postgres`) live in separate crates to avoid imposing heavy dependencies. They implement `EventStore` and, when applicable, `EventReader`.
-- All implementations must support chaos testing hooks (e.g., injected conflicts) and optional instrumentation for observability.
+- All implementations must support contract testing and optional instrumentation for observability.
 
 ### Contract Testing
 
@@ -295,12 +279,6 @@ Events carry type identity through the `EventTypeName` mechanism:
 ### StreamId Character Restrictions
 
 StreamId values cannot contain glob metacharacters (`*`, `?`, `[`, `]`) to enable unambiguous future pattern matching in subscription queries. Valid identifiers include UUIDs, hierarchical paths (`tenant/account/123`), and composite keys (`order-2024-12-10-001`).
-
-### Metadata Pipeline
-
-- Standard metadata fields (IDs, versions, timestamps, tracing IDs) are handled by infrastructure when events are persisted
-- Applications supply strongly typed custom metadata `M: Serialize + DeserializeOwned` to capture audit information (actors, IP addresses, etc.) without violating infrastructure neutrality
-- Metadata records are immutable facts; changes require emitting compensating events rather than editing existing ones
 
 ## Command Model
 
@@ -355,6 +333,22 @@ impl CommandLogic for TransferMoney {
 - `handle` validates business rules and produces new domain events using the type-safe `emit!` helper
 - `stream_resolver` is optional; commands needing runtime discovery return `Some(self)` (or another resolver)
 
+### Trait Separation
+
+The command system uses two separate traits:
+
+**CommandStreams** (generated by macro):
+- Extracts stream IDs from command fields
+- Manages phantom type for compile-time tracking
+- Handles interaction with EventStore trait
+- Pure boilerplate - no business logic
+
+**CommandLogic** (implemented by developers):
+- `apply(state, event)` - reconstructs state from events
+- `handle(state)` - validates business rules and produces events
+- Contains only domain-specific logic
+- No infrastructure concerns
+
 ### Dynamic Stream Discovery
 
 When commands implement `StreamResolver<State>`, the executor uses a queue-based algorithm:
@@ -365,11 +359,31 @@ When commands implement `StreamResolver<State>`, the executor uses a queue-based
 4. Invokes `discover_related_streams(&state)` to enqueue additional stream IDs discovered from reconstructed state
 5. Continues until the queue is empty
 
-This approach eliminates multi-pass re-read loops while ensuring both static and discovered streams participate in optimistic concurrency.
+This approach:
+- Eliminates multi-pass re-read loops
+- Ensures both static and discovered streams participate in optimistic concurrency
+- Uses incremental reading (only new events from already-read streams)
+- Provides deterministic FIFO ordering for diagnostics and testing
+
+Discovery errors are permanent (no retry) since they indicate programming errors, not transient conditions.
 
 ## Command Execution Pipeline
 
 The primary API is the async free function `execute(command, store)`. Each attempt runs five deterministic phases:
+
+```mermaid
+flowchart TD
+    A[Stream Resolution] --> B[Read and Version Capture]
+    B --> C[State Reconstruction]
+    C --> D[Business Logic]
+    D --> E[Atomic Append]
+    E -->|Version Conflict| F[Retry with Backoff]
+    F --> B
+    E -->|Success| G[Return ExecutionResponse]
+    D -->|Business Error| H[Return CommandError]
+```
+
+### Execution Phases
 
 1. **Stream Resolution** - Ask the command for its static stream declarations and seed the dynamic discovery queue.
 
@@ -390,23 +404,30 @@ If Phase 5 returns a concurrency error:
 - Correlation and causation IDs remain unchanged so tracing reflects a single logical operation
 - Permanent errors (validation failures, business rule violations, non-retriable storage errors) short-circuit and return immediately with enriched context
 
+Exponential backoff reduces lock contention by spacing retry attempts progressively. Optional jitter further randomizes timing to prevent synchronized retries (thundering herd).
+
 ### Metadata Continuity
 
 - Correlation IDs are generated once per `execute` call and preserved across retries
 - Causation IDs typically use the command identifier and never change
 - Commit timestamps reflect when events are successfully persisted, not when execution began
 
-### Observability Hooks
-
-- Each phase emits structured logs and metrics (read durations, queue depth, retry counts, conflict rates)
-- Backoff decisions expose telemetry for contention analysis
-- Correlation/causation IDs tie command execution to surrounding telemetry
-
 ## Poll-Based Projections
 
-### EventReader Trait
+### Design Philosophy
 
-Read models are built using poll-based event retrieval:
+Projections use poll-based event retrieval rather than push-based streaming. This design aligns control flow with transactional requirements - the projector controls when to fetch events, applies them transactionally, and checkpoints atomically.
+
+| Concern | Poll-Based Approach |
+|---------|---------------------|
+| Transaction boundaries | Projector fetches within transaction |
+| Checkpoint atomicity | Same transaction as projection |
+| Error recovery | Simple - restart from checkpoint |
+| Backpressure | Just don't poll |
+| Testing | Deterministic |
+| Implementation | Simple database query |
+
+### EventReader Trait
 
 ```rust
 pub trait EventReader {
@@ -419,9 +440,7 @@ pub trait EventReader {
 }
 ```
 
-EventStore implementations that support projections implement this trait. The poll-based approach aligns control flow with transactional requirements - the projector controls when to fetch events, applies them transactionally, and checkpoints atomically.
-
-**StreamPosition** wraps the event's UUID7 identifier, providing a monotonically increasing, globally sortable position for tracking projection progress. This design eliminates the need for computed row numbers and provides natural portability across database instances and sharding scenarios.
+**StreamPosition** wraps the event's UUID7 identifier, providing a monotonically increasing, globally sortable position for tracking projection progress.
 
 ### Subscribable Trait
 
@@ -442,8 +461,6 @@ Key features:
 - `try_from_stored` returns Result for graceful schema evolution handling
 
 ### Projector Trait
-
-Projections are built using the `Projector` trait:
 
 ```rust
 pub trait Projector: Send + 'static {
@@ -476,22 +493,9 @@ The trait provides:
 - **on_error()** - Returns failure strategy (Fatal, Skip, or Retry) when projection fails
 - **after_apply()** - Lifecycle hook for side effects like notifications and metrics
 
-### Integrated Checkpoint Management
-
-Checkpoints are managed within the projection transaction, not as a separate concern:
-
-- Projector implementations control checkpoint persistence
-- Checkpoint updates happen atomically with read model updates
-- The `Context` type parameter enables transactional coordination (e.g., database transaction handle)
-
-This design eliminates the coordination problems of separate checkpoint management.
-
 ### Projection Runner API
 
-The projection runner uses a free function matching the command execution pattern:
-
 ```rust
-/// Runs a projector against a backend that provides events, checkpoints, and coordination.
 pub async fn run_projection<P, B>(
     projector: P,
     backend: &B,
@@ -501,42 +505,20 @@ where
     B: EventReader + CheckpointStore + ProjectorCoordinator,
 ```
 
-This design optimizes for the common case where a single backend (e.g., PostgreSQL) provides all three capabilities:
+This design optimizes for the common case where a single backend provides all three capabilities:
 
 ```rust
-// Simple case (99.9% of deployments) - everything from PostgreSQL
+// Simple case (99.9% of deployments)
 run_projection(my_projector, &postgres_store).await?;
 ```
 
-For deployments where events come from one source but coordination belongs in another (e.g., events from EventStoreDB, projections and coordination in PostgreSQL), users create a wrapper struct:
-
-```rust
-struct MyBackend<'a> {
-    events: &'a EventStoreDbClient,
-    postgres: &'a PgPool,
-}
-
-impl EventReader for MyBackend<'_> { /* delegate to self.events */ }
-impl CheckpointStore for MyBackend<'_> { /* delegate to self.postgres */ }
-impl ProjectorCoordinator for MyBackend<'_> { /* delegate to self.postgres */ }
-
-// Usage
-run_projection(my_projector, &my_backend).await?;
-```
-
-The three traits remain separate (not consolidated) for:
-
-- **Single responsibility** - Each trait has one job
-- **Independent unit testing** - Test each implementation in isolation
-- **Reusability** - Individual traits may be used elsewhere
+For mixed-backend deployments, users create a wrapper struct implementing all three traits.
 
 ### Projection Execution Loop
 
-Internally, `run_projection` follows this pattern:
-
 ```rust
 // Acquire leadership - returns error if lock already held
-guard = coordinator.try_acquire(projector.name())?;  // Returns LockNotAcquired if unavailable
+guard = coordinator.try_acquire(projector.name())?;
 
 loop {
     events = poll_events_after(checkpoint)
@@ -549,90 +531,43 @@ loop {
 // guard dropped - leadership released automatically
 ```
 
-Leadership acquisition uses `pg_try_advisory_lock()` (non-blocking). If another instance already holds the lock, `LockNotAcquired` is returned immediately - the library does not block or retry. Callers decide how to handle this:
-
-- **Exit the process** (recommended) - Let Kubernetes, systemd, or similar orchestrators handle restart with backoff
-- **Sleep and retry** - For environments without restart orchestration
-- **Continue without this projector** - For degraded-mode operation
-
-Leadership is held via the guard's lifetime - when the guard is dropped (process exit, panic, scope end), leadership is released automatically.
-
-### Projector Configuration
-
-The projection runner accepts per-projector configuration for three distinct concerns. Each concern has different units, different defaults, and different operational meaning - they are orthogonal and should not be conflated.
-
-#### Poll Configuration (Infrastructure Level)
-
-Configuration for the polling loop itself:
-
-- **poll_interval** - Duration between successful polls that returned events (default: 100ms)
-- **empty_poll_backoff** - Duration to wait when poll returns no events (default: 1 second, configurable backoff strategy)
-- **poll_failure_backoff** - Backoff strategy when `read_events_after()` fails (default: exponential, 100ms base, 30s max)
-- **max_consecutive_poll_failures** - After this many failures, projector gives up and exits (default: 10, or "infinite" for never give up)
-
-These parameters control how the projector interacts with the event store when there are no events to process or when infrastructure is degraded. Poll failures are about the polling mechanism itself (database connection errors, network timeouts, transient unavailability during failover), not about processing any particular event.
-
-A projector that cannot reach the event store indefinitely is not useful. At some point, it should exit and let the orchestration layer (Kubernetes, systemd) restart it. "Infinite" mode is available for projectors in environments without orchestration.
-
-#### Event Retry Configuration (Application Level)
-
-See the Error Handling Strategies section for event retry configuration details.
-
-#### Heartbeat Configuration (Coordination Level)
-
-Heartbeat configuration is specific to the coordinator implementation being used. See the Projector Coordination section for details on how different backends implement liveness detection.
-
-#### Per-Projector Tuning
-
-Different projectors have different characteristics:
-
-- A real-time notification projector needs sub-second poll intervals and tight liveness detection
-- A daily reporting projector might poll every minute with relaxed heartbeat intervals
-- A projector doing expensive external API calls needs longer event retry delays
-- A projector updating critical financial data prioritizes correctness over speed
-
-Per-projector configuration lets each projector match its operational profile rather than forcing all projectors to the lowest common denominator. Configuration uses builder pattern with sensible defaults - most projectors work with zero configuration.
-
 ### Error Handling Strategies
 
 Three strategies are available for projection failures:
 
-- **Fatal (Default)** - Stop immediately, prevent silent projection drift. This is the safe default requiring zero configuration.
+- **Fatal (Default)** - Stop immediately, prevent silent projection drift
+- **Skip** - Log the error and continue to next event (use for non-critical projections)
+- **Retry** - Retry with configurable backoff for transient failures
 
-- **Skip** - Log the error and continue to next event. Use for non-critical projections that can tolerate gaps (caches, dashboards, notifications).
+All strategies preserve temporal ordering - events are never processed out of order.
 
-- **Retry** - Retry with configurable backoff for transient failures.
+### Projector Configuration
 
-The default Fatal behavior ensures applications fail fast rather than silently drift. Skip and Retry require explicit opt-in, documenting the application's tolerance for gaps or retries.
+Per-projector configuration covers two distinct concerns:
 
-#### Event Retry Configuration
+**Poll Configuration (Infrastructure Level):**
+- `poll_interval` - Duration between successful polls (default: 100ms)
+- `empty_poll_backoff` - Wait when poll returns no events (default: 1 second)
+- `poll_failure_backoff` - Backoff when infrastructure fails (default: exponential)
+- `max_consecutive_poll_failures` - Exit threshold (default: 10)
 
-When `on_error()` returns `FailureStrategy::Retry`, the retry behavior is controlled by event retry configuration:
+**Event Retry Configuration (Application Level):**
+- `max_retry_attempts` - Maximum retries before Fatal (default: 3)
+- `retry_delay` - Initial delay between retries (default: 100ms)
+- `retry_backoff_multiplier` - Multiplier for delays (default: 2.0)
+- `max_retry_delay` - Cap on retry delay (default: 5 seconds)
 
-- **max_retry_attempts** - Maximum retries before escalating to Fatal (default: 3)
-- **retry_delay** - Initial delay between retries (default: 100ms)
-- **retry_backoff_multiplier** - Multiplier for subsequent retry delays (default: 2.0)
-- **max_retry_delay** - Cap on retry delay (default: 5 seconds)
+## Projector Coordination
 
-The `on_error()` callback decides WHETHER to retry; the configuration controls HOW retries behave. This separation lets projector implementations focus on failure classification while operational concerns like retry timing are tuned per deployment.
+### The Distributed Coordination Challenge
 
-### Ordering Preservation
+Production systems typically run multiple application instances. Without coordination, multiple instances would process the same events concurrently, causing:
 
-All error handling strategies preserve temporal ordering:
+- Checkpoint races (race conditions between instances updating the same checkpoint)
+- Read model corruption (concurrent projection writes interleaving)
+- Ordering violations (parallel processing undermines sequential guarantees)
 
-- **Fatal**: Stops stream, no further processing
-- **Skip**: Skips current event, continues to next in order (gap, not reorder)
-- **Retry**: Retries current event, blocks subsequent events
-
-This is a hard constraint: events are never processed out of order.
-
-### Projector Coordination for Distributed Deployments
-
-Production systems typically run multiple application instances for availability and load distribution. Without coordination, multiple instances would process the same events concurrently, causing checkpoint races, read model corruption, and ordering violations.
-
-EventCore uses a subscription table combined with session-scoped advisory locks for coordination. This pattern, proven in production by Commanded/EventStore (Elixir), aligns three critical lifecycles: projector process lifetime, database connection lifetime, and leadership lock lifetime.
-
-#### Subscriptions Table and Advisory Locks
+### Subscription Table and Advisory Locks
 
 The coordination mechanism separates two concerns:
 
@@ -642,114 +577,76 @@ The coordination mechanism separates two concerns:
 - Updated transactionally with projection writes
 
 **Advisory Locks** - Coordinates WHO is processing:
-- Acquired via `SELECT pg_try_advisory_lock(hash(subscription_name))` on dedicated connection (non-blocking)
-- Returns immediately with success/failure - does not block if lock unavailable
-- Lock ID derived from subscription name for uniqueness
+- Acquired via `pg_try_advisory_lock(hash(subscription_name))` (non-blocking)
+- Returns immediately with success/failure
 - Held for session duration (connection open)
 - Released automatically when connection closes
 
-#### Dedicated Connections Not Pooled
+```mermaid
+graph LR
+    subgraph Instance A
+        PA[Projector A] --> CA[Connection A]
+    end
+    subgraph Instance B
+        PB[Projector B] --> CB[Connection B]
+    end
+    subgraph PostgreSQL
+        Lock[Advisory Lock]
+        Table[Subscriptions Table]
+    end
+
+    CA -->|pg_try_advisory_lock| Lock
+    CB -.->|blocked| Lock
+    CA -->|UPDATE checkpoint| Table
+```
+
+### Dedicated Connections
 
 Each projector owns a dedicated database connection for its entire lifetime, not a connection from a pool. This is essential because:
 
 - Advisory locks are session-scoped - tied to a specific database connection
 - Connection lifetime = projector lifetime = lock lifetime
 - When the process crashes or exits, the connection closes and the lock releases automatically
-- No separate heartbeat table or validity checking needed - connection alive implies lock held
+- No separate heartbeat table or validity checking needed
 
-Typical application: 5-20 projectors, each with 1 dedicated connection (well within PostgreSQL limits). This is fundamentally different from connection-per-request web applications where pooling is essential.
+### Non-Blocking Lock Acquisition
 
-#### Coordination Approach
+Leadership acquisition uses `pg_try_advisory_lock()` which returns immediately. If another instance already holds the lock:
 
-Per ADR-026, coordination uses direct advisory locks rather than a trait abstraction. Key simplifications compared to heartbeat-table approaches:
+- Returns `LockNotAcquired` error immediately (does not block)
+- Callers decide how to handle: exit process, sleep and retry, or continue without projection
+- Recommended: exit and let orchestrators (Kubernetes, systemd) handle restart with backoff
 
-- No `is_valid()` checks in the projection loop - connection lifecycle handles it
-- No `heartbeat()` calls - connection alive = leadership held
-- No heartbeat timeout configuration - session lifetime is sufficient
-- Fewer failure modes - connection close is the only release mechanism
+### Crash Safety
 
-#### Backend Implementations
-
-- **PostgreSQL**: Session-scoped advisory locks on dedicated connections. Lock acquisition uses `pg_try_advisory_lock(hash(subscription_name))` (non-blocking). Returns `LockNotAcquired` error immediately if another instance holds the lock. Released automatically on connection close (crash, shutdown, network partition).
-
-- **Single-Process**: No coordination needed - only one projector instance runs. The ProjectionRunner operates without coordination overhead.
-
-- **Future Backends**: MySQL `GET_LOCK()`, Redis `SETNX` with TTL, or similar primitives following the same pattern (non-blocking try-acquire semantics).
-
-#### Crash Safety and Leadership Release
-
-The key insight is aligning three lifecycles: projector process, database connection, and advisory lock. When any of these terminates, the others follow:
+The key insight is aligning three lifecycles: projector process, database connection, and advisory lock. When any terminates, the others follow:
 
 - **Process crashes**: Connection closes, lock released automatically
 - **Network partition**: Connection times out, lock released automatically
 - **Graceful shutdown**: Guard dropped, connection closed, lock released
 
-No separate heartbeat mechanism is needed because the database session itself provides the liveness signal. This is simpler and more reliable than heartbeat-table approaches.
+No separate heartbeat mechanism is needed because the database session itself provides the liveness signal.
 
-#### Stuck Projector Detection
+### Stuck Projector Detection
 
-Hung projectors (infinite loops, deadlocks with connection alive) are detected via application monitoring (metrics, health checks) rather than infrastructure coordination primitives. The subscriptions table's `updated_at` timestamp provides visibility into processing progress:
+Hung projectors (infinite loops, deadlocks with connection alive) are detected via application monitoring rather than infrastructure coordination:
 
-- Monitor time since last checkpoint update
+- Monitor time since last checkpoint update (`updated_at` in subscriptions table)
 - Alert if a projector hasn't made progress in N minutes
-- Coordinate restart via orchestration layer (Kubernetes, systemd)
-
-This separates concerns: coordination ensures mutual exclusion; monitoring detects stuck processes.
-
-#### Why Leader Election, Not Partition Assignment
-
-Sequential processing (a hard constraint for ordering preservation) eliminates the need for partition assignment. The question is not "which instance processes which subset of events" but rather "which single instance processes events for this projector."
-
-For users who need Kafka-style partition-based scaling, an escape hatch exists: create a single-threaded projector that pushes events onto a Kafka (or similar) log, then let that external system handle partitioning and parallel consumption. EventCore handles the leader-elected, sequential projection to the external system; that external system provides the partition assignment semantics.
-
-## Type System Patterns
-
-### Validated Newtypes
-
-Domain types use the `nutype` crate for validation at boundaries:
-
-- `StreamId`, `EventId`, `CorrelationId`, `Money` enforce invariants at construction time
-- Construction returns Result types with descriptive errors
-- Types implement standard traits (Debug, Clone, Serialize, AsRef)
-
-### Phantom Types and Typestate
-
-- `StreamWrite<StreamSet, Event>` enforces compile-time stream access control
-- `NewEvents` carries the same phantom to ensure only declared streams receive emissions
-- The macro generates phantom types that make illegal stream access unrepresentable
-
-### Total Functions
-
-- Public APIs return `Result` instead of panicking
-- Error enums derive `thiserror` and support pattern matching
-- No `unwrap()` or `expect()` in library code
-
-### Trait Composition
-
-Narrow traits keep responsibilities focused:
-
-- `CommandStreams` - Stream declarations (generated by macro)
-- `CommandLogic` - Business logic (implemented by developers)
-- `StreamResolver` - Dynamic stream discovery (optional)
-- `EventStore` - Storage operations (implemented by backends)
-- `EventReader` - Event polling for projections
-- `Projector` - Read model construction
+- Coordinate restart via orchestration layer
 
 ## Error Handling
 
 ### Error Categories
 
-- **CommandError** - Categorizes domain failures (validation, business rule violations, infrastructure issues surfaced to commands). Business rule violations are permanent by design.
-
-- **EventStoreError** - Represents storage-layer failures (version conflicts, connectivity, serialization). Version conflicts map to `ConcurrencyError` and are retriable.
-
-- **ValidationError** - Raised by newtype constructors and automatically bubbled up through `CommandError`.
-
-- **SubscriptionError** - Covers projection failures (deserialization, unknown event types).
+- **CommandError** - Domain failures (validation, business rule violations, infrastructure issues)
+- **EventStoreError** - Storage-layer failures (version conflicts, connectivity, serialization)
+- **ValidationError** - Raised by newtype constructors
+- **SubscriptionError** - Projection failures (deserialization, unknown event types)
 
 ### Retry Classification
 
-Errors implement marker traits indicating whether they are retriable or permanent:
+Errors implement marker traits indicating retriability:
 
 - **Retriable**: ConcurrencyError, network timeouts
 - **Permanent**: Validation errors, business rule violations, schema errors
@@ -764,71 +661,40 @@ Errors carry diagnostic information:
 - Stream identifiers and operation context
 - Detailed messages without sensitive data exposure
 
-## Reference Implementations and Tooling
+## Testing Architecture
 
-### InMemoryEventStore
+### Contract Testing
 
-Included in `eventcore` with zero third-party dependencies:
+The `eventcore-testing` crate provides contract test suites for:
 
-- **InMemoryEventStore**: Full EventStore and EventReader implementation for testing and development
-- Optional chaos hooks (ConflictOnceStore, CountingEventStore)
-- Full contract test compliance for storage
+- EventStore implementations (version conflicts, atomicity, metadata preservation)
+- EventReader implementations (ordering, filtering, position tracking)
+- ProjectorCoordinator implementations (mutual exclusion, crash-safe release)
 
-### External Backends
+All backends integrate these tests into their CI pipeline to guarantee semantic compliance.
 
-Production backends (e.g., `eventcore-postgres`) implement the same traits:
+### Black-Box Integration Testing
 
-- Full EventStore and EventReader support
-- Contract test suite integration in CI (storage and reader)
-- Additional observability and operational features
+Integration tests verify command execution via projections, not direct event store access. This approach:
 
-### Testing Utilities
+- Uses the same APIs as real applications (dogfooding)
+- Demonstrates intended usage patterns
+- Keeps `EventStore` trait exclusively in `eventcore-types`
 
-The `eventcore-testing` crate provides:
+The `EventCollector` projector in `eventcore-testing` collects events for assertion:
 
-- Contract test suite for EventStore implementations
-- Projector contract tests for EventReader implementations
-- Property-based testing helpers
-- Integration scenario utilities
-
-## Deployment Architecture
-
-```mermaid
-graph TB
-    subgraph Application
-        Cmd[Commands]
-        Proj[Projectors]
-        Domain[Domain Types]
-    end
-
-    subgraph EventCore Library
-        Exec[execute function]
-        ES[EventStore Trait]
-        ER[EventReader Trait]
-        PT[Projector Trait]
-    end
-
-    subgraph Storage Backend
-        PG[PostgreSQL / InMemory]
-        Schema[Event Schema]
-        Locks[Advisory Locks]
-    end
-
-    Cmd --> Exec
-    Exec --> ES
-    ES --> PG
-
-    Proj --> PT
-    PT --> ER
-    ER --> PG
-
-    Domain --> Cmd
-    Domain --> Proj
-
-    style Exec fill:#e1f5ff
-    style ES fill:#e1ffe1
-    style ER fill:#f5e1ff
+```rust
+execute(&mut store, &command).await?;
+let collector = EventCollector::<MyEvent>::new();
+run_projection(collector, &backend).await?;
+assert_eq!(collector.events(), vec![expected_event]);
 ```
+
+### Test Crate Organization
+
+Integration tests live in the `eventcore-examples` crate, which sits at the top of the dependency graph and can depend on all other crates without creating circular dependencies.
+
+## Deployment Patterns
 
 ### Single-Process Deployment
 
@@ -848,77 +714,32 @@ For production systems:
 - Contract tests verify backend compliance
 - Observability via structured logging and metrics
 
-### Dependency Configuration
-
-Users configure storage backends via feature flags:
+### Configuration
 
 ```toml
 # Development/testing (default)
 [dependencies]
-eventcore = "0.1"
+eventcore = "0.5"
 
 # Production with PostgreSQL
 [dependencies]
-eventcore = { version = "0.1", features = ["postgres"] }
-
-# With macros (default, can be disabled)
-eventcore = { version = "0.1", default-features = false }
+eventcore = { version = "0.5", features = ["postgres"] }
 ```
 
-Third-party adapter implementations depend on `eventcore-types` rather than the full `eventcore` crate, keeping their dependency footprint minimal.
+## Versioning Policy
 
-## Versioning and Release Policy
+EventCore follows a lockstep versioning strategy across all workspace crates using Cargo workspace version inheritance:
 
-EventCore follows a lockstep versioning strategy across all workspace crates to ensure compatibility and clear mental model for users.
-
-### Lockstep Major/Minor Versioning
-
-All workspace crates maintain identical major and minor version numbers, while patch versions may differ independently:
-
-- **Allowed**: `eventcore 0.2.1`, `eventcore-types 0.2.0`, `eventcore-postgres 0.2.3`
-- **Allowed**: All crates at `0.3.0` after breaking change in `eventcore-types`
-- **Forbidden**: `eventcore 0.3.0`, `eventcore-types 0.2.5` (major/minor skew)
-
-This approach provides clear compatibility guarantees: matching major/minor versions are compatible.
-
-### Independent Patch Versions
-
-Bug fixes in individual crates may bump patch versions independently. For example:
-
-- `eventcore-postgres 0.2.1` fixes a connection pool leak
-- `eventcore` remains at `0.2.0` (no changes, no release)
-- Users can update: `eventcore-postgres = "0.2.1"` with `eventcore = "0.2.0"`
-
-This reduces unnecessary releases and provides faster patch turnaround for individual components.
+- All crates maintain identical major, minor, AND patch version numbers
+- Single source of truth in workspace `Cargo.toml`
+- Clear compatibility guarantee: matching versions are compatible
 
 ### Release Automation
 
-Releases are managed through a two-phase workflow using release-plz:
+Releases are managed through a two-phase workflow:
 
-**Phase 1: Release PR Preview**
-- Automated PR created on main branch with version bumps and changelog
-- Must pass all CI quality gates (tests, clippy, format, mutation testing ≥80%, security audit)
-- Maintainers review and can edit before merge
-
-**Phase 2: Publication to crates.io**
-- Triggered by release PR merge
-- Crates published in dependency order:
-  1. `eventcore-types` (foundation, no EventCore dependencies)
-  2. `eventcore-macros`, `eventcore-postgres`, `eventcore-memory`, `eventcore-testing` (depend on types)
-  3. `eventcore` (depends on all via feature flags)
-- GitHub release created with combined changelog
-- Repository tagged with release version
-
-### Version Compatibility
-
-Users depend on the main crate with feature flags:
-
-```toml
-[dependencies]
-eventcore = { version = "0.2", features = ["postgres"] }
-```
-
-The lockstep major/minor policy ensures that `eventcore 0.2.x` is compatible with `eventcore-postgres 0.2.y` for any `x` and `y` values. Breaking changes in shared vocabulary (`eventcore-types`) trigger coordinated major/minor bumps across all crates.
+1. **Release PR Preview** - Automated PR with version bumps and changelog, requiring all CI quality gates to pass
+2. **Publication to crates.io** - Triggered by PR merge, publishing crates in dependency order
 
 ## Quality Attributes
 
@@ -958,13 +779,11 @@ EventCore provides a cohesive architecture for event-sourced applications:
 1. **Type-safe domain modeling** with zero boilerplate for infrastructure
 2. **Deterministic, atomic execution** of complex multi-stream business operations
 3. **Automatic concurrency management** and retry behavior that keeps business code simple
-4. **Poll-based projections** via `run_projection(projector, &backend)` with integrated checkpoint management for correct read models
-5. **Unified backend traits** - backends implement `EventReader + CheckpointStore + ProjectorCoordinator`, with wrapper structs for mixed-backend deployments
-6. **Subscription table + advisory lock coordination** for distributed deployments using session-scoped locks on dedicated connections
-7. **Per-projector configuration** with three orthogonal concerns: poll (infrastructure), event retry (application), and monitoring (stuck process detection)
+4. **Poll-based projections** with integrated checkpoint management for correct read models
+5. **Unified backend traits** for simplified backend implementations
+6. **Advisory lock coordination** for distributed deployments using session-scoped locks
+7. **Per-projector configuration** with orthogonal concerns (poll, retry, monitoring)
 8. **Rich metadata and observability** hooks for auditing, compliance, and debugging
 9. **Pluggable storage backends** validated by a shared contract suite
-10. **Feature flag ergonomics** for adapter configuration matching Rust ecosystem patterns
-11. **Lockstep versioning policy** with automated release management for clear compatibility guarantees
-
-This document is the single source of truth for EventCore's architecture and serves as the working reference for all implementation work.
+10. **Feature flag ergonomics** matching Rust ecosystem patterns
+11. **Lockstep versioning** with automated release management
