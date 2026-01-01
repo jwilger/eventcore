@@ -36,6 +36,8 @@
 
 pub mod chaos;
 pub mod contract;
+pub mod event_collector;
 
 pub use chaos::*;
 pub use contract::*;
+pub use event_collector::*;
