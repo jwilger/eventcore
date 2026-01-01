@@ -35,6 +35,7 @@ This directory contains Architecture Decision Records (ADRs) for this project.
 | 027 | Projector Poll and Retry Configuration | Accepted |
 | 028 | Advisory Lock Acquisition Behavior | Accepted |
 | 029 | Projection Runner API Simplification | Accepted |
+| 030 | Layered Crate Public API Design | Accepted |
 
 ## Creating an ADR
 

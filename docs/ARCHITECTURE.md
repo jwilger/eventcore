@@ -1,7 +1,7 @@
 # EventCore Architecture
 
-**Document Version:** 2.7
-**Date:** 2025-12-30
+**Document Version:** 2.8
+**Date:** 2025-12-31
 **Phase:** 4 - Architecture Synthesis
 
 ## Overview
@@ -24,32 +24,85 @@ The architecture follows a clear separation between infrastructure concerns (han
 
 ## Crate Organization
 
-EventCore uses a multi-crate workspace designed for feature flag ergonomics while maintaining clean dependency boundaries.
+EventCore uses a multi-crate workspace with a layered public API design that serves two distinct audiences.
+
+### Audience Separation
+
+**Application Developers** (primary audience) use the `eventcore` crate to build event-sourced applications. They need a minimal, focused API: free functions for execution, macros for boilerplate, and just enough types to implement commands and projectors.
+
+**Backend Implementers** (secondary audience) use the `eventcore-types` crate to build storage backends. They need access to all traits and types required to implement `EventStore`, `EventReader`, `CheckpointStore`, and `ProjectorCoordinator`.
+
+This separation keeps the primary API surface small while providing backend authors with everything they need. Since EventCore is pre-1.0.0, breaking changes are expected and require only minor version bumps.
 
 ### Workspace Structure
 
 ```
 eventcore/                    (workspace root, virtual manifest)
-  eventcore/                  (main crate - implementation + feature flags)
+  eventcore/                  (main crate - application developer API)
     Cargo.toml
-    src/lib.rs               (execute(), InMemoryEventStore, retry logic, re-exports)
-  eventcore-types/           (shared vocabulary - traits and types)
+    src/lib.rs               (execute(), run_projection(), minimal re-exports)
+  eventcore-types/           (backend implementer API - all traits and types)
     Cargo.toml
-    src/                     (EventStore trait, Event trait, StreamId, etc.)
+    src/                     (EventStore, EventReader, CheckpointStore, etc.)
   eventcore-macros/          (all macros: #[derive(Command)], require!)
   eventcore-postgres/        (PostgreSQL backend, depends on eventcore-types)
   eventcore-testing/         (dev-dependency testing utilities)
 ```
 
+### Layer 1: `eventcore` Crate (Application Developers)
+
+The main crate exports only what application developers need:
+
+**Primary Entry Points:**
+- `execute()` - Run commands against an event store
+- `run_projection()` - Run projectors against a backend
+
+**Command Infrastructure:**
+- `RetryPolicy`, `BackoffStrategy` - Configure retry behavior
+- `ExecutionResponse` - Command execution result
+- `MetricsHook`, `RetryContext` - Metrics integration
+
+**Macros:**
+- `Command` derive macro (via `eventcore-macros`)
+- `require!` macro for business rule validation
+
+**Minimal Re-exports for Command/Projector Implementation:**
+- `CommandLogic`, `CommandStreams`, `CommandError`, `Event`, `StreamId`
+- `StreamDeclarations`, `NewEvents`, `StreamResolver`
+- `Projector`, `FailureContext`, `FailureStrategy`, `StreamPosition`
+
+**NOT Exported** (internal implementation details):
+- `ProjectionRunner` - Use `run_projection()` instead
+- `PollMode`, `PollConfig` - Operational tuning, not application code
+- `EventRetryConfig` - Controlled by `Projector::on_error()` return values
+- `NoCheckpointStore` - Internal null object pattern
+
+### Layer 2: `eventcore-types` Crate (Backend Implementers)
+
+This crate exports everything needed to implement storage backends:
+
+**Traits for Implementation:**
+- `EventStore` - Core event storage abstraction
+- `EventReader` - Read events across streams
+- `CheckpointStore` - Track projection progress
+- `ProjectorCoordinator` - Leader election for projectors
+
+**Types for Trait Implementations:**
+- `EventStoreError`, `Operation` - Error handling
+- `EventStreamReader`, `EventStreamSlice` - Event reading results
+- `StreamWrites`, `StreamWriteEntry`, `StreamVersion` - Event writing
+- `EventFilter`, `EventPage` - Event querying
+- `StreamPrefix` - Stream pattern matching
+
 ### Crate Responsibilities
 
-| Crate | Purpose | Dependencies |
-|-------|---------|--------------|
-| `eventcore-types` | Shared vocabulary: traits (`EventStore`, `Event`, `CommandLogic`) and types (`StreamId`, `StreamWrites`, errors) | Minimal |
-| `eventcore` | Main entry point: `execute()`, `InMemoryEventStore`, retry logic, re-exports from `eventcore-types` | `eventcore-types`, optionally `eventcore-postgres` via feature |
-| `eventcore-macros` | Procedural macros: `#[derive(Command)]`, `require!` | syn, quote, proc-macro2 |
-| `eventcore-postgres` | PostgreSQL backend implementing `EventStore` and `EventReader` | `eventcore-types`, sqlx |
-| `eventcore-testing` | Contract tests (storage, reader), chaos harness, test fixtures (dev-dependency) | `eventcore-types` |
+| Crate | Audience | Purpose |
+|-------|----------|---------|
+| `eventcore` | Application developers | `execute()`, `run_projection()`, macros, minimal types for commands/projectors |
+| `eventcore-types` | Backend implementers | All traits (`EventStore`, `EventReader`, etc.) and types for implementations |
+| `eventcore-macros` | Application developers | `#[derive(Command)]`, `require!` |
+| `eventcore-postgres` | Both | PostgreSQL backend implementing all storage traits |
+| `eventcore-testing` | Backend implementers | Contract tests, chaos harness, test fixtures |
 
 ### Feature Flag Ergonomics
 
@@ -60,19 +113,26 @@ Users enable storage adapters via feature flags on the main crate:
 eventcore = { version = "0.1", features = ["postgres"] }
 ```
 
-The main crate re-exports enabled adapters:
+The main crate provides selective re-exports (not a blanket `pub use eventcore_types::*`):
 
 ```rust
-pub use eventcore_types::*;
+// Primary API
+pub use crate::execute::execute;
+pub use crate::projection::run_projection;
 
+// Macros (feature-gated)
 #[cfg(feature = "macros")]
-pub use eventcore_macros::Command;
+pub use eventcore_macros::{Command, require};
 
+// Minimal re-exports for command/projector implementation
+pub use eventcore_types::{CommandLogic, CommandError, Event, StreamId, /* ... */};
+
+// Backends (feature-gated)
 #[cfg(feature = "postgres")]
 pub use eventcore_postgres as postgres;
 ```
 
-This pattern matches the Rust ecosystem norm (tokio, sqlx, reqwest) while keeping heavy dependencies isolated in separate crates.
+This pattern matches Rust ecosystem norms while keeping the API surface minimal and evolution-friendly.
 
 ### Dependency Flow
 
@@ -86,7 +146,7 @@ eventcore-types  <--  eventcore-postgres
        eventcore-macros (feature gated)
 ```
 
-The `eventcore-types` crate breaks potential circular dependencies by providing the shared vocabulary that both `eventcore` and adapter crates depend on.
+The `eventcore-types` crate breaks potential circular dependencies by providing the shared vocabulary that both `eventcore` and adapter crates depend on. Backend implementations depend on `eventcore-types` rather than the full `eventcore` crate, keeping their dependency footprint minimal.
 
 ## System Blueprint
 
