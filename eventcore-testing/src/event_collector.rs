@@ -159,4 +159,17 @@ mod tests {
         let events = storage.lock().unwrap();
         assert_eq!(*events, vec![event]);
     }
+
+    #[test]
+    fn projector_name_is_event_collector() {
+        use eventcore_types::Projector;
+        use std::sync::{Arc, Mutex};
+
+        // Given: An EventCollector
+        let storage: Arc<Mutex<Vec<TestEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let collector = EventCollector::new(storage);
+
+        // When/Then: The projector name is "event-collector"
+        assert_eq!(collector.name(), "event-collector");
+    }
 }
