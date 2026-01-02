@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "eventcore-macros",
@@ -339,11 +339,11 @@ dependencies = [
 
 [[package]]
 name = "eventcore-examples"
-version = "0.5.0"
+version = "0.5.1"
 
 [[package]]
 name = "eventcore-macros"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "eventcore",
  "eventcore-memory",
@@ -358,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-memory"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "eventcore-testing",
  "eventcore-types",
@@ -370,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-postgres"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "eventcore-testing",
  "eventcore-types",
@@ -389,7 +389,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-testing"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "eventcore",
  "eventcore-memory",
@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-types"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "nutype",
  "proptest",
