@@ -36,6 +36,8 @@ This directory contains Architecture Decision Records (ADRs) for this project.
 | 028 | Advisory Lock Acquisition Behavior | Accepted |
 | 029 | Projection Runner API Simplification | Accepted |
 | 030 | Layered Crate Public API Design | Accepted |
+| 031 | Black-Box Integration Testing via Projections | Proposed |
+| 032 | Integration Test Crate for End-to-End Testing | Proposed |
 
 ## Creating an ADR
 
