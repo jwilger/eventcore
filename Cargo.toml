@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "eventcore",
+    "eventcore-examples",
     "eventcore-macros",
     "eventcore-memory",
     "eventcore-postgres",
