@@ -40,17 +40,11 @@ use std::sync::{Arc, Mutex};
 /// The internal storage uses `Arc<Mutex<_>>` to allow the collector to be shared
 /// across threads (e.g., between the projection runner and test assertions).
 #[derive(Debug)]
-pub struct EventCollector<E>
-where
-    E: Clone,
-{
+pub struct EventCollector<E> {
     events: Arc<Mutex<Vec<E>>>,
 }
 
-impl<E> EventCollector<E>
-where
-    E: Clone,
-{
+impl<E> EventCollector<E> {
     /// Creates a new `EventCollector` with the provided shared storage.
     ///
     /// # Arguments
@@ -66,15 +60,18 @@ where
     ///
     /// This method clones the internal vector, allowing inspection without
     /// consuming the collector. The `Clone` bound on `E` enables this behavior.
-    pub fn events(&self) -> Vec<E> {
-        self.events.lock().unwrap().clone()
+    pub fn events(&self) -> Vec<E>
+    where
+        E: Clone,
+    {
+        self.events
+            .lock()
+            .expect("EventCollector mutex poisoned - a test panicked while holding the lock")
+            .clone()
     }
 }
 
-impl<E> Projector for EventCollector<E>
-where
-    E: Clone,
-{
+impl<E> Projector for EventCollector<E> {
     type Event = E;
     type Error = Infallible;
     type Context = ();
@@ -85,7 +82,10 @@ where
         _position: StreamPosition,
         _ctx: &mut Self::Context,
     ) -> Result<(), Self::Error> {
-        self.events.lock().unwrap().push(event);
+        self.events
+            .lock()
+            .expect("EventCollector mutex poisoned - a test panicked while holding the lock")
+            .push(event);
         Ok(())
     }
 
