@@ -1,0 +1,14 @@
+[package]
+name = "eventcore-examples"
+version.workspace = true
+edition.workspace = true
+description = "Integration tests and example applications for EventCore"
+license.workspace = true
+repository.workspace = true
+
+[lints.rust]
+warnings = "deny"
+
+[dependencies]
+
+[dev-dependencies]

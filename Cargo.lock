@@ -338,6 +338,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "eventcore-examples"
+version = "0.5.0"
+
+[[package]]
 name = "eventcore-macros"
 version = "0.5.0"
 dependencies = [
