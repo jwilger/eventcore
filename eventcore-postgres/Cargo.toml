@@ -12,7 +12,7 @@ nutype = { version = "0.6.2", features = ["serde"] }
 serde_json = "1.0"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "macros", "migrate"] }
 thiserror = "2.0.17"
-tokio = { version = "1.48.0", default-features = false, features = ["rt-multi-thread"] }
+tokio = { version = "1.49.0", default-features = false, features = ["rt-multi-thread"] }
 tracing = "0.1"
 uuid = { version = "1.19.0", features = ["serde", "v7"] }
 
@@ -21,5 +21,5 @@ eventcore-testing = { path = "../eventcore-testing" }
 futures = "0.3"
 mutants = "0.0.3"
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.48.0", default-features = false, features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.49.0", default-features = false, features = ["macros", "rt-multi-thread"] }
 tracing-test = { version = "0.2", features = ["no-env-filter"] }
