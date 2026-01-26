@@ -9,9 +9,9 @@ repository.workspace = true
 [dependencies]
 eventcore-types = { version = "0.5.0", path = "../eventcore-types" }
 serde_json = "1.0"
-uuid = { version = "1.18.1", features = ["v7"] }
+uuid = { version = "1.20.0", features = ["v7"] }
 
 [dev-dependencies]
 eventcore-testing = { path = "../eventcore-testing" }
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.48.0", default-features = false, features = ["macros", "rt-multi-thread", "sync"] }
+tokio = { version = "1.49.0", default-features = false, features = ["macros", "rt-multi-thread", "sync"] }
