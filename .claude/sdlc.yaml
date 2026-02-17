@@ -6,7 +6,7 @@ version: "1.2.1"
 mode: traditional
 
 git:
-  workflow: git-spice
+  workflow: branch
   require_clean: true
 
 github:

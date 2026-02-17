@@ -145,78 +145,13 @@ history/
 - ❌ Do NOT duplicate tracking systems
 - ❌ Do NOT clutter repo root with planning documents
 
-## Stacked PRs with git-spice
+## Git Workflow
 
-This project uses **git-spice** (`gs`) for managing stacked pull requests.
+This project uses standard feature branches with squash merges. Do **not** use git-spice (`gs`), as it is incompatible with squash merges.
 
-### Why Stacked PRs?
+### Branch Workflow
 
-- Continue working on dependent changes without waiting for PR review/merge
-- Break large features into reviewable chunks
-- Each PR in a stack = one GitHub issue
-
-**Stacks are about code dependencies, not feature relationships.** Valid use cases:
-
-- A single feature broken into reviewable parts
-- **Unrelated tickets where later work depends on earlier code changes**
-- Experimental work that builds on pending changes
-
-### Quick Reference
-
-**Initialize (first time per repo clone):**
-
-```bash
-gs repo init
-gs auth    # Authenticate with GitHub
-```
-
-**Create a stack:**
-
-```bash
-gs branch create feature-part-1    # First branch in stack
-# ... make changes, commit ...
-gs branch create feature-part-2    # Stacks on part-1
-# ... make changes, commit ...
-```
-
-**Submit stack as PRs:**
-
-```bash
-gs stack submit    # Creates/updates all PRs in stack
-```
-
-**After ANY PR merges (run regularly):**
-
-```bash
-gs repo sync --restack    # Sync + restack ALL branches in one command
-gs stack submit           # Update remaining PRs
-```
-
-Or use the alias: `gs-sync` (syncs, restacks, and submits)
-
-**Navigation:**
-
-```bash
-gs branch checkout <name>   # or: gs bco <name>
-gs stack            # Show current stack
-gs log              # Show stack with PR status
-```
-
-### Workflow Integration
-
-1. **Create GitHub issue** for each PR in the stack
-2. Link issues in PR descriptions
-3. **Submit stack**: `gs stack submit`
-4. **Update PRs**: After changes, `gs stack submit` again
-5. **After ANY merge**: `gs-sync` (or `gs repo sync --restack && gs stack submit`)
-6. **Close GitHub issues** as PRs merge
-
-### Shorthand Commands
-
-| Full Command | Shorthand |
-|--------------|-----------|
-| `gs branch create` | `gs bc` |
-| `gs branch checkout` | `gs bco` |
-| `gs stack submit` | `gs ss` |
-| `gs repo sync --restack` | `gs rs --restack` |
-| Sync + restack + submit | `gs-sync` (alias) |
+1. Create a feature branch: `git checkout -b type/description`
+2. Make commits using Conventional Commits
+3. Push and create a PR: `git push -u origin <branch>` then `gh pr create`
+4. PRs are squash-merged into `main`

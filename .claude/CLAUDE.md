@@ -23,5 +23,5 @@ This project uses the **marvin-sdlc** methodology (TDD, Event Sourcing, ADR, Sto
 | `/sdlc:remember` | Save conventions/solutions to auto memory |
 
 **Task management:** `dot new`, `dot ls`, `dot start`, `dot done`
-**Git workflow:** git-spice (`gs bc`, `gs ss`, `gs-sync`)
+**Git workflow:** standard branches (`git checkout -b`, `git push -u origin`)
 <!-- END SDLC MANAGED SECTION -->
