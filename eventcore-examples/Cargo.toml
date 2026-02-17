@@ -12,3 +12,12 @@ warnings = "deny"
 [dependencies]
 
 [dev-dependencies]
+eventcore = { path = "../eventcore" }
+eventcore-macros = { path = "../eventcore-macros" }
+eventcore-memory = { path = "../eventcore-memory" }
+eventcore-testing = { path = "../eventcore-testing" }
+eventcore-types = { path = "../eventcore-types" }
+nutype = { version = "0.6.2", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "time", "sync"] }
+uuid = { version = "1.19.0", features = ["v7"] }
