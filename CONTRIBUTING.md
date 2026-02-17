@@ -179,6 +179,19 @@ cargo test --test '*' --workspace
 3. **Descriptive branch names** - e.g. `feat/add-user-model`
 4. **Submit early** - Create draft PRs to show intent
 
+## Task Tracking
+
+This project uses **dots** (`dot` CLI) for local task tracking alongside GitHub Issues.
+
+```bash
+dot ls                          # View all open tasks
+dot ready                       # Find unblocked tasks
+dot show <task-id>              # View task details
+dot on <task-id>                # Start working on a task
+dot off <task-id> -r "reason"   # Complete a task
+dot add "title" -p 2 -d "desc" # Create a new task
+```
+
 ## Pull Request Process
 
 1. **Update documentation** for any changed functionality
