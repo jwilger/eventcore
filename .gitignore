@@ -78,12 +78,8 @@ website/src/logo.png
 .claude/settings.local.json
 .cargo-advisory-db..lock
 
-# Beads daemon lock file
-.beads/daemon.lock
-
 # Mutation testing output
 mutants.out/
 mutants.out.old/
 
 .serena/
-.beads/
