@@ -28,6 +28,8 @@ jobs:
         if: "!startsWith(github.event.pull_request.head.ref, 'release-plz-')"
         id: claude-review
         uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
@@ -142,4 +144,3 @@ jobs:
             If the code is fine, just approve with a one-line summary.
 
           claude_args: '--allowed-tools "Bash(gh api:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Read,Glob,Grep"'
-

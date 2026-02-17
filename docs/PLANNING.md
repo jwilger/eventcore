@@ -1,61 +1,42 @@
 # EventCore Planning
 
-**ALL planning, story tracking, and increment management is done in Beads.**
+**ALL planning, story tracking, and task management uses `dot` (dots CLI) and GitHub Issues.**
 
-## Using Beads for Planning
+## Using dots for Planning
 
-**View all issues:**
+**View all tasks:**
 
 ```bash
-bd list
+dot ls
 ```
 
-**View specific issue details (design, acceptance criteria, dependencies):**
+**View specific task details:**
 
 ```bash
-bd show <issue-id>
-# Example: bd show eventcore-004
+dot show <task-id>
 ```
 
 **Find ready work:**
 
 ```bash
-bd ready
+dot ready
 ```
 
-**View blocked items:**
+**Start working on a task:**
 
 ```bash
-bd blocked
+dot on <task-id>
 ```
 
-**Update issue status:**
+**Complete a task:**
 
 ```bash
-bd update <issue-id> --status <status>
-```
-
-**Close completed work:**
-
-```bash
-bd close <issue-id> --reason "Completed because..."
-```
-
-**View project statistics:**
-
-```bash
-bd stats
+dot off <task-id> -r "Completed because..."
 ```
 
 ## For AI Assistants
 
 - **DO NOT** maintain separate planning in Markdown files
-- **DO** use Beads MCP tools (`/beads:*` commands) for all issue operations
-- **DO** reference issue IDs (e.g., `eventcore-004`) in commit messages and documentation
-- **DO** query Beads for current status before starting work on any increment
-
-## Historical Note
-
-This file previously contained detailed increment specifications through version 3.0 (2025-10-14). All that content has been migrated to Beads issues with full acceptance criteria in Gherkin format.
-
-For any questions about stories, increments, tasks, or planning, consult Beads - it is the single source of truth.
+- **DO** use `dot` commands for all task operations
+- **DO** reference task IDs in commit messages and documentation
+- **DO** query `dot ls` / `dot ready` for current status before starting work

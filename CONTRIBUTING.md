@@ -165,102 +165,32 @@ cargo test --test '*' --workspace
 - Use property-based testing for invariants
 - Follow the existing test patterns in the codebase
 
-## Stacked Pull Requests (Optional)
+## Branching Workflow
 
-Stacked PRs let you continue working on dependent changes without waiting for earlier PRs to merge.
-
-**Stacks are about code dependencies, not feature relationships.** You can use stacks for:
-
-- Breaking a large feature into reviewable chunks
-- Working on unrelated tickets where one depends on another's code changes
-- Experimental work that builds on pending changes
-
-### Setup
-
-If using Nix:
-
-```bash
-nix develop  # git-spice is included
-gs repo init
-gs auth      # Authenticate with GitHub (one-time)
-```
-
-Without Nix:
-
-```bash
-# Install git-spice (see: https://github.com/abhinav/git-spice)
-# On macOS:
-brew install git-spice
-
-# On Linux (download binary):
-# https://github.com/abhinav/git-spice/releases
-
-gs repo init
-gs auth
-```
-
-### Creating a Stack
-
-```bash
-# Start from main
-git checkout main && git pull
-
-# Create first branch
-gs branch create add-user-model
-# ... make changes, commit ...
-
-# Stack another branch on top (can be related OR unrelated work)
-gs branch create add-user-api
-# ... make changes, commit ...
-
-# Submit all PRs
-gs stack submit
-```
-
-### Maintaining a Stack
-
-```bash
-# After making changes to any branch
-gs stack submit    # Updates all PRs
-
-# After ANY PR merges (run this regularly!)
-gs repo sync --restack   # Sync + restack in one command
-gs stack submit          # Update remaining PRs
-
-# Or use the alias (if using nix develop):
-gs-sync    # Does sync --restack + submit
-```
-
-When a PR merges, its branch is deleted and dependent branches are rebased onto main. Run `gs-sync` regularly to keep your stacks up to date.
+1. **Create a feature branch** from `main`: `git checkout -b type/description`
+2. **Make commits** using Conventional Commits
+3. **Push and create a PR**: `git push -u origin <branch>` then `gh pr create`
+4. **PRs are squash-merged** into `main`
 
 ### Best Practices
 
 1. **Small, focused PRs** - Each PR should be independently reviewable
-2. **One beads issue per PR** - Use `discovered-from` for dependencies
-3. **Descriptive branch names** - `gs branch create meaningful-name`
+2. **One issue per PR** - Link the GitHub issue in the PR description
+3. **Descriptive branch names** - e.g. `feat/add-user-model`
 4. **Submit early** - Create draft PRs to show intent
-5. **Sync often** - Run `gs-sync` after any PR merges (yours or others')
 
-### Troubleshooting
+## Task Tracking
 
-**Conflicts during restack:**
-
-```bash
-# Resolve conflicts in your editor
-git add <resolved-files>
-git rebase --continue
-# Then re-submit
-gs stack submit
-```
-
-**Detached from stack:**
+This project uses **dots** (`dot` CLI) for local task tracking alongside GitHub Issues.
 
 ```bash
-gs stack    # See current stack state
-gs branch track --base <upstream-branch>  # Re-attach if needed
+dot ls                          # View all open tasks
+dot ready                       # Find unblocked tasks
+dot show <task-id>              # View task details
+dot on <task-id>                # Start working on a task
+dot off <task-id> -r "reason"   # Complete a task
+dot add "title" -p 2 -d "desc" # Create a new task
 ```
-
-For more details, see [git-spice documentation](https://abhinav.github.io/git-spice/).
 
 ## Pull Request Process
 
