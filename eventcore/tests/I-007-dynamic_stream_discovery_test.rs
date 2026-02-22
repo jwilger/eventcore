@@ -344,7 +344,7 @@ impl CommandLogic for ProcessPaymentCommand {
         .into())
     }
 
-    fn stream_resolver(&self) -> Option<&dyn StreamResolver<Self::State>> {
+    fn stream_resolver(&self) -> Option<&(dyn StreamResolver<Self::State> + Sync)> {
         Some(self)
     }
 }
@@ -396,7 +396,7 @@ impl CommandLogic for CaptureAcrossStreamsCommand {
         .into())
     }
 
-    fn stream_resolver(&self) -> Option<&dyn StreamResolver<Self::State>> {
+    fn stream_resolver(&self) -> Option<&(dyn StreamResolver<Self::State> + Sync)> {
         Some(self)
     }
 }

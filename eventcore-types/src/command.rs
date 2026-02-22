@@ -182,7 +182,7 @@ pub trait CommandLogic: CommandStreams {
     /// dedicated resolver type so the executor loads additional streams after
     /// reconstructing state. The default implementation returns `None`, meaning
     /// the command relies solely on static [`CommandStreams`] declarations.
-    fn stream_resolver(&self) -> Option<&dyn StreamResolver<Self::State>> {
+    fn stream_resolver(&self) -> Option<&(dyn StreamResolver<Self::State> + Sync)> {
         None
     }
 }
