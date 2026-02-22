@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/jwilger/eventcore/compare/eventcore-v0.5.0...eventcore-v0.5.1) - 2026-02-22
+
+### Bug Fixes
+
+- add Sync bound to StreamResolver trait object so execute() future is Send ([#304](https://github.com/jwilger/eventcore/pull/304))
+
 ## [0.5.0](https://github.com/jwilger/eventcore/compare/eventcore-v0.4.0...eventcore-v0.5.0) - 2025-12-31
 
 ### Documentation

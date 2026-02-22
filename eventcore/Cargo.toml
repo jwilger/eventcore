@@ -16,7 +16,7 @@ postgres = ["dep:eventcore-postgres"]
 
 [dependencies]
 # Core types from shared vocabulary crate
-eventcore-types = { version = "0.5.0", path = "../eventcore-types" }
+eventcore-types = { version = "0.5.1", path = "../eventcore-types" }
 
 # Runtime dependencies for execute() and retry logic
 chrono = { version = "0.4.42", features = ["serde"] }
@@ -29,10 +29,10 @@ tracing = "0.1.44"
 uuid = { version = "1.19.0", features = ["serde", "v1", "v7"] }
 
 # Optional dependency for derive macros (enabled by default)
-eventcore-macros = { version = "0.5.0", path = "../eventcore-macros", optional = true }
+eventcore-macros = { version = "0.5.1", path = "../eventcore-macros", optional = true }
 
 # Optional dependency for PostgreSQL backend (enabled via feature flag)
-eventcore-postgres = { version = "0.5.0", path = "../eventcore-postgres", optional = true }
+eventcore-postgres = { version = "0.5.1", path = "../eventcore-postgres", optional = true }
 
 [dev-dependencies]
 eventcore-memory = { path = "../eventcore-memory" }
