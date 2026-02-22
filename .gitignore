@@ -83,3 +83,34 @@ mutants.out/
 mutants.out.old/
 
 .serena/
+
+# Agent skills (harness-specific symlink dirs -- only .agents/ and .claude/skills/ are needed)
+.adal/
+.agent/
+.augment/
+.cline/
+.codebuddy/
+.commandcode/
+.continue/
+.crush/
+.factory/
+.goose/
+.iflow/
+.junie/
+.kilocode/
+.kiro/
+.kode/
+.mcpjam/
+.mux/
+.neovate/
+.openhands/
+.pi/
+.pochi/
+.qoder/
+.qwen/
+.roo/
+.trae/
+.vibe/
+.windsurf/
+.zencoder/
+/skills/
