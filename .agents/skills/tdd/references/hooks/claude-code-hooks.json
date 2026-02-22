@@ -1,0 +1,125 @@
+{
+  "_comment": "Optional hook templates for Claude Code. These provide mechanical enforcement of TDD phase boundaries. Install via the bootstrap skill or copy into your project's .claude/hooks.json. These are static recipes -- not a maintained plugin.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "_category": "Evidence gate after Edit (all phases)",
+        "_description": "Requires running tests and pasting output after every file edit",
+        "hooks": [
+          {
+            "prompt": "POST-EDIT: Run tests and paste output. Show the actual result.\n\"I expect it to fail\" is not evidence. \"Tests should pass now\" is not evidence.\nRun the test. Paste the output.\nOutput ONLY: {\"ok\": true}",
+            "type": "prompt"
+          }
+        ],
+        "matcher": "Edit"
+      },
+      {
+        "_category": "Evidence gate after Write (all phases)",
+        "_description": "Requires running tests and pasting output after every file creation",
+        "hooks": [
+          {
+            "prompt": "POST-WRITE: Run tests or type checker and paste output. Show the exact result.\nNever claim success or failure without pasted evidence.\nOutput ONLY: {\"ok\": true}",
+            "type": "prompt"
+          }
+        ],
+        "matcher": "Write"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "_category": "RED phase file-type verification",
+        "_description": "Blocks red agent from editing non-test files",
+        "hooks": [
+          {
+            "prompt": "RED AGENT FILE-TYPE VERIFICATION\n\nVerify this is a test file. The hook input is: $ARGUMENTS\n\n1. Extract file_path from tool_input\n2. Check path indicators FIRST:\n   - Path contains: tests/, __tests__/, spec/, test/\n   - File name matches: *_test.rs, *.test.ts, test_*.py, *_spec.rb, *_test.go\n3. If ambiguous, read file and check for test content (annotations, imports)\n\nALLOW if test file. BLOCK if not.\n\n{\"ok\": true} - test file\n{\"ok\": false, \"reason\": \"red agent can only edit test files.\"} - not a test file",
+            "timeout": 60,
+            "type": "agent"
+          }
+        ],
+        "matcher": "Edit"
+      },
+      {
+        "_category": "GREEN phase file-type verification",
+        "_description": "Blocks green agent from editing test files or type-only files",
+        "hooks": [
+          {
+            "prompt": "GREEN AGENT FILE-TYPE VERIFICATION\n\nVerify this is production implementation code (NOT test, NOT type-only). The hook input is: $ARGUMENTS\n\n1. Extract file_path from tool_input\n2. BLOCK if path contains: tests/, __tests__/, spec/, test/\n3. BLOCK if file name matches test patterns\n4. ALLOW if path is in: src/, lib/, app/\n5. If ambiguous, check content: BLOCK if only type definitions with stubs\n\n{\"ok\": true} - production code\n{\"ok\": false, \"reason\": \"green agent can only edit production implementation code.\"} - otherwise",
+            "timeout": 60,
+            "type": "agent"
+          }
+        ],
+        "matcher": "Edit"
+      },
+      {
+        "_category": "DOMAIN phase file-type verification",
+        "_description": "Blocks domain agent from editing test files or implementation bodies",
+        "hooks": [
+          {
+            "prompt": "DOMAIN AGENT FILE-TYPE VERIFICATION\n\nVerify this edit is for type definitions ONLY (not tests, not implementations). The hook input is: $ARGUMENTS\n\n1. BLOCK if path contains: tests/, __tests__/, spec/, test/\n2. BLOCK if file name matches test patterns\n3. ALLOW if content contains type definitions (struct, enum, trait, interface)\n4. ALLOW if function signatures with stub bodies (unimplemented!(), todo!())\n5. BLOCK if function bodies contain real implementation logic\n\n{\"ok\": true} - type definition work\n{\"ok\": false, \"reason\": \"domain agent can only edit type definitions.\"} - otherwise",
+            "timeout": 60,
+            "type": "agent"
+          }
+        ],
+        "matcher": "Edit"
+      },
+      {
+        "_category": "RED phase Write verification",
+        "_description": "Blocks red agent from creating non-test files",
+        "hooks": [
+          {
+            "prompt": "RED AGENT FILE-TYPE VERIFICATION\n\nVerify this is a test file being created. The hook input is: $ARGUMENTS\n\nCheck path indicators first, then content if ambiguous.\n\n{\"ok\": true} - test file\n{\"ok\": false, \"reason\": \"red agent can only create test files.\"} - not a test file",
+            "timeout": 60,
+            "type": "agent"
+          }
+        ],
+        "matcher": "Write"
+      },
+      {
+        "_category": "GREEN phase Write verification",
+        "_description": "Blocks green agent from creating test files or type-only files",
+        "hooks": [
+          {
+            "prompt": "GREEN AGENT FILE-TYPE VERIFICATION\n\nVerify this is a production implementation file being created. The hook input is: $ARGUMENTS\n\nCheck path indicators first, then content if ambiguous.\n\n{\"ok\": true} - production file\n{\"ok\": false, \"reason\": \"green agent can only create production implementation files.\"} - otherwise",
+            "timeout": 60,
+            "type": "agent"
+          }
+        ],
+        "matcher": "Write"
+      },
+      {
+        "_category": "DOMAIN phase Write verification",
+        "_description": "Blocks domain agent from creating test or implementation files",
+        "hooks": [
+          {
+            "prompt": "DOMAIN AGENT FILE-TYPE VERIFICATION\n\nVerify this file contains type definitions ONLY. The hook input is: $ARGUMENTS\nBLOCK test files and files with real implementation logic.\nALLOW type definitions with stub bodies.\n\n{\"ok\": true} - type definition file\n{\"ok\": false, \"reason\": \"domain agent can only create type definition files.\"} - otherwise",
+            "timeout": 60,
+            "type": "agent"
+          }
+        ],
+        "matcher": "Write"
+      }
+    ],
+    "SubagentStop": [
+      {
+        "_category": "Domain review checkpoint",
+        "_description": "Enforces mandatory domain review after RED and GREEN phases. Prevents skipping domain review.",
+        "hooks": [
+          {
+            "prompt": "DOMAIN REVIEW CHECKPOINT (MANDATORY)\n\nDetect which agent just completed and enforce domain review requirements.\n\nExamine the conversation to determine which agent just finished. Look for agent invocation patterns, self-identification, and file modification patterns (test files = red, production = green).\n\n**If red just completed:**\nA failing test was just written. Domain review is MANDATORY before proceeding.\nNext action MUST be: Launch domain agent with DOMAIN_CONTEXT: AFTER_RED\nBlock if orchestrator tries to skip directly to GREEN.\n\n**If green just completed:**\nProduction code was just implemented. Domain review is MANDATORY before proceeding.\nNext action MUST be: Launch domain agent with DOMAIN_CONTEXT: AFTER_GREEN\nBlock if orchestrator tries to write another test without review.\n\n**If domain just completed:**\nDomain review passed, workflow may continue. Allow orchestrator to proceed.\n\n**If any other agent completed:**\nAllow (domain review not required).\n\nAfter RED or GREEN (domain review required):\n{\"ok\": false, \"reason\": \"Domain review is MANDATORY after {agent} phase. You must launch the domain agent with appropriate DOMAIN_CONTEXT before proceeding. This is NOT optional.\"}\n\nAfter DOMAIN or other agents:\n{\"ok\": true}",
+            "type": "prompt"
+          }
+        ]
+      },
+      {
+        "_category": "Orchestration reminder",
+        "_description": "Prevents the orchestrator from writing files directly. Reminds it to delegate to phase agents.",
+        "hooks": [
+          {
+            "prompt": "SUBAGENT COMPLETED - ORCHESTRATION REMINDER\n\nAn agent just finished. Before proceeding:\n\nYOU ARE AN ORCHESTRATOR, NOT AN IMPLEMENTER.\n\nYou MUST NEVER use Edit or Write tools directly on project files.\n\nRole selection for file edits:\n- Test code -> Launch red agent\n- Production code -> Launch green agent\n- Type definitions -> Launch domain agent\n\nTDD CYCLE CHECKPOINT:\n- After RED -> Launch domain (review test)\n- After DOMAIN (post-red) -> Launch green (implement)\n- After GREEN -> Launch domain (review implementation)\n- After DOMAIN (post-green) -> Commit, then next test or refactor\n\nNO EXCEPTIONS. NO \"QUICK FIXES\". NO \"JUST ONE LINE\".\n\nAgents have ZERO memory of this conversation - provide complete context every time:\n- File paths\n- Test names and error messages\n- Current TDD phase\n- Requirements and constraints\n\nRespond with JSON only: {\"ok\": true}",
+            "type": "prompt"
+          }
+        ]
+      }
+    ]
+  }
+}
