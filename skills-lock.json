@@ -1,0 +1,35 @@
+{
+  "skills": {
+    "architecture-decisions": {
+      "computedHash": "5fa0e80c3bc153df05f918477112905c2c83c3d0872180f30333b965f85bab65",
+      "source": "jwilger/agent-skills",
+      "sourceType": "github"
+    },
+    "code-review": {
+      "computedHash": "517752820eb14247899434764af0b99c8bb1b992707bc21ee6e3967aa19a071b",
+      "source": "jwilger/agent-skills",
+      "sourceType": "github"
+    },
+    "debugging-protocol": {
+      "computedHash": "41b051c42ba98274c736b17dc258a813e8158b1a961893f29f856ea94eaa39f1",
+      "source": "jwilger/agent-skills",
+      "sourceType": "github"
+    },
+    "domain-modeling": {
+      "computedHash": "02b8c134939e0955c284ed07b6e3a1a5d217f4dd321597123c5b8e00848064a0",
+      "source": "jwilger/agent-skills",
+      "sourceType": "github"
+    },
+    "tdd": {
+      "computedHash": "27d74133cf5e26597e119e4f66ecafc8d53272bb3e67e8eefcd30c155f3f408c",
+      "source": "jwilger/agent-skills",
+      "sourceType": "github"
+    },
+    "ticket-triage": {
+      "computedHash": "1fd09377af185e35d5ae4aad6a93296698abf3fa94d188d730f1a6beb04fea02",
+      "source": "jwilger/agent-skills",
+      "sourceType": "github"
+    }
+  },
+  "version": 1
+}
