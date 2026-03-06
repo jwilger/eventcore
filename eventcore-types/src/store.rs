@@ -18,6 +18,7 @@ use std::future::Future;
 pub struct StreamWrites {
     entries: Vec<StreamWriteEntry>,
     expected_versions: HashMap<StreamId, StreamVersion>,
+    metadata: Value,
 }
 
 #[derive(Debug)]
@@ -36,7 +37,14 @@ impl StreamWrites {
         Self {
             entries: Vec::new(),
             expected_versions: HashMap::new(),
+            metadata: Value::Object(Default::default()),
         }
+    }
+
+    /// Attach immutable metadata to every event persisted in this batch.
+    pub fn with_metadata(mut self, metadata: Value) -> Self {
+        self.metadata = metadata;
+        self
     }
 
     /// Register a stream and its expected version prior to appending events.
@@ -107,6 +115,10 @@ impl StreamWrites {
 
     pub fn expected_versions(&self) -> &HashMap<StreamId, StreamVersion> {
         &self.expected_versions
+    }
+
+    pub fn metadata(&self) -> &Value {
+        &self.metadata
     }
 
     pub fn into_entries(self) -> Vec<StreamWriteEntry> {
@@ -581,6 +593,27 @@ mod tests {
         assert_eq!(versions.len(), 2);
         assert_eq!(versions.get(&stream_a), Some(&StreamVersion::new(0)));
         assert_eq!(versions.get(&stream_b), Some(&StreamVersion::new(5)));
+    }
+
+    #[test]
+    fn stream_writes_defaults_metadata_to_empty_object() {
+        let writes = StreamWrites::new();
+
+        assert_eq!(writes.metadata(), &serde_json::json!({}));
+    }
+
+    #[test]
+    fn stream_writes_returns_attached_metadata() {
+        let writes = StreamWrites::new().with_metadata(serde_json::json!({
+            "project_id": "018f17f2-44df-7cc7-86e0-8c2e6f6d8a57"
+        }));
+
+        assert_eq!(
+            writes.metadata(),
+            &serde_json::json!({
+                "project_id": "018f17f2-44df-7cc7-86e0-8c2e6f6d8a57"
+            })
+        );
     }
 
     #[test]

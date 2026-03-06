@@ -162,6 +162,7 @@ impl EventStore for PostgresEventStore {
         &self,
         writes: StreamWrites,
     ) -> Result<EventStreamSlice, EventStoreError> {
+        let metadata = writes.metadata().clone();
         let expected_versions = writes.expected_versions().clone();
         let entries = writes.into_entries();
 
@@ -214,7 +215,7 @@ impl EventStore for PostgresEventStore {
             .bind(stream_id.as_ref())
             .bind(event_type)
             .bind(Json(event_data))
-            .bind(Json(json!({})))
+            .bind(Json(metadata.clone()))
             .execute(&mut *tx)
             .await
             .map_err(|error| map_sqlx_error(error, Operation::AppendEvents))?;
