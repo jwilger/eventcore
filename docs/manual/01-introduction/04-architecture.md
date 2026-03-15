@@ -23,7 +23,7 @@ EventCore follows a clean, layered architecture:
          │                       │                       │
 ┌────────▼────────┐   ┌──────────▼──────────┐  ┌────────▼────────┐
 │    Commands     │   │   Event Store       │  │  Projections    │
-│  (Domain Logic) │   │  (PostgreSQL)       │  │  (Read Models)  │
+│  (Domain Logic) │   │(PG / SQLite / Mem)  │  │  (Read Models)  │
 └─────────────────┘   └─────────────────────┘  └─────────────────┘
 ```
 

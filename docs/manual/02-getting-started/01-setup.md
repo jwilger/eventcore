@@ -469,6 +469,34 @@ Run the tests:
 cargo test
 ```
 
+## Environment Setup for SQLite (Optional)
+
+If you want persistence without running a database server, use the SQLite adapter:
+
+```toml
+[dependencies]
+eventcore-sqlite = "0.1"
+```
+
+```rust
+use eventcore_sqlite::SqliteEventStore;
+
+// File-backed store - data persists across restarts
+let store = SqliteEventStore::new(SqliteConfig {
+    path: PathBuf::from("./taskmaster.db"),
+    encryption_key: None,
+})?;
+store.migrate().await?;
+
+// Optional: encrypt the database
+let store = SqliteEventStore::new(SqliteConfig {
+    path: PathBuf::from("./taskmaster.db"),
+    encryption_key: Some("my-secret-key".to_string()),
+})?;
+```
+
+No external services needed - the database is embedded in your application.
+
 ## Environment Setup for PostgreSQL (Optional)
 
 If you want to use PostgreSQL instead of the in-memory store:
