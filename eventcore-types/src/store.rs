@@ -5,15 +5,13 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
 
-/// Placeholder for collection of events to write, organized by stream.
+/// Collection of events to write, organized by stream.
 ///
 /// StreamWrites represents the output of a command's handle() method,
 /// ready to be persisted atomically across multiple streams.
 ///
 /// Uses type erasure to store events of different types in the same collection.
 /// Events are boxed as `Box<dyn Any>` for storage and later downcast when reading.
-///
-/// TODO: Refine based on multi-stream atomicity requirements.
 #[derive(Debug)]
 pub struct StreamWrites {
     entries: Vec<StreamWriteEntry>,
@@ -340,10 +338,9 @@ impl std::fmt::Display for Operation {
 
 /// Error type returned by event store operations.
 ///
-/// EventStoreError represents failures during read or append operations.
-/// Will be refined with specific variants for different failure modes.
-///
-/// TODO: Implement full error hierarchy per ADR-004.
+/// EventStoreError represents failures during read or append operations,
+/// covering serialization, deserialization, version conflicts, infrastructure
+/// failures, and stream declaration violations.
 #[derive(thiserror::Error, Debug, PartialEq)]
 pub enum EventStoreError {
     /// Returned when a stream is assigned multiple different expected versions within the same write batch.
@@ -383,11 +380,9 @@ pub enum EventStoreError {
 
 /// Event stream reader generic over event payload type.
 ///
-/// EventStreamReader represents a handle for reading events from a stream.
-/// The generic type parameter T is the consumer's event payload type.
-/// Will be refined with actual event iteration and filtering capabilities.
-///
-/// TODO: Implement with async iterator or vector of events.
+/// EventStreamReader holds a deserialized sequence of events from a single stream.
+/// It provides iteration, length, and first-element access for state reconstruction
+/// during command execution.
 pub struct EventStreamReader<E: Event> {
     events: Vec<E>,
 }
@@ -398,8 +393,6 @@ impl<E: Event> EventStreamReader<E> {
     }
 
     /// Returns the number of events in the stream.
-    ///
-    /// TODO: Implement based on actual storage structure.
     pub fn len(&self) -> usize {
         self.events.len()
     }
@@ -418,8 +411,6 @@ impl<E: Event> EventStreamReader<E> {
     ///
     /// * `Some(&E)` - Reference to the first event in the stream
     /// * `None` - If the stream is empty
-    ///
-    /// TODO: Implement based on actual storage structure.
     pub fn first(&self) -> Option<&E> {
         self.events.first()
     }
@@ -442,14 +433,11 @@ impl<E: Event> IntoIterator for EventStreamReader<E> {
     }
 }
 
-/// Placeholder for event stream slice type.
+/// Marker type returned by a successful `EventStore::append_events()` call.
 ///
-/// `EventStreamSlice` is a consecutive set of `StoredEvent` that represents a fixed number of
-/// events that can start and/or end at any points short of the start and the end of the set. This
-/// is primarily used to contain the resuling `StoredEvent` instances from a success call to
-/// `EventStore.append_events()`.
-///
-/// TODO: Refine with actual metadata returned after successful append.
+/// Currently a unit struct confirming that the append operation committed
+/// successfully. Future versions may carry metadata such as the assigned
+/// stream versions or global positions of the written events.
 pub struct EventStreamSlice;
 
 /// Blanket implementation allowing EventStore trait to work with references.

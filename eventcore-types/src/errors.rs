@@ -38,6 +38,6 @@ pub enum CommandError {
     /// This error indicates the command entered an invalid state during
     /// execution (e.g., state reconstruction failed, required stream missing).
     /// These errors are permanent and indicate logic errors.
-    #[error("validation error")]
-    ValidationError,
+    #[error("validation error: {0}")]
+    ValidationError(String),
 }

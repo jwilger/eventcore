@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 mod projection;
 
-// Re-export all types from eventcore-types for backward compatibility
+// Re-export all public types from eventcore-types so consumers only need to depend on `eventcore`
 pub use eventcore_types::{
     AttemptNumber, BackoffMultiplier, BatchSize, CheckpointStore, CommandError, CommandLogic,
     CommandStreams, DelayMilliseconds, Event, EventFilter, EventPage, EventReader, EventStore,

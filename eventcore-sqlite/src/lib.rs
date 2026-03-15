@@ -41,6 +41,9 @@ pub enum SqliteCheckpointError {
         #[source]
         source: uuid::Error,
     },
+
+    #[error("internal task failed: {0}")]
+    TaskFailed(String),
 }
 
 #[derive(Debug, Error)]
@@ -120,11 +123,7 @@ fn map_join_error_migration(e: tokio::task::JoinError) -> SqliteEventStoreError 
 
 /// Map a `JoinError` from `spawn_blocking` into a `SqliteCheckpointError`.
 fn map_join_error_checkpoint(e: tokio::task::JoinError) -> SqliteCheckpointError {
-    SqliteCheckpointError::DatabaseError(rusqlite::Error::FromSqlConversionFailure(
-        0,
-        rusqlite::types::Type::Text,
-        Box::new(std::io::Error::other(e.to_string())),
-    ))
+    SqliteCheckpointError::TaskFailed(e.to_string())
 }
 
 // ---------------------------------------------------------------------------

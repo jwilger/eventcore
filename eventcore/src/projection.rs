@@ -60,9 +60,9 @@ impl Default for PollConfig {
 ///
 /// ```ignore
 /// let retry_config = EventRetryConfig {
-///     max_retry_attempts: 3,
+///     max_retry_attempts: MaxRetryAttempts::new(3),
 ///     retry_delay: Duration::from_millis(100),
-///     retry_backoff_multiplier: 2.0,
+///     retry_backoff_multiplier: BackoffMultiplier::try_new(2.0).expect("valid"),
 ///     max_retry_delay: Duration::from_secs(5),
 /// };
 /// let runner = ProjectionRunner::new(projector, &store)
@@ -321,9 +321,9 @@ where
     ///
     /// ```ignore
     /// let retry_config = EventRetryConfig {
-    ///     max_retry_attempts: 5,
+    ///     max_retry_attempts: MaxRetryAttempts::new(5),
     ///     retry_delay: Duration::from_millis(100),
-    ///     retry_backoff_multiplier: 2.0,
+    ///     retry_backoff_multiplier: BackoffMultiplier::try_new(2.0).expect("valid"),
     ///     max_retry_delay: Duration::from_secs(10),
     /// };
     /// let runner = ProjectionRunner::new(projector, &store)
@@ -549,8 +549,8 @@ where
 
 /// Error type for projection operations.
 ///
-/// Placeholder error type for projection failures. Will be expanded
-/// with specific variants as the implementation progresses.
+/// Covers fatal processing failures and leadership acquisition errors
+/// encountered during projection execution.
 #[derive(thiserror::Error, Debug)]
 pub enum ProjectionError {
     /// Generic projection failure.
