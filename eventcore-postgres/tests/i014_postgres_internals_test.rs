@@ -10,8 +10,6 @@ use common::PostgresTestFixture;
 use eventcore_postgres::PostgresProjectorCoordinator;
 use eventcore_types::{ProjectorCoordinator, StreamPosition};
 use sqlx::Row;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use uuid::Uuid;
 
 #[tokio::test]
@@ -165,11 +163,17 @@ async fn trigger_prevents_delete_on_event_log() {
     );
 }
 
-/// Helper to compute advisory lock key from subscription name (same algorithm as production code)
+/// Helper to compute advisory lock key from subscription name (same FNV-1a algorithm as production code)
 fn compute_lock_key(subscription_name: &str) -> i64 {
-    let mut hasher = DefaultHasher::new();
-    subscription_name.hash(&mut hasher);
-    hasher.finish() as i64
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x00000100000001B3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in subscription_name.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash as i64
 }
 
 /// Helper to check if an advisory lock is held by querying pg_locks
