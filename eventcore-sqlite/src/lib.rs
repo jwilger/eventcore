@@ -10,9 +10,13 @@ use eventcore_types::{
 use rusqlite::OptionalExtension;
 use rusqlite::params;
 use thiserror::Error;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// Error types
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Error)]
 pub enum SqliteEventStoreError {
@@ -21,32 +25,181 @@ pub enum SqliteEventStoreError {
 
     #[error("migration failed: {0}")]
     MigrationFailed(#[source] rusqlite::Error),
+
+    #[error("internal task failed: {0}")]
+    TaskFailed(String),
 }
 
 #[derive(Debug, Error)]
 pub enum SqliteCheckpointError {
     #[error("database operation failed: {0}")]
     DatabaseError(#[source] rusqlite::Error),
+
+    #[error("corrupted checkpoint: invalid position UUID '{position}': {source}")]
+    CorruptedCheckpoint {
+        position: String,
+        #[source]
+        source: uuid::Error,
+    },
 }
 
 #[derive(Debug, Error)]
 pub enum SqliteCoordinationError {
     #[error("leadership not acquired: another instance holds the lock")]
     LeadershipNotAcquired { subscription_name: String },
-
-    #[error("lock poisoned: {message}")]
-    LockPoisoned { message: String },
 }
 
-#[derive(Debug, Clone)]
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+/// Configuration for SQLite event store connections.
+///
+/// The `encryption_key` field is redacted from `Debug` output to prevent
+/// accidental exposure in logs.
+#[derive(Clone)]
 pub struct SqliteConfig {
     pub path: PathBuf,
     pub encryption_key: Option<String>,
 }
 
+impl std::fmt::Debug for SqliteConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqliteConfig")
+            .field("path", &self.path)
+            .field(
+                "encryption_key",
+                &self.encryption_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared connection helper
+// ---------------------------------------------------------------------------
+
+/// Internal helper for opening and configuring a SQLite connection.
+/// Shared by `SqliteEventStore` and `SqliteCheckpointStore` to avoid
+/// duplicating connection setup logic.
+fn open_connection(path: &PathBuf) -> Result<rusqlite::Connection, SqliteEventStoreError> {
+    let conn = rusqlite::Connection::open(path).map_err(SqliteEventStoreError::ConnectionFailed)?;
+    // WAL mode is a no-op for in-memory databases but kept for code consistency.
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(SqliteEventStoreError::ConnectionFailed)?;
+    Ok(conn)
+}
+
+fn open_in_memory_connection() -> Result<rusqlite::Connection, SqliteEventStoreError> {
+    let conn =
+        rusqlite::Connection::open_in_memory().map_err(SqliteEventStoreError::ConnectionFailed)?;
+    // WAL mode is a no-op for in-memory databases but kept for code consistency.
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(SqliteEventStoreError::ConnectionFailed)?;
+    Ok(conn)
+}
+
+fn apply_encryption_key(
+    conn: &rusqlite::Connection,
+    key: &str,
+) -> Result<(), SqliteEventStoreError> {
+    conn.pragma_update(None, "key", key)
+        .map_err(SqliteEventStoreError::ConnectionFailed)
+}
+
+/// Map a `JoinError` from `spawn_blocking` into an `EventStoreError`.
+fn map_join_error(e: tokio::task::JoinError, operation: Operation) -> EventStoreError {
+    error!(error = %e, ?operation, "[sqlite] spawn_blocking task failed");
+    EventStoreError::StoreFailure { operation }
+}
+
+/// Map a `JoinError` from `spawn_blocking` into a `SqliteEventStoreError`.
+fn map_join_error_migration(e: tokio::task::JoinError) -> SqliteEventStoreError {
+    SqliteEventStoreError::TaskFailed(e.to_string())
+}
+
+/// Map a `JoinError` from `spawn_blocking` into a `SqliteCheckpointError`.
+fn map_join_error_checkpoint(e: tokio::task::JoinError) -> SqliteCheckpointError {
+    SqliteCheckpointError::DatabaseError(rusqlite::Error::FromSqlConversionFailure(
+        0,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::other(e.to_string())),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Shared checkpoint helpers
+// ---------------------------------------------------------------------------
+
+fn checkpoint_load(
+    conn: &rusqlite::Connection,
+    name: &str,
+) -> Result<Option<StreamPosition>, SqliteCheckpointError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT last_position FROM eventcore_subscription_versions WHERE subscription_name = ?1",
+        )
+        .map_err(SqliteCheckpointError::DatabaseError)?;
+
+    let result: Option<String> = stmt
+        .query_row(params![name], |row| row.get(0))
+        .optional()
+        .map_err(SqliteCheckpointError::DatabaseError)?;
+
+    match result {
+        Some(pos_str) => {
+            let uuid = Uuid::parse_str(&pos_str).map_err(|e| {
+                SqliteCheckpointError::CorruptedCheckpoint {
+                    position: pos_str,
+                    source: e,
+                }
+            })?;
+            Ok(Some(StreamPosition::new(uuid)))
+        }
+        None => Ok(None),
+    }
+}
+
+fn checkpoint_save(
+    conn: &rusqlite::Connection,
+    name: &str,
+    position_str: &str,
+) -> Result<(), SqliteCheckpointError> {
+    conn.execute(
+        "INSERT INTO eventcore_subscription_versions (subscription_name, last_position, updated_at)
+         VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         ON CONFLICT (subscription_name) DO UPDATE SET last_position = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        params![name, position_str],
+    )
+    .map_err(SqliteCheckpointError::DatabaseError)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Shared coordination helpers
+// ---------------------------------------------------------------------------
+
+fn try_acquire_lock(
+    locks: &std::sync::RwLock<HashSet<String>>,
+    subscription_name: &str,
+) -> Result<(), SqliteCoordinationError> {
+    let mut guard = locks.write().expect("coordination lock poisoned");
+    if guard.contains(subscription_name) {
+        return Err(SqliteCoordinationError::LeadershipNotAcquired {
+            subscription_name: subscription_name.to_string(),
+        });
+    }
+    guard.insert(subscription_name.to_string());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// SqliteEventStore
+// ---------------------------------------------------------------------------
+
 pub struct SqliteEventStore {
     conn: Arc<Mutex<rusqlite::Connection>>,
-    locks: Arc<RwLock<HashSet<String>>>,
+    locks: Arc<std::sync::RwLock<HashSet<String>>>,
 }
 
 impl std::fmt::Debug for SqliteEventStore {
@@ -57,33 +210,21 @@ impl std::fmt::Debug for SqliteEventStore {
 
 impl SqliteEventStore {
     pub fn new(config: SqliteConfig) -> Result<Self, SqliteEventStoreError> {
-        let conn = rusqlite::Connection::open(&config.path)
-            .map_err(SqliteEventStoreError::ConnectionFailed)?;
-
+        let conn = open_connection(&config.path)?;
         if let Some(ref key) = config.encryption_key {
-            conn.pragma_update(None, "key", key)
-                .map_err(SqliteEventStoreError::ConnectionFailed)?;
+            apply_encryption_key(&conn, key)?;
         }
-
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(SqliteEventStoreError::ConnectionFailed)?;
-
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
-            locks: Arc::new(RwLock::new(HashSet::new())),
+            locks: Arc::new(std::sync::RwLock::new(HashSet::new())),
         })
     }
 
     pub fn in_memory() -> Result<Self, SqliteEventStoreError> {
-        let conn = rusqlite::Connection::open_in_memory()
-            .map_err(SqliteEventStoreError::ConnectionFailed)?;
-
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(SqliteEventStoreError::ConnectionFailed)?;
-
+        let conn = open_in_memory_connection()?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
-            locks: Arc::new(RwLock::new(HashSet::new())),
+            locks: Arc::new(std::sync::RwLock::new(HashSet::new())),
         })
     }
 
@@ -115,7 +256,7 @@ impl SqliteEventStore {
             Ok(())
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(map_join_error_migration)?
     }
 }
 
@@ -162,7 +303,7 @@ impl EventStore for SqliteEventStore {
             Ok::<Vec<String>, EventStoreError>(rows)
         })
         .await
-        .expect("spawn_blocking panicked")?;
+        .map_err(|e| map_join_error(e, Operation::ReadStream))??;
 
         let mut events = Vec::with_capacity(rows.len());
         for json_str in rows {
@@ -206,7 +347,6 @@ impl EventStore for SqliteEventStore {
                 }
             })?;
 
-            // Check all expected versions
             for (stream_id, expected_version) in &expected_versions {
                 let current: usize = tx
                     .query_row(
@@ -232,8 +372,9 @@ impl EventStore for SqliteEventStore {
                 }
             }
 
-            // Track per-stream next_version for assigning stream_version to each event
-            let mut next_versions: HashMap<&StreamId, usize> = expected_versions
+            // Initialize per-stream version counters from expected versions;
+            // each will be incremented before assignment.
+            let mut current_versions: HashMap<&StreamId, usize> = expected_versions
                 .iter()
                 .map(|(sid, v)| (sid, v.into_inner()))
                 .collect();
@@ -247,11 +388,11 @@ impl EventStore for SqliteEventStore {
                 } = entry;
 
                 let event_id = Uuid::now_v7().to_string();
-                let next_version = next_versions
+                let version_counter = current_versions
                     .get_mut(stream_id)
                     .expect("stream must be registered");
-                *next_version += 1;
-                let version = *next_version;
+                *version_counter += 1;
+                let version = *version_counter;
 
                 let event_json = serde_json::to_string(event_data).map_err(|e| {
                     error!(error = %e, "[sqlite.append_events] serialization failed");
@@ -289,13 +430,14 @@ impl EventStore for SqliteEventStore {
             Ok(EventStreamSlice)
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(|e| map_join_error(e, Operation::AppendEvents))?
     }
 }
 
 impl EventReader for SqliteEventStore {
     type Error = EventStoreError;
 
+    #[instrument(name = "sqlite.read_events", skip(self))]
     async fn read_events<E: Event>(
         &self,
         filter: EventFilter,
@@ -312,6 +454,9 @@ impl EventReader for SqliteEventStore {
 
             let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
                 match (&prefix, &after_event_id) {
+                    // UUIDv7 event IDs sort lexicographically in chronological order,
+                    // so text comparison (`event_id > ?1`) preserves insertion order
+                    // for cursor-based pagination.
                     (Some(pfx), Some(after_id)) => (
                         "SELECT event_id, event_data FROM eventcore_events WHERE event_id > ?1 AND stream_id LIKE ?2 ORDER BY event_id LIMIT ?3"
                             .to_string(),
@@ -375,8 +520,12 @@ impl EventReader for SqliteEventStore {
             Ok::<Vec<(String, String)>, EventStoreError>(rows)
         })
         .await
-        .expect("spawn_blocking panicked")?;
+        .map_err(|e| map_join_error(e, Operation::ReadStream))??;
 
+        // Silently skip events that cannot be deserialized into the requested
+        // type E. This is intentional: EventReader serves polymorphic consumers
+        // that may only understand a subset of stored event types. This matches
+        // the behavior of the postgres and in-memory backends.
         let events: Vec<(E, StreamPosition)> = rows
             .into_iter()
             .filter_map(|(event_id_str, event_data_str)| {
@@ -393,60 +542,29 @@ impl EventReader for SqliteEventStore {
 impl CheckpointStore for SqliteEventStore {
     type Error = SqliteCheckpointError;
 
+    #[instrument(name = "sqlite.checkpoint.load", skip(self))]
     async fn load(&self, name: &str) -> Result<Option<StreamPosition>, Self::Error> {
         let conn = self.conn.clone();
         let name = name.to_string();
         tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-            let mut stmt = conn
-                .prepare(
-                    "SELECT last_position FROM eventcore_subscription_versions WHERE subscription_name = ?1",
-                )
-                .map_err(SqliteCheckpointError::DatabaseError)?;
-
-            let result: Option<String> = stmt
-                .query_row(params![name], |row| row.get(0))
-                .optional()
-                .map_err(SqliteCheckpointError::DatabaseError)?;
-
-            match result {
-                Some(pos_str) => {
-                    let uuid =
-                        Uuid::parse_str(&pos_str).map_err(|e| {
-                            SqliteCheckpointError::DatabaseError(
-                                rusqlite::Error::FromSqlConversionFailure(
-                                    0,
-                                    rusqlite::types::Type::Text,
-                                    Box::new(e),
-                                ),
-                            )
-                        })?;
-                    Ok(Some(StreamPosition::new(uuid)))
-                }
-                None => Ok(None),
-            }
+            checkpoint_load(&conn, &name)
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(map_join_error_checkpoint)?
     }
 
+    #[instrument(name = "sqlite.checkpoint.save", skip(self))]
     async fn save(&self, name: &str, position: StreamPosition) -> Result<(), Self::Error> {
         let conn = self.conn.clone();
         let name = name.to_string();
         let position_str = position.into_inner().to_string();
         tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-            conn.execute(
-                "INSERT INTO eventcore_subscription_versions (subscription_name, last_position, updated_at)
-                 VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-                 ON CONFLICT (subscription_name) DO UPDATE SET last_position = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
-                params![name, position_str],
-            )
-            .map_err(SqliteCheckpointError::DatabaseError)?;
-            Ok(())
+            checkpoint_save(&conn, &name, &position_str)
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(map_join_error_checkpoint)?
     }
 }
 
@@ -454,17 +572,9 @@ impl ProjectorCoordinator for SqliteEventStore {
     type Error = SqliteCoordinationError;
     type Guard = SqliteCoordinationGuard;
 
+    #[instrument(name = "sqlite.coordinator.try_acquire", skip(self))]
     async fn try_acquire(&self, subscription_name: &str) -> Result<Self::Guard, Self::Error> {
-        let mut guard = self.locks.write().await;
-
-        if guard.contains(subscription_name) {
-            return Err(SqliteCoordinationError::LeadershipNotAcquired {
-                subscription_name: subscription_name.to_string(),
-            });
-        }
-
-        guard.insert(subscription_name.to_string());
-
+        try_acquire_lock(&self.locks, subscription_name)?;
         Ok(SqliteCoordinationGuard {
             subscription_name: subscription_name.to_string(),
             locks: Arc::clone(&self.locks),
@@ -472,33 +582,37 @@ impl ProjectorCoordinator for SqliteEventStore {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SqliteCoordinationGuard
+// ---------------------------------------------------------------------------
+
+/// Guard that releases leadership when dropped.
+///
+/// Uses `std::sync::RwLock` (not `tokio::sync::RwLock`) so that cleanup
+/// works reliably in `Drop` without requiring an async runtime.
 #[derive(Debug)]
 pub struct SqliteCoordinationGuard {
     subscription_name: String,
-    locks: Arc<RwLock<HashSet<String>>>,
+    locks: Arc<std::sync::RwLock<HashSet<String>>>,
 }
 
 impl Drop for SqliteCoordinationGuard {
     fn drop(&mut self) {
-        // Try to remove the lock. If we can't get the write lock, the lock set
-        // will be cleaned up when the RwLock is dropped.
-        let locks = self.locks.clone();
-        let name = self.subscription_name.clone();
-
-        // Use try_write to avoid blocking in drop
-        if let Ok(mut guard) = locks.try_write() {
-            guard.remove(&name);
+        if let Ok(mut guard) = self.locks.write() {
+            guard.remove(&self.subscription_name);
         } else {
-            // Spawn a task to clean up asynchronously
-            tokio::spawn(async move {
-                let mut guard = locks.write().await;
-                guard.remove(&name);
-            });
+            error!(
+                subscription = %self.subscription_name,
+                "[sqlite.coordination_guard] lock poisoned, cannot release leadership"
+            );
         }
     }
 }
 
-// Standalone checkpoint store
+// ---------------------------------------------------------------------------
+// SqliteCheckpointStore (standalone)
+// ---------------------------------------------------------------------------
+
 pub struct SqliteCheckpointStore {
     conn: Arc<Mutex<rusqlite::Connection>>,
 }
@@ -512,29 +626,17 @@ impl std::fmt::Debug for SqliteCheckpointStore {
 
 impl SqliteCheckpointStore {
     pub fn new(config: SqliteConfig) -> Result<Self, SqliteEventStoreError> {
-        let conn = rusqlite::Connection::open(&config.path)
-            .map_err(SqliteEventStoreError::ConnectionFailed)?;
-
+        let conn = open_connection(&config.path)?;
         if let Some(ref key) = config.encryption_key {
-            conn.pragma_update(None, "key", key)
-                .map_err(SqliteEventStoreError::ConnectionFailed)?;
+            apply_encryption_key(&conn, key)?;
         }
-
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(SqliteEventStoreError::ConnectionFailed)?;
-
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
     }
 
     pub fn in_memory() -> Result<Self, SqliteEventStoreError> {
-        let conn = rusqlite::Connection::open_in_memory()
-            .map_err(SqliteEventStoreError::ConnectionFailed)?;
-
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(SqliteEventStoreError::ConnectionFailed)?;
-
+        let conn = open_in_memory_connection()?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -555,74 +657,46 @@ impl SqliteCheckpointStore {
             Ok(())
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(map_join_error_migration)?
     }
 }
 
 impl CheckpointStore for SqliteCheckpointStore {
     type Error = SqliteCheckpointError;
 
+    #[instrument(name = "sqlite.checkpoint.load", skip(self))]
     async fn load(&self, name: &str) -> Result<Option<StreamPosition>, Self::Error> {
         let conn = self.conn.clone();
         let name = name.to_string();
         tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-            let mut stmt = conn
-                .prepare(
-                    "SELECT last_position FROM eventcore_subscription_versions WHERE subscription_name = ?1",
-                )
-                .map_err(SqliteCheckpointError::DatabaseError)?;
-
-            let result: Option<String> = stmt
-                .query_row(params![name], |row| row.get(0))
-                .optional()
-                .map_err(SqliteCheckpointError::DatabaseError)?;
-
-            match result {
-                Some(pos_str) => {
-                    let uuid =
-                        Uuid::parse_str(&pos_str).map_err(|e| {
-                            SqliteCheckpointError::DatabaseError(
-                                rusqlite::Error::FromSqlConversionFailure(
-                                    0,
-                                    rusqlite::types::Type::Text,
-                                    Box::new(e),
-                                ),
-                            )
-                        })?;
-                    Ok(Some(StreamPosition::new(uuid)))
-                }
-                None => Ok(None),
-            }
+            checkpoint_load(&conn, &name)
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(map_join_error_checkpoint)?
     }
 
+    #[instrument(name = "sqlite.checkpoint.save", skip(self))]
     async fn save(&self, name: &str, position: StreamPosition) -> Result<(), Self::Error> {
         let conn = self.conn.clone();
         let name = name.to_string();
         let position_str = position.into_inner().to_string();
         tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-            conn.execute(
-                "INSERT INTO eventcore_subscription_versions (subscription_name, last_position, updated_at)
-                 VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-                 ON CONFLICT (subscription_name) DO UPDATE SET last_position = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
-                params![name, position_str],
-            )
-            .map_err(SqliteCheckpointError::DatabaseError)?;
-            Ok(())
+            checkpoint_save(&conn, &name, &position_str)
         })
         .await
-        .expect("spawn_blocking panicked")
+        .map_err(map_join_error_checkpoint)?
     }
 }
 
-// Standalone projector coordinator
+// ---------------------------------------------------------------------------
+// SqliteProjectorCoordinator (standalone)
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Default)]
 pub struct SqliteProjectorCoordinator {
-    locks: Arc<RwLock<HashSet<String>>>,
+    locks: Arc<std::sync::RwLock<HashSet<String>>>,
 }
 
 impl SqliteProjectorCoordinator {
@@ -635,17 +709,9 @@ impl ProjectorCoordinator for SqliteProjectorCoordinator {
     type Error = SqliteCoordinationError;
     type Guard = SqliteCoordinationGuard;
 
+    #[instrument(name = "sqlite.coordinator.try_acquire", skip(self))]
     async fn try_acquire(&self, subscription_name: &str) -> Result<Self::Guard, Self::Error> {
-        let mut guard = self.locks.write().await;
-
-        if guard.contains(subscription_name) {
-            return Err(SqliteCoordinationError::LeadershipNotAcquired {
-                subscription_name: subscription_name.to_string(),
-            });
-        }
-
-        guard.insert(subscription_name.to_string());
-
+        try_acquire_lock(&self.locks, subscription_name)?;
         Ok(SqliteCoordinationGuard {
             subscription_name: subscription_name.to_string(),
             locks: Arc::clone(&self.locks),

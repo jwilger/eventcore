@@ -475,11 +475,11 @@ If you want persistence without running a database server, use the SQLite adapte
 
 ```toml
 [dependencies]
-eventcore-sqlite = "0.1"
+eventcore = { version = "0.1", features = ["sqlite"] }
 ```
 
 ```rust
-use eventcore_sqlite::SqliteEventStore;
+use eventcore::sqlite::{SqliteEventStore, SqliteConfig};
 
 // File-backed store - data persists across restarts
 let store = SqliteEventStore::new(SqliteConfig {
@@ -516,8 +516,7 @@ docker run -d \
 
 ```toml
 [dependencies]
-eventcore-postgres = "0.1"
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"] }
+eventcore = { version = "0.1", features = ["postgres"] }
 ```
 
 3. Set environment variable:
