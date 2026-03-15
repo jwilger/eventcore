@@ -556,10 +556,17 @@ impl Drop for CoordinationGuard {
                 tokio::task::block_in_place(|| {
                     handle.block_on(async {
                         // Unlock on the SAME connection that acquired the lock
-                        let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+                        if let Err(e) = sqlx::query("SELECT pg_advisory_unlock($1)")
                             .bind(lock_key)
                             .execute(&mut *connection)
-                            .await;
+                            .await
+                        {
+                            warn!(
+                                lock_key = lock_key,
+                                error = %e,
+                                "failed to release advisory lock on drop"
+                            );
+                        }
                         // Connection is returned to pool when dropped here
                     });
                 });
@@ -569,10 +576,17 @@ impl Drop for CoordinationGuard {
                 // the advisory lock is released when the PostgreSQL session ends (the
                 // connection closes). See struct-level documentation for details.
                 tokio::spawn(async move {
-                    let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+                    if let Err(e) = sqlx::query("SELECT pg_advisory_unlock($1)")
                         .bind(lock_key)
                         .execute(&mut *connection)
-                        .await;
+                        .await
+                    {
+                        warn!(
+                            lock_key = lock_key,
+                            error = %e,
+                            "failed to release advisory lock on drop (async)"
+                        );
+                    }
                 });
             }
         }
@@ -619,46 +633,64 @@ impl PostgresProjectorCoordinator {
     }
 }
 
+/// Compute a stable FNV-1a hash of the subscription name to derive an advisory lock key.
+///
+/// This uses the FNV-1a algorithm (64-bit) which produces deterministic output
+/// across Rust versions, unlike `DefaultHasher` which is explicitly not stable.
+fn advisory_lock_key(subscription_name: &str) -> i64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x00000100000001B3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in subscription_name.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash as i64
+}
+
+/// Try to acquire a PostgreSQL advisory lock for the given subscription name
+/// using the provided connection pool.
+async fn try_acquire_advisory_lock(
+    pool: &Pool<Postgres>,
+    subscription_name: &str,
+) -> Result<CoordinationGuard, CoordinationError> {
+    let lock_key = advisory_lock_key(subscription_name);
+
+    // Acquire a dedicated connection from the pool.
+    // This connection MUST be kept for the lifetime of the guard because
+    // PostgreSQL advisory locks are session-scoped.
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(CoordinationError::DatabaseError)?;
+
+    // Attempt to acquire advisory lock (non-blocking) on this specific connection
+    let row = sqlx::query("SELECT pg_try_advisory_lock($1)")
+        .bind(lock_key)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(CoordinationError::DatabaseError)?;
+
+    let acquired: bool = row.get(0);
+
+    if acquired {
+        Ok(CoordinationGuard {
+            lock_key,
+            connection: Some(connection),
+        })
+    } else {
+        // Lock not acquired - connection will be returned to pool here
+        Err(CoordinationError::LeadershipNotAcquired)
+    }
+}
+
 impl ProjectorCoordinator for PostgresProjectorCoordinator {
     type Error = CoordinationError;
     type Guard = CoordinationGuard;
 
     async fn try_acquire(&self, subscription_name: &str) -> Result<Self::Guard, Self::Error> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        // Derive advisory lock key from subscription name
-        let mut hasher = DefaultHasher::new();
-        subscription_name.hash(&mut hasher);
-        let lock_key = hasher.finish() as i64;
-
-        // Acquire a dedicated connection from the pool.
-        // This connection MUST be kept for the lifetime of the guard because
-        // PostgreSQL advisory locks are session-scoped.
-        let mut connection = self
-            .pool
-            .acquire()
-            .await
-            .map_err(CoordinationError::DatabaseError)?;
-
-        // Attempt to acquire advisory lock (non-blocking) on this specific connection
-        let row = sqlx::query("SELECT pg_try_advisory_lock($1)")
-            .bind(lock_key)
-            .fetch_one(&mut *connection)
-            .await
-            .map_err(CoordinationError::DatabaseError)?;
-
-        let acquired: bool = row.get(0);
-
-        if acquired {
-            Ok(CoordinationGuard {
-                lock_key,
-                connection: Some(connection),
-            })
-        } else {
-            // Lock not acquired - connection will be returned to pool here
-            Err(CoordinationError::LeadershipNotAcquired)
-        }
+        try_acquire_advisory_lock(&self.pool, subscription_name).await
     }
 }
 
@@ -667,40 +699,6 @@ impl ProjectorCoordinator for PostgresEventStore {
     type Guard = CoordinationGuard;
 
     async fn try_acquire(&self, subscription_name: &str) -> Result<Self::Guard, Self::Error> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        // Derive advisory lock key from subscription name
-        let mut hasher = DefaultHasher::new();
-        subscription_name.hash(&mut hasher);
-        let lock_key = hasher.finish() as i64;
-
-        // Acquire a dedicated connection from the pool.
-        // This connection MUST be kept for the lifetime of the guard because
-        // PostgreSQL advisory locks are session-scoped.
-        let mut connection = self
-            .pool
-            .acquire()
-            .await
-            .map_err(CoordinationError::DatabaseError)?;
-
-        // Attempt to acquire advisory lock (non-blocking) on this specific connection
-        let row = sqlx::query("SELECT pg_try_advisory_lock($1)")
-            .bind(lock_key)
-            .fetch_one(&mut *connection)
-            .await
-            .map_err(CoordinationError::DatabaseError)?;
-
-        let acquired: bool = row.get(0);
-
-        if acquired {
-            Ok(CoordinationGuard {
-                lock_key,
-                connection: Some(connection),
-            })
-        } else {
-            // Lock not acquired - connection will be returned to pool here
-            Err(CoordinationError::LeadershipNotAcquired)
-        }
+        try_acquire_advisory_lock(&self.pool, subscription_name).await
     }
 }
