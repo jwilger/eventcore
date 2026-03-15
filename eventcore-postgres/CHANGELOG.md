@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.5.1...eventcore-postgres-v0.6.0) - 2026-03-15
+
+### Miscellaneous Tasks
+
+- remove claude-code-review CI workflow ([#316](https://github.com/jwilger/eventcore/pull/316))
+
 ## [0.5.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.4.0...eventcore-postgres-v0.5.0) - 2025-12-31
 
 ### Features
