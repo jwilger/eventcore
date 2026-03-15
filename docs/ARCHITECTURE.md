@@ -18,16 +18,9 @@ graph TB
     end
 
     subgraph EventCore Library
-        subgraph "Functional Core (pure)"
-            ExecSM[Execute Pipeline]
-            ProjSM[Projection Loop]
-        end
-        subgraph "Imperative Shell"
-            ExecShell[Execute Shell]
-            ProjShell[Projection Shell]
-        end
         Exec[execute function]
         RunProj[run_projection function]
+        ProjRunner[ProjectionRunner]
         ES[EventStore Trait]
         ER[EventReader Trait]
         CS[CheckpointStore Trait]
@@ -42,19 +35,14 @@ graph TB
     end
 
     Cmd --> Exec
-    Exec --> ExecShell
-    ExecShell -- "effect requests" --> ExecSM
-    ExecSM -- "effect results" --> ExecShell
-    ExecShell --> ES
+    Exec --> ES
     ES --> PG
 
     Proj --> RunProj
-    RunProj --> ProjShell
-    ProjShell -- "effect requests" --> ProjSM
-    ProjSM -- "effect results" --> ProjShell
-    ProjShell --> ER
-    ProjShell --> CS
-    ProjShell --> PC
+    RunProj --> ProjRunner
+    ProjRunner --> ER
+    ProjRunner --> CS
+    ProjRunner --> PC
     ER --> PG
     CS --> Checkpoints
     PC --> Locks
@@ -64,10 +52,7 @@ graph TB
 
     style Exec fill:#e1f5ff
     style RunProj fill:#f5e1ff
-    style ExecSM fill:#fff3e0
-    style ProjSM fill:#fff3e0
-    style ExecShell fill:#e8f5e9
-    style ProjShell fill:#e8f5e9
+    style ProjRunner fill:#fff3e0
     style ES fill:#e1ffe1
 ```
 
@@ -75,7 +60,7 @@ graph TB
 
 ### Type-Driven Development
 
-All externally visible APIs express domain constraints in their signatures. Domain concepts use validated newtypes (StreamId, EventId, CorrelationId) constructed via smart constructors, ensuring "parse, don't validate" semantics. Types are validated at construction time and guaranteed valid thereafter. Total functions return Result types with descriptive errors rather than panicking.
+All externally visible APIs express domain constraints in their signatures. Domain concepts use validated newtypes (StreamId, StreamVersion, StreamPosition) constructed via smart constructors, ensuring "parse, don't validate" semantics. Types are validated at construction time and guaranteed valid thereafter. Total functions return Result types with descriptive errors rather than panicking.
 
 The library uses the `nutype` crate for domain type validation at boundaries, with types implementing standard traits (Debug, Clone, Serialize, AsRef). Phantom types and typestate patterns make illegal states unrepresentable at compile time.
 
@@ -89,25 +74,18 @@ The library owns infrastructure concerns (stream management, retries, metadata, 
 
 ### Free-Function APIs
 
-Public entry points are free functions with explicit dependencies (`execute(command, &store)`, `run_projection(projector, &backend)`), keeping the API surface minimal and composable. Structs exist only when grouping configuration or results adds clarity. This design provides:
+Public entry points are free functions with explicit dependencies (`execute(store, command, policy)`, `run_projection(projector, &backend)`), keeping the API surface minimal and composable. Structs exist only when grouping configuration or results adds clarity. This design provides:
 
 - Explicit dependencies visible in signatures
 - Composable and testable functions
 - Alignment with Rust ecosystem patterns (tokio::spawn, serde_json::to_string)
 - No unnecessary intermediate structs
 
-### Functional Core / Imperative Shell (Effect Pattern)
+### Functional Core / Imperative Shell
 
-Core functions (`execute`, `run_projection`) use an internal effect pattern: instead of calling trait methods directly, they are implemented as pure state machines that emit **effect requests** describing what infrastructure operation is needed. A shell loop routes each effect to the appropriate trait implementation, feeds the result back, and repeats until the function completes.
+Core functions (`execute`, `run_projection`) separate pure domain logic from effectful infrastructure calls. `CommandLogic::handle()` is pure (state in, events out), while the executor and projection runner make direct calls to trait implementations (`EventStore`, `EventReader`, `CheckpointStore`, `ProjectorCoordinator`) for I/O operations.
 
-This separation provides:
-
-- **Testability**: Pipeline logic can be tested with canned effect responses, no full trait implementations needed
-- **Observability**: The effect sequence is a complete, reified trace of operations performed
-- **Composability**: Cross-cutting concerns (caching, metrics, circuit breaking) wrap the effect handler, not the trait
-- **Determinism**: Given recorded effect results, the pipeline can be replayed exactly
-
-The public API is unchanged — `execute(store, command, policy)` and `run_projection(projector, &backend)` remain the entry points. The effect machinery is `pub(crate)` inside the `eventcore` crate, invisible to both application developers and backend implementers. `CommandLogic::handle()` was already pure (state in, events out); the effect pattern extends this discipline to the entire execution pipeline and projection runner.
+The public entry points are `execute(store, command, policy)` and `run_projection(projector, &backend)`. Both coordinate infrastructure calls internally while keeping business logic pure and testable.
 
 ### Developer Ergonomics
 
@@ -191,11 +169,9 @@ The main crate exports only what application developers need:
 - `StreamDeclarations`, `NewEvents`, `StreamResolver`
 - `Projector`, `FailureContext`, `FailureStrategy`, `StreamPosition`
 
-**NOT Exported** (internal implementation details):
+**Also Exported** (advanced/operational use):
 
-- `ProjectionRunner` - Use `run_projection()` instead
-- `PollMode`, `PollConfig` - Operational tuning, not application code
-- `EventRetryConfig` - Controlled by `Projector::on_error()` return values
+- `ProjectionRunner`, `PollMode`, `PollConfig`, `EventRetryConfig` - For fine-grained control over projection behavior when `run_projection()` defaults are insufficient
 
 ### Layer 2: Backend Implementer API (`eventcore-types`)
 
@@ -233,7 +209,7 @@ This pattern matches Rust ecosystem norms (tokio, sqlx, reqwest) while keeping t
 
 The `EventStore` trait exposes two fundamental operations:
 
-1. **Read Operations** - `read_stream` / `read_streams` fetch all events for one or more streams, returning both events and current stream versions.
+1. **Read Operations** - `read_stream` fetches all events for a stream, returning both events and current stream version. The executor calls `read_stream` once per declared stream.
 
 2. **Append Operations** - `append_events` atomically registers new streams (if needed) and appends events to one or more streams while verifying expected versions.
 
@@ -261,22 +237,21 @@ Version-based conflict detection ensures concurrent commands cannot corrupt stat
 
 ### Event Metadata
 
-All persisted events carry immutable metadata:
+All persisted events carry immutable metadata assigned by the storage backend:
 
 | Field                          | Purpose                                                              |
 | ------------------------------ | -------------------------------------------------------------------- |
 | `EventId (UUIDv7)`             | Globally ordered identity for cross-stream projections and debugging |
 | `StreamId` and `StreamVersion` | Aggregate identity and per-stream ordering                           |
+| `EventType`                    | Fully qualified Rust type name for deserialization                   |
+| `Payload (JSONB)`              | Serialized event data                                                |
 | `Timestamp`                    | Commit time (not command start time)                                 |
-| `CorrelationId`                | Logical operation identifier (stable across retries)                 |
-| `CausationId`                  | Immediate trigger of the event (usually the command)                 |
-| `CustomMetadata<M>`            | Application-defined, strongly typed metadata payload                 |
 
-UUIDv7 provides time-based ordering while maintaining uniqueness guarantees without coordination. Metadata is validated at construction time, persisted verbatim by every backend, and never mutated after commit.
+UUIDv7 provides time-based ordering while maintaining uniqueness guarantees without coordination. Metadata is assigned at persist time and never mutated after commit.
 
 ### Storage Implementations
 
-- **InMemoryEventStore** ships inside the main crate with zero third-party dependencies. It is the default for tests, tutorials, and quickstarts.
+- **InMemoryEventStore** ships in the `eventcore-memory` crate with zero third-party dependencies beyond `eventcore-types`. It is the default for tests, tutorials, and quickstarts.
 - **Production backends** (e.g., PostgreSQL via `eventcore-postgres`, SQLite via `eventcore-sqlite`) live in separate crates to avoid imposing heavy dependencies. They implement `EventStore` and, when applicable, `EventReader`.
 - **SQLiteEventStore** provides an embedded event store using SQLCipher (a SQLite superset with optional encryption). Suitable for single-process applications, CLI tools, mobile/desktop apps, and testing with persistence. Uses `tokio::task::spawn_blocking` for async compatibility.
 - All implementations must support contract testing and optional instrumentation for observability.
@@ -314,11 +289,11 @@ Key characteristics:
 
 ### Event Type Identity
 
-Events carry type identity through the `EventTypeName` mechanism:
+Events carry type identity through Rust's `std::any::type_name`:
 
-- Each event type has a string name (e.g., "MoneyDeposited")
-- The `Subscribable` trait provides `subscribable_type_names()` for filtering by type
-- Type names enable filtering, routing, and cross-language interoperability
+- Each event's fully qualified type name is stored alongside its serialized payload
+- Type names enable deserialization back to the correct Rust type
+- The `Event` trait's `Serialize + DeserializeOwned` bounds enable JSON storage and retrieval
 
 ### StreamId Character Restrictions
 
@@ -416,7 +391,7 @@ Discovery errors are permanent (no retry) since they indicate programming errors
 
 ## Command Execution Pipeline
 
-The primary API is the async free function `execute(command, store)`. Internally, the pipeline is implemented as a pure state machine that yields effect requests (`ReadStream`, `AppendEvents`) to a shell loop. The shell dispatches each effect to the `EventStore` implementation and feeds the result back. This separates pipeline orchestration (pure, testable) from storage interaction (effectful). Each attempt runs five deterministic phases:
+The primary API is the async free function `execute(store, command, policy)`. Internally, the pipeline reads streams, reconstructs state, runs business logic, and appends events via direct calls to the `EventStore` trait. Each attempt runs five deterministic phases:
 
 ```mermaid
 flowchart TD
@@ -478,67 +453,48 @@ Projections use poll-based event retrieval rather than push-based streaming. Thi
 
 ```rust
 pub trait EventReader {
-    async fn read_events_after<E: Subscribable>(
+    type Error;
+
+    fn read_events<E: Event>(
         &self,
-        query: SubscriptionQuery,
-        after: Option<StreamPosition>,
-        limit: usize,
-    ) -> Result<Vec<(E, StreamPosition)>, EventStoreError>;
+        filter: EventFilter,
+        page: EventPage,
+    ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send;
 }
 ```
 
-**StreamPosition** wraps the event's UUID7 identifier, providing a monotonically increasing, globally sortable position for tracking projection progress.
-
-### Subscribable Trait
-
-The `Subscribable` trait enables type filtering for subscriptions:
-
-```rust
-pub trait Subscribable: Clone + Send + 'static {
-    fn subscribable_type_names() -> Vec<EventTypeName>;
-    fn try_from_stored(type_name: &EventTypeName, data: &[u8]) -> Result<Self, SubscriptionError>;
-}
-```
-
-Key features:
-
-- Blanket implementation for all Event types provides zero-cost adoption
-- View enums can implement Subscribable directly without implementing Event
-- Type name-based filtering distinguishes enum variants at the storage level
-- `try_from_stored` returns Result for graceful schema evolution handling
+- **EventFilter** specifies which events to read (`EventFilter::all()` or `EventFilter::prefix(prefix)`)
+- **EventPage** controls pagination (`EventPage::first(limit)` or `EventPage::after(position, limit)`)
+- **StreamPosition** wraps the event's UUID7 identifier, providing a monotonically increasing, globally sortable position for tracking projection progress
 
 ### Projector Trait
 
 ```rust
-pub trait Projector: Send + 'static {
-    type Event: Subscribable;
-    type Error: std::error::Error + Send;
+pub trait Projector {
+    type Event;
+    type Error;
     type Context;
 
     fn apply(
         &mut self,
         event: Self::Event,
         position: StreamPosition,
-        ctx: &mut Self::Context
+        ctx: &mut Self::Context,
     ) -> Result<(), Self::Error>;
 
-    fn on_error(&mut self, failure: FailureContext<Self::Event, Self::Error>) -> FailureStrategy {
+    fn name(&self) -> &str;
+
+    fn on_error(&mut self, _ctx: FailureContext<'_, Self::Error>) -> FailureStrategy {
         FailureStrategy::Fatal
     }
-
-    fn after_apply(&mut self, event: &Self::Event, ctx: &Self::Context) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn name(&self) -> &str;
 }
 ```
 
 The trait provides:
 
 - **apply()** - Updates the read model for a single event within the provided context
-- **on_error()** - Returns failure strategy (Fatal, Skip, or Retry) when projection fails
-- **after_apply()** - Lifecycle hook for side effects like notifications and metrics
+- **name()** - Returns a unique identifier used for logging, checkpointing, and coordination
+- **on_error()** - Returns failure strategy (Fatal, Skip, or Retry) when projection fails; receives `FailureContext` containing the error reference, stream position, and retry count
 
 ### Projection Runner API
 
@@ -563,7 +519,7 @@ For mixed-backend deployments, users create a wrapper struct implementing all th
 
 ### Projection Execution Loop
 
-Like the command pipeline, the projection loop is internally implemented as a pure state machine yielding effect requests (`TryAcquireLock`, `LoadCheckpoint`, `ReadEvents`, `SaveCheckpoint`, `Sleep`) to a shell loop that dispatches them to the `EventReader`, `CheckpointStore`, and `ProjectorCoordinator` trait implementations.
+The projection loop makes direct calls to `EventReader`, `CheckpointStore`, and `ProjectorCoordinator` trait implementations.
 
 ```rust
 // Acquire leadership - returns error if lock already held
@@ -597,9 +553,9 @@ Per-projector configuration covers two distinct concerns:
 **Poll Configuration (Infrastructure Level):**
 
 - `poll_interval` - Duration between successful polls (default: 100ms)
-- `empty_poll_backoff` - Wait when poll returns no events (default: 1 second)
-- `poll_failure_backoff` - Backoff when infrastructure fails (default: exponential)
-- `max_consecutive_poll_failures` - Exit threshold (default: 10)
+- `empty_poll_backoff` - Wait when poll returns no events (default: 50ms)
+- `poll_failure_backoff` - Backoff when infrastructure fails (default: 100ms)
+- `max_consecutive_poll_failures` - Exit threshold (default: 5)
 
 **Event Retry Configuration (Application Level):**
 
@@ -624,7 +580,7 @@ The coordination mechanism separates two concerns:
 
 **Subscriptions Table** - Tracks checkpoint state:
 
-- Schema: `(subscription_name TEXT PRIMARY KEY, last_position BIGINT, updated_at TIMESTAMPTZ)`
+- Schema: `(subscription_name TEXT PRIMARY KEY, last_position UUID NOT NULL, updated_at TIMESTAMPTZ)`
 - Purpose: WHERE did we process up to?
 - Updated transactionally with projection writes
 
@@ -695,7 +651,7 @@ Hung projectors (infinite loops, deadlocks with connection alive) are detected v
 - **CommandError** - Domain failures (validation, business rule violations, infrastructure issues)
 - **EventStoreError** - Storage-layer failures (version conflicts, connectivity, serialization)
 - **ValidationError** - Raised by newtype constructors
-- **SubscriptionError** - Projection failures (deserialization, unknown event types)
+- **ProjectionError** - Projection failures (fatal errors, leadership acquisition failures)
 
 ### Retry Classification
 
@@ -737,7 +693,7 @@ Integration tests verify command execution via projections, not direct event sto
 The `EventCollector` projector in `eventcore-testing` collects events for assertion:
 
 ```rust
-execute(&mut store, &command).await?;
+execute(&store, command, RetryPolicy::default()).await?;
 let collector = EventCollector::<MyEvent>::new();
 run_projection(collector, &backend).await?;
 assert_eq!(collector.events(), vec![expected_event]);
@@ -837,7 +793,7 @@ EventCore provides a cohesive architecture for event-sourced applications:
 1. **Type-safe domain modeling** with zero boilerplate for infrastructure
 2. **Deterministic, atomic execution** of complex multi-stream business operations
 3. **Automatic concurrency management** and retry behavior that keeps business code simple
-4. **Effect-driven internals** separating pure pipeline logic from effectful infrastructure calls
+4. **Clean separation** of pure domain logic from infrastructure I/O calls
 5. **Poll-based projections** with integrated checkpoint management for correct read models
 6. **Unified backend traits** for simplified backend implementations
 7. **Advisory lock coordination** for distributed deployments using session-scoped locks
