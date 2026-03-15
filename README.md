@@ -202,16 +202,12 @@ See [eventcore-examples/](eventcore-examples/) for complete working examples:
 
 ```bash
 # Setup
-nix develop              # Enter dev environment (includes git-spice)
+nix develop              # Enter dev environment
 docker-compose up -d     # Start PostgreSQL
 
 # Test
 cargo nextest run        # Fast parallel tests
 cargo test              # Standard test runner
-
-# Stacked PRs (optional)
-gs repo init            # Initialize git-spice
-gs auth                 # Authenticate with GitHub
 
 # Bench
 cargo bench             # Performance benchmarks
