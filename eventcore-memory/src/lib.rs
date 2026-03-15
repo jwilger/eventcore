@@ -13,25 +13,6 @@ use eventcore_types::{
 };
 use uuid::Uuid;
 
-/// In-memory event store implementation for testing.
-///
-/// InMemoryEventStore provides a lightweight, zero-dependency storage backend
-/// for EventCore integration tests and development. It implements the EventStore
-/// trait using standard library collections (HashMap, BTreeMap) with optimistic
-/// concurrency control via version checking.
-///
-/// # Example
-///
-/// ```ignore
-/// use eventcore_memory::InMemoryEventStore;
-///
-/// let store = InMemoryEventStore::new();
-/// // Use store with execute() function
-/// ```
-///
-/// # Thread Safety
-///
-/// InMemoryEventStore uses interior mutability for concurrent access.
 type StreamData = (Vec<Box<dyn std::any::Any + Send>>, StreamVersion);
 
 /// Entry in the global event log with indexed stream_id for efficient filtering.
@@ -62,6 +43,26 @@ struct StoreData {
     locks: Arc<RwLock<HashMap<String, ()>>>,
 }
 
+/// In-memory event store implementation for testing.
+///
+/// `InMemoryEventStore` provides a lightweight, zero-dependency storage backend
+/// for EventCore integration tests and development. It implements the `EventStore`,
+/// `EventReader`, `CheckpointStore`, and `ProjectorCoordinator` traits using
+/// standard library collections with optimistic concurrency control via version
+/// checking.
+///
+/// # Example
+///
+/// ```ignore
+/// use eventcore_memory::InMemoryEventStore;
+///
+/// let store = InMemoryEventStore::new();
+/// // Use store with execute() function
+/// ```
+///
+/// # Thread Safety
+///
+/// `InMemoryEventStore` uses interior mutability (`Mutex`) for concurrent access.
 pub struct InMemoryEventStore {
     data: std::sync::Mutex<StoreData>,
 }

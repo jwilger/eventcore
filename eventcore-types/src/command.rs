@@ -54,6 +54,11 @@ impl StreamDeclarations {
         Self::try_from_streams(streams)
     }
 
+    /// Returns true if the declaration contains no streams.
+    ///
+    /// Note: Valid instances constructed via `single()`, `try_from_streams()`, or
+    /// `with_participant()` are never empty. This method exists for API completeness
+    /// (e.g., to satisfy `clippy::len_without_is_empty`).
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.streams.is_empty()
@@ -314,9 +319,6 @@ mod tests {
             .expect("multi-stream declaration should succeed");
         let empty_error = StreamDeclarations::try_from_streams(Vec::<StreamId>::new())
             .expect_err("empty set rejected");
-        let invariant_empty = StreamDeclarations {
-            streams: Vec::new(),
-        };
 
         let observed = (
             single.len(),
@@ -324,10 +326,9 @@ mod tests {
             multi.len(),
             multi.is_empty(),
             matches!(empty_error, StreamDeclarationsError::Empty),
-            invariant_empty.is_empty(),
         );
 
-        assert_eq!(observed, (1, false, 2, false, true, true));
+        assert_eq!(observed, (1, false, 2, false, true));
     }
 
     #[test]

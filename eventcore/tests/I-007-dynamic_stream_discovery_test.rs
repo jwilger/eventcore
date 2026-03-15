@@ -382,10 +382,13 @@ impl CommandLogic for CaptureAcrossStreamsCommand {
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        let payment_stream = state
-            .discovered_payment_stream
-            .clone()
-            .ok_or(CommandError::ValidationError)?;
+        let payment_stream =
+            state
+                .discovered_payment_stream
+                .clone()
+                .ok_or(CommandError::ValidationError(
+                    "no payment stream discovered during state reconstruction".to_string(),
+                ))?;
 
         Ok(vec![
             CheckoutEvent::PaymentCaptured {
