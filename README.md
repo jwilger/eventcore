@@ -149,16 +149,18 @@ Optimistic locking prevents conflicts automatically. Just execute your commands 
 eventcore/              # Core library - re-exports types, macros, and optional adapters
 eventcore-types/        # Shared vocabulary - traits and types (StreamId, Event, EventStore)
 eventcore-postgres/     # PostgreSQL adapter (enabled via feature flag)
+eventcore-sqlite/       # SQLite adapter with optional SQLCipher encryption
 eventcore-macros/       # Derive macros (re-exported by eventcore)
 eventcore-testing/      # Contract test suite for backends
 ```
 
 ## Feature Flags
 
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `macros` | Yes | Re-exports `#[derive(Command)]` from `eventcore-macros` |
-| `postgres` | No | Re-exports `PostgresEventStore` from `eventcore-postgres` |
+| Feature    | Default | Description                                               |
+| ---------- | ------- | --------------------------------------------------------- |
+| `macros`   | Yes     | Re-exports `#[derive(Command)]` from `eventcore-macros`   |
+| `postgres` | No      | Re-exports `PostgresEventStore` from `eventcore-postgres` |
+| `sqlite`   | No      | Re-exports `SqliteEventStore` from `eventcore-sqlite`     |
 
 ```toml
 # Default (includes macros)
@@ -183,7 +185,8 @@ See [eventcore-examples/](eventcore-examples/) for complete working examples:
 ## Documentation
 
 - [Core Library](eventcore/README.md) - Types, traits, and patterns
-- [PostgreSQL Adapter](eventcore-postgres/README.md) - Production event store
+- [PostgreSQL Adapter](eventcore-postgres/README.md) - Production event store for server deployments
+- [SQLite Adapter](eventcore-sqlite/) - Embedded event store with optional encryption
 - [Testing Guide](eventcore-memory/README.md) - In-memory store for tests
 - [Examples](eventcore-examples/README.md) - Complete applications
 - [Web API Examples](eventcore-examples/src/axum_integration_example.rs) - Integration with Axum web framework

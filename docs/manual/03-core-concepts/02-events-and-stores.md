@@ -242,6 +242,46 @@ CREATE TABLE events (
 );
 ```
 
+### SQLite Adapter
+
+Embedded event store for single-process applications, CLI tools, and desktop/mobile apps. Uses SQLCipher (a SQLite superset) with optional encryption:
+
+```rust
+use eventcore_sqlite::{SqliteEventStore, SqliteConfig};
+use std::path::PathBuf;
+
+// File-backed store
+let config = SqliteConfig {
+    path: PathBuf::from("./my-app-events.db"),
+    encryption_key: None, // Optional: Some("passphrase".to_string()) for encryption
+};
+let store = SqliteEventStore::new(config)?;
+store.migrate().await?;
+
+// In-memory store (for testing with persistence semantics)
+let store = SqliteEventStore::in_memory()?;
+store.migrate().await?;
+```
+
+SQLite schema:
+
+```sql
+CREATE TABLE eventcore_events (
+    event_id TEXT PRIMARY KEY,
+    stream_id TEXT NOT NULL,
+    stream_version INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    event_data TEXT NOT NULL,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE UNIQUE INDEX idx_eventcore_events_stream_version
+    ON eventcore_events (stream_id, stream_version);
+CREATE INDEX idx_eventcore_events_stream_id
+    ON eventcore_events (stream_id);
+```
+
 ### In-Memory Adapter
 
 Perfect for testing and development:

@@ -304,6 +304,8 @@ The answer is almost always **NO**.
 - ✅ **Collaborative tools** - Natural conflict resolution
 - ✅ **Regulated industries** - Compliance built-in
 - ✅ **Domain-driven design** - Commands match your domain
+- ✅ **CLI tools and desktop apps** - SQLite adapter requires no external services
+- ✅ **Sensitive data at rest** - SQLCipher encryption built into SQLite adapter
 
 ### Consider Alternatives Only For:
 

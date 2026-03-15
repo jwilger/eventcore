@@ -47,6 +47,54 @@ let config = PostgresConfig::new("postgresql://localhost/eventcore".to_string())
     });
 ```
 
+#### SqliteConfig
+
+Configuration for SQLite event store.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct SqliteConfig {
+    /// Path to the SQLite database file
+    pub path: PathBuf,
+    /// Optional encryption key (uses SQLCipher AES-256 encryption)
+    pub encryption_key: Option<String>,
+}
+```
+
+**Example:**
+
+```rust
+use eventcore_sqlite::{SqliteEventStore, SqliteConfig};
+use std::path::PathBuf;
+
+// Unencrypted file-backed store
+let config = SqliteConfig {
+    path: PathBuf::from("./events.db"),
+    encryption_key: None,
+};
+let store = SqliteEventStore::new(config)?;
+store.migrate().await?;
+
+// Encrypted store
+let config = SqliteConfig {
+    path: PathBuf::from("./events.db"),
+    encryption_key: Some("my-secret-key".to_string()),
+};
+let store = SqliteEventStore::new(config)?;
+store.migrate().await?;
+
+// In-memory store (for testing)
+let store = SqliteEventStore::in_memory()?;
+store.migrate().await?;
+```
+
+**Notes:**
+
+- SQLite uses a single-writer model with `Arc<Mutex<Connection>>` - appropriate for single-process apps
+- WAL mode is enabled by default for better read concurrency
+- Encryption uses SQLCipher (bundled) with vendored OpenSSL - no runtime dependencies
+- In-process projector coordination via `Arc<RwLock<HashSet>>` (no advisory locks needed)
+
 #### PoolConfig
 
 Database connection pool configuration.

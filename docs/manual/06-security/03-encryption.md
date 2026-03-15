@@ -2,6 +2,23 @@
 
 Events are immutable and permanent. Encrypt sensitive data before storing it.
 
+## Storage-Level Encryption with SQLite
+
+The `eventcore-sqlite` crate uses SQLCipher, which provides transparent AES-256 encryption of the entire database file. This encrypts all event data, metadata, indexes, and checkpoints at rest with zero application code changes:
+
+```rust
+use eventcore_sqlite::{SqliteEventStore, SqliteConfig};
+
+let store = SqliteEventStore::new(SqliteConfig {
+    path: PathBuf::from("./encrypted-events.db"),
+    encryption_key: Some("my-secret-passphrase".to_string()),
+})?;
+store.migrate().await?;
+// All data written to this store is encrypted on disk
+```
+
+When no `encryption_key` is provided, the SQLite store operates as a standard unencrypted database. Storage-level encryption protects against physical media theft but does not replace field-level encryption for defense-in-depth.
+
 ## Encryption Strategies
 
 ### Field-Level Encryption

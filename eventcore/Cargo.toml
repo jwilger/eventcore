@@ -13,6 +13,7 @@ warnings = "deny"
 default = ["macros"]
 macros = ["dep:eventcore-macros"]
 postgres = ["dep:eventcore-postgres"]
+sqlite = ["dep:eventcore-sqlite"]
 
 [dependencies]
 # Core types from shared vocabulary crate
@@ -33,6 +34,9 @@ eventcore-macros = { version = "0.5.1", path = "../eventcore-macros", optional =
 
 # Optional dependency for PostgreSQL backend (enabled via feature flag)
 eventcore-postgres = { version = "0.5.1", path = "../eventcore-postgres", optional = true }
+
+# Optional dependency for SQLite backend (enabled via feature flag)
+eventcore-sqlite = { version = "0.5.1", path = "../eventcore-sqlite", optional = true }
 
 [dev-dependencies]
 eventcore-memory = { path = "../eventcore-memory" }

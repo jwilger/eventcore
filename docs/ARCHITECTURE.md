@@ -35,7 +35,7 @@ graph TB
     end
 
     subgraph Storage Backend
-        PG[PostgreSQL / InMemory]
+        PG[PostgreSQL / SQLite / InMemory]
         Schema[Event Schema]
         Locks[Advisory Locks]
         Checkpoints[Checkpoint Table]
@@ -124,6 +124,7 @@ graph TD
     memory[eventcore-memory]
     testing[eventcore-testing]
     postgres[eventcore-postgres]
+    sqlite[eventcore-sqlite]
     types[eventcore-types]
     macros[eventcore-macros]
 
@@ -135,11 +136,13 @@ graph TD
     core --> types
     core -.->|feature: macros| macros
     core -.->|feature: postgres| postgres
+    core -.->|feature: sqlite| sqlite
 
     memory --> types
     testing --> core
     testing --> types
     postgres --> types
+    sqlite --> types
     macros
 ```
 
@@ -157,6 +160,7 @@ graph TD
 | `eventcore-types`    | Backend implementers   | All traits (`EventStore`, `EventReader`, etc.) and types for implementations   |
 | `eventcore-macros`   | Application developers | `#[derive(Command)]`, `require!`                                               |
 | `eventcore-postgres` | Both                   | PostgreSQL backend implementing all storage traits                             |
+| `eventcore-sqlite`   | Both                   | SQLite backend with optional SQLCipher encryption for embedded/single-process  |
 | `eventcore-testing`  | Backend implementers   | Contract tests, chaos harness, test fixtures                                   |
 | `eventcore-memory`   | Both                   | In-memory storage for testing and development                                  |
 | `eventcore-examples` | Application developers | Integration tests and demo applications                                        |
@@ -238,6 +242,7 @@ The `EventStore` trait exposes two fundamental operations:
 Multi-stream atomicity is achieved by delegating to the backend's native transaction mechanism:
 
 - PostgreSQL uses ACID transactions
+- SQLite uses rusqlite transactions (single-writer model with `Arc<Mutex<Connection>>`)
 - In-memory stores use mutex-protected synchronization
 - Future backends may use other appropriate mechanisms
 
@@ -272,7 +277,8 @@ UUIDv7 provides time-based ordering while maintaining uniqueness guarantees with
 ### Storage Implementations
 
 - **InMemoryEventStore** ships inside the main crate with zero third-party dependencies. It is the default for tests, tutorials, and quickstarts.
-- **Production backends** (e.g., PostgreSQL via `eventcore-postgres`) live in separate crates to avoid imposing heavy dependencies. They implement `EventStore` and, when applicable, `EventReader`.
+- **Production backends** (e.g., PostgreSQL via `eventcore-postgres`, SQLite via `eventcore-sqlite`) live in separate crates to avoid imposing heavy dependencies. They implement `EventStore` and, when applicable, `EventReader`.
+- **SQLiteEventStore** provides an embedded event store using SQLCipher (a SQLite superset with optional encryption). Suitable for single-process applications, CLI tools, mobile/desktop apps, and testing with persistence. Uses `tokio::task::spawn_blocking` for async compatibility.
 - All implementations must support contract testing and optional instrumentation for observability.
 
 ### Contract Testing
@@ -748,8 +754,9 @@ Integration tests live in the `eventcore-examples` crate, which sits at the top 
 For simpler deployments:
 
 - InMemoryEventStore for development and testing
+- SqliteEventStore for single-process apps needing persistence (CLI tools, desktop apps)
 - Single projector instance per projection type
-- No coordination overhead needed
+- No coordination overhead needed (in-process locks)
 
 ### Production Deployment
 
@@ -768,9 +775,13 @@ For production systems:
 [dependencies]
 eventcore = "0.5"
 
-# Production with PostgreSQL
+# Production with PostgreSQL (multi-process server deployments)
 [dependencies]
 eventcore = { version = "0.5", features = ["postgres"] }
+
+# Embedded with SQLite (single-process apps, CLI tools, desktop/mobile)
+[dependencies]
+eventcore = { version = "0.5", features = ["sqlite"] }
 ```
 
 ## Versioning Policy

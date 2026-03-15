@@ -64,6 +64,10 @@ pub use eventcore_macros::Command;
 #[cfg(feature = "postgres")]
 pub use eventcore_postgres as postgres;
 
+// Re-export SQLite backend when the "sqlite" feature is enabled
+#[cfg(feature = "sqlite")]
+pub use eventcore_sqlite as sqlite;
+
 /// Validates a business rule condition and returns early with
 /// `CommandError::BusinessRuleViolation` when the condition is false.
 ///

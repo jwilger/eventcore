@@ -5,6 +5,7 @@ members = [
     "eventcore-macros",
     "eventcore-memory",
     "eventcore-postgres",
+    "eventcore-sqlite",
     "eventcore-testing",
     "eventcore-types",
 ]
