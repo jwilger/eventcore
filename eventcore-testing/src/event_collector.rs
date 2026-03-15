@@ -71,7 +71,7 @@ impl<E> EventCollector<E> {
     }
 }
 
-impl<E> Projector for EventCollector<E> {
+impl<E: Send + 'static> Projector for EventCollector<E> {
     type Event = E;
     type Error = Infallible;
     type Context = ();

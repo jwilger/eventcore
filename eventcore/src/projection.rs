@@ -355,10 +355,17 @@ where
     pub async fn run(mut self) -> Result<(), ProjectionError>
     where
         P::Error: std::fmt::Debug,
+        R::Error: std::fmt::Display,
     {
         // Load checkpoint if checkpoint store is configured
         let mut last_checkpoint = match &self.checkpoint_store {
-            Some(cs) => cs.load(self.projector.name()).await.ok().flatten(),
+            Some(cs) => cs.load(self.projector.name()).await.map_err(|e| {
+                ProjectionError::Failed(format!(
+                    "failed to load checkpoint for projector '{}': {}",
+                    self.projector.name(),
+                    e
+                ))
+            })?,
             None => None,
         };
 
@@ -382,15 +389,25 @@ where
                         consecutive_failures = 0;
                         break events;
                     }
-                    Err(_) => {
-                        // Database error - check if retries exhausted
+                    Err(e) => {
+                        // Database error - log and check if retries exhausted
                         let max_failures: std::num::NonZeroU32 =
                             self.poll_config.max_consecutive_poll_failures.into();
+
+                        tracing::warn!(
+                            projector = self.projector.name(),
+                            error = %e,
+                            consecutive_failures = consecutive_failures + 1,
+                            max_failures = max_failures.get(),
+                            "Poll failure reading events"
+                        );
+
                         if consecutive_failures >= max_failures.get() {
                             // Already failed max_consecutive_poll_failures times, no more retries allowed
-                            return Err(ProjectionError::Failed(
-                                "failed to read events after max retries".to_string(),
-                            ));
+                            return Err(ProjectionError::Failed(format!(
+                                "failed to read events after max retries: {}",
+                                e
+                            )));
                         }
 
                         // Track this failure and apply backoff
@@ -415,9 +432,15 @@ where
                         Ok(()) => {
                             // Event processed successfully - update and save checkpoint
                             last_checkpoint = Some(position);
-                            if let Some(cs) = &self.checkpoint_store {
-                                // Ignore checkpoint save errors - checkpoint is best-effort
-                                let _ = cs.save(self.projector.name(), position).await;
+                            if let Some(cs) = &self.checkpoint_store
+                                && let Err(e) = cs.save(self.projector.name(), position).await
+                            {
+                                tracing::warn!(
+                                    projector = self.projector.name(),
+                                    position = %position,
+                                    error = %e,
+                                    "Failed to save checkpoint after successful event processing"
+                                );
                             }
                             break; // Move to next event
                         }
@@ -454,9 +477,16 @@ where
                                     // This is intentional - Skip is for poison events that should never
                                     // be retried (e.g., malformed data, unrecoverable errors).
                                     last_checkpoint = Some(position);
-                                    if let Some(cs) = &self.checkpoint_store {
-                                        // Ignore checkpoint save errors - checkpoint is best-effort
-                                        let _ = cs.save(self.projector.name(), position).await;
+                                    if let Some(cs) = &self.checkpoint_store
+                                        && let Err(e) =
+                                            cs.save(self.projector.name(), position).await
+                                    {
+                                        tracing::warn!(
+                                            projector = self.projector.name(),
+                                            position = %position,
+                                            error = %e,
+                                            "Failed to save checkpoint after skipping event"
+                                        );
                                     }
                                     break; // Move to next event
                                 }
@@ -562,6 +592,7 @@ where
     P::Context: Default,
     P::Error: std::fmt::Debug,
     B: EventReader + CheckpointStore + eventcore_types::ProjectorCoordinator,
+    <B as EventReader>::Error: std::fmt::Display,
 {
     // Acquire leadership for this projector
     let _guard = backend
