@@ -354,6 +354,11 @@ impl Drop for InMemoryCoordinationGuard {
     fn drop(&mut self) {
         if let Ok(mut guard) = self.locks.write() {
             let _ = guard.remove(&self.subscription_name);
+        } else {
+            tracing::error!(
+                subscription_name = %self.subscription_name,
+                "failed to release coordination lock: RwLock poisoned"
+            );
         }
     }
 }
