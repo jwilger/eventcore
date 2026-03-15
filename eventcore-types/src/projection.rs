@@ -149,7 +149,7 @@ pub struct StreamPosition(Uuid);
 ///     }
 /// }
 /// ```
-pub trait Projector {
+pub trait Projector: Send + 'static {
     /// The domain event type this projector handles.
     type Event;
 
