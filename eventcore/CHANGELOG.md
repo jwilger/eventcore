@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/jwilger/eventcore/compare/eventcore-v0.5.1...eventcore-v0.6.0) - 2026-03-15
+
+### Bug Fixes
+
+- add projection error logging and propagate checkpoint failures ([#313](https://github.com/jwilger/eventcore/pull/313))
+- improve type encapsulation, error context, and clean up stale TODOs ([#315](https://github.com/jwilger/eventcore/pull/315))
+
+### Features
+
+- add eventcore-sqlite crate with SQLCipher encryption support ([#310](https://github.com/jwilger/eventcore/pull/310))
+
 ## [0.5.1](https://github.com/jwilger/eventcore/compare/eventcore-v0.5.0...eventcore-v0.5.1) - 2026-02-22
 
 ### Bug Fixes

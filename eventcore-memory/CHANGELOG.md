@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/jwilger/eventcore/compare/eventcore-memory-v0.5.1...eventcore-memory-v0.6.0) - 2026-03-15
+
+### Bug Fixes
+
+- improve type encapsulation, error context, and clean up stale TODOs ([#315](https://github.com/jwilger/eventcore/pull/315))
+
+### Miscellaneous Tasks
+
+- remove claude-code-review CI workflow ([#316](https://github.com/jwilger/eventcore/pull/316))
+
 ## [0.5.0](https://github.com/jwilger/eventcore/compare/eventcore-memory-v0.4.0...eventcore-memory-v0.5.0) - 2025-12-31
 
 ### Features
