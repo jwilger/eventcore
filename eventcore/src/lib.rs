@@ -234,7 +234,7 @@ pub struct RetryPolicy {
 impl RetryPolicy {
     /// Create a new RetryPolicy with default values.
     ///
-    /// Default configuration matches I-002 hardcoded values:
+    /// Default configuration:
     /// - max_retries: 4 (5 total attempts including initial)
     /// - backoff_strategy: Exponential with 10ms base
     /// - jitter: ±20% (applied during execution)
@@ -926,11 +926,11 @@ mod tests {
     /// that when a developer specifies max_retries=1 (not the default 4), execute()
     /// respects this configuration and fails after exactly 1 retry (2 total attempts).
     ///
-    /// This is the simplest test for I-003 (Configurable Retry Policies) - testing
-    /// the most basic configuration parameter from the library consumer's perspective.
+    /// Tests that the retry policy configuration is respected by the executor,
+    /// verifying the most basic configuration parameter from the consumer's perspective.
     #[tokio::test]
     async fn test_execute_with_custom_retry_policy() {
-        // Given: An event store that ALWAYS conflicts (reuse from I-002 test)
+        // Given: An event store that ALWAYS conflicts
         let store = AlwaysConflictStore::new();
 
         // And: A retry policy with max 1 retry (2 total attempts, not default 4 retries)
@@ -1126,7 +1126,7 @@ mod tests {
     /// structured tracing. Operations teams need visibility into retry behavior, timing,
     /// and success/failure outcomes for debugging and monitoring.
     ///
-    /// Tests tracing requirements from I-003 (Configurable Retry Policies):
+    /// Tests tracing requirements for configurable retry policies:
     /// - Execution span with structured fields (stream_id, command type)
     /// - Retry warning events with structured fields (attempt, delay_ms)
     /// - Success event when command completes

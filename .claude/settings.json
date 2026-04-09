@@ -1,3 +1,60 @@
 {
-  "permissions": {}
+  "enabledPlugins": {
+    "act@han": true,
+    "backend-development@han": true,
+    "bdd@han": true,
+    "blueprints@han": true,
+    "bushido@han": true,
+    "clippy@han": true,
+    "core@han": true,
+    "database-engineering@han": true,
+    "docker-compose@han": true,
+    "documentation-engineering@han": true,
+    "functional-programming@han": true,
+    "git-storytelling@han": true,
+    "git-worktrees@han": true,
+    "github@han": true,
+    "markdown@han": true,
+    "project-management@han": true,
+    "quality-engineering@han": true,
+    "remember@claude-plugins-official": true,
+    "rust@han": true,
+    "security-engineering@han": true,
+    "session-code-review@han": false,
+    "system-architecture@han": true,
+    "tdd@han": true
+  },
+  "extraKnownMarketplaces": {
+    "han": {
+      "autoUpdate": true,
+      "source": {
+        "repo": "thebushidocollective/han",
+        "source": "github"
+      }
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "han hook dispatch SessionStart",
+            "timeout": 30000,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "han hook dispatch UserPromptSubmit",
+            "timeout": 30000,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
 }
