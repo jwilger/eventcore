@@ -67,7 +67,14 @@ Every invariant below is a hard rule. Verify each applicable item on every commi
 - [ ] Public API is clean: types, traits, and functions that consumers need are re-exported through `lib.rs`.
 - [ ] Borrows (`&T`) are used instead of `clone()` where the receiver does not need ownership.
 
-### 6. Repository Conventions
+### 6. Design Principles
+
+- [ ] Multi-stream atomicity, optimistic concurrency, and event immutability are preserved. Performance optimizations do not relax correctness guarantees.
+- [ ] The library does not assume a particular business domain. No "user", "actor", or application-specific concepts leak into library code.
+- [ ] Public entry points are free functions with explicit dependencies (`execute(store, command, policy)`), not builder structs or intermediate types.
+- [ ] Infrastructure boilerplate is macro-generated. Domain code contains only state reconstruction and business logic.
+
+### 7. Repository Conventions
 
 - [ ] No user-specific or machine-specific absolute paths in repo-committed files.
 - [ ] Conventional Commits format for all commit messages and PR titles.
