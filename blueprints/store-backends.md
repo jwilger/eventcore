@@ -77,6 +77,28 @@ All backends share:
 - Stream prefix filtering for EventReader
 - Checkpoint-based resumable projection processing
 
+## Deployment Patterns
+
+**Development/Testing:** InMemoryEventStore — zero dependencies, instant setup.
+
+**Embedded/Single-Process:** SqliteEventStore — persistence for CLI tools, desktop
+apps, single-instance servers. Optional SQLCipher encryption. In-memory coordination
+only (no distributed leader election).
+
+**Production/Distributed:** PostgresEventStore — ACID transactions, advisory locks
+for distributed projector coordination, connection pooling.
+
+```toml
+# Development (default)
+eventcore = "0.6"
+
+# Production with PostgreSQL
+eventcore = { version = "0.6", features = ["postgres"] }
+
+# Embedded with SQLite
+eventcore = { version = "0.6", features = ["sqlite"] }
+```
+
 ## Files
 
 | File                            | Description                          |
