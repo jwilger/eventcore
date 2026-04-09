@@ -114,3 +114,6 @@ mutants.out.old/
 .windsurf/
 .zencoder/
 /skills/
+
+
+.claude/worktrees/
