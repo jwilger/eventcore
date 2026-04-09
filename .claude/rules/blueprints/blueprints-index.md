@@ -34,5 +34,12 @@ Update blueprints using the Write tool on `blueprints/{name}.md` when you:
 
 <!-- AUTO-GENERATED INDEX - DO NOT EDIT BELOW THIS LINE -->
 
-_No blueprints generated yet. Use `blueprints:generate-blueprints` to create
-initial documentation._
+| Blueprint                                                            | Summary                                                                                                         |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| [command-execution](../../blueprints/command-execution.md)           | Command pattern with pure apply/handle, automatic retry, and dynamic stream discovery.                          |
+| [event-sourcing](../../blueprints/event-sourcing.md)                 | Core event sourcing model with multi-stream atomic writes, optimistic concurrency, and immutable event storage. |
+| [macro-codegen](../../blueprints/macro-codegen.md)                   | Procedural macros generating CommandStreams implementations and business rule validation helpers.               |
+| [projection-system](../../blueprints/projection-system.md)           | Poll-based projection runner with checkpoint resumption, leader election, and configurable retry.               |
+| [store-backends](../../blueprints/store-backends.md)                 | Pluggable EventStore implementations for PostgreSQL, SQLite, and in-memory testing.                             |
+| [testing-infrastructure](../../blueprints/testing-infrastructure.md) | Contract tests, chaos harness, and deterministic testing tools for verifying EventStore backends.               |
+| [type-system](../../blueprints/type-system.md)                       | Semantic domain types with nutype validation enforcing parse-don't-validate at construction boundaries.         |
