@@ -28,8 +28,6 @@
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             rustToolchain
-            git
-            git-spice
             pre-commit
             nodejs_22
             glow
