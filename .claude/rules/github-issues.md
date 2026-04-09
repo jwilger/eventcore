@@ -2,36 +2,50 @@
 
 ## Repository
 
-`slipstream-consulting/stochastic_macro`
+`jwilger/eventcore`
 
 ## Issue Types
 
-This org has custom issue types configured. Always set the `type` field when creating issues.
+| Type        | Purpose                                                    |
+| ----------- | ---------------------------------------------------------- |
+| **Task**    | A specific piece of implementation or infrastructure work. |
+| **Feature** | A request, idea, or new functionality.                     |
+| **Bug**     | An unexpected problem or behavior.                         |
+| **Meta**    | Repository process or engineering-foundation work.         |
 
-| Type         | Purpose                                                                                           |
-| ------------ | ------------------------------------------------------------------------------------------------- |
-| **Journey**  | Top-level workflow from the event model. One per blueprint workflow.                              |
-| **Slice**    | A vertical pattern slice inside a journey (State Change, State View, Automation, or Translation). |
-| **Scenario** | A concrete Given-When-Then scenario inside a slice.                                               |
-| **Task**     | A specific piece of implementation or infrastructure work.                                        |
-| **Feature**  | A request, idea, or new functionality not yet modeled.                                            |
-| **Bug**      | An unexpected problem or behavior.                                                                |
-| **Meta**     | Repository process or engineering-foundation work.                                                |
+## Labels
+
+**Priority labels:**
+
+- `P0-critical` - Security, data loss, broken builds
+- `P1-high` - Major features, important bugs
+- `P2-medium` - Default priority
+- `P3-low` - Polish, optimization
+- `P4-backlog` - Future ideas
+
+**Type labels:**
+
+- `bug` - Something broken
+- `enhancement` - New feature or request
+- `task` - Work item (refactoring, tests, tooling)
+- `epic` - Large feature with sub-issues
+- `chore` - Maintenance (audits, cleanup)
+- `research` - Investigation / spike
+- `documentation` - Docs improvements
 
 ## Hierarchy and Relationships
 
 ### Parent/Child (Sub-Issues)
 
-Use GitHub's native sub-issue feature for containment:
-
-- **Journey → Slice**: every Slice is a sub-issue of its Journey
-- **Slice → Scenario**: if individual scenarios are tracked, they are sub-issues of their Slice
-
-Use the `sub_issue_write` MCP tool (method: `add`) to create these links. The tool requires the parent's issue number and the child's numeric issue ID (from the `id` field in the creation response, not the issue number).
+Use GitHub's native sub-issue feature for containment. Use the
+`sub_issue_write` MCP tool (method: `add`) to create these links. The tool
+requires the parent's issue number and the child's numeric issue ID (from the
+`id` field in the creation response, not the issue number).
 
 ### Blocker Relationships
 
-Use GitHub's native "blocked by" / "blocking" feature for sequencing dependencies between slices.
+Use GitHub's native "blocked by" / "blocking" feature for sequencing
+dependencies.
 
 These are set via the GraphQL `addBlockedBy` mutation:
 
@@ -44,49 +58,26 @@ gh api graphql -f query='mutation {
 }'
 ```
 
-Node IDs (the GraphQL `id` field, not the REST `id`) are required. Fetch them with:
+Node IDs (the GraphQL `id` field, not the REST `id`) are required. Fetch them
+with:
 
 ```bash
 gh api graphql -f query='{
-  repository(owner: "slipstream-consulting", name: "stochastic_macro") {
+  repository(owner: "jwilger", name: "eventcore") {
     issue(number: 28) { id }
   }
 }'
 ```
-
-### When to Add Blockers
-
-Add a "blocked by" link when a slice cannot be implemented until another slice is complete — i.e., the Gherkin `Given` preconditions of one slice depend on events produced by another slice.
 
 ## Issue Assignment
 
 When starting work on an issue, assign it to the current authenticated user.
 Use `mcp__plugin_github_github__get_me` to get the current login, then
 `mcp__plugin_github_github__issue_write` with `assignees: ["<login>"]` to
-claim the issue. This signals to other sessions and collaborators that the
-issue is actively being worked on.
+claim the issue.
 
 Unassign when work is complete (the issue will be closed) or if work is
 abandoned mid-session.
-
-## Issue Body Conventions
-
-- Reference the blueprint file and slice name: `blueprints/<workflow>.md → Pattern Slices → <slice name>`
-- Include the Gherkin scenario in a fenced code block
-- Include the "Completeness Focus" points from the blueprint
-- For UI-facing slices, name the first-party screen
-- Note implementation status if code already exists
-- **Do not** duplicate parent/child or blocker relationships in the body text — those are tracked via GitHub's native link features
-
-## Creating Issues from Blueprints
-
-When creating issues for a new workflow blueprint:
-
-1. Create the **Journey** issue first (type: Journey)
-2. Create each **Slice** issue (type: Slice)
-3. Wire sub-issue links (Slice → Journey parent)
-4. Wire blocker links based on Given-precondition dependencies
-5. Close any slices that are already implemented (state_reason: completed)
 
 ## Post-Merge Issue Hygiene
 
@@ -103,5 +94,6 @@ ask the user whether the parent issue should also be closed.
 
 - Use `mcp__plugin_github_github__issue_write` to create and update issues
 - Use `mcp__plugin_github_github__sub_issue_write` to link sub-issues
-- Use `gh api graphql` (via Bash) for blocker relationships (no MCP tool exists for this)
+- Use `gh api graphql` (via Bash) for blocker relationships (no MCP tool exists
+  for this)
 - Use `mcp__plugin_github_github__list_issues` / `issue_read` to read issues

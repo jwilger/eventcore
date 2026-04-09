@@ -8,7 +8,7 @@ be separate code paths, even when the current logic is identical.
 - **Command state** (`CommandLogic::apply` + `CommandLogic::handle`) is
   the write model. It exists to validate preconditions and produce events.
 - **Projections and queries** are the read model. They exist to present
-  data to users or to inform shell-level IO decisions.
+  data to consumers or to inform application-level decisions.
 
 These two concerns must not share functions, even if they currently fold
 events the same way.
@@ -27,17 +27,17 @@ other breaks.
 ## Applies To
 
 - The `apply` function inside `CommandLogic` is write-model code. Do not
-  expose it as a public function for shell-level reads.
-- Shell handlers that need to query state before executing a command must
-  use a separate projection function, not the command's apply.
+  expose it as a public function for consumer-level reads.
+- Application code that needs to query state before executing a command must
+  use a separate projection, not the command's apply.
 
 ## Example
 
 ```rust
-// Wrong: shell reuses the command's apply for reads
+// Wrong: application reuses the command's apply for reads
 let state = events.iter().fold(State::default(), |s, e| command::apply(s, e));
 let credential = state.stored_credential_for(&email);
 
-// Right: shell has its own projection
+// Right: application has its own projection
 let credential = credential_projection::lookup(&events, &email);
 ```

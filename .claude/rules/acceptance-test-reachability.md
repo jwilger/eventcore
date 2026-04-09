@@ -1,46 +1,47 @@
-# Reachability Tests for Every Page
+# Public API Coverage
 
-Every page or screen in the application must have at least one acceptance test
-proving a user can reach it through natural browser navigation from the
-application entry point.
+Every public API surface must have at least one integration test proving a
+downstream consumer can use it through the documented entry points.
 
-## What Reachability Means
+## What Coverage Means
 
-A page is "reachable" when a user starting at the application's root URL can
-arrive at it through a sequence of visible interactions: clicking links,
-submitting forms, following redirects, or being redirected after an action.
+A public API is "covered" when an integration test exercises it through the
+crate's public interface — calling `execute()`, constructing commands,
+running projections, or using macro-generated code — without reaching into
+internal modules.
 
 ## What Is Required
 
-For every page:
+For every public API path:
 
-1. **A reachability test** that starts at the entry point (e.g., the setup
-   token redemption screen for setup flows, the login screen for authenticated
-   flows) and navigates to the page through the UI.
-2. **A rendering test** that verifies the page displays the correct content
-   for its state.
+1. **A usage test** that calls the API the way a downstream consumer would.
+2. **A behavioral assertion** that verifies the API produces the correct
+   observable outcome (events appended, projection state updated, errors
+   returned).
 
-Direct-URL navigation in a test proves rendering but NOT reachability. Both
-are needed.
+Tests that only exercise internal functions prove correctness but NOT
+usability. Both are needed.
 
 ## What This Catches
 
-- Missing navigation links between pages
-- Broken redirects after form submissions
-- Orphaned pages that exist but have no path leading to them
-- Incorrect route wiring that serves 404 for pages that should be linked
+- Missing re-exports from `lib.rs`
+- Broken macro expansions that compile internally but fail for consumers
+- Trait bound issues that only surface when using the public API
+- Type inference failures at the consumer boundary
+- Documentation examples that don't actually work
 
 ## Applies To
 
-All pages, including:
+All public items, including:
 
-- Primary workflow screens (setup, login, configuration)
-- Error states and validation feedback
-- Confirmation and success screens
-- Redirect targets after form submissions
+- Free functions (`execute`, `run_projection`)
+- Public traits and their required methods
+- Macro-generated code (`#[derive(Command)]`, `require!`, `emit!`)
+- Feature-gated re-exports (postgres, sqlite backends)
+- Error types and their variants
 
 ## Why
 
-A page that renders correctly but cannot be reached through the UI is dead
-code from the user's perspective. Reachability tests ensure the application
-is navigable end-to-end, not just renderable page-by-page.
+A function that works internally but cannot be called through the public
+API is dead code from the consumer's perspective. Coverage tests ensure the
+library is usable end-to-end, not just correct in isolation.

@@ -1,45 +1,49 @@
 # Acceptance Test Boundaries
 
-Acceptance tests must exercise the system from the actor's perspective. The
-actor is either a human using a browser or a human using a CLI.
+Acceptance tests must exercise the system from the perspective of a downstream
+library consumer. The consumer is a Rust developer calling the public API.
 
-## UI Features
+## Library Features
 
-Step definitions for UI-facing features MUST use Playwright browser automation.
-The test opens a real browser, navigates pages, fills forms, clicks buttons,
-and asserts on visible page content.
+Integration tests MUST call the public API: `eventcore::execute()`,
+`run_projection()`, public trait methods (`CommandLogic`, `EventStore`,
+`Projector`), and macro-generated code (`#[derive(Command)]`, `require!`,
+`emit!`).
 
-Raw HTTP client calls (reqwest, curl, fetch, etc.) against internal endpoints
-are NOT acceptance tests for UI features. They may exist as supplementary
-integration tests, but they do not satisfy the acceptance test requirement.
+Tests must not reach into internal modules, bypass `execute()` to call
+`apply`/`handle` directly, or construct internal types that are not part of
+the public API.
 
-## CLI Features
+## Backend Implementations
 
-Step definitions for CLI features MUST invoke the CLI binary as a subprocess
-and assert on stdout, stderr, and exit codes. This is the real boundary a
-CLI user interacts with.
+Contract tests in `eventcore-testing` verify that `EventStore` and
+`EventReader` implementations satisfy the required behavioral contracts.
+Each backend crate (postgres, sqlite, memory) runs these contract tests
+against its implementation.
 
 ## The Litmus Test
 
-> "Could a real user perform this action the way the test does?"
+> "Could a downstream developer perform this operation using only the
+> published API?"
 
-If a real user would open a browser and fill out a form, the test must open a
-browser and fill out a form. If the test posts JSON to an internal API
-endpoint, it is not testing the user's experience.
+If a test calls internal functions, constructs types from private modules,
+or bypasses `execute()`, it is not testing the user's experience of the
+library.
 
-## API-Level Tests
+## Unit Tests
 
-Tests that call internal HTTP endpoints directly are integration tests. They
-are permitted and sometimes valuable, but they:
+Unit tests within a crate may test internal functions directly. They are
+permitted and sometimes valuable, but they:
 
-- Do NOT count as acceptance tests for user-visible features
-- Do NOT replace the requirement for a Playwright-based acceptance test
-- Should be used only when testing internal API contracts that are not
-  exercised through the UI
+- Do NOT count as acceptance tests for public API behavior
+- Do NOT replace the requirement for an integration test exercising the
+  public API
+- Should be used when drill-down discipline requires narrower scope
 
 ## Why
 
-The gap between "the API works" and "the user can do the thing" is where
-bugs hide. Missing routes, broken form actions, unlinked pages, and
-JavaScript errors are invisible to API-level tests. Playwright tests catch
-all of these because they exercise the same path a real user takes.
+The gap between "the internal logic works" and "the consumer can use the
+API" is where bugs hide. Missing re-exports, broken macro expansions,
+type inference failures, and trait bound issues are invisible to unit tests.
+Integration tests catch all of these because they exercise the same path
+a real consumer takes.

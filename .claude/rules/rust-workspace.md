@@ -1,55 +1,52 @@
 ---
-globs: crates/**/*.rs,Cargo.toml
+globs: "**/*.rs,Cargo.toml"
 ---
 
 # Rust Workspace Conventions
 
-## Functional Core / Imperative Shell
+## Workspace Structure
 
-- Business logic functions are pure: no IO, no side effects, no database calls
-- The imperative shell dispatches IO via the trampoline pattern
-- Core functions return `Step<AppEffect, AppResult, T>`
-- The shell matches on `AppEffect` variants and executes IO
+| Crate                | Purpose                                                            |
+| -------------------- | ------------------------------------------------------------------ |
+| `eventcore`          | Main library: `execute()`, `run_projection()`, re-exports          |
+| `eventcore-types`    | Shared vocabulary: traits (`EventStore`, `CommandLogic`) and types |
+| `eventcore-macros`   | `#[derive(Command)]`, `require!`, `emit!` macro implementations    |
+| `eventcore-postgres` | PostgreSQL backend with ACID transactions and advisory locks       |
+| `eventcore-sqlite`   | SQLite backend with optional SQLCipher encryption                  |
+| `eventcore-memory`   | Zero-dependency in-memory store for tests and development          |
+| `eventcore-testing`  | Contract tests, chaos harness, `EventCollector` for testing        |
+| `eventcore-examples` | Integration tests demonstrating EventCore patterns                 |
 
 ## Domain Types
 
-- Every domain concept has a semantic named type (e.g., `CustomerId`, `LicenseId`)
+- Every domain concept has a semantic named type (e.g., `StreamId`, `StreamVersion`)
 - **No raw primitives in domain code** — `String`, `bool`, `u32`, `i64`, and
   all other primitive types appear only at IO boundaries. This includes struct
-  fields, function parameters, and return types. If a `bool` represents a domain
-  concept (e.g., "server has started"), wrap it in a semantic type.
+  fields, function parameters, and return types.
 - **nutype is required** for all domain newtype definitions. Do not write manual
   newtype boilerplate (struct + impl blocks). Use nutype's built-in validations
   where possible; write custom validations only when necessary. Custom
   validations must be covered by property tests.
-- Parse at the boundary, never re-validate inside the domain
+- Parse at the boundary, never re-validate inside the domain.
 - **Use `Option` for optionality** — when a value may or may not be present,
   use `Option<T>` instead of sentinel values like zero counts, empty strings,
-  or boolean flags. `Option::None` expresses absence; a count of zero hides it.
-- **Follow current rules, not existing code** — some older crates (e.g.,
-  `sm_licensing`) predate the nutype convention and use manual newtypes. Always
-  follow the current rules when writing new code, regardless of what patterns
-  exist in the repo.
+  or boolean flags.
 
 ## Event Sourcing
 
 - All state mutations are events via `eventcore`
 - Commands MUST implement the `eventcore::CommandLogic` trait — not standalone
-  functions that mimic the pattern. See `eventcore-command-pattern.md` for details.
-- The shell MUST use `eventcore::execute()` to run commands
+  functions that mimic the pattern. See `eventcore-command-pattern.md` for
+  details.
+- `execute()` is the canonical entry point for running commands
 - Read models use `Projector` with checkpoint-based projections
-- Each project has its own SQLite database; cross-project data is in the central DB
+- `EventStore` and `EventReader` traits define the backend contract
 
 ## Testing
 
-- Acceptance tests use `cucumber` crate with Playwright for UI
+- Integration tests live in each crate's `tests/` directory, organized by
+  feature
+- Contract tests in `eventcore-testing` verify backend implementations
 - Property tests via `proptest` for every validation function (not optional)
 - Unit tests only when drill-down discipline requires narrower scope
 - Never test internal structure — only behavior
-
-## UI (sm_ui)
-
-- Atomic Design: quarks → atoms → molecules → organisms → templates → pages
-- Components are pure: accept typed inputs, return Maud markup deterministically
-- No IO, no database calls, no session access inside sm_ui
-- Every reusable component requires property tests

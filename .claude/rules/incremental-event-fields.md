@@ -1,12 +1,12 @@
 # Incremental Event Field Addition
 
 Event variants are built incrementally as tests demand fields, not all at once
-from the blueprint. This rule governs how fields are added over time.
+from the target design. This rule governs how fields are added over time.
 
 ## Adding Fields to Existing Events
 
-When a new slice needs a field on an event variant that was created by an
-earlier slice:
+When a new feature needs a field on an event variant that was created by an
+earlier change:
 
 1. **Check if a serde default is reasonable.** Can the application replay old
    events without this field and behave correctly? If yes, add the field with
@@ -30,11 +30,10 @@ events. Old events simply never match the new variant.
 
 ## Do Not Pre-Add Fields
 
-The blueprint describes the complete event model. Implementation is incremental.
-Only add fields that current non-test code reads. The blueprint is the target,
-not the current schema.
+The target API design describes the complete event model. Implementation is
+incremental. Only add fields that current non-test code reads. The design is
+the target, not the current schema.
 
 ## Reference
 
 - ADR 0021: Event Schema Evolution and Upcasting
-- Blueprint: event-sourcing.md
