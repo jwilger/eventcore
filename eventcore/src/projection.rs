@@ -4,8 +4,8 @@
 //! - `ProjectionRunner`: Orchestrates projector execution with event polling
 
 use crate::{
-    BackoffMultiplier, BatchSize, CheckpointStore, Event, EventFilter, EventPage, EventReader,
-    FailureStrategy, MaxConsecutiveFailures, MaxRetryAttempts, Projector, StreamPosition,
+    BackoffMultiplier, CheckpointStore, Event, EventReader, MaxConsecutiveFailures,
+    MaxRetryAttempts, Projector, StreamPosition,
 };
 use std::time::Duration;
 
@@ -336,11 +336,10 @@ where
 
     /// Run the projection, processing events until completion.
     ///
-    /// This method:
-    /// 1. Polls for events starting from the last checkpoint
-    /// 2. Applies each event to the projector
-    /// 3. Checkpoints progress after successful processing
-    /// 4. Continues until no more events are available
+    /// Internally, this method drives a [`ProjectionPipeline`] state machine
+    /// that yields effects (read events, load/save checkpoint, sleep). This
+    /// method is the thin shell loop that dispatches those effects to the
+    /// backend traits.
     ///
     /// # Returns
     ///
@@ -352,198 +351,56 @@ where
     /// Returns an error if:
     /// - Event store operations fail
     /// - The projector returns a fatal error
-    pub async fn run(mut self) -> Result<(), ProjectionError>
+    pub async fn run(self) -> Result<(), ProjectionError>
     where
         P::Error: std::fmt::Debug,
         R::Error: std::fmt::Display,
     {
-        // Load checkpoint if checkpoint store is configured
-        let mut last_checkpoint = match &self.checkpoint_store {
-            Some(cs) => cs.load(self.projector.name()).await.map_err(|e| {
-                ProjectionError::Failed(format!(
-                    "failed to load checkpoint for projector '{}': {}",
-                    self.projector.name(),
-                    e
-                ))
-            })?,
-            None => None,
+        use crate::projection_pipeline::{
+            ProjectionEffect, ProjectionEffectResult, ProjectionPipeline, ProjectionStep,
         };
 
-        let mut ctx = P::Context::default();
-        let mut consecutive_failures = 0u32;
+        let has_checkpoint_store = self.checkpoint_store.is_some();
+        let mut pipeline = ProjectionPipeline::new(
+            self.projector,
+            has_checkpoint_store,
+            self.poll_mode,
+            self.poll_config,
+            self.event_retry_config,
+        );
+        let mut step = pipeline.step();
 
         loop {
-            // Read events from the store with retry logic for transient errors
-            let events: Vec<(P::Event, _)> = loop {
-                // Attempt to read events
-                let filter = EventFilter::all();
-                let page = match last_checkpoint {
-                    Some(position) => EventPage::after(position, BatchSize::new(1000)),
-                    None => EventPage::first(BatchSize::new(1000)),
-                };
-                let result = self.store.read_events(filter, page).await;
-
-                match result {
-                    Ok(events) => {
-                        // Success - reset failure counter and return events
-                        consecutive_failures = 0;
-                        break events;
-                    }
-                    Err(e) => {
-                        // Database error - log and check if retries exhausted
-                        let max_failures: std::num::NonZeroU32 =
-                            self.poll_config.max_consecutive_poll_failures.into();
-
-                        tracing::warn!(
-                            projector = self.projector.name(),
-                            error = %e,
-                            consecutive_failures = consecutive_failures + 1,
-                            max_failures = max_failures.get(),
-                            "Poll failure reading events"
-                        );
-
-                        if consecutive_failures >= max_failures.get() {
-                            // Already failed max_consecutive_poll_failures times, no more retries allowed
-                            return Err(ProjectionError::Failed(format!(
-                                "failed to read events after max retries: {}",
-                                e
-                            )));
-                        }
-
-                        // Track this failure and apply backoff
-                        consecutive_failures += 1;
-
-                        // Use configured poll failure backoff
-                        tokio::time::sleep(self.poll_config.poll_failure_backoff).await;
-                        // Continue retry loop
-                    }
+            match step {
+                ProjectionStep::Done(result) => return result,
+                ProjectionStep::Yield(ProjectionEffect::LoadCheckpoint { name }) => {
+                    let result = match &self.checkpoint_store {
+                        Some(cs) => cs.load(&name).await.map_err(|e| e.to_string()),
+                        None => Ok(None),
+                    };
+                    step = pipeline.resume(ProjectionEffectResult::CheckpointLoaded(result));
                 }
-            };
-
-            // Track whether we found events for poll delay selection
-            let found_events = !events.is_empty();
-
-            // Apply each event to the projector
-            for (event, position) in events {
-                let mut retry_count = 0u32;
-
-                loop {
-                    match self.projector.apply(event.clone(), position, &mut ctx) {
-                        Ok(()) => {
-                            // Event processed successfully - update and save checkpoint
-                            last_checkpoint = Some(position);
-                            if let Some(cs) = &self.checkpoint_store
-                                && let Err(e) = cs.save(self.projector.name(), position).await
-                            {
-                                tracing::warn!(
-                                    projector = self.projector.name(),
-                                    position = %position,
-                                    error = %e,
-                                    "Failed to save checkpoint after successful event processing"
-                                );
-                            }
-                            break; // Move to next event
-                        }
-                        Err(error) => {
-                            // Error occurred - ask projector what to do
-                            let failure_ctx = eventcore_types::FailureContext {
-                                error: &error,
-                                position,
-                                retry_count: eventcore_types::RetryCount::new(retry_count),
-                            };
-                            let strategy = self.projector.on_error(failure_ctx);
-                            match strategy {
-                                FailureStrategy::Fatal => {
-                                    // Stop processing and return error
-                                    // Checkpoint is already saved up to last successful event
-                                    return Err(ProjectionError::Failed(
-                                        "projector apply failed".to_string(),
-                                    ));
-                                }
-                                FailureStrategy::Skip => {
-                                    // Log the error and continue processing
-                                    tracing::warn!(
-                                        projector = self.projector.name(),
-                                        position = %position,
-                                        error = ?error,
-                                        "Skipping failed event"
-                                    );
-                                    // Update checkpoint to skip past this event
-                                    //
-                                    // IMPORTANT: This permanently skips the failed event across restarts.
-                                    // The checkpoint is saved at the current (failed) event position.
-                                    // On restart, read_after(position) will skip all events at or before
-                                    // this position, meaning the failed event will never be retried.
-                                    // This is intentional - Skip is for poison events that should never
-                                    // be retried (e.g., malformed data, unrecoverable errors).
-                                    last_checkpoint = Some(position);
-                                    if let Some(cs) = &self.checkpoint_store
-                                        && let Err(e) =
-                                            cs.save(self.projector.name(), position).await
-                                    {
-                                        tracing::warn!(
-                                            projector = self.projector.name(),
-                                            position = %position,
-                                            error = %e,
-                                            "Failed to save checkpoint after skipping event"
-                                        );
-                                    }
-                                    break; // Move to next event
-                                }
-                                FailureStrategy::Retry => {
-                                    // Check if we've exceeded max retry attempts
-                                    if retry_count
-                                        >= self.event_retry_config.max_retry_attempts.into_inner()
-                                    {
-                                        // Escalate to Fatal after exhausting retries
-                                        return Err(ProjectionError::Failed(
-                                            "projector apply failed after max retries".to_string(),
-                                        ));
-                                    }
-
-                                    retry_count += 1;
-
-                                    // Calculate delay with exponential backoff
-                                    let base_delay_ms =
-                                        self.event_retry_config.retry_delay.as_millis() as f64;
-                                    let multiplier = self
-                                        .event_retry_config
-                                        .retry_backoff_multiplier
-                                        .into_inner();
-                                    let delay_ms =
-                                        base_delay_ms * multiplier.powi(retry_count as i32 - 1);
-                                    let delay = Duration::from_millis(delay_ms as u64);
-
-                                    // Cap at max_retry_delay
-                                    let capped_delay =
-                                        delay.min(self.event_retry_config.max_retry_delay);
-
-                                    // Wait before retrying
-                                    tokio::time::sleep(capped_delay).await;
-                                    // Continue retry loop
-                                }
-                            }
-                        }
-                    }
+                ProjectionStep::Yield(ProjectionEffect::ReadEvents { filter, page }) => {
+                    let result = self
+                        .store
+                        .read_events(filter, page)
+                        .await
+                        .map_err(|e| e.to_string());
+                    step = pipeline.resume(ProjectionEffectResult::EventsRead(result));
+                }
+                ProjectionStep::Yield(ProjectionEffect::SaveCheckpoint { name, position }) => {
+                    let result = match &self.checkpoint_store {
+                        Some(cs) => cs.save(&name, position).await.map_err(|e| e.to_string()),
+                        None => Ok(()),
+                    };
+                    step = pipeline.resume(ProjectionEffectResult::CheckpointSaved(result));
+                }
+                ProjectionStep::Yield(ProjectionEffect::Sleep { duration }) => {
+                    tokio::time::sleep(duration).await;
+                    step = pipeline.resume(ProjectionEffectResult::Slept);
                 }
             }
-
-            // For batch mode, exit after one pass
-            if self.poll_mode == PollMode::Batch {
-                break;
-            }
-
-            // For continuous mode, sleep before next poll
-            // Use poll_interval if events were found, empty_poll_backoff if not
-            let delay = if found_events {
-                self.poll_config.poll_interval
-            } else {
-                self.poll_config.empty_poll_backoff
-            };
-            tokio::time::sleep(delay).await;
         }
-
-        Ok(())
     }
 }
 

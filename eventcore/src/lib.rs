@@ -33,11 +33,14 @@
     unused_variables
 )]
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+mod effects;
+mod execute_pipeline;
 mod projection;
+mod projection_pipeline;
 
 // Re-export all public types from eventcore-types so consumers only need to depend on `eventcore`
 pub use eventcore_types::{
@@ -368,71 +371,7 @@ fn apply_jitter(base_delay: u64, jitter_factor: f64) -> u64 {
     (base_delay as f64 * jitter_factor) as u64
 }
 
-struct PreparedExecution<C: CommandLogic> {
-    state: C::State,
-    stream_ids: Vec<StreamId>,
-    expected_versions: HashMap<StreamId, StreamVersion>,
-}
-
-async fn prepare_execution_context<C, S>(
-    store: &S,
-    command: &C,
-) -> Result<PreparedExecution<C>, CommandError>
-where
-    C: CommandLogic,
-    S: EventStore,
-{
-    let declared_streams = command.stream_declarations();
-    let resolver = command.stream_resolver();
-    let mut scheduled: HashSet<StreamId> = HashSet::with_capacity(declared_streams.len());
-    let mut queue: VecDeque<StreamId> = VecDeque::with_capacity(declared_streams.len());
-
-    for stream_id in declared_streams.iter() {
-        let stream_id = stream_id.clone();
-        if scheduled.insert(stream_id.clone()) {
-            queue.push_back(stream_id);
-        }
-    }
-
-    let mut visited: HashSet<StreamId> = HashSet::with_capacity(scheduled.len());
-    let mut stream_ids: Vec<StreamId> = Vec::with_capacity(scheduled.len());
-    let mut expected_versions: HashMap<StreamId, StreamVersion> =
-        HashMap::with_capacity(scheduled.len());
-    let mut state = C::State::default();
-
-    while let Some(stream_id) = queue.pop_front() {
-        if !visited.insert(stream_id.clone()) {
-            continue;
-        }
-
-        let reader = store
-            .read_stream::<C::Event>(stream_id.clone())
-            .await
-            .map_err(CommandError::EventStoreError)?;
-        let expected_version = StreamVersion::new(reader.len());
-        let _ = expected_versions.insert(stream_id.clone(), expected_version);
-        state = reader
-            .into_iter()
-            .fold(state, |acc, event| command.apply(acc, &event));
-        stream_ids.push(stream_id.clone());
-
-        if let Some(resolver) = resolver {
-            for related_stream in resolver.discover_related_streams(&state) {
-                if scheduled.insert(related_stream.clone()) {
-                    queue.push_back(related_stream);
-                }
-            }
-        }
-    }
-
-    Ok(PreparedExecution {
-        state,
-        stream_ids,
-        expected_versions,
-    })
-}
-
-fn build_stream_writes_from_events<C: CommandLogic>(
+pub(crate) fn build_stream_writes_from_events<C: CommandLogic>(
     events: Vec<C::Event>,
     expected_versions: HashMap<StreamId, StreamVersion>,
 ) -> Result<StreamWrites, CommandError> {
@@ -452,7 +391,10 @@ fn build_stream_writes_from_events<C: CommandLogic>(
         .map_err(CommandError::EventStoreError)
 }
 
-fn compute_retry_delay_ms(strategy: &BackoffStrategy, attempt: u32) -> DelayMilliseconds {
+pub(crate) fn compute_retry_delay_ms(
+    strategy: &BackoffStrategy,
+    attempt: u32,
+) -> DelayMilliseconds {
     match strategy {
         BackoffStrategy::Fixed { delay_ms } => *delay_ms,
         BackoffStrategy::Exponential { base_ms } => {
@@ -468,36 +410,15 @@ fn compute_retry_delay_ms(strategy: &BackoffStrategy, attempt: u32) -> DelayMill
     }
 }
 
-async fn apply_retry_backoff(policy: &RetryPolicy, attempt: u32, stream_ids: &[StreamId]) {
-    let delay_ms = compute_retry_delay_ms(&policy.backoff_strategy, attempt);
-    let attempt_number = attempt + 1;
-    let attempt_number_domain =
-        AttemptNumber::new(NonZeroU32::new(attempt_number).expect("attempt_number is always > 0"));
-
-    tracing::warn!(
-        attempt = attempt_number,
-        delay_ms = delay_ms.into_inner(),
-        streams = ?stream_ids,
-        "retrying command after concurrency conflict"
-    );
-
-    if let Some(hook) = &policy.metrics_hook {
-        let ctx = RetryContext {
-            streams: stream_ids.to_vec(),
-            attempt: attempt_number_domain,
-            delay_ms,
-        };
-        hook.on_retry_attempt(&ctx);
-    }
-
-    tokio::time::sleep(std::time::Duration::from_millis(delay_ms.into())).await;
-}
-
 /// Execute a command against the event store with a custom retry policy.
 ///
 /// This is the primary entry point for EventCore. It orchestrates the complete
 /// command execution workflow: loading state from multiple streams, validating
 /// business rules, and atomically committing resulting events.
+///
+/// Internally, this function drives an [`ExecutePipeline`] state machine that
+/// yields effects (read stream, append events, sleep). This function is the
+/// thin shell loop that dispatches those effects to the `EventStore` trait.
 ///
 /// # Type Parameters
 ///
@@ -528,59 +449,30 @@ where
     C: CommandLogic,
     S: EventStore,
 {
-    for attempt in 0..=policy.max_retries.into() {
-        let PreparedExecution {
-            state,
-            stream_ids,
-            expected_versions,
-        } = prepare_execution_context(&store, &command).await?;
+    use effects::{StoreEffect, StoreEffectResult};
+    use execute_pipeline::{ExecutePipeline, PipelineOutcome, PipelineStep};
 
-        let new_events = command.handle(state)?;
-        let writes =
-            build_stream_writes_from_events::<C>(Vec::from(new_events), expected_versions)?;
+    let mut pipeline = ExecutePipeline::new(command, policy);
+    let mut step = pipeline.step();
 
-        // Convert EventStoreError variants to appropriate CommandError types.
-        //
-        // thiserror's #[from] only implements the From trait, which has signature
-        // `fn from(e: T) -> Self` - it cannot pattern match on enum variants.
-        // Every EventStoreError would become CommandError::EventStoreError(e).
-        //
-        // We need variant-specific routing:
-        //   - VersionConflict → ConcurrencyError (different CommandError variant!)
-        //   - Other errors → EventStoreError(e)
-        //
-        // Manual map_err with match is the idiomatic solution for this.
-        let result = store
-            .append_events(writes)
-            .await
-            .map_err(|error| match error {
-                EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt),
-                other => CommandError::EventStoreError(other),
-            });
-
-        match result {
-            Ok(_) => {
-                tracing::info!("command execution succeeded");
-                return Ok(ExecutionResponse::new(
-                    NonZeroU32::new(attempt + 1).expect("attempts are 1-based"),
-                ));
+    loop {
+        match step {
+            PipelineStep::Done(PipelineOutcome::Success(response)) => return Ok(response),
+            PipelineStep::Done(PipelineOutcome::Error(err)) => return Err(err),
+            PipelineStep::Yield(StoreEffect::ReadStream { stream_id }) => {
+                let result = store.read_stream::<C::Event>(stream_id).await;
+                step = pipeline.resume(StoreEffectResult::StreamRead(result));
             }
-            Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries.into() => {
-                apply_retry_backoff(&policy, attempt, &stream_ids).await;
-                continue; // Retry
+            PipelineStep::Yield(StoreEffect::AppendEvents { writes }) => {
+                let result = store.append_events(writes).await;
+                step = pipeline.resume(StoreEffectResult::EventsAppended(result));
             }
-            Err(CommandError::ConcurrencyError(_)) => {
-                tracing::error!(
-                    max_retries = policy.max_retries.into_inner(),
-                    streams = ?stream_ids.as_slice()
-                );
-                return Err(CommandError::ConcurrencyError(policy.max_retries.into()));
+            PipelineStep::Yield(StoreEffect::Sleep { duration }) => {
+                tokio::time::sleep(duration).await;
+                step = pipeline.resume(StoreEffectResult::Slept);
             }
-            Err(e) => return Err(e), // Other permanent errors
         }
     }
-
-    unreachable!("loop always returns before max_retries")
 }
 
 #[cfg(test)]
