@@ -19,7 +19,7 @@
 - `cargo nextest run --workspace` — Run all tests (fallback: `cargo test --workspace`)
 - `cargo clippy --all-targets --all-features -- -D warnings` — Lint
 - `cargo fmt --all` — Format
-- `cargo mutants` — Mutation testing (threshold: 80%)
+- `cargo mutants` — Mutation testing (zero surviving mutants required)
 
 ## Environment
 

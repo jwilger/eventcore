@@ -1,13 +1,12 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
 permissions:
   contents: read
+  issues: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -124,31 +123,131 @@ jobs:
           - 5432:5432
 
     steps:
+      - name: Skip mutation testing on non-release PRs
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        run: echo "Skipping mutation testing — not a release PR"
+
       - uses: actions/checkout@v6
+        if: contains(github.event.pull_request.labels.*.name, 'release')
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache dependencies
+        if: contains(github.event.pull_request.labels.*.name, 'release')
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-mutants
+        if: contains(github.event.pull_request.labels.*.name, 'release')
         run: cargo install cargo-mutants --locked
 
-      - name: Run cargo mutants
+      - name: Install cargo-nextest
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.115
+
+      - name: Run mutation testing
+        id: mutants
+        if: contains(github.event.pull_request.labels.*.name, 'release')
         env:
           POSTGRES_VERSION: 17
-        run: cargo mutants --workspace --check
+        run: |
+          cargo mutants --workspace 2>&1 | tee mutation-output.txt
+          MUTANTS_EXIT=$?
+          if [ $MUTANTS_EXIT -ne 0 ]; then
+            echo "has_survivors=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_survivors=false" >> "$GITHUB_OUTPUT"
+          fi
+          exit $MUTANTS_EXIT
+        continue-on-error: true
 
       - name: Upload mutation report
+        if: contains(github.event.pull_request.labels.*.name, 'release') && always()
         uses: actions/upload-artifact@v6
         with:
           name: mutation-report
-          path: target/mutants/everything/.mutants.json
+          path: |
+            mutation-output.txt
+            mutants.out/
+
+      - name: Create issues for surviving mutants
+        if: steps.mutants.outputs.has_survivors == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.readFileSync('mutation-output.txt', 'utf8');
+
+            const survivors = output
+              .split('\n')
+              .filter(line => line.startsWith('SURVIVED'))
+              .map(line => line.trim());
+
+            if (survivors.length === 0) {
+              console.log('No surviving mutants found in output');
+              return;
+            }
+
+            const byFile = {};
+            for (const line of survivors) {
+              const match = line.match(/SURVIVED:\s+(.+?\.rs):\d+/);
+              const file = match ? match[1] : 'unknown';
+              if (!byFile[file]) byFile[file] = [];
+              byFile[file].push(line);
+            }
+
+            const prNumber = context.payload.pull_request.number;
+
+            for (const [file, mutants] of Object.entries(byFile)) {
+              const mutantList = mutants
+                .map(m => `- \`${m}\``)
+                .join('\n');
+
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `mutant: surviving mutants in ${file}`,
+                labels: ['P0-critical', 'bug'],
+                body: [
+                  `## Surviving Mutants`,
+                  ``,
+                  `Mutation testing found **${mutants.length} surviving mutant(s)** in \`${file}\`.`,
+                  `Detected during release PR #${prNumber}.`,
+                  ``,
+                  `### Mutants`,
+                  ``,
+                  mutantList,
+                  ``,
+                  `### What This Means`,
+                  ``,
+                  `Each surviving mutant represents a code change that no test caught.`,
+                  `This indicates a gap in test coverage that could allow bugs to ship undetected.`,
+                  ``,
+                  `### How to Fix`,
+                  ``,
+                  `1. For each mutant, write a test that fails when the mutation is applied`,
+                  `2. Run \`cargo mutants --file ${file}\` locally to verify the fix`,
+                  `3. All mutants must be killed before the next release`,
+                  ``,
+                  `### Context`,
+                  ``,
+                  `- Release PR: #${prNumber}`,
+                  `- Full mutation report: see workflow artifacts`,
+                ].join('\n'),
+              });
+
+              console.log(`Created issue for ${mutants.length} surviving mutants in ${file}`);
+            }
+
+      - name: Fail if mutants survived
+        if: steps.mutants.outputs.has_survivors == 'true'
+        run: |
+          echo "::error::Mutation testing found surviving mutants. Issues have been created."
+          echo "All mutants must be killed before this release can proceed."
+          exit 1
 
   security-audit:
     name: Security Audit

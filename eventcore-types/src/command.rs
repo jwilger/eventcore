@@ -135,7 +135,7 @@ pub trait Event: Clone + Send + Serialize + DeserializeOwned + 'static {
 ///
 /// * `Event` - The domain event type implementing the Event trait
 /// * `State` - The state type reconstructed from events via `apply()`
-pub trait CommandLogic: CommandStreams {
+pub trait CommandLogic: CommandStreams + Send + Sync {
     /// The domain event type this command produces.
     ///
     /// Must implement the Event trait to provide stream identity and
@@ -147,7 +147,7 @@ pub trait CommandLogic: CommandStreams {
     /// This type represents the reconstructed state needed to validate
     /// business rules and produce events. It's rebuilt from scratch for
     /// each command execution by applying events via `apply()`.
-    type State: Default;
+    type State: Default + Send;
 
     /// Reconstruct state by applying a single event.
     ///
