@@ -39,6 +39,7 @@ use std::sync::Arc;
 mod effects;
 mod execute_pipeline;
 mod projection;
+mod projection_pipeline;
 
 // Re-export all public types from eventcore-types so consumers only need to depend on `eventcore`
 pub use eventcore_types::{
