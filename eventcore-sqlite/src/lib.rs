@@ -85,9 +85,19 @@ impl std::fmt::Debug for SqliteConfig {
 /// Internal helper for opening and configuring a SQLite connection.
 /// Shared by `SqliteEventStore` and `SqliteCheckpointStore` to avoid
 /// duplicating connection setup logic.
-fn open_connection(path: &PathBuf) -> Result<rusqlite::Connection, SqliteEventStoreError> {
+fn open_connection(
+    path: &PathBuf,
+    encryption_key: Option<&str>,
+) -> Result<rusqlite::Connection, SqliteEventStoreError> {
     let conn = rusqlite::Connection::open(path).map_err(SqliteEventStoreError::ConnectionFailed)?;
-    // WAL mode is a no-op for in-memory databases but kept for code consistency.
+    // SQLCipher requires PRAGMA key before any other PRAGMA, otherwise the
+    // database file is treated as unencrypted and subsequent operations fail.
+    if let Some(key) = encryption_key {
+        apply_encryption_key(&conn, key)?;
+        // Validate the key works before proceeding.
+        conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
+            .map_err(SqliteEventStoreError::ConnectionFailed)?;
+    }
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(SqliteEventStoreError::ConnectionFailed)?;
     Ok(conn)
@@ -209,10 +219,7 @@ impl std::fmt::Debug for SqliteEventStore {
 
 impl SqliteEventStore {
     pub fn new(config: SqliteConfig) -> Result<Self, SqliteEventStoreError> {
-        let conn = open_connection(&config.path)?;
-        if let Some(ref key) = config.encryption_key {
-            apply_encryption_key(&conn, key)?;
-        }
+        let conn = open_connection(&config.path, config.encryption_key.as_deref())?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             locks: Arc::new(std::sync::RwLock::new(HashSet::new())),
@@ -625,10 +632,7 @@ impl std::fmt::Debug for SqliteCheckpointStore {
 
 impl SqliteCheckpointStore {
     pub fn new(config: SqliteConfig) -> Result<Self, SqliteEventStoreError> {
-        let conn = open_connection(&config.path)?;
-        if let Some(ref key) = config.encryption_key {
-            apply_encryption_key(&conn, key)?;
-        }
+        let conn = open_connection(&config.path, config.encryption_key.as_deref())?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
