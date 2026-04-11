@@ -17,52 +17,78 @@ By participating in this project, you agree to abide by our [Code of Conduct](CO
 
 ### Prerequisites
 
-- Rust 1.70+ (check with `rustc --version`)
-- Docker and Docker Compose (for PostgreSQL databases)
-- Nix (optional, for development environment)
+- Rust stable toolchain (2024 edition) -- the exact version is pinned via `rust-toolchain.toml`
+- Docker and Docker Compose (for PostgreSQL backend tests only)
+- Nix (recommended) -- run `nix develop` for the correct toolchain and all dev dependencies
+
+### Workspace Crates
+
+| Crate                | Purpose                                                            |
+| -------------------- | ------------------------------------------------------------------ |
+| `eventcore`          | Main library: `execute()`, `run_projection()`, re-exports          |
+| `eventcore-types`    | Shared vocabulary: traits (`EventStore`, `CommandLogic`) and types |
+| `eventcore-macros`   | `#[derive(Command)]`, `require!`, `emit!` macro implementations    |
+| `eventcore-postgres` | PostgreSQL backend with ACID transactions and advisory locks       |
+| `eventcore-sqlite`   | SQLite backend with optional SQLCipher encryption                  |
+| `eventcore-memory`   | Zero-dependency in-memory store for tests and development          |
+| `eventcore-testing`  | Contract tests, chaos harness, `EventCollector`, `TestScenario`    |
+| `eventcore-examples` | Integration tests demonstrating EventCore patterns                 |
 
 ### Initial Setup
 
 ```bash
-# Enter development environment (if using Nix)
+# Enter development environment (recommended)
 nix develop
 
-# Start databases
+# Start PostgreSQL (only needed for postgres backend tests)
 docker-compose up -d
 
 # Run tests to verify setup
-cargo test --workspace
+cargo nextest run --workspace
 ```
 
 ## Commit Guidelines
 
 ### Commit Message Format
 
-We follow a specific commit message format:
+This project uses [Conventional Commits](https://www.conventionalcommits.org/).
+All commit messages and PR titles must follow this format:
 
 ```
-Short summary (max 50 chars)
-
-Detailed explanation of the change. Wrap lines at 72 characters.
-Focus on WHY the change was made, not just what changed.
-
-Include any breaking changes, performance implications, or other
-important notes.
+type(scope): short description
 ```
 
-Example:
+**Types:**
+
+| Type       | When to use                                  |
+| ---------- | -------------------------------------------- |
+| `feat`     | A new feature or capability                  |
+| `fix`      | A bug fix                                    |
+| `docs`     | Documentation-only changes                   |
+| `style`    | Formatting, whitespace (no logic changes)    |
+| `refactor` | Code restructuring without behavior change   |
+| `test`     | Adding or updating tests                     |
+| `chore`    | Maintenance, tooling, CI, dependency updates |
+
+**Scopes** (optional but encouraged): `core`, `postgres`, `sqlite`, `memory`,
+`testing`, `macros`, `types`, `examples`
+
+**Examples:**
 
 ```
-Add snapshot support for long-running streams
+feat(core): add retry policy configuration to execute()
 
-Event streams with millions of events cause performance issues during
-state reconstruction. Snapshots allow faster recovery by storing
-periodic state checkpoints.
+fix(postgres): prevent advisory lock leak on transaction rollback
 
-Implements automatic snapshot creation based on configurable event
-count thresholds. Snapshots are stored alongside events and loaded
-transparently during reconstruction.
+refactor(types): extract StreamVersion validation into nutype
+
+test(sqlite): add contract tests for SQLCipher encryption mode
+
+chore: update workspace dependencies to latest compatible versions
 ```
+
+Add a blank line and a body paragraph when the "why" needs explanation.
+Never add `Co-Authored-By` trailers to commit messages.
 
 ### GPG Commit Signing (Recommended)
 
@@ -134,9 +160,9 @@ git verify-commit <commit-hash>
 1. **Create a feature branch** from `main`
 2. **Make your changes** following our coding standards
 3. **Write tests** for new functionality
-4. **Run the test suite**: `cargo test --workspace`
-5. **Run linting**: `cargo clippy --workspace --all-targets -- -D warnings`
-6. **Format code**: `cargo fmt`
+4. **Run the test suite**: `cargo nextest run --workspace` (fallback: `cargo test --workspace`)
+5. **Run linting**: `cargo clippy --all-targets --all-features -- -D warnings`
+6. **Format code**: `cargo fmt --all`
 7. **Commit your changes** with descriptive messages
 8. **Push to your fork** and create a pull request
 
@@ -145,18 +171,21 @@ git verify-commit <commit-hash>
 ### Running Tests
 
 ```bash
-# Run all tests
+# Run all tests (preferred)
+cargo nextest run --workspace
+
+# Run a specific test by name
+cargo nextest run --workspace -E 'test(test_name)'
+
+# Run a specific integration test file
+cargo nextest run --test feature_name_test
+
+# Fallback: standard cargo test
 cargo test --workspace
-
-# Run specific test
-cargo test test_name
-
-# Run tests with output
-cargo test -- --nocapture
-
-# Run integration tests only
-cargo test --test '*' --workspace
 ```
+
+> **Note:** `cargo nextest` is the primary test runner. Use `cargo test` only
+> as a fallback when nextest is unavailable.
 
 ### Writing Tests
 
@@ -164,6 +193,18 @@ cargo test --test '*' --workspace
 - Write integration tests for database operations
 - Use property-based testing for invariants
 - Follow the existing test patterns in the codebase
+
+### Mutation Testing
+
+Run `cargo mutants` to verify test suite quality. Zero surviving mutants is
+required -- every behavioral mutation the tool introduces must be caught by at
+least one test.
+
+### Pre-Commit Hooks
+
+Pre-commit hooks are enforced via `.pre-commit-config.yaml` and lefthook. They
+run formatting, linting, and dependency checks automatically on each commit.
+Keep hooks green before pushing.
 
 ## Branching Workflow
 
@@ -181,23 +222,15 @@ cargo test --test '*' --workspace
 
 ## Task Tracking
 
-This project uses **dots** (`dot` CLI) for local task tracking alongside GitHub Issues.
-
-```bash
-dot ls                          # View all open tasks
-dot ready                       # Find unblocked tasks
-dot show <task-id>              # View task details
-dot on <task-id>                # Start working on a task
-dot off <task-id> -r "reason"   # Complete a task
-dot add "title" -p 2 -d "desc" # Create a new task
-```
+This project uses **GitHub Issues** for all task tracking. See AGENTS.md for
+label conventions and CLI commands.
 
 ## Pull Request Process
 
 1. **Update documentation** for any changed functionality
 2. **Add tests** for new features
 3. **Ensure CI passes** - all checks must be green
-4. **Update CHANGELOG.md** with your changes (once we have one)
+4. Changelogs are auto-generated by release-plz from Conventional Commit messages. Do not manually edit per-crate `CHANGELOG.md` files
 5. **Request review** from maintainers
 
 ### PR Title Format
@@ -254,7 +287,7 @@ Example:
 #[nutype(
     sanitize(trim),
     validate(not_empty, len_char_max = 255),
-    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Serialize, Deserialize)
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Into, Serialize, Deserialize)
 )]
 pub struct StreamId(String);
 
