@@ -190,3 +190,90 @@ fn developer_migrates_manual_validation_to_require_without_behavior_changes() {
         "require! migration should not change error text or successful validation outcomes",
     );
 }
+
+// --- Typed error support (#327) ---
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+enum WithdrawError {
+    #[error("insufficient-funds")]
+    InsufficientFunds,
+}
+
+impl From<WithdrawError> for CommandError {
+    fn from(e: WithdrawError) -> Self {
+        CommandError::BusinessRuleViolation(e.to_string())
+    }
+}
+
+#[derive(Command)]
+struct TypedWithdrawCommand {
+    #[stream]
+    account_id: StreamId,
+    amount: u64,
+}
+
+impl CommandLogic for TypedWithdrawCommand {
+    type Event = AccountEvent;
+    type State = AccountState;
+
+    fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
+        state
+    }
+
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+        require!(
+            state.available_funds >= self.amount,
+            WithdrawError::InsufficientFunds
+        );
+
+        Ok(NewEvents::default())
+    }
+}
+
+#[test]
+fn developer_uses_typed_error_with_require_macro() {
+    // Given: developer reconstructs state showing fewer funds than the requested withdrawal.
+    let command = TypedWithdrawCommand {
+        account_id: account_stream(),
+        amount: 75,
+    };
+    let state = AccountState {
+        available_funds: 25,
+    };
+
+    // When: the typed `require!` guard runs during command handling.
+    let result = command.handle(state);
+
+    // Then: the macro returns a business rule violation using the typed error's Display impl.
+    match result {
+        Err(CommandError::BusinessRuleViolation(message)) => {
+            assert_eq!(
+                message, "insufficient-funds",
+                "require! should convert typed error via Into<CommandError>"
+            );
+        }
+        Err(other) => panic!("require! should produce BusinessRuleViolation, got: {other}"),
+        Ok(_) => panic!("require! should have rejected insufficient funds"),
+    }
+}
+
+#[test]
+fn developer_typed_error_allows_passing_condition() {
+    // Given: developer reconstructs state with sufficient funds.
+    let command = TypedWithdrawCommand {
+        account_id: account_stream(),
+        amount: 25,
+    };
+    let state = AccountState {
+        available_funds: 100,
+    };
+
+    // When: the typed `require!` guard runs during command handling.
+    let result = command.handle(state);
+
+    // Then: command execution succeeds because the guard condition passes.
+    assert!(
+        result.is_ok(),
+        "require! with typed error should allow execution when condition is satisfied"
+    );
+}

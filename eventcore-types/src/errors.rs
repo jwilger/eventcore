@@ -41,3 +41,15 @@ pub enum CommandError {
     #[error("validation error: {0}")]
     ValidationError(String),
 }
+
+impl From<String> for CommandError {
+    fn from(message: String) -> Self {
+        CommandError::BusinessRuleViolation(message)
+    }
+}
+
+impl From<&str> for CommandError {
+    fn from(message: &str) -> Self {
+        CommandError::BusinessRuleViolation(message.to_string())
+    }
+}

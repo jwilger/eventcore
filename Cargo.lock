@@ -381,6 +381,7 @@ dependencies = [
  "quote",
  "serde",
  "syn",
+ "thiserror",
  "tokio",
  "trybuild",
  "uuid",
