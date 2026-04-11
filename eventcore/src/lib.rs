@@ -44,8 +44,8 @@ pub use eventcore_types::{
     AttemptNumber, BackoffMultiplier, BatchSize, CheckpointStore, CommandError, CommandLogic,
     CommandStreams, DelayMilliseconds, Event, EventFilter, EventPage, EventReader, EventStore,
     EventStoreError, EventStreamReader, EventStreamSlice, FailureContext, FailureStrategy,
-    MaxConsecutiveFailures, MaxRetries, MaxRetryAttempts, NewEvents, Operation, Projector,
-    RetryCount, StreamDeclarations, StreamDeclarationsError, StreamId, StreamPosition,
+    HandleDecision, MaxConsecutiveFailures, MaxRetries, MaxRetryAttempts, NewEvents, Operation,
+    Projector, RetryCount, StreamDeclarations, StreamDeclarationsError, StreamId, StreamPosition,
     StreamPrefix, StreamResolver, StreamVersion, StreamWriteEntry, StreamWrites,
 };
 
@@ -150,6 +150,110 @@ impl ExecutionResponse {
 
     pub fn attempts(&self) -> u32 {
         self.attempts.get()
+    }
+}
+
+/// The result of executing a command that may require caller-driven effects.
+///
+/// Commands with `Effect = ()` will only ever produce `Success` or `Error`.
+/// Commands that declare effects may produce `Effect` variants that the caller
+/// must fulfill before execution can continue.
+pub enum Execution<C: CommandLogic, S: EventStore> {
+    /// Command completed successfully; events have been persisted.
+    Success(ExecutionResponse),
+    /// Command failed with an error.
+    Error(CommandError),
+    /// Command requires an external effect to be fulfilled.
+    Effect(EffectRequest<C, S>),
+}
+
+impl<C: CommandLogic, S: EventStore> std::fmt::Debug for Execution<C, S>
+where
+    C::Effect: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Success(r) => f.debug_tuple("Success").field(r).finish(),
+            Self::Error(e) => f.debug_tuple("Error").field(e).finish(),
+            Self::Effect(req) => f.debug_tuple("Effect").field(req).finish(),
+        }
+    }
+}
+
+/// A pending effect request from a command execution.
+///
+/// Contains the effect description and the continuation state needed
+/// to resume execution after the caller fulfills the effect.
+pub struct EffectRequest<C: CommandLogic, S: EventStore> {
+    effect: C::Effect,
+    state: C::State,
+    command: C,
+    store: S,
+    policy: RetryPolicy,
+}
+
+impl<C: CommandLogic, S: EventStore> std::fmt::Debug for EffectRequest<C, S>
+where
+    C::Effect: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EffectRequest")
+            .field("effect", &self.effect)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<C: CommandLogic, S: EventStore> Execution<C, S> {
+    /// Returns `true` if the execution succeeded.
+    pub fn is_success(&self) -> bool {
+        matches!(self, Self::Success(_))
+    }
+
+    /// Returns `true` if the execution failed with an error.
+    pub fn is_error(&self) -> bool {
+        matches!(self, Self::Error(_))
+    }
+
+    /// Unwraps the success response, panicking if not successful.
+    pub fn unwrap(self) -> ExecutionResponse {
+        match self {
+            Self::Success(r) => r,
+            Self::Error(e) => panic!("called unwrap() on Error: {e:?}"),
+            Self::Effect(_) => panic!("called unwrap() on Effect"),
+        }
+    }
+
+    /// Unwraps the error, panicking if not an error.
+    pub fn unwrap_err(self) -> CommandError {
+        match self {
+            Self::Error(e) => e,
+            Self::Success(_) => panic!("called unwrap_err() on Success"),
+            Self::Effect(_) => panic!("called unwrap_err() on Effect"),
+        }
+    }
+
+    /// Unwraps the success response with a custom message.
+    pub fn expect(self, msg: &str) -> ExecutionResponse {
+        match self {
+            Self::Success(r) => r,
+            Self::Error(e) => panic!("{msg}: {e:?}"),
+            Self::Effect(_) => panic!("{msg}: got Effect"),
+        }
+    }
+}
+
+impl<C: CommandLogic, S: EventStore> EffectRequest<C, S> {
+    /// Returns a reference to the effect the command is requesting.
+    pub fn effect(&self) -> &C::Effect {
+        &self.effect
+    }
+
+    /// Resume execution after fulfilling the effect.
+    ///
+    /// The caller provides the result of the effect, and execution continues
+    /// from where it left off (the command's `resume()` method is called).
+    pub async fn resume(self, result: C::EffectResult) -> Execution<C, S> {
+        resume_execution(self.store, self.command, self.policy, self.state, result).await
     }
 }
 
@@ -499,88 +603,160 @@ async fn apply_retry_backoff(policy: &RetryPolicy, attempt: u32, stream_ids: &[S
 /// command execution workflow: loading state from multiple streams, validating
 /// business rules, and atomically committing resulting events.
 ///
-/// # Type Parameters
-///
-/// * `C` - A command implementing [`CommandLogic`] that defines the business operation
-/// * `S` - An event store implementing [`EventStore`] for persistence
-///
-/// # Parameters
-///
-/// * `store` - The event store for reading/writing events
-/// * `command` - The command to execute
-/// * `policy` - Retry policy configuration (max attempts, backoff strategy, etc.)
-///
-/// # Errors
-///
-/// Returns [`CommandError`] if:
-/// - Stream resolution fails
-/// - Event loading fails
-/// - Business rule validation fails (via command's `handle()`)
-/// - Event persistence fails
-/// - Optimistic concurrency conflicts occur after exhausting retries
+/// Commands that declare effects (Effect != ()) may return `Execution::Effect`
+/// with an `EffectRequest` that the caller must fulfill before execution continues.
+/// Effect-free commands always return `Success` or `Error` directly.
 #[tracing::instrument(name = "execute", skip_all, fields())]
-pub async fn execute<C, S>(
-    store: S,
-    command: C,
-    policy: RetryPolicy,
-) -> Result<ExecutionResponse, CommandError>
+pub async fn execute<C, S>(store: S, command: C, policy: RetryPolicy) -> Execution<C, S>
 where
     C: CommandLogic,
     S: EventStore,
 {
     for attempt in 0..=policy.max_retries.into() {
-        let PreparedExecution {
-            state,
-            stream_ids,
-            expected_versions,
-        } = prepare_execution_context(&store, &command).await?;
+        let prepared = match prepare_execution_context(&store, &command).await {
+            Ok(p) => p,
+            Err(e) => return Execution::Error(e),
+        };
 
-        let new_events = command.handle(state)?;
-        let writes =
-            build_stream_writes_from_events::<C>(Vec::from(new_events), expected_versions)?;
-
-        // Convert EventStoreError variants to appropriate CommandError types.
-        //
-        // thiserror's #[from] only implements the From trait, which has signature
-        // `fn from(e: T) -> Self` - it cannot pattern match on enum variants.
-        // Every EventStoreError would become CommandError::EventStoreError(e).
-        //
-        // We need variant-specific routing:
-        //   - VersionConflict → ConcurrencyError (different CommandError variant!)
-        //   - Other errors → EventStoreError(e)
-        //
-        // Manual map_err with match is the idiomatic solution for this.
-        let result = store
-            .append_events(writes)
-            .await
-            .map_err(|error| match error {
-                EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt),
-                other => CommandError::EventStoreError(other),
-            });
-
-        match result {
-            Ok(_) => {
-                tracing::info!("command execution succeeded");
-                return Ok(ExecutionResponse::new(
-                    NonZeroU32::new(attempt + 1).expect("attempts are 1-based"),
-                ));
+        let decision = command.handle(prepared.state.clone());
+        match try_complete_execution(&store, &command, &policy, prepared, decision, attempt).await {
+            ExecuteStepResult::Done(execution) => return execution,
+            ExecuteStepResult::Effect(effect, state) => {
+                return Execution::Effect(EffectRequest {
+                    effect,
+                    state,
+                    command,
+                    store,
+                    policy,
+                });
             }
-            Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries.into() => {
-                apply_retry_backoff(&policy, attempt, &stream_ids).await;
-                continue; // Retry
-            }
-            Err(CommandError::ConcurrencyError(_)) => {
-                tracing::error!(
-                    max_retries = policy.max_retries.into_inner(),
-                    streams = ?stream_ids.as_slice()
-                );
-                return Err(CommandError::ConcurrencyError(policy.max_retries.into()));
-            }
-            Err(e) => return Err(e), // Other permanent errors
+            ExecuteStepResult::Retry => continue,
         }
     }
 
     unreachable!("loop always returns before max_retries")
+}
+
+/// Resume execution after the caller has fulfilled an effect.
+///
+/// Calls `command.resume(state, result)` with the state captured at the time
+/// the effect was requested. If resume produces events and there's a version
+/// conflict, the full cycle restarts (re-read, re-handle).
+async fn resume_execution<C, S>(
+    store: S,
+    command: C,
+    policy: RetryPolicy,
+    state: C::State,
+    result: C::EffectResult,
+) -> Execution<C, S>
+where
+    C: CommandLogic,
+    S: EventStore,
+{
+    let decision = command.resume(state.clone(), result);
+
+    // Re-read streams to get current expected versions for the append
+    let prepared = match prepare_execution_context(&store, &command).await {
+        Ok(p) => p,
+        Err(e) => return Execution::Error(e),
+    };
+
+    // Use the resume decision with the freshly-read versions
+    let prepared_with_resume_state = PreparedExecution {
+        state,
+        stream_ids: prepared.stream_ids,
+        expected_versions: prepared.expected_versions,
+    };
+
+    match try_complete_execution(
+        &store,
+        &command,
+        &policy,
+        prepared_with_resume_state,
+        decision,
+        0,
+    )
+    .await
+    {
+        ExecuteStepResult::Done(execution) => execution,
+        ExecuteStepResult::Effect(effect, state) => Execution::Effect(EffectRequest {
+            effect,
+            state,
+            command,
+            store,
+            policy,
+        }),
+        ExecuteStepResult::Retry => {
+            // Version conflict after resume — restart the full cycle
+            execute(store, command, policy).await
+        }
+    }
+}
+
+enum ExecuteStepResult<C: CommandLogic, S: EventStore> {
+    Done(Execution<C, S>),
+    Effect(C::Effect, C::State),
+    Retry,
+}
+
+async fn try_complete_execution<C, S>(
+    store: &S,
+    _command: &C,
+    policy: &RetryPolicy,
+    prepared: PreparedExecution<C>,
+    decision: HandleDecision<C>,
+    attempt: u32,
+) -> ExecuteStepResult<C, S>
+where
+    C: CommandLogic,
+    S: EventStore,
+{
+    let new_events = match decision {
+        HandleDecision::Done(Ok(events)) => events,
+        HandleDecision::Done(Err(e)) => return ExecuteStepResult::Done(Execution::Error(e)),
+        HandleDecision::Effect(effect) => {
+            return ExecuteStepResult::Effect(effect, prepared.state);
+        }
+    };
+
+    let writes = match build_stream_writes_from_events::<C>(
+        Vec::from(new_events),
+        prepared.expected_versions,
+    ) {
+        Ok(w) => w,
+        Err(e) => return ExecuteStepResult::Done(Execution::Error(e)),
+    };
+
+    let result = store
+        .append_events(writes)
+        .await
+        .map_err(|error| match error {
+            EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt),
+            other => CommandError::EventStoreError(other),
+        });
+
+    match result {
+        Ok(_) => {
+            tracing::info!("command execution succeeded");
+            ExecuteStepResult::Done(Execution::Success(ExecutionResponse::new(
+                NonZeroU32::new(attempt + 1).expect("attempts are 1-based"),
+            )))
+        }
+        Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries.into() => {
+            apply_retry_backoff(policy, attempt, &prepared.stream_ids).await;
+            ExecuteStepResult::Retry
+        }
+        Err(CommandError::ConcurrencyError(_)) => {
+            tracing::error!(
+                max_retries = policy.max_retries.into_inner(),
+                streams = ?prepared.stream_ids.as_slice()
+            );
+            ExecuteStepResult::Done(Execution::Error(CommandError::ConcurrencyError(
+                policy.max_retries.into(),
+            )))
+        }
+        Err(e) => ExecuteStepResult::Done(Execution::Error(e)),
+    }
 }
 
 #[cfg(test)]
@@ -626,14 +802,16 @@ mod tests {
     impl CommandLogic for MockCommand {
         type Event = TestEvent;
         type State = ();
+        type Effect = ();
+        type EffectResult = ();
 
         fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
             state
         }
 
-        fn handle(&self, _state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+        fn handle(&self, _state: Self::State) -> HandleDecision<Self> {
             self.handle_called.store(true, Ordering::SeqCst);
-            Ok(NewEvents::default())
+            HandleDecision::Done(Ok(NewEvents::default()))
         }
     }
 
@@ -660,7 +838,7 @@ mod tests {
         let result = execute(&store, command, RetryPolicy::new()).await;
 
         // Then: Command execution succeeds
-        assert!(result.is_ok(), "execute() should succeed");
+        assert!(result.is_success(), "execute() should succeed");
 
         // And: The command's handle() method was called
         assert!(
@@ -707,16 +885,18 @@ mod tests {
     impl CommandLogic for StateCapturingCommand {
         type Event = TestEventWithValue;
         type State = TestState;
+        type Effect = ();
+        type EffectResult = ();
 
         fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
             state.value += event.value;
             state
         }
 
-        fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+        fn handle(&self, state: Self::State) -> HandleDecision<Self> {
             // Capture the state that was passed to handle()
             *self.captured_state.lock().unwrap() = Some(state);
-            Ok(NewEvents::default())
+            HandleDecision::Done(Ok(NewEvents::default()))
         }
     }
 
@@ -763,7 +943,7 @@ mod tests {
 
         // Then: Execution fails with EventStoreError, not BusinessRuleViolation
         assert!(
-            matches!(result, Err(CommandError::EventStoreError(_))),
+            matches!(result, Execution::Error(CommandError::EventStoreError(_))),
             "read_stream() failure should propagate as CommandError::EventStoreError, got: {:?}",
             result
         );
@@ -878,7 +1058,7 @@ mod tests {
 
         // Then: Command succeeds automatically (retry transparent to developer)
         assert!(
-            result.is_ok(),
+            result.is_success(),
             "execute() should retry automatically and succeed, but got: {:?}",
             result
         );
@@ -924,7 +1104,7 @@ mod tests {
 
         // Then: ConcurrencyError is returned (retries exhausted)
         assert!(
-            matches!(result, Err(CommandError::ConcurrencyError(_))),
+            matches!(result, Execution::Error(CommandError::ConcurrencyError(_))),
             "should return ConcurrencyError after exhausting retries, but got: {:?}",
             result
         );
@@ -969,7 +1149,7 @@ mod tests {
 
         // Then: Fails after exactly 1 retry (2 total attempts)
         assert!(
-            matches!(result, Err(CommandError::ConcurrencyError(1))),
+            matches!(result, Execution::Error(CommandError::ConcurrencyError(1))),
             "should fail after exactly 1 retry as configured in policy, but got: {:?}",
             result
         );
@@ -1087,7 +1267,10 @@ mod tests {
         let elapsed = start.elapsed();
 
         // Then: Command succeeds after 2 retries (3 total attempts)
-        assert!(result.is_ok(), "command should succeed after 2 retries");
+        assert!(
+            result.is_success(),
+            "command should succeed after 2 retries"
+        );
 
         // And: Total delay is ~100ms (2 retries × 50ms fixed)
         // Allow ±30ms tolerance for test timing variance
@@ -1128,7 +1311,7 @@ mod tests {
 
         // Then: Returns ConcurrencyError immediately (no retry attempts)
         assert!(
-            matches!(result, Err(CommandError::ConcurrencyError(0))),
+            matches!(result, Execution::Error(CommandError::ConcurrencyError(0))),
             "should return ConcurrencyError(0) for zero max_retries, but got: {:?}",
             result
         );
@@ -1173,7 +1356,7 @@ mod tests {
 
         // Then: Command succeeds after retries
         assert!(
-            result.is_ok(),
+            result.is_success(),
             "command should succeed after 2 retries, got: {:?}",
             result
         );
@@ -1217,7 +1400,10 @@ mod tests {
         let result = execute(&store, command, policy).await;
 
         // Then: Command succeeds after retries
-        assert!(result.is_ok(), "command should succeed after 2 retries");
+        assert!(
+            result.is_success(),
+            "command should succeed after 2 retries"
+        );
 
         // And: Logs contain structured field data
         // Note: tracing-test shows fields as "key=value" in log output
@@ -1260,7 +1446,7 @@ mod tests {
 
         // Then: Execution fails
         assert!(
-            matches!(result, Err(CommandError::ConcurrencyError(2))),
+            matches!(result, Execution::Error(CommandError::ConcurrencyError(2))),
             "should fail after exhausting retries"
         );
 
@@ -1325,7 +1511,7 @@ mod tests {
         let result = execute(&store, command, policy).await;
 
         // Then: Command succeeds after one retry
-        assert!(result.is_ok(), "command should succeed after retry");
+        assert!(result.is_success(), "command should succeed after retry");
 
         // And: Metrics hook was called exactly once for the retry attempt
         assert_eq!(

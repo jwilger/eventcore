@@ -56,8 +56,8 @@ mod store;
 mod validation;
 
 pub use command::{
-    CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamDeclarationsError,
-    StreamResolver,
+    CommandLogic, CommandStreams, Event, HandleDecision, NewEvents, StreamDeclarations,
+    StreamDeclarationsError, StreamResolver,
 };
 pub use errors::CommandError;
 pub use projection::{

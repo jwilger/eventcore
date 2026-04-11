@@ -10,8 +10,8 @@ use std::{
 
 use eventcore::{
     CommandLogic, CommandStreams, Event, EventStore, EventStoreError, EventStreamReader,
-    EventStreamSlice, NewEvents, RetryPolicy, StreamDeclarations, StreamId, StreamVersion,
-    StreamWrites, execute,
+    EventStreamSlice, Execution, HandleDecision, RetryPolicy, StreamDeclarations, StreamId,
+    StreamVersion, StreamWrites, execute,
 };
 use eventcore_memory::InMemoryEventStore;
 use nutype::nutype;
@@ -234,20 +234,19 @@ impl CommandStreams for TransferMoney {
 impl CommandLogic for SeedDeposit {
     type Event = TestDomainEvents;
     type State = ();
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state
     }
 
-    fn handle(
-        &self,
-        _state: Self::State,
-    ) -> Result<NewEvents<Self::Event>, eventcore::CommandError> {
-        Ok(vec![TestDomainEvents::Credited {
+    fn handle(&self, _state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done(Ok(vec![TestDomainEvents::Credited {
             account_id: self.account_id.clone(),
             amount: self.amount,
         }]
-        .into())
+        .into()))
     }
 }
 
@@ -308,16 +307,15 @@ impl EventStore for ConflictInjectingStore {
 impl CommandLogic for TransferMoney {
     type Event = TestDomainEvents;
     type State = ();
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state
     }
 
-    fn handle(
-        &self,
-        _state: Self::State,
-    ) -> Result<NewEvents<Self::Event>, eventcore::CommandError> {
-        Ok(vec![
+    fn handle(&self, _state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done(Ok(vec![
             TestDomainEvents::Debited {
                 account_id: self.from.clone(),
                 amount: self.amount,
@@ -327,7 +325,7 @@ impl CommandLogic for TransferMoney {
                 amount: self.amount,
             },
         ]
-        .into())
+        .into()))
     }
 }
 
@@ -380,12 +378,12 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
         .expect("reading destination account stream succeeds");
 
     // Single assertion: struct comparison keeps one assert while inspecting both accounts.
-    let attempts = result
-        .as_ref()
-        .ok()
-        .and_then(|response| NonZeroU32::new(response.attempts()));
+    let (succeeded, attempts) = match &result {
+        Execution::Success(response) => (true, NonZeroU32::new(response.attempts())),
+        _ => (false, None),
+    };
     let actual = TransferAcceptanceResult {
-        succeeded: result.is_ok(),
+        succeeded,
         attempts,
         from_account: account_snapshot(&from_account, from_events.into_iter().collect()),
         to_account: account_snapshot(&to_account, to_events.into_iter().collect()),
@@ -463,12 +461,12 @@ async fn transfer_retries_after_destination_conflict() {
         .await
         .expect("reading destination account stream succeeds after retry");
 
-    let attempts = result
-        .as_ref()
-        .ok()
-        .and_then(|response| NonZeroU32::new(response.attempts()));
+    let (succeeded, attempts) = match &result {
+        Execution::Success(response) => (true, NonZeroU32::new(response.attempts())),
+        _ => (false, None),
+    };
     let actual = TransferAcceptanceResult {
-        succeeded: result.is_ok(),
+        succeeded,
         attempts,
         from_account: account_snapshot(&from_account, from_events.into_iter().collect()),
         to_account: account_snapshot(&to_account, to_events.into_iter().collect()),
@@ -624,21 +622,18 @@ async fn concurrent_transfers_never_expose_partial_state() {
         amount: second_transfer_amount,
     };
 
-    // Clone store references for concurrent execution
-    let store_for_first = Arc::clone(&snapshotting_store);
-    let store_for_second = Arc::clone(&snapshotting_store);
-
     // Execute both transfers concurrently - they will race and one will retry
     let (first_result, second_result) = tokio::join!(
-        async move { execute(store_for_first.as_ref(), first_command, RetryPolicy::new()).await },
-        async move {
-            execute(
-                store_for_second.as_ref(),
-                second_command,
-                RetryPolicy::new(),
-            )
-            .await
-        }
+        execute(
+            snapshotting_store.as_ref(),
+            first_command,
+            RetryPolicy::new()
+        ),
+        execute(
+            snapshotting_store.as_ref(),
+            second_command,
+            RetryPolicy::new()
+        ),
     );
 
     // Stop the background poller now that transfers are complete
@@ -724,18 +719,16 @@ async fn concurrent_transfers_never_expose_partial_state() {
 
     // Collect all evidence into a single struct for assertion
     let actual_analysis = PartialVisibilityEvidence {
-        first_transfer_ok: first_result.is_ok(),
-        first_attempts_at_least_one: first_result
-            .as_ref()
-            .ok()
-            .map(|response| response.attempts() >= 1)
-            .unwrap_or(false),
-        second_transfer_ok: second_result.is_ok(),
-        second_attempts_at_least_one: second_result
-            .as_ref()
-            .ok()
-            .map(|response| response.attempts() >= 1)
-            .unwrap_or(false),
+        first_transfer_ok: first_result.is_success(),
+        first_attempts_at_least_one: match &first_result {
+            Execution::Success(response) => response.attempts() >= 1,
+            _ => false,
+        },
+        second_transfer_ok: second_result.is_success(),
+        second_attempts_at_least_one: match &second_result {
+            Execution::Success(response) => response.attempts() >= 1,
+            _ => false,
+        },
         final_source_version: final_source_snapshot.version,
         final_destination_version: final_destination_snapshot.version,
         final_source_balance: final_source_snapshot.balance,

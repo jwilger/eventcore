@@ -9,8 +9,7 @@
 //! ALL events are written or NONE are.
 
 use eventcore::{
-    Command, CommandError, CommandLogic, Event, NewEvents, RetryPolicy, StreamId, execute,
-    run_projection,
+    Command, CommandLogic, Event, HandleDecision, RetryPolicy, StreamId, execute, run_projection,
 };
 use eventcore_memory::InMemoryEventStore;
 use eventcore_testing::EventCollector;
@@ -89,17 +88,19 @@ struct SeedDeposit {
 impl CommandLogic for SeedDeposit {
     type Event = TransferEvent;
     type State = ();
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state
     }
 
-    fn handle(&self, _state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        Ok(vec![TransferEvent::Credited {
+    fn handle(&self, _state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done(Ok(vec![TransferEvent::Credited {
             account_id: self.account_id.clone(),
             amount: self.amount,
         }]
-        .into())
+        .into()))
     }
 }
 
@@ -120,13 +121,15 @@ struct TransferMoney {
 impl CommandLogic for TransferMoney {
     type Event = TransferEvent;
     type State = ();
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state
     }
 
-    fn handle(&self, _state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        Ok(vec![
+    fn handle(&self, _state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done(Ok(vec![
             TransferEvent::Debited {
                 account_id: self.from.clone(),
                 amount: self.amount,
@@ -136,7 +139,7 @@ impl CommandLogic for TransferMoney {
                 amount: self.amount,
             },
         ]
-        .into())
+        .into()))
     }
 }
 
@@ -304,20 +307,10 @@ async fn concurrent_transfers_produce_consistent_final_state() {
         amount: second_transfer_amount,
     };
 
-    let store_for_first = Arc::clone(&store);
-    let store_for_second = Arc::clone(&store);
-
     // Execute both transfers concurrently
     let (first_result, second_result) = tokio::join!(
-        async move { execute(store_for_first.as_ref(), first_command, RetryPolicy::new()).await },
-        async move {
-            execute(
-                store_for_second.as_ref(),
-                second_command,
-                RetryPolicy::new(),
-            )
-            .await
-        }
+        execute(store.as_ref(), first_command, RetryPolicy::new()),
+        execute(store.as_ref(), second_command, RetryPolicy::new()),
     );
 
     // Then: Both transfers succeed

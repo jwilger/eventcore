@@ -1,6 +1,6 @@
 use eventcore::{
-    CommandError, CommandLogic, CommandStreams, Event, NewEvents, RetryPolicy, StreamDeclarations,
-    StreamId, StreamResolver,
+    CommandLogic, CommandStreams, Event, HandleDecision, RetryPolicy, StreamDeclarations, StreamId,
+    StreamResolver,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
@@ -59,16 +59,18 @@ impl CommandStreams for SendCheckCommand {
 impl CommandLogic for SendCheckCommand {
     type Event = TestEvent;
     type State = TestState;
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state
     }
 
-    fn handle(&self, _state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        Ok(vec![TestEvent::Happened {
+    fn handle(&self, _state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done(Ok(vec![TestEvent::Happened {
             stream: self.stream.clone(),
         }]
-        .into())
+        .into()))
     }
 
     fn stream_resolver(&self) -> Option<&(dyn StreamResolver<Self::State> + Sync)> {

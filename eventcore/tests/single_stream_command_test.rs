@@ -1,6 +1,6 @@
 use eventcore::{
-    CommandError, CommandLogic, CommandStreams, Event, EventStore, NewEvents, RetryPolicy,
-    StreamDeclarations, StreamId, execute,
+    CommandError, CommandLogic, CommandStreams, Event, EventStore, Execution, HandleDecision,
+    RetryPolicy, StreamDeclarations, StreamId, execute,
 };
 use eventcore_memory::InMemoryEventStore;
 use nutype::nutype;
@@ -98,20 +98,19 @@ impl CommandStreams for Deposit {
 impl CommandLogic for Deposit {
     type Event = TestDomainEvents;
     type State = ();
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state
     }
 
-    fn handle(
-        &self,
-        _state: Self::State,
-    ) -> Result<NewEvents<Self::Event>, eventcore::CommandError> {
-        Ok(vec![TestDomainEvents::MoneyDeposited {
+    fn handle(&self, _state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done(Ok(vec![TestDomainEvents::MoneyDeposited {
             account_id: self.account_id.clone(),
             amount: self.amount,
         }]
-        .into())
+        .into()))
     }
 }
 
@@ -131,23 +130,22 @@ impl CommandStreams for Withdraw {
 impl CommandLogic for Withdraw {
     type Event = TestDomainEvents;
     type State = AccountBalance;
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
         state.apply_event(event)
     }
 
-    fn handle(
-        &self,
-        state: Self::State,
-    ) -> Result<NewEvents<Self::Event>, eventcore::CommandError> {
+    fn handle(&self, state: Self::State) -> HandleDecision<Self> {
         if !state.has_sufficient_funds(self.amount) {
             let requested: u16 = self.amount.into();
-            return Err(CommandError::BusinessRuleViolation(format!(
+            return HandleDecision::Done(Err(CommandError::BusinessRuleViolation(format!(
                 "insufficient funds for account {}: balance={}, attempted_withdrawal={}",
                 self.account_id.as_ref(),
                 state.balance_cents(),
                 requested
-            )));
+            ))));
         }
 
         let event = TestDomainEvents::MoneyWithdrawn {
@@ -155,7 +153,7 @@ impl CommandLogic for Withdraw {
             amount: self.amount,
         };
 
-        Ok(vec![event].into())
+        HandleDecision::Done(Ok(vec![event].into()))
     }
 }
 
@@ -237,8 +235,8 @@ async fn insufficient_funds_returns_business_rule_violation() {
 
     // When: Developer executes the withdraw command
     let error = match execute(&store, withdraw, RetryPolicy::new()).await {
-        Ok(_) => panic!("expected business rule violation but command succeeded"),
-        Err(error) => error,
+        Execution::Error(error) => error,
+        _ => panic!("expected business rule violation but command succeeded"),
     };
 
     // Then: CommandError::BusinessRuleViolation is returned with actionable context

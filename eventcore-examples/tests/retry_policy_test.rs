@@ -6,8 +6,8 @@
 //! - Testing retry behavior with injected version conflicts
 
 use eventcore::{
-    AttemptNumber, CommandError, CommandLogic, CommandStreams, DelayMilliseconds, Event,
-    EventStore, EventStoreError, EventStreamReader, EventStreamSlice, MetricsHook, NewEvents,
+    AttemptNumber, CommandLogic, CommandStreams, DelayMilliseconds, Event, EventStore,
+    EventStoreError, EventStreamReader, EventStreamSlice, HandleDecision, MetricsHook,
     RetryContext, RetryPolicy, StreamDeclarations, StreamId, StreamWrites, execute,
 };
 use eventcore_memory::InMemoryEventStore;
@@ -50,16 +50,18 @@ impl CommandStreams for TestCommand {
 impl CommandLogic for TestCommand {
     type Event = TestEvent;
     type State = ();
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state
     }
 
-    fn handle(&self, _state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        Ok(vec![TestEvent {
+    fn handle(&self, _state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done(Ok(vec![TestEvent {
             stream_id: self.stream_id.clone(),
         }]
-        .into())
+        .into()))
     }
 }
 
@@ -171,7 +173,10 @@ async fn metrics_hook_receives_correct_attempt_numbers() {
     let result = execute(&store, command, policy).await;
 
     // Then: The command succeeds after 3 retries
-    assert!(result.is_ok(), "command should succeed after 3 retries");
+    assert!(
+        result.is_success(),
+        "command should succeed after 3 retries"
+    );
 
     // And: The metrics hook receives exactly 3 RetryContext values
     let contexts = captured_contexts.lock().unwrap();

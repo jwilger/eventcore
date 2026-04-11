@@ -1,6 +1,6 @@
 //! Integration tests demonstrating the GWT (Given-When-Then) test scenario API.
 
-use eventcore::{Command, CommandError, CommandLogic, Event, NewEvents, StreamId};
+use eventcore::{Command, CommandError, CommandLogic, Event, HandleDecision, StreamId};
 use eventcore_testing::TestScenario;
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,8 @@ struct Deposit {
 impl CommandLogic for Deposit {
     type Event = BankAccountEvent;
     type State = AccountBalance;
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
         match event {
@@ -90,12 +92,12 @@ impl CommandLogic for Deposit {
         }
     }
 
-    fn handle(&self, _state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        Ok(vec![BankAccountEvent::MoneyDeposited {
+    fn handle(&self, _state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done(Ok(vec![BankAccountEvent::MoneyDeposited {
             account_id: self.account_id.clone(),
             amount: self.amount,
         }]
-        .into())
+        .into()))
     }
 }
 
@@ -109,6 +111,8 @@ struct Withdraw {
 impl CommandLogic for Withdraw {
     type Event = BankAccountEvent;
     type State = AccountBalance;
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
         match event {
@@ -117,17 +121,19 @@ impl CommandLogic for Withdraw {
         }
     }
 
-    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        eventcore::require!(
-            state.has_sufficient_funds(self.amount),
-            WithdrawError::InsufficientFunds
-        );
+    fn handle(&self, state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done((|| {
+            eventcore::require!(
+                state.has_sufficient_funds(self.amount),
+                WithdrawError::InsufficientFunds
+            );
 
-        Ok(vec![BankAccountEvent::MoneyWithdrawn {
-            account_id: self.account_id.clone(),
-            amount: self.amount,
-        }]
-        .into())
+            Ok(vec![BankAccountEvent::MoneyWithdrawn {
+                account_id: self.account_id.clone(),
+                amount: self.amount,
+            }]
+            .into())
+        })())
     }
 }
 

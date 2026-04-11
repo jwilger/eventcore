@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use eventcore::{
     CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, NewEvents, RetryPolicy, StreamDeclarations, StreamId,
+    EventStreamReader, EventStreamSlice, HandleDecision, RetryPolicy, StreamDeclarations, StreamId,
     StreamResolver, StreamVersion, StreamWrites, execute,
 };
 use eventcore_memory::InMemoryEventStore;
@@ -34,7 +34,7 @@ async fn process_payment_discovers_related_payment_stream_before_handling() {
         .expect("handle() should capture reconstructed checkout state");
 
     let actual = (
-        result.is_ok(),
+        result.is_success(),
         final_state.payment_stream_loaded,
         final_state.payment_events_observed > 0,
     );
@@ -71,7 +71,11 @@ async fn executor_registers_discovered_streams_for_optimistic_concurrency() {
         .await
         .expect("payment stream read should succeed");
 
-    let actual = (result.is_ok(), order_events.len(), payment_events.len());
+    let actual = (
+        result.is_success(),
+        order_events.len(),
+        payment_events.len(),
+    );
     let expected = (true, 2, 2);
 
     assert_eq!(
@@ -96,7 +100,7 @@ async fn executor_retries_when_discovered_stream_conflicts() {
     let result = execute(&store, command, RetryPolicy::new()).await;
 
     // Then: Execution should succeed after one retry, proving append_events was attempted twice.
-    let actual = (result.is_ok(), store.append_attempts());
+    let actual = (result.is_success(), store.append_attempts());
     let expected = (true, 2);
 
     assert_eq!(
@@ -123,7 +127,7 @@ async fn executor_reads_each_stream_once_during_discovery() {
 
     // Then: Each stream should be read exactly once even when discovered dynamically.
     let actual = (
-        result.is_ok(),
+        result.is_success(),
         store.read_count(&order_stream),
         store.read_count(&payment_stream),
     );
@@ -330,22 +334,24 @@ impl CommandStreams for ProcessPaymentCommand {
 impl CommandLogic for ProcessPaymentCommand {
     type Event = CheckoutEvent;
     type State = CheckoutState;
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
         state.record(event);
         state
     }
 
-    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+    fn handle(&self, state: Self::State) -> HandleDecision<Self> {
         self.captured_state
             .lock()
             .expect("capture mutex should not be poisoned")
             .replace(state.clone());
 
-        Ok(vec![CheckoutEvent::PaymentCaptured {
+        HandleDecision::Done(Ok(vec![CheckoutEvent::PaymentCaptured {
             order_stream: self.order_stream.clone(),
         }]
-        .into())
+        .into()))
     }
 
     fn stream_resolver(&self) -> Option<&(dyn StreamResolver<Self::State> + Sync)> {
@@ -379,28 +385,31 @@ impl CommandStreams for CaptureAcrossStreamsCommand {
 impl CommandLogic for CaptureAcrossStreamsCommand {
     type Event = CheckoutEvent;
     type State = CheckoutState;
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
         state.record(event);
         state
     }
 
-    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        let payment_stream =
-            state
-                .discovered_payment_stream
-                .clone()
-                .ok_or(CommandError::ValidationError(
+    fn handle(&self, state: Self::State) -> HandleDecision<Self> {
+        let payment_stream = match state.discovered_payment_stream.clone() {
+            Some(s) => s,
+            None => {
+                return HandleDecision::Done(Err(CommandError::ValidationError(
                     "no payment stream discovered during state reconstruction".to_string(),
-                ))?;
+                )));
+            }
+        };
 
-        Ok(vec![
+        HandleDecision::Done(Ok(vec![
             CheckoutEvent::PaymentCaptured {
                 order_stream: self.order_stream.clone(),
             },
             CheckoutEvent::PaymentMethodCaptured { payment_stream },
         ]
-        .into())
+        .into()))
     }
 
     fn stream_resolver(&self) -> Option<&(dyn StreamResolver<Self::State> + Sync)> {

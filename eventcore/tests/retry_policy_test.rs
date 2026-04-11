@@ -1,7 +1,7 @@
 use eventcore::{
-    CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, MetricsHook, NewEvents, RetryContext, RetryPolicy,
-    StreamDeclarations, StreamId, StreamWrites, execute,
+    CommandLogic, CommandStreams, Event, EventStore, EventStoreError, EventStreamReader,
+    EventStreamSlice, HandleDecision, MetricsHook, RetryContext, RetryPolicy, StreamDeclarations,
+    StreamId, StreamWrites, execute,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
@@ -43,16 +43,18 @@ impl CommandStreams for TestCommand {
 impl CommandLogic for TestCommand {
     type Event = TestEvent;
     type State = ();
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, _event: &Self::Event) -> Self::State {
         state
     }
 
-    fn handle(&self, _state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        Ok(vec![TestEvent {
+    fn handle(&self, _state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done(Ok(vec![TestEvent {
             stream_id: self.stream_id.clone(),
         }]
-        .into())
+        .into()))
     }
 }
 
@@ -140,7 +142,10 @@ async fn metrics_hook_receives_correct_attempt_numbers() {
     let result = execute(&store, command, policy).await;
 
     // Then: Command succeeds after retries
-    assert!(result.is_ok(), "command should succeed after 3 retries");
+    assert!(
+        result.is_success(),
+        "command should succeed after 3 retries"
+    );
 
     // And: Metrics hook captured exactly 3 retry contexts
     let contexts = captured_contexts.lock().unwrap();

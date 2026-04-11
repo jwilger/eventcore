@@ -1,6 +1,6 @@
 use eventcore::{
-    Command, CommandError, CommandLogic, CommandStreams, Event, EventStore, NewEvents, RetryPolicy,
-    StreamDeclarations, StreamId, execute,
+    Command, CommandError, CommandLogic, CommandStreams, Event, EventStore, HandleDecision,
+    RetryPolicy, StreamDeclarations, StreamId, execute,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
@@ -66,29 +66,33 @@ impl CommandStreams for ManualTransfer {
 impl CommandLogic for ManualTransfer {
     type Event = TransferEvent;
     type State = TransferLedger;
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
         state.record(event)
     }
 
-    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        if state.already_completed() {
-            return Err(CommandError::BusinessRuleViolation(
-                "transfer already applied to both streams".to_string(),
-            ));
-        }
+    fn handle(&self, state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done((|| {
+            if state.already_completed() {
+                return Err(CommandError::BusinessRuleViolation(
+                    "transfer already applied to both streams".to_string(),
+                ));
+            }
 
-        Ok(vec![
-            TransferEvent::Debited {
-                account_id: self.source.clone(),
-                cents: self.cents,
-            },
-            TransferEvent::Credited {
-                account_id: self.destination.clone(),
-                cents: self.cents,
-            },
-        ]
-        .into())
+            Ok(vec![
+                TransferEvent::Debited {
+                    account_id: self.source.clone(),
+                    cents: self.cents,
+                },
+                TransferEvent::Credited {
+                    account_id: self.destination.clone(),
+                    cents: self.cents,
+                },
+            ]
+            .into())
+        })())
     }
 }
 
@@ -106,29 +110,33 @@ struct DerivedTransfer {
 impl CommandLogic for DerivedTransfer {
     type Event = TransferEvent;
     type State = TransferLedger;
+    type Effect = ();
+    type EffectResult = ();
 
     fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
         state.record(event)
     }
 
-    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        if state.already_completed() {
-            return Err(CommandError::BusinessRuleViolation(
-                "transfer already applied to both streams".to_string(),
-            ));
-        }
+    fn handle(&self, state: Self::State) -> HandleDecision<Self> {
+        HandleDecision::Done((|| {
+            if state.already_completed() {
+                return Err(CommandError::BusinessRuleViolation(
+                    "transfer already applied to both streams".to_string(),
+                ));
+            }
 
-        Ok(vec![
-            TransferEvent::Debited {
-                account_id: self.source.clone(),
-                cents: self.cents,
-            },
-            TransferEvent::Credited {
-                account_id: self.destination.clone(),
-                cents: self.cents,
-            },
-        ]
-        .into())
+            Ok(vec![
+                TransferEvent::Debited {
+                    account_id: self.source.clone(),
+                    cents: self.cents,
+                },
+                TransferEvent::Credited {
+                    account_id: self.destination.clone(),
+                    cents: self.cents,
+                },
+            ]
+            .into())
+        })())
     }
 }
 

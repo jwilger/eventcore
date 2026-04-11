@@ -60,7 +60,16 @@ impl TestScenario {
         C: CommandLogic,
         C::Event: Clone + PartialEq + std::fmt::Debug,
     {
-        let result = eventcore::execute(&self.store, command, eventcore::RetryPolicy::new()).await;
+        let execution =
+            eventcore::execute(&self.store, command, eventcore::RetryPolicy::new()).await;
+
+        let result = match execution {
+            eventcore::Execution::Success(_) => Ok(()),
+            eventcore::Execution::Error(e) => Err(e),
+            eventcore::Execution::Effect(_) => {
+                panic!("TestScenario does not support commands that request effects")
+            }
+        };
 
         let storage: std::sync::Arc<std::sync::Mutex<Vec<C::Event>>> =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -69,10 +78,7 @@ impl TestScenario {
 
         let all_events = storage.lock().unwrap().clone();
 
-        ScenarioResult {
-            result: result.map(|_| ()),
-            all_events,
-        }
+        ScenarioResult { result, all_events }
     }
 }
 

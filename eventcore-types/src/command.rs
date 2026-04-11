@@ -158,7 +158,19 @@ pub trait CommandLogic: CommandStreams + Send + Sync {
     /// This type represents the reconstructed state needed to validate
     /// business rules and produce events. It's rebuilt from scratch for
     /// each command execution by applying events via `apply()`.
-    type State: Default + Send;
+    type State: Default + Clone + Send;
+
+    /// The effect type this command can request from the caller.
+    ///
+    /// Commands that need external I/O (API calls, LLM invocations, etc.)
+    /// declare their effect type here. Effect-free commands use `()`.
+    type Effect: Send + std::fmt::Debug;
+
+    /// The result type the caller returns after fulfilling an effect.
+    ///
+    /// Paired with `Effect` — the caller receives an `Effect` and returns
+    /// an `EffectResult`. Effect-free commands use `()`.
+    type EffectResult: Send;
 
     /// Reconstruct state by applying a single event.
     ///
@@ -176,11 +188,12 @@ pub trait CommandLogic: CommandStreams + Send + Sync {
     /// The updated state after applying the event
     fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State;
 
-    /// Execute business logic and produce events.
+    /// Execute business logic and produce events, or request an effect.
     ///
     /// This method validates business rules using the reconstructed state
-    /// and returns events to be persisted. It's a pure function that
-    /// makes domain decisions without performing I/O or side effects.
+    /// and either returns events to be persisted or requests an external
+    /// effect. It's a pure function that makes domain decisions without
+    /// performing I/O or side effects.
     ///
     /// # Parameters
     ///
@@ -188,9 +201,21 @@ pub trait CommandLogic: CommandStreams + Send + Sync {
     ///
     /// # Returns
     ///
-    /// * `Ok(NewEvents<Self::Event>)` if business rules pass and events produced
-    /// * `Err(CommandError)` if business rules violated
-    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError>;
+    /// * `HandleDecision::Done(Ok(events))` if business rules pass
+    /// * `HandleDecision::Done(Err(error))` if business rules violated
+    /// * `HandleDecision::Effect(effect)` if external I/O needed
+    fn handle(&self, state: Self::State) -> HandleDecision<Self>;
+
+    /// Resume command execution after an effect has been fulfilled.
+    ///
+    /// Called when the caller has fulfilled an effect requested by `handle()`
+    /// or a previous `resume()` call. May return more effects or complete.
+    ///
+    /// Effect-free commands (Effect = ()) should never have this called.
+    /// The default implementation panics — commands with effects MUST override.
+    fn resume(&self, _state: Self::State, _result: Self::EffectResult) -> HandleDecision<Self> {
+        panic!("resume() called on a command that does not declare effects")
+    }
 
     /// Returns a runtime stream resolver when the command needs dynamic discovery.
     ///
@@ -203,6 +228,19 @@ pub trait CommandLogic: CommandStreams + Send + Sync {
     }
 }
 
+/// The decision returned by a command's `handle()` or `resume()` method.
+///
+/// Commands can either produce events immediately (`Done`) or request
+/// an external effect to be fulfilled by the caller (`Effect`).
+/// Effect-free commands always return `Done`.
+#[derive(Debug)]
+pub enum HandleDecision<C: CommandLogic + ?Sized> {
+    /// The command has finished and produced events (or an error).
+    Done(Result<NewEvents<C::Event>, CommandError>),
+    /// The command needs an external effect fulfilled before continuing.
+    Effect(C::Effect),
+}
+
 /// Collection of new events produced by a command.
 ///
 /// This type represents the output of `CommandLogic::handle()` - the
@@ -211,6 +249,14 @@ pub trait CommandLogic: CommandStreams + Send + Sync {
 /// Per ADR-012, this works with domain event types that implement the Event trait.
 pub struct NewEvents<E: Event> {
     events: Vec<E>,
+}
+
+impl<E: Event> std::fmt::Debug for NewEvents<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewEvents")
+            .field("len", &self.events.len())
+            .finish()
+    }
 }
 
 impl<E: Event> From<Vec<E>> for NewEvents<E> {
