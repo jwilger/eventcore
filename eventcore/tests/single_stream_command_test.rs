@@ -62,6 +62,14 @@ impl AccountBalance {
         self
     }
 
+    fn has_sufficient_funds(&self, amount: MoneyAmount) -> bool {
+        self.cents >= amount.into()
+    }
+
+    fn balance_cents(&self) -> u16 {
+        self.cents
+    }
+
     fn apply_event(self, event: &TestDomainEvents) -> Self {
         match event {
             TestDomainEvents::MoneyDeposited { amount, .. } => self.deposit(*amount),
@@ -128,12 +136,12 @@ impl CommandLogic for Withdraw {
         &self,
         state: Self::State,
     ) -> Result<NewEvents<Self::Event>, eventcore::CommandError> {
-        let requested: u16 = self.amount.into();
-        if state.cents < requested {
+        if !state.has_sufficient_funds(self.amount) {
+            let requested: u16 = self.amount.into();
             return Err(CommandError::BusinessRuleViolation(format!(
                 "insufficient funds for account {}: balance={}, attempted_withdrawal={}",
                 self.account_id.as_ref(),
-                state.cents,
+                state.balance_cents(),
                 requested
             )));
         }
