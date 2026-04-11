@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/jwilger/eventcore/compare/eventcore-examples-v0.6.0...eventcore-examples-v0.7.0) - 2026-04-11
+
+### Features
+
+- add required event_type_name() to Event trait for stable storage ([#344](https://github.com/jwilger/eventcore/pull/344))
+- add TestScenario GWT testing helpers to eventcore-testing ([#346](https://github.com/jwilger/eventcore/pull/346))
+
+### Refactoring
+
+- replace into_inner() with into() for nutype domain types ([#334](https://github.com/jwilger/eventcore/pull/334))
+
 ## [0.5.1](https://github.com/jwilger/eventcore/compare/eventcore-examples-v0.5.0...eventcore-examples-v0.5.1) - 2026-02-22
 
 ### Features

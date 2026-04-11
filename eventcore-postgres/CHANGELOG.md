@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.6.0...eventcore-postgres-v0.7.0) - 2026-04-11
+
+### Features
+
+- add required event_type_name() to Event trait for stable storage ([#344](https://github.com/jwilger/eventcore/pull/344))
+
+### Miscellaneous Tasks
+
+- adopt han plugins, blueprints, and project conventions ([#330](https://github.com/jwilger/eventcore/pull/330))
+
 ## [0.6.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.5.1...eventcore-postgres-v0.6.0) - 2026-03-15
 
 ### Miscellaneous Tasks
