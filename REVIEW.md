@@ -42,6 +42,8 @@ Every invariant below is a hard rule. Verify each applicable item on every commi
 - [ ] Every domain concept has a semantic named type defined with `nutype` (e.g., `StreamId`, `StreamVersion`).
 - [ ] Domain types are parsed at the boundary and never re-validated downstream. A domain type value is proof of validity.
 - [ ] `Option<T>` is used for optionality, not sentinel values (zero counts, empty strings).
+- [ ] Domain types expose operations (arithmetic, comparison) via methods or trait impls rather than requiring callers to extract the inner value.
+- [ ] `into_inner()` / `into()` for raw value extraction appears only at IO boundaries (SQL params, logging), not in domain logic or test assertions.
 
 ### 3. Testing
 
@@ -120,6 +122,7 @@ The review MUST reject commits that:
 12. Use `clone()` where a borrow (`&T`) would suffice
 13. Violate any architectural invariant without a complete EXCEPTION annotation
 14. Add dead code workarounds to suppress compiler warnings
+15. Extract inner values from domain types (`into_inner()`, `into()`) in domain logic or test assertions instead of using domain operations
 
 ## What to Allow
 
