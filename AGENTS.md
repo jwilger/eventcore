@@ -7,7 +7,7 @@
 - **Build:** `cargo build --workspace`
 - **Lint:** `cargo clippy --all-targets --all-features -- -D warnings`
 - **Format:** `cargo fmt --all`
-- **Mutation testing:** `cargo mutants` (threshold: 80%)
+- **Mutation testing:** `cargo mutants` (zero surviving mutants required)
 - **Architecture docs:** `docs/ARCHITECTURE.md`
 - **ADRs:** `docs/adr/`
 
