@@ -52,6 +52,8 @@ state.require_setup_completed().map_err(AuthenticateAdminError::from)?;
 - Error messages use kebab-case machine-readable identifiers
 - `thiserror` is a workspace dependency — use it via the workspace
 - Command error enums implement `From<...> for CommandError`
+- Test assertion helpers accept typed errors via `Into<CommandError>`,
+  not raw strings — this matches `require!` macro usage
 
 ## Reference
 

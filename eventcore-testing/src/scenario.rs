@@ -93,20 +93,24 @@ impl<E: PartialEq + std::fmt::Debug> ScenarioResult<E> {
         self
     }
 
-    /// Assert the command failed with a business rule violation.
-    pub fn failed_with_business_rule(&self, expected_message: &str) -> &Self {
+    /// Assert the command failed with a specific error.
+    ///
+    /// Accepts any error type that implements `Into<CommandError>`, matching
+    /// the same pattern used with the `require!` macro. The error is converted
+    /// to `CommandError` via `Into` and compared against the actual result.
+    pub fn failed_with<Err: Into<eventcore_types::CommandError>>(&self, expected: Err) -> &Self {
+        let expected_error = expected.into();
         match &self.result {
-            Err(eventcore_types::CommandError::BusinessRuleViolation(message)) => {
-                assert!(
-                    message.contains(expected_message),
-                    "expected error containing '{}', got: '{}'",
-                    expected_message,
-                    message
+            Err(actual) => {
+                assert_eq!(
+                    actual.to_string(),
+                    expected_error.to_string(),
+                    "command error mismatch"
                 );
             }
-            other => panic!(
-                "expected BusinessRuleViolation containing '{}', got: {:?}",
-                expected_message, other
+            Ok(()) => panic!(
+                "expected command to fail with {}, but it succeeded",
+                expected_error
             ),
         }
         self

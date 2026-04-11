@@ -5,6 +5,18 @@ use eventcore_testing::TestScenario;
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+enum WithdrawError {
+    #[error("insufficient-funds")]
+    InsufficientFunds,
+}
+
+impl From<WithdrawError> for CommandError {
+    fn from(e: WithdrawError) -> Self {
+        CommandError::BusinessRuleViolation(e.to_string())
+    }
+}
+
 // =============================================================================
 // Test Domain (minimal, just enough to exercise the scenario API)
 // =============================================================================
@@ -106,11 +118,10 @@ impl CommandLogic for Withdraw {
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        if !state.has_sufficient_funds(self.amount) {
-            return Err(CommandError::BusinessRuleViolation(
-                "insufficient-funds".to_string(),
-            ));
-        }
+        eventcore::require!(
+            state.has_sufficient_funds(self.amount),
+            WithdrawError::InsufficientFunds
+        );
 
         Ok(vec![BankAccountEvent::MoneyWithdrawn {
             account_id: self.account_id.clone(),
@@ -201,6 +212,6 @@ async fn withdraw_with_insufficient_funds() {
             amount: test_amount(100),
         })
         .await
-        .failed_with_business_rule("insufficient-funds")
+        .failed_with(WithdrawError::InsufficientFunds)
         .then_event_count(1);
 }
