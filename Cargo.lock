@@ -367,6 +367,7 @@ dependencies = [
  "eventcore-types",
  "nutype",
  "serde",
+ "thiserror",
  "tokio",
  "uuid",
 ]
