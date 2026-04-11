@@ -10,7 +10,7 @@ By participating in this project, you agree to abide by our [Code of Conduct](CO
 
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/eventcore.git`
-3. Add upstream remote: `git remote add upstream https://github.com/eventsourcing/eventcore.git`
+3. Add upstream remote: `git remote add upstream https://github.com/jwilger/eventcore.git`
 4. Create a feature branch: `git checkout -b my-feature-branch`
 
 ## Development Setup
@@ -284,7 +284,7 @@ When adding new features:
 
 ## Questions?
 
-- Open a [Discussion](https://github.com/eventsourcing/eventcore/discussions) for questions
+- Open a [Discussion](https://github.com/jwilger/eventcore/discussions) for questions
 - Check existing issues before creating new ones
 - Join our community chat (to be added)
 

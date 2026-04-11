@@ -28,7 +28,7 @@
 
 ## Documentation
 
-- Architecture docs: `docs/ARCHITECTURE.md`
+- Architecture docs: `docs/manual/01-introduction/04-architecture.md`
 - Decision history: `docs/adr/`
 - System blueprints: `blueprints/` (when they exist)
 
