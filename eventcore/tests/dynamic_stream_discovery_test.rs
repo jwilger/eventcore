@@ -273,6 +273,10 @@ impl Event for CheckoutEvent {
             | CheckoutEvent::PaymentMethodCaptured { payment_stream } => payment_stream,
         }
     }
+
+    fn event_type_name() -> &'static str {
+        "CheckoutEvent"
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

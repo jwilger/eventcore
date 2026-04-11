@@ -209,6 +209,10 @@ impl Event for TestEvent {
     fn stream_id(&self) -> &StreamId {
         &self.stream_id
     }
+
+    fn event_type_name() -> &'static str {
+        "TestEvent"
+    }
 }
 
 /// A test fixture that creates an isolated database for each test.

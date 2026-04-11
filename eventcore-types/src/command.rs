@@ -117,6 +117,17 @@ pub trait Event: Clone + Send + Serialize + DeserializeOwned + 'static {
     /// The stream ID represents the aggregate identity in Domain-Driven Design.
     /// Each domain event knows which aggregate instance it belongs to.
     fn stream_id(&self) -> &StreamId;
+
+    /// Stable event type name for storage metadata.
+    ///
+    /// Returns a name that identifies this event type independently of
+    /// the Rust module path. Used for the `event_type` column in backends
+    /// (auditing/debugging — not used for deserialization).
+    ///
+    /// Choose a name that won't change when the type moves between modules.
+    fn event_type_name() -> &'static str
+    where
+        Self: Sized;
 }
 
 /// Trait defining the business logic of a command.

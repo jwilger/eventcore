@@ -44,6 +44,10 @@ impl Event for TestDomainEvents {
             | TestDomainEvents::MoneyWithdrawn { account_id, .. } => account_id,
         }
     }
+
+    fn event_type_name() -> &'static str {
+        "TestDomainEvents"
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

@@ -67,6 +67,10 @@ impl Event for ContractTestEvent {
     fn stream_id(&self) -> &StreamId {
         &self.stream_id
     }
+
+    fn event_type_name() -> &'static str {
+        "ContractTestEvent"
+    }
 }
 
 fn contract_stream_id(
@@ -414,6 +418,10 @@ pub struct MismatchedEvent {
 impl Event for MismatchedEvent {
     fn stream_id(&self) -> &StreamId {
         &self.stream_id
+    }
+
+    fn event_type_name() -> &'static str {
+        "MismatchedEvent"
     }
 }
 

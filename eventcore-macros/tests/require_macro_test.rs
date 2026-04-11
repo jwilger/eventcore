@@ -13,6 +13,10 @@ impl Event for AccountEvent {
     fn stream_id(&self) -> &StreamId {
         &self.stream_id
     }
+
+    fn event_type_name() -> &'static str {
+        "AccountEvent"
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

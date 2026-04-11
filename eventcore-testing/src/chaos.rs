@@ -211,6 +211,10 @@ mod tests {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
         }
+
+        fn event_type_name() -> &'static str {
+            "PassthroughEvent"
+        }
     }
 
     #[test]
