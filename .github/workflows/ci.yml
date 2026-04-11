@@ -103,53 +103,6 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features
 
-  mutation:
-    name: Mutation
-    needs: test
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-mutants
-        run: cargo install cargo-mutants --locked
-
-      - name: Run cargo mutants
-        env:
-          POSTGRES_VERSION: 17
-        run: cargo mutants --workspace --check
-
-      - name: Upload mutation report
-        uses: actions/upload-artifact@v6
-        with:
-          name: mutation-report
-          path: target/mutants/everything/.mutants.json
-
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest
