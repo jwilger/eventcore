@@ -36,6 +36,10 @@ impl Event for TestEvent {
             TestEvent::Happened { stream } => stream,
         }
     }
+
+    fn event_type_name() -> &'static str {
+        "TestEvent"
+    }
 }
 
 #[derive(Debug, Default, Clone)]

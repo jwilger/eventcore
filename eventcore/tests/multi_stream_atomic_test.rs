@@ -73,6 +73,10 @@ impl Event for TestDomainEvents {
             | TestDomainEvents::Audit { account_id } => account_id,
         }
     }
+
+    fn event_type_name() -> &'static str {
+        "TestDomainEvents"
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

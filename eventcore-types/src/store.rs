@@ -95,7 +95,7 @@ impl StreamWrites {
         let entry = StreamWriteEntry {
             stream_id,
             event: Box::new(event),
-            event_type: std::any::type_name::<E>(),
+            event_type: E::event_type_name(),
             event_data,
         };
         writes.entries.push(entry);
@@ -482,6 +482,10 @@ mod tests {
     impl Event for TestEvent {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
+        }
+
+        fn event_type_name() -> &'static str {
+            "TestEvent"
         }
     }
 

@@ -462,6 +462,10 @@ mod tests {
         fn stream_id(&self) -> &StreamId {
             &self.stream_id
         }
+
+        fn event_type_name() -> &'static str {
+            "TestEvent"
+        }
     }
 
     /// Unit test: Verify InMemoryEventStore can append and retrieve a single event

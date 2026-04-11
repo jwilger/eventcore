@@ -53,6 +53,10 @@ impl Event for BankAccountEvent {
             | BankAccountEvent::MoneyWithdrawn { account_id, .. } => account_id,
         }
     }
+
+    fn event_type_name() -> &'static str {
+        "BankAccountEvent"
+    }
 }
 
 /// Reconstructed account state for command decision-making.

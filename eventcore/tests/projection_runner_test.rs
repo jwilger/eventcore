@@ -32,6 +32,10 @@ impl Event for CounterIncremented {
     fn stream_id(&self) -> &StreamId {
         &self.counter_id
     }
+
+    fn event_type_name() -> &'static str {
+        "CounterIncremented"
+    }
 }
 
 /// Helper function to seed N events and return their positions.
