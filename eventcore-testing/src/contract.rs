@@ -404,6 +404,76 @@ where
     }
 }
 
+/// A different event type used to test type mismatch detection in read_stream.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MismatchedEvent {
+    stream_id: StreamId,
+    extra_field: String,
+}
+
+impl Event for MismatchedEvent {
+    fn stream_id(&self) -> &StreamId {
+        &self.stream_id
+    }
+}
+
+/// Contract test: read_stream errors when events on the stream don't match
+/// the requested type.
+///
+/// This verifies that all backends behave consistently when a stream contains
+/// events that were written with one type but read with a different type.
+/// The correct behavior is to return `EventStoreError::DeserializationFailed`,
+/// not to silently skip unrecognized events.
+pub async fn test_read_stream_errors_on_type_mismatch<F, S>(make_store: F) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "read_stream_errors_on_type_mismatch";
+
+    let store = make_store();
+    let stream_id = contract_stream_id(SCENARIO, "mismatched")?;
+
+    // Write an event using ContractTestEvent
+    let writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &stream_id,
+        StreamVersion::new(0),
+    )?;
+    let writes = append_contract_event(SCENARIO, writes, &stream_id)?;
+
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+
+    // Read the same stream but request a different event type
+    let result = store.read_stream::<MismatchedEvent>(stream_id).await;
+
+    match result {
+        Err(EventStoreError::DeserializationFailed { .. }) => Ok(()),
+        Err(other) => Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected DeserializationFailed error, got different error: {}",
+                other
+            ),
+        )),
+        Ok(reader) if reader.is_empty() => Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "read_stream silently returned empty results instead of erroring on type mismatch",
+        )),
+        Ok(reader) => Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "read_stream returned {} events instead of erroring on type mismatch",
+                reader.len()
+            ),
+        )),
+    }
+}
+
 // NOTE: The old fragmented macros (event_store_contract_tests!, event_reader_contract_tests!)
 // have been removed. Use backend_contract_tests! which runs ALL contract tests.
 
@@ -442,7 +512,8 @@ macro_rules! backend_contract_tests {
                 test_coordination_independent_subscriptions,
                 test_coordination_leadership_released_on_guard_drop,
                 test_coordination_second_instance_blocked, test_event_ordering_across_streams,
-                test_missing_stream_reads, test_position_based_resumption, test_stream_isolation,
+                test_missing_stream_reads, test_position_based_resumption,
+                test_read_stream_errors_on_type_mismatch, test_stream_isolation,
                 test_stream_prefix_filtering, test_stream_prefix_requires_prefix_match,
             };
 
@@ -477,6 +548,13 @@ macro_rules! backend_contract_tests {
             #[tokio::test(flavor = "multi_thread")]
             async fn conflict_preserves_atomicity_contract() {
                 test_conflict_preserves_atomicity($make_store)
+                    .await
+                    .expect("event store contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn read_stream_errors_on_type_mismatch_contract() {
+                test_read_stream_errors_on_type_mismatch($make_store)
                     .await
                     .expect("event store contract failed");
             }

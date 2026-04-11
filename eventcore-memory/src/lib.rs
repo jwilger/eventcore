@@ -101,17 +101,27 @@ impl EventStore for InMemoryEventStore {
             .map_err(|_| EventStoreError::StoreFailure {
                 operation: Operation::ReadStream,
             })?;
-        let events = data
-            .streams
-            .get(&stream_id)
-            .map(|(boxed_events, _version)| {
-                boxed_events
-                    .iter()
-                    .filter_map(|boxed| boxed.downcast_ref::<E>())
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
+        let events = match data.streams.get(&stream_id) {
+            None => Vec::new(),
+            Some((boxed_events, _version)) => {
+                let mut events = Vec::with_capacity(boxed_events.len());
+                for boxed in boxed_events {
+                    match boxed.downcast_ref::<E>() {
+                        Some(event) => events.push(event.clone()),
+                        None => {
+                            return Err(EventStoreError::DeserializationFailed {
+                                stream_id,
+                                detail: format!(
+                                    "event could not be downcast to {}",
+                                    std::any::type_name::<E>()
+                                ),
+                            });
+                        }
+                    }
+                }
+                events
+            }
+        };
 
         Ok(EventStreamReader::new(events))
     }
