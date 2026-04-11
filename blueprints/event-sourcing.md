@@ -70,6 +70,28 @@ EventCore implements aggregateless event sourcing where commands can atomically 
 | `eventcore-types/src/projection.rs` | EventReader, CheckpointStore, ProjectorCoordinator, pagination |
 | `eventcore-types/src/command.rs`    | Event trait definition                                         |
 
+## Event Schema Evolution
+
+Event schemas evolve via **new enum variants**, not upcasting or migration.
+See ADR-0035 for full rationale.
+
+### Additive Changes
+
+New optional fields use `#[serde(default)]`. Old events deserialize with
+the default value.
+
+### Incompatible Changes
+
+Add a new variant (e.g., `MoneyDepositedV2`). Old variants remain — they
+represent historical facts. `apply()` and projectors handle all variants
+via exhaustive pattern matching. `handle()` emits only the latest variant.
+
+### Storage Format
+
+Events are stored as JSON using serde's externally-tagged enum format.
+The `event_type` column is informational metadata (auditing/debugging),
+not used for deserialization routing.
+
 ## Related Systems
 
 - [command-execution](command-execution.md) — Orchestrates the read-validate-write cycle
@@ -79,3 +101,4 @@ EventCore implements aggregateless event sourcing where commands can atomically 
 - ADR-007: Optimistic concurrency control
 - ADR-012: Event trait for domain-first design
 - ADR-017: StreamId reserved characters
+- ADR-035: Event schema evolution via enum variants
