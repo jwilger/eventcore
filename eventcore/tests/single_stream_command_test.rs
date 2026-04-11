@@ -18,7 +18,7 @@ fn test_amount(cents: u16) -> MoneyAmount {
 
 #[nutype(
     validate(greater = 0),
-    derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)
+    derive(Debug, Clone, Copy, PartialEq, Eq, Into, Serialize, Deserialize)
 )]
 struct MoneyAmount(u16);
 
@@ -52,16 +52,29 @@ struct AccountBalance {
 }
 
 impl AccountBalance {
-    fn apply_event(mut self, event: &TestDomainEvents) -> Self {
-        match event {
-            TestDomainEvents::MoneyDeposited { amount, .. } => {
-                self.cents = self.cents.saturating_add(amount.into_inner());
-            }
-            TestDomainEvents::MoneyWithdrawn { amount, .. } => {
-                self.cents = self.cents.saturating_sub(amount.into_inner());
-            }
-        }
+    fn deposit(mut self, amount: MoneyAmount) -> Self {
+        self.cents = self.cents.saturating_add(amount.into());
         self
+    }
+
+    fn withdraw(mut self, amount: MoneyAmount) -> Self {
+        self.cents = self.cents.saturating_sub(amount.into());
+        self
+    }
+
+    fn has_sufficient_funds(&self, amount: MoneyAmount) -> bool {
+        self.cents >= amount.into()
+    }
+
+    fn balance_cents(&self) -> u16 {
+        self.cents
+    }
+
+    fn apply_event(self, event: &TestDomainEvents) -> Self {
+        match event {
+            TestDomainEvents::MoneyDeposited { amount, .. } => self.deposit(*amount),
+            TestDomainEvents::MoneyWithdrawn { amount, .. } => self.withdraw(*amount),
+        }
     }
 }
 
@@ -123,12 +136,12 @@ impl CommandLogic for Withdraw {
         &self,
         state: Self::State,
     ) -> Result<NewEvents<Self::Event>, eventcore::CommandError> {
-        let requested = self.amount.into_inner();
-        if state.cents < requested {
+        if !state.has_sufficient_funds(self.amount) {
+            let requested: u16 = self.amount.into();
             return Err(CommandError::BusinessRuleViolation(format!(
                 "insufficient funds for account {}: balance={}, attempted_withdrawal={}",
                 self.account_id.as_ref(),
-                state.cents,
+                state.balance_cents(),
                 requested
             )));
         }
