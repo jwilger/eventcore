@@ -893,7 +893,6 @@ pub struct HealthService {
     dependencies: Vec<Arc<dyn HealthCheck>>,
 }
 
-#[async_trait]
 pub trait HealthCheck: Send + Sync {
     async fn name(&self) -> &'static str;
     async fn check(&self) -> HealthStatus;

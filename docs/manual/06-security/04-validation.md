@@ -132,27 +132,31 @@ impl TransferMoney {
     }
 }
 
-#[async_trait]
 impl CommandLogic for TransferMoney {
-    async fn handle(&self, state: State) -> CommandResult<Vec<Event>> {
+    type State = TransferState;
+    type Event = TransferEvent;
+
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        // Reconstruct state from events...
+        state
+    }
+
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Business rule validation
-        require!(
-            state.from_balance >= self.amount,
-            CommandError::InsufficientFunds
-        );
+        if state.from_balance < self.amount {
+            return Err(TransferError::InsufficientFunds.into());
+        }
 
-        require!(
-            state.to_account.is_active(),
-            CommandError::AccountInactive
-        );
+        if !state.to_account_active {
+            return Err(TransferError::AccountInactive.into());
+        }
 
-        require!(
-            self.amount <= state.daily_limit_remaining,
-            CommandError::DailyLimitExceeded
-        );
+        if self.amount > state.daily_limit_remaining {
+            return Err(TransferError::DailyLimitExceeded.into());
+        }
 
         // Proceed with valid transfer...
-        Ok(vec![/* events */])
+        Ok(vec![/* events */].into())
     }
 }
 ```
@@ -260,7 +264,7 @@ async fn execute_command(
     // Rate limit by IP for anonymous operations
     // rate_limiter.check_rate_limit(&ip_address).await?;
 
-    executor.execute(command).await
+    execute(&store, command, RetryPolicy::new()).await
 }
 ```
 

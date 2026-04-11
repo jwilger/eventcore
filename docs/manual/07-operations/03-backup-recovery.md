@@ -945,7 +945,7 @@ impl IntegrityMonitor {
         };
 
         // Check payload can be deserialized
-        if let Err(_) = serde_json::from_value::<serde_json::Value>(event.payload.clone()) {
+        if let Err(_) = serde_json::to_value(&event) {
             check.valid = false;
             check.issues.push("Payload deserialization failed".to_string());
         }

@@ -33,9 +33,12 @@ The API documentation includes:
 
 For quick access to commonly used items:
 
-- [`Command`](../../api/eventcore/trait.Command.html) - Core command trait
-- [`CommandExecutor`](../../api/eventcore/struct.CommandExecutor.html) - Executes commands
+- [`CommandLogic`](../../api/eventcore/trait.CommandLogic.html) - Core command logic trait
+- [`execute()`](../../api/eventcore/fn.execute.html) - Free function to execute commands
+- [`run_projection()`](../../api/eventcore/fn.run_projection.html) - Free function to run projections
 - [`EventStore`](../../api/eventcore/trait.EventStore.html) - Event persistence trait
-- [`Projection`](../../api/eventcore/trait.Projection.html) - Read model projections
+- [`Event`](../../api/eventcore/trait.Event.html) - Event trait (stream_id + event_type_name)
+- [`RetryPolicy`](../../api/eventcore/struct.RetryPolicy.html) - Retry configuration
+- [`NewEvents`](../../api/eventcore/struct.NewEvents.html) - Events produced by commands
 - [`StreamId`](../../api/eventcore/struct.StreamId.html) - Stream identifier
-- [`EventId`](../../api/eventcore/struct.EventId.html) - Event identifier
+- [`CommandError`](../../api/eventcore/enum.CommandError.html) - Command error type

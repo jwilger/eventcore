@@ -183,7 +183,7 @@ struct OrderPlacedV2 {
 EventCore supports explicit event versioning:
 
 ```rust
-use eventcore::serialization::VersionedEvent;
+// Application-level versioned event pattern
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "version")]
@@ -256,7 +256,7 @@ impl VersionedEvent for UserRegisteredVersioned {
 For complex transformations, use migration functions:
 
 ```rust
-use eventcore::serialization::{Migration, MigrationError};
+// Application-level migration trait
 
 struct UserRegisteredV1ToV2;
 
@@ -301,7 +301,7 @@ fn parse_legacy_user_id(legacy_id: &str) -> Result<UserId, MigrationError> {
 EventCore provides a schema registry for managing types:
 
 ```rust
-use eventcore::serialization::{SchemaRegistry, TypeInfo};
+// Application-level schema registry
 
 #[derive(Default)]
 struct MySchemaRegistry {
@@ -449,8 +449,9 @@ impl CommandLogic for CreateUser {
     type State = UserState;
     type Event = UserEvent;
 
-    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-        match &event.payload {
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        let mut state = state;
+        match event {
             UserEvent::RegisteredV1 { user_id, email, username } => {
                 state.exists = true;
                 state.email = email.clone();
@@ -473,6 +474,7 @@ impl CommandLogic for CreateUser {
             }
             // Handle other events...
         }
+        state
     }
 }
 ```
@@ -482,13 +484,10 @@ impl CommandLogic for CreateUser {
 Projections need to handle schema changes too:
 
 ```rust
-#[async_trait]
-impl Projection for UserListProjection {
-    type Event = UserEvent;
-    type Error = ProjectionError;
-
-    async fn apply(&mut self, event: &StoredEvent<Self::Event>) -> Result<(), Self::Error> {
-        match &event.payload {
+// Projection handling multiple event versions
+impl UserListProjection {
+    fn apply_event(&mut self, event: &UserEvent, occurred_at: DateTime<Utc>) -> Result<(), ProjectionError> {
+        match event {
             // Handle all versions of user registration
             UserEvent::RegisteredV1 { user_id, email, username } => {
                 let user = UserSummary {
@@ -497,7 +496,7 @@ impl Projection for UserListProjection {
                     display_name: username.clone(), // Use username as display name
                     first_name: None,
                     last_name: None,
-                    created_at: event.occurred_at,
+                    created_at: occurred_at,
                 };
                 self.users.insert(user_id.clone(), user);
             }
@@ -508,7 +507,7 @@ impl Projection for UserListProjection {
                     display_name: format!("{} {}", first_name, last_name),
                     first_name: Some(first_name.clone()),
                     last_name: Some(last_name.clone()),
-                    created_at: event.occurred_at,
+                    created_at: occurred_at,
                 };
                 self.users.insert(user_id.clone(), user);
             }
@@ -519,7 +518,7 @@ impl Projection for UserListProjection {
                     display_name: profile.display_name(),
                     first_name: Some(profile.first_name.clone()),
                     last_name: Some(profile.last_name.clone()),
-                    created_at: event.occurred_at,
+                    created_at: occurred_at,
                 };
                 self.users.insert(user_id.clone(), user);
             }
@@ -613,7 +612,7 @@ enum OrderEventV2 {
 Migrate events only when needed:
 
 ```rust
-use eventcore::serialization::LazyMigration;
+// Application-level lazy migration pattern
 
 #[derive(Clone)]
 struct LazyUserEvent {

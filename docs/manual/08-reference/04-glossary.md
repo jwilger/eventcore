@@ -12,9 +12,9 @@ In traditional event sourcing, an aggregate is a cluster of domain objects that 
 
 A request to change the state of the system by writing events to one or more streams. Commands in EventCore can read from and write to multiple streams atomically, defining their own consistency boundaries.
 
-### Command Executor
+### execute()
 
-The component responsible for executing commands against the event store. It handles stream reading, state reconstruction, command logic execution, and event writing.
+The free function `execute(&store, command, RetryPolicy::new())` is the canonical entry point for running commands against the event store. It handles stream reading, state reconstruction via `apply()`, command logic execution via `handle()`, and atomic event writing with optimistic concurrency control.
 
 ### Consistency Boundary
 
@@ -80,7 +80,7 @@ The result of executing a command, containing information about events written, 
 
 ### StreamDeclarations
 
-A type-safe value representing the streams a command declares. Commands expose these via `command.stream_declarations()`. Use StreamDeclarations when constructing writes (for example, pass them to `StreamWrite::new`) and to enforce that commands only write to streams they declared.
+A type-safe value representing the streams a command declares. Commands expose these via `command.stream_declarations()`. The executor uses StreamDeclarations to enforce that commands only write to streams they declared.
 
 ### StreamData
 
@@ -94,9 +94,9 @@ A validated identifier for event streams. Must be non-empty and under 255 charac
 
 A command-implemented trait that inspects reconstructed state and returns additional `StreamId` values to enqueue for reading. The executor deduplicates IDs, reads each discovered stream exactly once per attempt, and includes every visited stream in optimistic concurrency checks so static and dynamic streams share the same atomicity guarantees.
 
-### StreamWrite
+### NewEvents
 
-A type-safe wrapper for writing events to streams that enforces stream access control.
+The return type from `CommandLogic::handle()`. Represents the events produced by a command's business logic. Created via `vec![Event::Variant { ... }].into()`.
 
 ### TypeState Pattern
 

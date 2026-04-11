@@ -50,11 +50,9 @@ struct ProcessPayment {
 Services publish events for other services to consume:
 
 ```rust
-use eventcore::distributed::{EventPublisher, EventSubscriber};
-
-#[async_trait]
+// Application-level event publishing (not part of eventcore core)
 trait EventPublisher {
-    async fn publish(&self, event: &StoredEvent) -> Result<(), PublishError>;
+    async fn publish(&self, event: &DistributedEvent) -> Result<(), PublishError>;
 }
 
 struct MessageBusPublisher {
@@ -63,7 +61,7 @@ struct MessageBusPublisher {
 }
 
 impl MessageBusPublisher {
-    async fn publish_event<E>(&self, event: &StoredEvent<E>) -> Result<(), PublishError>
+    async fn publish_event<E>(&self, event: &E) -> Result<(), PublishError>
     where
         E: Serialize,
     {
@@ -76,7 +74,7 @@ impl MessageBusPublisher {
             event_type: E::event_type(),
             stream_id: event.stream_id.clone(),
             version: event.version,
-            payload: serde_json::to_value(&event.payload)?,
+            payload: serde_json::to_value(event)?,
             metadata: event.metadata.clone(),
             occurred_at: event.occurred_at,
             published_at: Utc::now(),
@@ -111,18 +109,17 @@ struct DistributedEvent {
 Services subscribe to events from other services:
 
 ```rust
-#[async_trait]
 trait EventSubscriber {
     async fn subscribe<F>(&self, topic: &str, handler: F) -> Result<(), SubscribeError>
     where
         F: Fn(DistributedEvent) -> BoxFuture<'_, Result<(), HandleError>> + Send + Sync + 'static;
 }
 
-struct OrderEventHandler {
-    executor: CommandExecutor,
+struct OrderEventHandler<S: EventStore> {
+    store: S,
 }
 
-impl OrderEventHandler {
+impl<S: EventStore> OrderEventHandler<S> {
     async fn handle_user_events(&self, event: DistributedEvent) -> Result<(), HandleError> {
         match event.event_type.as_str() {
             "UserRegistered" => {
@@ -136,7 +133,7 @@ impl OrderEventHandler {
                     preferences: CustomerPreferences::default(),
                 };
 
-                self.executor.execute(&command).await?;
+                execute(&self.store, command, RetryPolicy::new()).await?;
             }
             "UserUpdated" => {
                 // Handle user updates
@@ -148,7 +145,7 @@ impl OrderEventHandler {
                     profile_updates: user_updated.profile_changes,
                 };
 
-                self.executor.execute(&command).await?;
+                execute(&self.store, command, RetryPolicy::new()).await?;
             }
             _ => {
                 // Unknown event type - log and ignore
@@ -337,16 +334,13 @@ struct OrderView {
     updated_at: DateTime<Utc>,
 }
 
-#[async_trait]
-impl Projection for CrossServiceOrderProjection {
-    type Event = DistributedEvent;
-    type Error = ProjectionError;
-
-    async fn apply(&mut self, event: &StoredEvent<Self::Event>) -> Result<(), Self::Error> {
-        match event.payload.event_type.as_str() {
+// Cross-service projection handling
+impl CrossServiceOrderProjection {
+    async fn apply_event(&mut self, event: &DistributedEvent) -> Result<(), ProjectionError> {
+        match event.event_type.as_str() {
             "OrderCreated" => {
                 let order_created: OrderCreatedEvent =
-                    serde_json::from_value(event.payload.payload.clone())?;
+                    serde_json::from_value(event.payload.clone())?;
 
                 // Get customer info from user service
                 let customer_info = self.user_service_client
@@ -360,28 +354,28 @@ impl Projection for CrossServiceOrderProjection {
                     payment_status: PaymentStatus::Pending,
                     shipping_status: ShippingStatus::NotStarted,
                     total_amount: order_created.total_amount,
-                    created_at: event.occurred_at,
-                    updated_at: event.occurred_at,
+                    created_at: event.published_at,
+                    updated_at: event.published_at,
                 };
 
                 self.orders.insert(order_created.order_id, order_view);
             }
             "PaymentProcessed" => {
                 let payment_processed: PaymentProcessedEvent =
-                    serde_json::from_value(event.payload.payload.clone())?;
+                    serde_json::from_value(event.payload.clone())?;
 
                 if let Some(order) = self.orders.get_mut(&payment_processed.order_id) {
                     order.payment_status = PaymentStatus::Completed;
-                    order.updated_at = event.occurred_at;
+                    order.updated_at = event.published_at;
                 }
             }
             "ShipmentDispatched" => {
                 let shipment_dispatched: ShipmentDispatchedEvent =
-                    serde_json::from_value(event.payload.payload.clone())?;
+                    serde_json::from_value(event.payload.clone())?;
 
                 if let Some(order) = self.orders.get_mut(&shipment_dispatched.order_id) {
                     order.shipping_status = ShippingStatus::Dispatched;
-                    order.updated_at = event.occurred_at;
+                    order.updated_at = event.published_at;
                 }
             }
             _ => {} // Ignore other events
@@ -477,7 +471,6 @@ impl EventFederationHub {
 ### Service Registry
 
 ```rust
-#[async_trait]
 trait ServiceRegistry {
     async fn register_service(&self, service: ServiceInfo) -> Result<(), RegistryError>;
     async fn discover_services(&self, service_type: &str) -> Result<Vec<ServiceInfo>, RegistryError>;
@@ -641,18 +634,19 @@ enum CircuitBreakerError<E> {
 use opentelemetry::{global, trace::{TraceContextExt, Tracer}};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+// Distributed tracing wrapper around execute()
 #[derive(Clone)]
-struct DistributedCommandExecutor {
-    inner: CommandExecutor,
+struct DistributedExecutor<S: EventStore> {
+    store: S,
     tracer: Box<dyn Tracer + Send + Sync>,
 }
 
-impl DistributedCommandExecutor {
-    async fn execute_with_tracing<C: Command>(
+impl<S: EventStore> DistributedExecutor<S> {
+    async fn execute_with_tracing<C: CommandLogic>(
         &self,
-        command: &C,
+        command: C,
         parent_context: Option<SpanContext>,
-    ) -> CommandResult<ExecutionResult> {
+    ) -> Result<ExecutionResult, CommandError> {
         let span = self.tracer
             .span_builder(format!("execute_command_{}", std::any::type_name::<C>()))
             .with_kind(SpanKind::Internal)
@@ -667,7 +661,7 @@ impl DistributedCommandExecutor {
         span.set_attribute("command.type", std::any::type_name::<C>());
         span.set_attribute("service.name", self.service_name());
 
-        match self.inner.execute(command).await {
+        match execute(&self.store, command, RetryPolicy::new()).await {
             Ok(result) => {
                 span.set_attribute("command.success", true);
                 span.set_attribute("events.written", result.events_written.len() as i64);
@@ -691,8 +685,8 @@ struct TracedDistributedEvent {
     span_id: String,
 }
 
-impl From<(&StoredEvent, &SpanContext)> for TracedDistributedEvent {
-    fn from((event, context): (&StoredEvent, &SpanContext)) -> Self {
+impl From<(&DistributedEvent, &SpanContext)> for TracedDistributedEvent {
+    fn from((event, context): (&DistributedEvent, &SpanContext)) -> Self {
         Self {
             event: event.into(),
             trace_id: context.trace_id().to_string(),

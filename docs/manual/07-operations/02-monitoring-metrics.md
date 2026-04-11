@@ -216,67 +216,25 @@ Instrument EventCore operations automatically:
 
 ```rust
 use std::time::Instant;
-use async_trait::async_trait;
 
-pub struct InstrumentedCommandExecutor {
-    inner: CommandExecutor,
-    metrics: MetricsService,
-}
+// Instrumented command execution using the free-function execute() API.
+// Wrap your calls to execute() with timing and metrics.
+pub async fn execute_instrumented<C: CommandLogic>(
+    store: &impl EventStore,
+    command: C,
+    policy: RetryPolicy,
+    metrics: &MetricsService,
+) -> Result<ExecutionResult, CommandError> {
+    let start = Instant::now();
+    let command_type = std::any::type_name::<C>();
 
-impl InstrumentedCommandExecutor {
-    pub fn new(inner: CommandExecutor, metrics: MetricsService) -> Self {
-        Self { inner, metrics }
-    }
-}
+    let result = execute(store, command, policy).await;
+    let duration = start.elapsed();
+    let success = result.is_ok();
 
-#[async_trait]
-impl CommandExecutor for InstrumentedCommandExecutor {
-    async fn execute<C: Command>(&self, command: &C) -> CommandResult<ExecutionResult> {
-        let start = Instant::now();
-        let command_type = std::any::type_name::<C>();
+    metrics.record_command_executed(command_type, duration, success);
 
-        let result = self.inner.execute(command).await;
-        let duration = start.elapsed();
-        let success = result.is_ok();
-
-        self.metrics.record_command_executed(command_type, duration, success);
-
-        if let Ok(ref execution_result) = result {
-            self.metrics.record_events_written(
-                &execution_result.affected_streams[0].to_string(),
-                execution_result.events_written.len()
-            );
-        }
-
-        result
-    }
-}
-
-// Instrumented event store
-pub struct InstrumentedEventStore {
-    inner: Arc<dyn EventStore>,
-    metrics: MetricsService,
-}
-
-#[async_trait]
-impl EventStore for InstrumentedEventStore {
-    async fn write_events(&self, events: Vec<EventToWrite>) -> EventStoreResult<WriteResult> {
-        let start = Instant::now();
-        let result = self.inner.write_events(events).await;
-        let duration = start.elapsed();
-
-        self.metrics.record_event_store_operation("write", duration);
-        result
-    }
-
-    async fn read_stream(&self, stream_id: &StreamId, options: ReadOptions) -> EventStoreResult<StreamEvents> {
-        let start = Instant::now();
-        let result = self.inner.read_stream(stream_id, options).await;
-        let duration = start.elapsed();
-
-        self.metrics.record_event_store_operation("read", duration);
-        result
-    }
+    result
 }
 ```
 
@@ -327,14 +285,14 @@ pub fn init_logging(log_level: &str, log_format: &str) -> Result<(), Box<dyn std
 }
 
 // Structured logging for command execution
-#[instrument(skip(command), fields(command_type = %std::any::type_name::<C>()))]
-pub async fn execute_command_with_logging<C: Command>(
-    command: &C,
-    executor: &CommandExecutor,
-) -> CommandResult<ExecutionResult> {
+#[instrument(skip(command, store), fields(command_type = %std::any::type_name::<C>()))]
+pub async fn execute_command_with_logging<C: CommandLogic>(
+    command: C,
+    store: &impl EventStore,
+) -> Result<ExecutionResult, CommandError> {
     debug!("Starting command execution");
 
-    let result = executor.execute(command).await;
+    let result = execute(store, command, RetryPolicy::new()).await;
 
     match &result {
         Ok(execution_result) => {
@@ -494,15 +452,15 @@ pub fn init_tracing(service_name: &str, otlp_endpoint: &str) -> Result<(), Trace
 }
 
 // Traced command execution
-#[tracing::instrument(skip(command, executor), fields(command_id = %uuid::Uuid::new_v4()))]
-pub async fn execute_command_traced<C: Command>(
-    command: &C,
-    executor: &CommandExecutor,
-) -> CommandResult<ExecutionResult> {
+#[tracing::instrument(skip(command, store), fields(command_id = %uuid::Uuid::new_v4()))]
+pub async fn execute_command_traced<C: CommandLogic>(
+    command: C,
+    store: &impl EventStore,
+) -> Result<ExecutionResult, CommandError> {
     let span = tracing::Span::current();
     span.record("command.type", std::any::type_name::<C>());
 
-    let result = executor.execute(command).await;
+    let result = execute(store, command, RetryPolicy::new()).await;
 
     match &result {
         Ok(execution_result) => {
