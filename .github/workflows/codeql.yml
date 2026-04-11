@@ -1,0 +1,40 @@
+name: "CodeQL"
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (rust)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Skip CodeQL on non-release PRs
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        run: echo "Skipping CodeQL analysis — not a release PR"
+
+      - name: Checkout repository
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        uses: github/codeql-action/init@v3
+        with:
+          languages: rust
+
+      - name: Build
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        run: cargo build --workspace
+
+      - name: Perform CodeQL Analysis
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:rust"
