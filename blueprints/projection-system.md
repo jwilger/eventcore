@@ -89,6 +89,33 @@ run_projection(projector, backend)
 | `eventcore/src/projection.rs`       | ProjectionRunner, PollConfig, EventRetryConfig, run_projection()     |
 | `eventcore-types/src/projection.rs` | Projector, EventReader, CheckpointStore, ProjectorCoordinator traits |
 
+## Public API (ADR-0036)
+
+Two paths for running projections:
+
+**Batch mode** — `run_projection()` convenience function:
+
+```rust
+run_projection(my_projector, &backend).await?;
+```
+
+Handles leadership acquisition, processes events once, exits. No
+configuration needed.
+
+**Continuous mode** — `ProjectionRunner` builder:
+
+```rust
+let _guard = backend.try_acquire(projector.name()).await?;
+ProjectionRunner::new(my_projector, &backend)
+    .with_poll_mode(PollMode::Continuous)
+    .with_poll_config(PollConfig::default())
+    .with_checkpoint_store(&backend)
+    .run()
+    .await?;
+```
+
+Caller manages leadership and configures polling behavior explicitly.
+
 ## Related Systems
 
 - [event-sourcing](event-sourcing.md) — Event stream being consumed
@@ -99,3 +126,4 @@ run_projection(projector, backend)
 - ADR-024: Projector configuration
 - ADR-028: Non-blocking advisory lock acquisition
 - ADR-029: Projection runner API simplification
+- ADR-036: Continuous polling via ProjectionRunner
