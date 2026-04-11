@@ -33,10 +33,11 @@
     unused_variables
 )]
 
-use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+mod effects;
+mod execute_pipeline;
 mod projection;
 
 // Re-export all public types from eventcore-types so consumers only need to depend on `eventcore`
@@ -472,90 +473,6 @@ fn apply_jitter(base_delay: u64, jitter_factor: f64) -> u64 {
     (base_delay as f64 * jitter_factor) as u64
 }
 
-struct PreparedExecution<C: CommandLogic> {
-    state: C::State,
-    stream_ids: Vec<StreamId>,
-    expected_versions: HashMap<StreamId, StreamVersion>,
-}
-
-async fn prepare_execution_context<C, S>(
-    store: &S,
-    command: &C,
-) -> Result<PreparedExecution<C>, CommandError>
-where
-    C: CommandLogic,
-    S: EventStore,
-{
-    let declared_streams = command.stream_declarations();
-    let resolver = command.stream_resolver();
-    let mut scheduled: HashSet<StreamId> = HashSet::with_capacity(declared_streams.len());
-    let mut queue: VecDeque<StreamId> = VecDeque::with_capacity(declared_streams.len());
-
-    for stream_id in declared_streams.iter() {
-        let stream_id = stream_id.clone();
-        if scheduled.insert(stream_id.clone()) {
-            queue.push_back(stream_id);
-        }
-    }
-
-    let mut visited: HashSet<StreamId> = HashSet::with_capacity(scheduled.len());
-    let mut stream_ids: Vec<StreamId> = Vec::with_capacity(scheduled.len());
-    let mut expected_versions: HashMap<StreamId, StreamVersion> =
-        HashMap::with_capacity(scheduled.len());
-    let mut state = C::State::default();
-
-    while let Some(stream_id) = queue.pop_front() {
-        if !visited.insert(stream_id.clone()) {
-            continue;
-        }
-
-        let reader = store
-            .read_stream::<C::Event>(stream_id.clone())
-            .await
-            .map_err(CommandError::EventStoreError)?;
-        let expected_version = StreamVersion::new(reader.len());
-        let _ = expected_versions.insert(stream_id.clone(), expected_version);
-        state = reader
-            .into_iter()
-            .fold(state, |acc, event| command.apply(acc, &event));
-        stream_ids.push(stream_id.clone());
-
-        if let Some(resolver) = resolver {
-            for related_stream in resolver.discover_related_streams(&state) {
-                if scheduled.insert(related_stream.clone()) {
-                    queue.push_back(related_stream);
-                }
-            }
-        }
-    }
-
-    Ok(PreparedExecution {
-        state,
-        stream_ids,
-        expected_versions,
-    })
-}
-
-fn build_stream_writes_from_events<C: CommandLogic>(
-    events: Vec<C::Event>,
-    expected_versions: HashMap<StreamId, StreamVersion>,
-) -> Result<StreamWrites, CommandError> {
-    expected_versions
-        .into_iter()
-        .try_fold(
-            StreamWrites::new(),
-            |writes, (stream_id, expected_version)| {
-                writes.register_stream(stream_id, expected_version)
-            },
-        )
-        .and_then(|writes| {
-            events
-                .into_iter()
-                .try_fold(writes, |writes, event| writes.append(event))
-        })
-        .map_err(CommandError::EventStoreError)
-}
-
 fn compute_retry_delay_ms(strategy: &BackoffStrategy, attempt: u32) -> DelayMilliseconds {
     match strategy {
         BackoffStrategy::Fixed { delay_ms } => *delay_ms,
@@ -572,31 +489,6 @@ fn compute_retry_delay_ms(strategy: &BackoffStrategy, attempt: u32) -> DelayMill
     }
 }
 
-async fn apply_retry_backoff(policy: &RetryPolicy, attempt: u32, stream_ids: &[StreamId]) {
-    let delay_ms = compute_retry_delay_ms(&policy.backoff_strategy, attempt);
-    let attempt_number = attempt + 1;
-    let attempt_number_domain =
-        AttemptNumber::new(NonZeroU32::new(attempt_number).expect("attempt_number is always > 0"));
-
-    tracing::warn!(
-        attempt = attempt_number,
-        delay_ms = delay_ms.into_inner(),
-        streams = ?stream_ids,
-        "retrying command after concurrency conflict"
-    );
-
-    if let Some(hook) = &policy.metrics_hook {
-        let ctx = RetryContext {
-            streams: stream_ids.to_vec(),
-            attempt: attempt_number_domain,
-            delay_ms,
-        };
-        hook.on_retry_attempt(&ctx);
-    }
-
-    tokio::time::sleep(std::time::Duration::from_millis(delay_ms.into())).await;
-}
-
 /// Execute a command against the event store with a custom retry policy.
 ///
 /// This is the primary entry point for EventCore. It orchestrates the complete
@@ -606,35 +498,53 @@ async fn apply_retry_backoff(policy: &RetryPolicy, attempt: u32, stream_ids: &[S
 /// Commands that declare effects (Effect != ()) may return `Execution::Effect`
 /// with an `EffectRequest` that the caller must fulfill before execution continues.
 /// Effect-free commands always return `Success` or `Error` directly.
+///
+/// Internally, this is a thin shell loop that drives a pure `ExecutePipeline`
+/// state machine, dispatching `StoreEffect` values to the `EventStore` backend.
 #[tracing::instrument(name = "execute", skip_all, fields())]
 pub async fn execute<C, S>(store: S, command: C, policy: RetryPolicy) -> Execution<C, S>
 where
     C: CommandLogic,
     S: EventStore,
 {
-    for attempt in 0..=policy.max_retries.into() {
-        let prepared = match prepare_execution_context(&store, &command).await {
-            Ok(p) => p,
-            Err(e) => return Execution::Error(e),
-        };
+    use execute_pipeline::{ExecutePipeline, PipelineOutcome, PipelineStep};
 
-        let decision = command.handle(prepared.state.clone());
-        match try_complete_execution(&store, &command, &policy, prepared, decision, attempt).await {
-            ExecuteStepResult::Done(execution) => return execution,
-            ExecuteStepResult::Effect(effect, state) => {
-                return Execution::Effect(EffectRequest {
-                    effect,
-                    state,
-                    command,
-                    store,
-                    policy,
-                });
+    let mut pipeline = ExecutePipeline::new(command, policy);
+    let mut current_step = pipeline.step();
+
+    loop {
+        match current_step {
+            PipelineStep::Yield(effects::StoreEffect::ReadStream { stream_id }) => {
+                let result = store.read_stream::<C::Event>(stream_id).await;
+                current_step = pipeline.resume(effects::StoreEffectResult::StreamRead(result));
             }
-            ExecuteStepResult::Retry => continue,
+            PipelineStep::Yield(effects::StoreEffect::AppendEvents { writes }) => {
+                let result = store.append_events(writes).await;
+                current_step = pipeline.resume(effects::StoreEffectResult::EventsAppended(result));
+            }
+            PipelineStep::Yield(effects::StoreEffect::Sleep { duration }) => {
+                tokio::time::sleep(duration).await;
+                current_step = pipeline.resume(effects::StoreEffectResult::Slept);
+            }
+            PipelineStep::Done(outcome) => {
+                let (command, policy) = pipeline.into_parts();
+                return match outcome {
+                    PipelineOutcome::Success(response) => {
+                        tracing::info!("command execution succeeded");
+                        Execution::Success(response)
+                    }
+                    PipelineOutcome::Error(e) => Execution::Error(e),
+                    PipelineOutcome::Effect { effect, state } => Execution::Effect(EffectRequest {
+                        effect,
+                        state,
+                        command,
+                        store,
+                        policy,
+                    }),
+                };
+            }
         }
     }
-
-    unreachable!("loop always returns before max_retries")
 }
 
 /// Resume execution after the caller has fulfilled an effect.
@@ -653,109 +563,43 @@ where
     C: CommandLogic,
     S: EventStore,
 {
-    let decision = command.resume(state.clone(), result);
+    use execute_pipeline::{ExecutePipeline, PipelineOutcome, PipelineStep};
 
-    // Re-read streams to get current expected versions for the append
-    let prepared = match prepare_execution_context(&store, &command).await {
-        Ok(p) => p,
-        Err(e) => return Execution::Error(e),
-    };
+    let mut pipeline = ExecutePipeline::new_resume(command, policy, state, result);
+    let mut current_step = pipeline.step();
 
-    // Use the resume decision with the freshly-read versions
-    let prepared_with_resume_state = PreparedExecution {
-        state,
-        stream_ids: prepared.stream_ids,
-        expected_versions: prepared.expected_versions,
-    };
-
-    match try_complete_execution(
-        &store,
-        &command,
-        &policy,
-        prepared_with_resume_state,
-        decision,
-        0,
-    )
-    .await
-    {
-        ExecuteStepResult::Done(execution) => execution,
-        ExecuteStepResult::Effect(effect, state) => Execution::Effect(EffectRequest {
-            effect,
-            state,
-            command,
-            store,
-            policy,
-        }),
-        ExecuteStepResult::Retry => {
-            // Version conflict after resume — restart the full cycle
-            execute(store, command, policy).await
+    loop {
+        match current_step {
+            PipelineStep::Yield(effects::StoreEffect::ReadStream { stream_id }) => {
+                let result = store.read_stream::<C::Event>(stream_id).await;
+                current_step = pipeline.resume(effects::StoreEffectResult::StreamRead(result));
+            }
+            PipelineStep::Yield(effects::StoreEffect::AppendEvents { writes }) => {
+                let result = store.append_events(writes).await;
+                current_step = pipeline.resume(effects::StoreEffectResult::EventsAppended(result));
+            }
+            PipelineStep::Yield(effects::StoreEffect::Sleep { duration }) => {
+                tokio::time::sleep(duration).await;
+                current_step = pipeline.resume(effects::StoreEffectResult::Slept);
+            }
+            PipelineStep::Done(outcome) => {
+                let (command, policy) = pipeline.into_parts();
+                return match outcome {
+                    PipelineOutcome::Success(response) => {
+                        tracing::info!("command execution succeeded");
+                        Execution::Success(response)
+                    }
+                    PipelineOutcome::Error(e) => Execution::Error(e),
+                    PipelineOutcome::Effect { effect, state } => Execution::Effect(EffectRequest {
+                        effect,
+                        state,
+                        command,
+                        store,
+                        policy,
+                    }),
+                };
+            }
         }
-    }
-}
-
-enum ExecuteStepResult<C: CommandLogic, S: EventStore> {
-    Done(Execution<C, S>),
-    Effect(C::Effect, C::State),
-    Retry,
-}
-
-async fn try_complete_execution<C, S>(
-    store: &S,
-    _command: &C,
-    policy: &RetryPolicy,
-    prepared: PreparedExecution<C>,
-    decision: HandleDecision<C>,
-    attempt: u32,
-) -> ExecuteStepResult<C, S>
-where
-    C: CommandLogic,
-    S: EventStore,
-{
-    let new_events = match decision {
-        HandleDecision::Done(Ok(events)) => events,
-        HandleDecision::Done(Err(e)) => return ExecuteStepResult::Done(Execution::Error(e)),
-        HandleDecision::Effect(effect) => {
-            return ExecuteStepResult::Effect(effect, prepared.state);
-        }
-    };
-
-    let writes = match build_stream_writes_from_events::<C>(
-        Vec::from(new_events),
-        prepared.expected_versions,
-    ) {
-        Ok(w) => w,
-        Err(e) => return ExecuteStepResult::Done(Execution::Error(e)),
-    };
-
-    let result = store
-        .append_events(writes)
-        .await
-        .map_err(|error| match error {
-            EventStoreError::VersionConflict => CommandError::ConcurrencyError(attempt),
-            other => CommandError::EventStoreError(other),
-        });
-
-    match result {
-        Ok(_) => {
-            tracing::info!("command execution succeeded");
-            ExecuteStepResult::Done(Execution::Success(ExecutionResponse::new(
-                NonZeroU32::new(attempt + 1).expect("attempts are 1-based"),
-            )))
-        }
-        Err(CommandError::ConcurrencyError(_)) if attempt < policy.max_retries.into() => {
-            apply_retry_backoff(policy, attempt, &prepared.stream_ids).await;
-            ExecuteStepResult::Retry
-        }
-        Err(CommandError::ConcurrencyError(_)) => {
-            tracing::error!(
-                max_retries = policy.max_retries.into_inner(),
-                streams = ?prepared.stream_ids.as_slice()
-            );
-            ExecuteStepResult::Done(Execution::Error(CommandError::ConcurrencyError(
-                policy.max_retries.into(),
-            )))
-        }
-        Err(e) => ExecuteStepResult::Done(Execution::Error(e)),
     }
 }
 
