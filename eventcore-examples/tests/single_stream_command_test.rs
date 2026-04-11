@@ -26,7 +26,7 @@ use uuid::Uuid;
 /// states at the type level.
 #[nutype(
     validate(greater = 0),
-    derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)
+    derive(Debug, Clone, Copy, PartialEq, Eq, Into, Serialize, Deserialize)
 )]
 struct MoneyAmount(u16);
 
@@ -62,16 +62,21 @@ struct AccountBalance {
 }
 
 impl AccountBalance {
-    fn apply(mut self, event: &BankAccountEvent) -> Self {
-        match event {
-            BankAccountEvent::MoneyDeposited { amount, .. } => {
-                self.cents = self.cents.saturating_add(amount.into_inner());
-            }
-            BankAccountEvent::MoneyWithdrawn { amount, .. } => {
-                self.cents = self.cents.saturating_sub(amount.into_inner());
-            }
-        }
+    fn deposit(mut self, amount: MoneyAmount) -> Self {
+        self.cents = self.cents.saturating_add(amount.into());
         self
+    }
+
+    fn withdraw(mut self, amount: MoneyAmount) -> Self {
+        self.cents = self.cents.saturating_sub(amount.into());
+        self
+    }
+
+    fn apply(self, event: &BankAccountEvent) -> Self {
+        match event {
+            BankAccountEvent::MoneyDeposited { amount, .. } => self.deposit(*amount),
+            BankAccountEvent::MoneyWithdrawn { amount, .. } => self.withdraw(*amount),
+        }
     }
 }
 
@@ -127,7 +132,7 @@ impl CommandLogic for Withdraw {
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        let requested = self.amount.into_inner();
+        let requested: u16 = self.amount.into();
         if state.cents < requested {
             return Err(CommandError::BusinessRuleViolation(format!(
                 "insufficient funds for account {}: balance={}, attempted_withdrawal={}",

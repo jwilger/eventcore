@@ -238,6 +238,7 @@ pub trait EventStore {
         PartialEq,
         Eq,
         Hash,
+        Into,
         AsRef,
         Deref,
         Display,
@@ -272,6 +273,7 @@ pub struct StreamId(String);
         PartialEq,
         Eq,
         Hash,
+        Into,
         AsRef,
         Deref,
         Display,
@@ -285,7 +287,7 @@ pub struct StreamPrefix(String);
 ///
 /// StreamVersion represents the version (event count) of an event stream.
 /// Versions start at 0 (empty stream) and increment with each event.
-#[nutype(derive(Clone, Copy, PartialEq, Debug, Display))]
+#[nutype(derive(Clone, Copy, PartialEq, Debug, Display, Into))]
 pub struct StreamVersion(usize);
 
 impl StreamVersion {
@@ -302,7 +304,8 @@ impl StreamVersion {
     /// assert_eq!(v1, StreamVersion::new(1));
     /// ```
     pub fn increment(self) -> Self {
-        Self::new(self.into_inner() + 1)
+        let inner: usize = self.into();
+        Self::new(inner + 1)
     }
 }
 

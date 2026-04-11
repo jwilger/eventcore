@@ -26,9 +26,27 @@ use uuid::Uuid;
 /// A validated monetary amount in cents.
 #[nutype(
     validate(greater = 0),
-    derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)
+    derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Into,
+        Serialize,
+        Deserialize
+    )
 )]
 struct MoneyAmount(u16);
+
+impl From<MoneyAmount> for i32 {
+    fn from(amount: MoneyAmount) -> Self {
+        let raw: u16 = amount.into();
+        i32::from(raw)
+    }
+}
 
 /// Domain events for multi-stream bank account transfers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,8 +166,8 @@ async fn seed_account_balance(
 /// Compute balance from a list of events.
 fn compute_balance(events: &[TransferEvent]) -> i32 {
     events.iter().fold(0i32, |current, event| match event {
-        TransferEvent::Credited { amount, .. } => current + i32::from(amount.into_inner()),
-        TransferEvent::Debited { amount, .. } => current - i32::from(amount.into_inner()),
+        TransferEvent::Credited { amount, .. } => current + i32::from(*amount),
+        TransferEvent::Debited { amount, .. } => current - i32::from(*amount),
     })
 }
 
@@ -328,10 +346,10 @@ async fn concurrent_transfers_produce_consistent_final_state() {
         .collect();
     assert_eq!(source_events.len(), 3, "source should have 3 events");
 
-    let source_debit_amounts: Vec<u16> = source_events
+    let source_debit_amounts: Vec<MoneyAmount> = source_events
         .iter()
         .filter_map(|e| match e {
-            TransferEvent::Debited { amount, .. } => Some(amount.into_inner()),
+            TransferEvent::Debited { amount, .. } => Some(*amount),
             _ => None,
         })
         .collect();
@@ -339,7 +357,7 @@ async fn concurrent_transfers_produce_consistent_final_state() {
     sorted_debits.sort();
     assert_eq!(
         sorted_debits,
-        vec![30, 40],
+        vec![test_amount(30), test_amount(40)],
         "source should have debits for both transfers"
     );
 
@@ -350,24 +368,24 @@ async fn concurrent_transfers_produce_consistent_final_state() {
         .collect();
     assert_eq!(dest_events.len(), 3, "destination should have 3 events");
 
-    let dest_credit_amounts: Vec<u16> = dest_events
+    let dest_credit_amounts: Vec<MoneyAmount> = dest_events
         .iter()
         .filter_map(|e| match e {
-            TransferEvent::Credited { amount, .. } => Some(amount.into_inner()),
+            TransferEvent::Credited { amount, .. } => Some(*amount),
             _ => None,
         })
         .collect();
     // First credit is the initial deposit (50), next two are transfers
     assert!(
-        dest_credit_amounts.contains(&50),
+        dest_credit_amounts.contains(&test_amount(50)),
         "destination should have initial credit"
     );
     assert!(
-        dest_credit_amounts.contains(&30),
+        dest_credit_amounts.contains(&test_amount(30)),
         "destination should have first transfer credit"
     );
     assert!(
-        dest_credit_amounts.contains(&40),
+        dest_credit_amounts.contains(&test_amount(40)),
         "destination should have second transfer credit"
     );
 
