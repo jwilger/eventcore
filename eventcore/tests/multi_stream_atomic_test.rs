@@ -28,9 +28,27 @@ fn test_amount(cents: u16) -> MoneyAmount {
 
 #[nutype(
     validate(greater = 0),
-    derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)
+    derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Into,
+        Serialize,
+        Deserialize
+    )
 )]
 struct MoneyAmount(u16);
+
+impl From<MoneyAmount> for i32 {
+    fn from(amount: MoneyAmount) -> Self {
+        let raw: u16 = amount.into();
+        i32::from(raw)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum TestDomainEvents {
@@ -157,8 +175,8 @@ fn account_snapshot(stream_id: &StreamId, events: Vec<TestDomainEvents>) -> Acco
 
 fn compute_balance(events: &[TestDomainEvents]) -> MoneyAmount {
     let balance = events.iter().fold(0i32, |current, event| match event {
-        TestDomainEvents::Credited { amount, .. } => current + i32::from(amount.into_inner()),
-        TestDomainEvents::Debited { amount, .. } => current - i32::from(amount.into_inner()),
+        TestDomainEvents::Credited { amount, .. } => current + i32::from(*amount),
+        TestDomainEvents::Debited { amount, .. } => current - i32::from(*amount),
         TestDomainEvents::Audit { .. } => current,
     });
 
@@ -502,8 +520,8 @@ struct PartialVisibilityEvidence {
     final_destination_version: usize,
     final_source_balance: MoneyAmount,
     final_destination_balance: MoneyAmount,
-    final_source_debits: Vec<u16>,
-    final_destination_transfer_credits: Vec<u16>,
+    final_source_debits: Vec<MoneyAmount>,
+    final_destination_transfer_credits: Vec<MoneyAmount>,
     event_counts_always_matched: bool,
     debit_credit_counts_balanced: bool,
 }
@@ -678,27 +696,27 @@ async fn concurrent_transfers_never_expose_partial_state() {
     });
 
     // Extract and sort debit amounts from source stream for final verification
-    let mut final_source_debits: Vec<u16> = final_source_snapshot
+    let mut final_source_debits: Vec<MoneyAmount> = final_source_snapshot
         .events
         .iter()
         .filter_map(|event| match event {
-            TestDomainEvents::Debited { amount, .. } => Some(amount.into_inner()),
+            TestDomainEvents::Debited { amount, .. } => Some(*amount),
             _ => None,
         })
         .collect();
-    final_source_debits.sort_unstable();
+    final_source_debits.sort();
 
     // Extract and sort credit amounts from destination stream (excluding initial seed)
-    let mut final_destination_transfer_credits: Vec<u16> = final_destination_snapshot
+    let mut final_destination_transfer_credits: Vec<MoneyAmount> = final_destination_snapshot
         .events
         .iter()
         .enumerate()
         .filter_map(|(index, event)| match event {
-            TestDomainEvents::Credited { amount, .. } if index > 0 => Some(amount.into_inner()),
+            TestDomainEvents::Credited { amount, .. } if index > 0 => Some(*amount),
             _ => None,
         })
         .collect();
-    final_destination_transfer_credits.sort_unstable();
+    final_destination_transfer_credits.sort();
 
     // Collect all evidence into a single struct for assertion
     let actual_analysis = PartialVisibilityEvidence {
@@ -733,8 +751,8 @@ async fn concurrent_transfers_never_expose_partial_state() {
         final_destination_version: 3,
         final_source_balance: test_amount(30),
         final_destination_balance: test_amount(120),
-        final_source_debits: vec![30, 40],
-        final_destination_transfer_credits: vec![30, 40],
+        final_source_debits: vec![test_amount(30), test_amount(40)],
+        final_destination_transfer_credits: vec![test_amount(30), test_amount(40)],
         event_counts_always_matched: true,
         debit_credit_counts_balanced: true,
     };

@@ -65,6 +65,19 @@ pub struct StreamId(String);
 
 Benefits: private inner field, fallible constructor, standard trait derives, no manual boilerplate.
 
+### Domain Operations Over Inner Value Extraction
+
+Domain types should expose operations (arithmetic, comparison, formatting)
+rather than requiring callers to extract the inner value. `into_inner()`
+and `Into` conversions should appear only at IO boundaries (SQL parameter
+binding, logging format arguments) — never in domain logic or test
+assertions.
+
+When a domain type needs arithmetic, implement `From<DomainType> for TargetType`
+or domain methods (e.g., `AccountBalance::deposit(amount)`). When sorting
+is needed, derive `PartialOrd` and `Ord`. Collections should hold domain
+types, not extracted primitives.
+
 ### Validation Functions
 
 Custom validation predicates (e.g., `no_glob_metacharacters`) must have property tests via proptest.

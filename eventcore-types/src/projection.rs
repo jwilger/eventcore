@@ -95,7 +95,7 @@ pub enum FailureStrategy {
 ///
 /// Positions are UUID7 values (timestamp-ordered UUIDs) assigned at event
 /// append time. They are monotonically increasing and globally sortable.
-#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display))]
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into))]
 pub struct StreamPosition(Uuid);
 
 /// Trait for transforming events into read model updates.
@@ -250,7 +250,7 @@ pub trait Projector: Send + 'static {
 /// let large = BatchSize::new(1_000_000);
 /// let empty = BatchSize::new(0);  // Valid - returns no events
 /// ```
-#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display))]
+#[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into))]
 pub struct BatchSize(usize);
 
 /// Maximum number of retry attempts for event processing.
@@ -788,7 +788,8 @@ mod tests {
     fn event_page_first_has_no_after_position() {
         let page = EventPage::first(BatchSize::new(100));
         assert_eq!(page.after_position(), None);
-        assert_eq!(page.limit().into_inner(), 100);
+        let limit: usize = page.limit().into();
+        assert_eq!(limit, 100);
     }
 
     #[test]
@@ -797,7 +798,8 @@ mod tests {
         let position = StreamPosition::new(uuid);
         let page = EventPage::after(position, BatchSize::new(50));
         assert_eq!(page.after_position(), Some(position));
-        assert_eq!(page.limit().into_inner(), 50);
+        let limit: usize = page.limit().into();
+        assert_eq!(limit, 50);
     }
 
     #[test]
@@ -807,6 +809,7 @@ mod tests {
         let new_position = StreamPosition::new(uuid);
         let next_page = page.next(new_position);
         assert_eq!(next_page.after_position(), Some(new_position));
-        assert_eq!(next_page.limit().into_inner(), 100);
+        let limit: usize = next_page.limit().into();
+        assert_eq!(limit, 100);
     }
 }
