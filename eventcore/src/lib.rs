@@ -68,8 +68,8 @@ pub use eventcore_postgres as postgres;
 #[cfg(feature = "sqlite")]
 pub use eventcore_sqlite as sqlite;
 
-/// Validates a business rule condition and returns early with
-/// `CommandError::BusinessRuleViolation` when the condition is false.
+/// Validates a business rule condition and returns early with a
+/// `CommandError` when the condition is false.
 ///
 /// Designed for command handlers (or any function returning
 /// `Result<_, CommandError>`) so domain invariants stay close to the logic
@@ -99,13 +99,26 @@ pub use eventcore_sqlite as sqlite;
 /// # Ok(())
 /// # }
 /// ```
+///
+/// With a typed error (any type implementing `Into<CommandError>`):
+/// ```
+/// # use eventcore::{require, CommandError};
+/// # #[derive(Debug, thiserror::Error)]
+/// # enum MyError { #[error("insufficient-funds")] InsufficientFunds }
+/// # impl From<MyError> for CommandError {
+/// #     fn from(e: MyError) -> Self { CommandError::BusinessRuleViolation(e.to_string()) }
+/// # }
+/// # fn check(balance: u64, amount: u64) -> Result<(), CommandError> {
+/// require!(balance >= amount, MyError::InsufficientFunds);
+/// # Ok(())
+/// # }
+/// ```
 #[macro_export]
 macro_rules! require {
-    ($condition:expr, $message:expr $(,)?) => {
+    ($condition:expr, $error:expr $(,)?) => {
         if !$condition {
-            let message = ::std::string::ToString::to_string(&$message);
             return ::core::result::Result::Err(
-                $crate::CommandError::BusinessRuleViolation(message),
+                ::core::convert::Into::<$crate::CommandError>::into($error),
             );
         }
     };
