@@ -72,7 +72,7 @@ Add Comment              →  Comment Added
 In EventCore, these become your command types:
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct CreateTask {
     #[stream]
     task_id: StreamId,
@@ -80,7 +80,7 @@ struct CreateTask {
     description: TaskDescription,
 }
 
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct AssignTask {
     #[stream]
     task_id: StreamId,
@@ -109,14 +109,28 @@ struct MyTasksProjection {
     tasks_by_user: HashMap<UserId, Vec<TaskSummary>>,
 }
 
-impl CqrsProjection for MyTasksProjection {
-    fn apply(&mut self, event: &StoredEvent<TaskEvent>) {
-        match &event.payload {
+impl Projector for MyTasksProjection {
+    type Event = TaskEvent;
+    type Error = Infallible;
+    type Context = ();
+
+    fn apply(
+        &mut self,
+        event: Self::Event,
+        _position: StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        match &event {
             TaskEvent::TaskAssigned { user_id, .. } => {
                 // Update tasks_by_user
             }
             // ... handle other events
         }
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "my-tasks"
     }
 }
 ```
@@ -143,7 +157,7 @@ Events:
 In EventCore:
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct PublishArticle {
     #[stream]
     article_id: StreamId,
@@ -172,7 +186,7 @@ Target Account ──────────────┬──────�
 In EventCore, this is ONE atomic command:
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct TransferMoney {
     #[stream]
     from_account: StreamId,
@@ -196,7 +210,7 @@ Order Created → Payment Processed → Inventory Reserved → Order Shipped
 Each step might be a separate command or one complex command:
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct FulfillOrder {
     #[stream]
     order_id: StreamId,
@@ -230,7 +244,7 @@ enum TaskEvent {
 Your identified commands:
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct CreateTask {
     #[stream]
     task_id: StreamId,
@@ -241,13 +255,18 @@ impl CommandLogic for CreateTask {
     type Event = TaskEvent;
     type State = TaskState;
 
-    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        require!(!state.exists, "Task already exists");
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        // Reconstruct state from events
+        state.apply(event)
+    }
 
-        Ok(NewEvents::from(vec![TaskEvent::Created {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+        require!(!state.exists(), "Task already exists");
+
+        Ok(vec![TaskEvent::Created {
             title: self.title.as_ref().to_string(),
             description: String::new(),
-        }]))
+        }].into())
     }
 }
 ```
@@ -262,17 +281,31 @@ struct TasksByUserProjection {
     index: HashMap<UserId, HashSet<TaskId>>,
 }
 
-impl CqrsProjection for TasksByUserProjection {
-    fn apply(&mut self, event: &StoredEvent<TaskEvent>) {
-        match &event.payload {
-            TaskEvent::Assigned { user_id } => {
+impl Projector for TasksByUserProjection {
+    type Event = TaskEvent;
+    type Error = Infallible;
+    type Context = ();
+
+    fn apply(
+        &mut self,
+        event: Self::Event,
+        _position: StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        match &event {
+            TaskEvent::Assigned { user_id, task_id, .. } => {
                 self.index
                     .entry(user_id.clone())
                     .or_default()
-                    .insert(TaskId::from(&event.stream_id));
+                    .insert(*task_id);
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "tasks-by-user"
     }
 }
 ```
@@ -318,7 +351,7 @@ Customer Entered → Order Placed → Payment Received → Coffee Prepared → O
 
 ```rust
 // One command handling the full order flow
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct PlaceAndPayOrder {
     #[stream]
     order_id: StreamId,

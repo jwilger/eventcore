@@ -39,11 +39,7 @@ By the end of this tutorial, you'll understand:
 
 ## Code Repository
 
-The complete code for this tutorial is available at:
-
-```bash
-git clone https://github.com/your-org/eventcore-task-tutorial
-cd eventcore-task-tutorial
-```
+Working examples that demonstrate EventCore patterns can be found in the
+`eventcore-examples/tests/` directory of the EventCore workspace.
 
 Ready? Let's [set up your project](./01-setup.md) →

@@ -370,12 +370,18 @@ pub enum SystemEvent {
     User(UserEvent),
 }
 
-// Required conversions for EventCore
-impl TryFrom<&SystemEvent> for SystemEvent {
-    type Error = std::convert::Infallible;
+// Implement the Event trait for stream routing.
+// Each event variant must report which stream it belongs to.
+impl eventcore::Event for SystemEvent {
+    fn stream_id(&self) -> &eventcore::StreamId {
+        match self {
+            SystemEvent::Task(task_event) => task_event.stream_id(),
+            SystemEvent::User(user_event) => user_event.stream_id(),
+        }
+    }
 
-    fn try_from(value: &SystemEvent) -> Result<Self, Self::Error> {
-        Ok(value.clone())
+    fn event_type_name() -> &'static str {
+        "SystemEvent"
     }
 }
 ```

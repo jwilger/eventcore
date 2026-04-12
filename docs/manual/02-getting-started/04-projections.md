@@ -21,9 +21,9 @@ Let's build a projection that answers: "What tasks does each user have?"
 
 ```rust
 use crate::domain::{events::*, types::*};
-use eventcore::prelude::*;
-use eventcore::cqrs::{CqrsProjection, ProjectionError};
-use std::collections::{HashMap, HashSet};
+use eventcore::Projector;
+use std::collections::HashMap;
+use std::convert::Infallible;
 use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
 
@@ -38,7 +38,9 @@ pub struct TaskSummary {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
-/// Projection that maintains task lists for each user
+/// Projection that maintains task lists for each user.
+///
+/// Implements the `Projector` trait so it can be run via `run_projection()`.
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct UserTaskListProjection {
     /// Tasks indexed by user
@@ -65,7 +67,6 @@ impl UserTaskListProjection {
             .get(user)
             .map(|tasks| {
                 let mut list: Vec<_> = tasks.values().cloned().collect();
-                // Sort by priority (high to low) then by assigned date
                 list.sort_by(|a, b| {
                     b.priority.cmp(&a.priority)
                         .then_with(|| a.assigned_at.cmp(&b.assigned_at))
@@ -86,28 +87,22 @@ impl UserTaskListProjection {
             })
             .unwrap_or(0)
     }
-
-    /// Get task by ID
-    pub fn get_task(&self, task_id: &TaskId) -> Option<&TaskSummary> {
-        self.task_assignments
-            .get(task_id)
-            .and_then(|user| {
-                self.tasks_by_user
-                    .get(user)?
-                    .get(task_id)
-            })
-    }
 }
 
-#[async_trait]
-impl CqrsProjection for UserTaskListProjection {
+impl Projector for UserTaskListProjection {
     type Event = SystemEvent;
-    type Error = ProjectionError;
+    type Error = Infallible;
+    type Context = ();
 
-    async fn apply(&mut self, event: &StoredEvent<Self::Event>) -> Result<(), Self::Error> {
-        match &event.payload {
+    fn apply(
+        &mut self,
+        event: Self::Event,
+        _position: eventcore::StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        match event {
             SystemEvent::Task(task_event) => {
-                self.apply_task_event(task_event, &event.occurred_at)?;
+                self.apply_task_event(&task_event);
             }
             SystemEvent::User(_) => {
                 // User events handled separately if needed
@@ -122,77 +117,46 @@ impl CqrsProjection for UserTaskListProjection {
 }
 
 impl UserTaskListProjection {
-    fn apply_task_event(
-        &mut self,
-        event: &TaskEvent,
-        occurred_at: &DateTime<Utc>
-    ) -> Result<(), ProjectionError> {
+    fn apply_task_event(&mut self, event: &TaskEvent) {
         match event {
-            TaskEvent::Created { task_id, title, creator, .. } => {
-                // Cache task details for later use
+            TaskEvent::Created { task_id, title, .. } => {
                 self.task_details.insert(
                     *task_id,
                     TaskDetails {
                         title: title.to_string(),
-                        created_at: *occurred_at,
+                        created_at: Utc::now(),
                         priority: Priority::default(),
                     }
                 );
             }
 
             TaskEvent::Assigned { task_id, assignee, assigned_at, .. } => {
-                // Remove from previous assignee if any
                 if let Some(previous_user) = self.task_assignments.get(task_id) {
                     if let Some(user_tasks) = self.tasks_by_user.get_mut(previous_user) {
                         user_tasks.remove(task_id);
                     }
                 }
 
-                // Add to new assignee
-                let task_details = self.task_details.get(task_id)
-                    .ok_or_else(|| ProjectionError::InvalidState(
-                        format!("Task {} not found in cache", task_id)
-                    ))?;
+                if let Some(task_details) = self.task_details.get(task_id) {
+                    let summary = TaskSummary {
+                        id: *task_id,
+                        title: task_details.title.clone(),
+                        status: TaskStatus::Open,
+                        priority: task_details.priority,
+                        assigned_at: *assigned_at,
+                        completed_at: None,
+                    };
 
-                let summary = TaskSummary {
-                    id: *task_id,
-                    title: task_details.title.clone(),
-                    status: TaskStatus::Open,
-                    priority: task_details.priority,
-                    assigned_at: *assigned_at,
-                    completed_at: None,
-                };
-
-                self.tasks_by_user
-                    .entry(assignee.clone())
-                    .or_default()
-                    .insert(*task_id, summary);
+                    self.tasks_by_user
+                        .entry(assignee.clone())
+                        .or_default()
+                        .insert(*task_id, summary);
+                }
 
                 self.task_assignments.insert(*task_id, assignee.clone());
             }
 
-            TaskEvent::Unassigned { task_id, previous_assignee, .. } => {
-                // Remove from assignee
-                if let Some(user_tasks) = self.tasks_by_user.get_mut(previous_assignee) {
-                    user_tasks.remove(task_id);
-                }
-                self.task_assignments.remove(task_id);
-            }
-
-            TaskEvent::Started { task_id, .. } => {
-                // Update status
-                if let Some(user) = self.task_assignments.get(task_id) {
-                    if let Some(task) = self.tasks_by_user
-                        .get_mut(user)
-                        .and_then(|tasks| tasks.get_mut(task_id))
-                    {
-                        task.status = TaskStatus::InProgress;
-                    }
-                }
-            }
-
             TaskEvent::Completed { task_id, completed_at, .. } => {
-                // Update status and completion time
                 if let Some(user) = self.task_assignments.get(task_id) {
                     if let Some(task) = self.tasks_by_user
                         .get_mut(user)
@@ -204,26 +168,8 @@ impl UserTaskListProjection {
                 }
             }
 
-            TaskEvent::PriorityChanged { task_id, new_priority, .. } => {
-                // Update priority in cache and summary
-                if let Some(details) = self.task_details.get_mut(task_id) {
-                    details.priority = *new_priority;
-                }
-
-                if let Some(user) = self.task_assignments.get(task_id) {
-                    if let Some(task) = self.tasks_by_user
-                        .get_mut(user)
-                        .and_then(|tasks| tasks.get_mut(task_id))
-                    {
-                        task.priority = *new_priority;
-                    }
-                }
-            }
-
             _ => {} // Handle other events as needed
         }
-
-        Ok(())
     }
 }
 ```
@@ -236,35 +182,18 @@ Let's build another projection for team statistics:
 
 ```rust
 use crate::domain::{events::*, types::*};
-use eventcore::prelude::*;
-use eventcore::cqrs::{CqrsProjection, ProjectionError};
+use eventcore::Projector;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use serde::{Serialize, Deserialize};
-use chrono::{DateTime, Utc, Datelike};
 
 /// Team statistics projection
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct TeamStatisticsProjection {
-    /// Total tasks created
     pub total_tasks_created: u64,
-
-    /// Tasks by status
     pub tasks_by_status: HashMap<TaskStatus, u64>,
-
-    /// Tasks by priority
     pub tasks_by_priority: HashMap<Priority, u64>,
-
-    /// User statistics
     pub user_stats: HashMap<UserName, UserStatistics>,
-
-    /// Daily completion rates
-    pub daily_completions: HashMap<String, u64>, // Date string -> count
-
-    /// Average completion time in hours
-    pub avg_completion_hours: f64,
-
-    /// Completion times for average calculation
-    completion_times: Vec<f64>,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -272,69 +201,37 @@ pub struct UserStatistics {
     pub tasks_assigned: u64,
     pub tasks_completed: u64,
     pub tasks_in_progress: u64,
-    pub total_comments: u64,
-    pub avg_completion_hours: f64,
-    completion_times: Vec<f64>,
 }
 
 impl TeamStatisticsProjection {
-    /// Get completion rate percentage
     pub fn completion_rate(&self) -> f64 {
         if self.total_tasks_created == 0 {
             return 0.0;
         }
-
         let completed = self.tasks_by_status
             .get(&TaskStatus::Completed)
             .copied()
             .unwrap_or(0);
-
         (completed as f64 / self.total_tasks_created as f64) * 100.0
-    }
-
-    /// Get most productive user
-    pub fn most_productive_user(&self) -> Option<(&UserName, u64)> {
-        self.user_stats
-            .iter()
-            .max_by_key(|(_, stats)| stats.tasks_completed)
-            .map(|(user, stats)| (user, stats.tasks_completed))
-    }
-
-    /// Get workload distribution
-    pub fn workload_distribution(&self) -> Vec<(UserName, f64)> {
-        let total_active: u64 = self.user_stats
-            .values()
-            .map(|s| s.tasks_in_progress)
-            .sum();
-
-        if total_active == 0 {
-            return vec![];
-        }
-
-        self.user_stats
-            .iter()
-            .filter(|(_, stats)| stats.tasks_in_progress > 0)
-            .map(|(user, stats)| {
-                let percentage = (stats.tasks_in_progress as f64 / total_active as f64) * 100.0;
-                (user.clone(), percentage)
-            })
-            .collect()
     }
 }
 
-#[async_trait]
-impl CqrsProjection for TeamStatisticsProjection {
+impl Projector for TeamStatisticsProjection {
     type Event = SystemEvent;
-    type Error = ProjectionError;
+    type Error = Infallible;
+    type Context = ();
 
-    async fn apply(&mut self, event: &StoredEvent<Self::Event>) -> Result<(), Self::Error> {
-        match &event.payload {
+    fn apply(
+        &mut self,
+        event: Self::Event,
+        _position: eventcore::StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        match event {
             SystemEvent::Task(task_event) => {
-                self.apply_task_event(task_event, &event.occurred_at)?;
+                self.apply_task_event(&task_event);
             }
-            SystemEvent::User(user_event) => {
-                self.apply_user_event(user_event)?;
-            }
+            SystemEvent::User(_) => {}
         }
         Ok(())
     }
@@ -345,72 +242,28 @@ impl CqrsProjection for TeamStatisticsProjection {
 }
 
 impl TeamStatisticsProjection {
-    fn apply_task_event(
-        &mut self,
-        event: &TaskEvent,
-        occurred_at: &DateTime<Utc>
-    ) -> Result<(), ProjectionError> {
+    fn apply_task_event(&mut self, event: &TaskEvent) {
         match event {
             TaskEvent::Created { .. } => {
                 self.total_tasks_created += 1;
                 *self.tasks_by_status.entry(TaskStatus::Open).or_insert(0) += 1;
-                *self.tasks_by_priority.entry(Priority::default()).or_insert(0) += 1;
             }
-
             TaskEvent::Assigned { assignee, .. } => {
                 let stats = self.user_stats.entry(assignee.clone()).or_default();
                 stats.tasks_assigned += 1;
                 stats.tasks_in_progress += 1;
             }
-
-            TaskEvent::Completed { task_id, completed_by, completed_at, .. } => {
-                // Update status counts
+            TaskEvent::Completed { completed_by, .. } => {
                 *self.tasks_by_status.entry(TaskStatus::Open).or_insert(0) =
                     self.tasks_by_status.get(&TaskStatus::Open).unwrap_or(&0).saturating_sub(1);
                 *self.tasks_by_status.entry(TaskStatus::Completed).or_insert(0) += 1;
 
-                // Update user stats
                 let stats = self.user_stats.entry(completed_by.clone()).or_default();
                 stats.tasks_completed += 1;
                 stats.tasks_in_progress = stats.tasks_in_progress.saturating_sub(1);
-
-                // Track daily completions
-                let date_key = completed_at.format("%Y-%m-%d").to_string();
-                *self.daily_completions.entry(date_key).or_insert(0) += 1;
-
-                // Calculate completion time (would need task creation time)
-                // For demo, using a placeholder
-                let completion_hours = 24.0; // In real app, calculate from creation
-                self.completion_times.push(completion_hours);
-                stats.completion_times.push(completion_hours);
-
-                // Update averages
-                self.avg_completion_hours = self.completion_times.iter().sum::<f64>()
-                    / self.completion_times.len() as f64;
-                stats.avg_completion_hours = stats.completion_times.iter().sum::<f64>()
-                    / stats.completion_times.len() as f64;
             }
-
-            TaskEvent::CommentAdded { author, .. } => {
-                let stats = self.user_stats.entry(author.clone()).or_default();
-                stats.total_comments += 1;
-            }
-
-            TaskEvent::PriorityChanged { old_priority, new_priority, .. } => {
-                *self.tasks_by_priority.entry(*old_priority).or_insert(0) =
-                    self.tasks_by_priority.get(old_priority).unwrap_or(&0).saturating_sub(1);
-                *self.tasks_by_priority.entry(*new_priority).or_insert(0) += 1;
-            }
-
             _ => {}
         }
-
-        Ok(())
-    }
-
-    fn apply_user_event(&mut self, event: &UserEvent) -> Result<(), ProjectionError> {
-        // Handle user-specific events if needed
-        Ok(())
     }
 }
 ```
@@ -419,51 +272,21 @@ impl TeamStatisticsProjection {
 
 EventCore provides infrastructure for running projections:
 
-### Setting Up Projection Runner
+### Running a Projection
+
+Use the `run_projection()` free function to process all events through your projector:
 
 ```rust
-use eventcore::prelude::*;
-use eventcore::cqrs::{
-    CqrsProjectionRunner,
-    InMemoryCheckpointStore,
-    InMemoryReadModelStore,
-    ProjectionRunnerConfig,
-};
+use eventcore::run_projection;
 use eventcore_memory::InMemoryEventStore;
 
 async fn setup_projections() -> Result<(), Box<dyn std::error::Error>> {
-    // Event store
-    let event_store = InMemoryEventStore::<SystemEvent>::new();
+    // Event store (already populated with events from command execution)
+    let store = InMemoryEventStore::new();
 
-    // Projection infrastructure
-    let checkpoint_store = InMemoryCheckpointStore::new();
-    let read_model_store = InMemoryReadModelStore::new();
-
-    // Create projection
-    let mut task_list_projection = UserTaskListProjection::default();
-
-    // Configure runner
-    let config = ProjectionRunnerConfig::default()
-        .with_batch_size(100)
-        .with_checkpoint_frequency(50);
-
-    // Create and start runner
-    let runner = CqrsProjectionRunner::new(
-        event_store.clone(),
-        checkpoint_store,
-        read_model_store.clone(),
-        config,
-    );
-
-    // Run projection
-    runner.run_projection(&mut task_list_projection).await?;
-
-    // Query the projection
-    let alice_tasks = task_list_projection.get_user_tasks(
-        &UserName::try_new("alice").unwrap()
-    );
-
-    println!("Alice has {} tasks", alice_tasks.len());
+    // Create and run a projection
+    let projection = UserTaskListProjection::default();
+    run_projection(projection, &store).await?;
 
     Ok(())
 }
@@ -471,14 +294,10 @@ async fn setup_projections() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Querying Projections
 
-EventCore provides a query builder for complex queries:
+Query your projection's state using the methods you defined on it:
 
 ```rust
-use eventcore::cqrs::{QueryBuilder, FilterOperator};
-
-async fn query_tasks(
-    projection: &UserTaskListProjection,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn query_tasks(projection: &UserTaskListProjection) {
     let alice = UserName::try_new("alice").unwrap();
 
     // Get all tasks for Alice
@@ -500,73 +319,33 @@ async fn query_tasks(
     println!("- Total: {}", all_tasks.len());
     println!("- High priority: {}", high_priority.len());
     println!("- Active: {}", active_tasks.len());
-
-    Ok(())
 }
 ```
 
 ## Real-time Updates
 
-Projections can be updated in real-time as events are written:
-
-```rust
-use tokio::sync::RwLock;
-use std::sync::Arc;
-
-struct ProjectionService {
-    projection: Arc<RwLock<UserTaskListProjection>>,
-    event_store: Arc<dyn EventStore>,
-}
-
-impl ProjectionService {
-    async fn start_real_time_updates(self) {
-        let mut last_position = EventId::default();
-
-        loop {
-            // Poll for new events
-            let events = self.event_store
-                .read_all_events(ReadOptions::default().after(last_position))
-                .await
-                .unwrap_or_default();
-
-            if !events.is_empty() {
-                let mut projection = self.projection.write().await;
-
-                for event in &events {
-                    if let Err(e) = projection.apply(event).await {
-                        eprintln!("Projection error: {}", e);
-                    }
-                    last_position = event.id.clone();
-                }
-            }
-
-            // Sleep before next poll
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        }
-    }
-}
-```
+For continuous projection updates, use `run_projection()` which polls for
+new events. EventCore's projection system handles checkpointing and
+resumption automatically. See the `projection-system` blueprint and
+ADR-0036 for details on the continuous polling architecture.
 
 ## Rebuilding Projections
 
-One of the powerful features of event sourcing is the ability to rebuild projections:
+One of the powerful features of event sourcing is the ability to rebuild
+projections from scratch. Simply create a fresh projector instance and run
+it against the store -- it will replay all events from the beginning:
 
 ```rust
-use eventcore::cqrs::{RebuildCoordinator, RebuildStrategy};
+use eventcore::run_projection;
 
 async fn rebuild_projection(
-    event_store: Arc<dyn EventStore>,
-    projection: &mut UserTaskListProjection,
+    store: &InMemoryEventStore,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let coordinator = RebuildCoordinator::new(event_store);
+    // Create a fresh projection (starts from the beginning)
+    let projection = UserTaskListProjection::default();
 
-    // Clear existing state
-    *projection = UserTaskListProjection::default();
-
-    // Rebuild from beginning
-    let strategy = RebuildStrategy::FromBeginning;
-
-    coordinator.rebuild(projection, strategy).await?;
+    // Run it -- processes all events from the store
+    run_projection(projection, store).await?;
 
     println!("Projection rebuilt successfully");
     Ok(())
@@ -581,103 +360,70 @@ Testing projections is straightforward:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eventcore::{execute, RetryPolicy, run_projection};
+    use eventcore_memory::InMemoryEventStore;
+    use eventcore_testing::EventCollector;
+    use std::sync::{Arc, Mutex};
 
     #[tokio::test]
-    async fn test_user_task_list_projection() {
-        let mut projection = UserTaskListProjection::default();
+    async fn test_projections_via_execute_and_run_projection() {
+        // Given: A store with events from command execution
+        let store = InMemoryEventStore::new();
 
-        // Create test events
-        let task_id = TaskId::new();
-        let alice = UserName::try_new("alice").unwrap();
+        // Execute commands to populate the store
+        let create = CreateTask {
+            task_id: StreamId::try_new("task-123").unwrap(),
+            title: TaskTitle::try_new("Test").unwrap(),
+            description: TaskDescription::try_new("").unwrap(),
+            creator: UserName::try_new("alice").unwrap(),
+            priority: Priority::default(),
+        };
+        execute(&store, create, RetryPolicy::new()).await.unwrap();
 
-        // Apply created event
-        let created_event = create_test_event(
-            StreamId::from_static("task-123"),
-            SystemEvent::Task(TaskEvent::Created {
-                task_id,
-                title: TaskTitle::try_new("Test").unwrap(),
-                description: TaskDescription::try_new("").unwrap(),
-                creator: alice.clone(),
-                created_at: Utc::now(),
-            })
-        );
+        // Then: Run an EventCollector to gather events
+        let storage: Arc<Mutex<Vec<SystemEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let collector = EventCollector::new(storage.clone());
+        run_projection(collector, &store).await.unwrap();
 
-        projection.apply(&created_event).await.unwrap();
-
-        // Apply assigned event
-        let assigned_event = create_test_event(
-            StreamId::from_static("task-123"),
-            SystemEvent::Task(TaskEvent::Assigned {
-                task_id,
-                assignee: alice.clone(),
-                assigned_by: alice.clone(),
-                assigned_at: Utc::now(),
-            })
-        );
-
-        projection.apply(&assigned_event).await.unwrap();
-
-        // Verify
-        let tasks = projection.get_user_tasks(&alice);
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].id, task_id);
-        assert_eq!(tasks[0].status, TaskStatus::Open);
-    }
-
-    #[tokio::test]
-    async fn test_statistics_projection() {
-        let mut projection = TeamStatisticsProjection::default();
-
-        // Apply multiple events
-        for i in 0..10 {
-            let event = create_test_event(
-                StreamId::from_static(&format!("task-{}", i)),
-                SystemEvent::Task(TaskEvent::Created {
-                    task_id: TaskId::new(),
-                    title: TaskTitle::try_new("Task").unwrap(),
-                    description: TaskDescription::try_new("").unwrap(),
-                    creator: UserName::try_new("alice").unwrap(),
-                    created_at: Utc::now(),
-                })
-            );
-            projection.apply(&event).await.unwrap();
-        }
-
-        assert_eq!(projection.total_tasks_created, 10);
-        assert_eq!(projection.completion_rate(), 0.0);
+        let events = storage.lock().unwrap();
+        assert_eq!(events.len(), 1);
     }
 }
 ```
 
-> **Note:** Helper functions such as `create_test_event` are simple utilities you can define inside your test module today; the dedicated `eventcore-testing` crate will publish official fixtures in a future release.
+> **Note:** The `eventcore-testing` crate provides `EventCollector` for
+> gathering events in tests. For custom projections, implement the
+> `Projector` trait and use `run_projection()` to process events.
 
 ## Performance Considerations
 
-### 1. Batch Processing
+### 1. Projector Design
 
-Process events in batches for better performance:
+Keep your `Projector::apply()` implementation fast and focused. Each call
+processes a single event, so avoid expensive I/O inside the apply method.
 
-```rust
-let config = ProjectionRunnerConfig::default()
-    .with_batch_size(1000)  // Process 1000 events at a time
-    .with_checkpoint_frequency(100);  // Checkpoint every 100 events
-```
+### 2. Selective Processing
 
-### 2. Selective Projections
-
-Only process relevant streams:
+Filter events within your `apply()` method to only process relevant ones:
 
 ```rust
-impl CqrsProjection for UserTaskListProjection {
-    fn relevant_streams(&self) -> Vec<&str> {
-        vec!["task-*", "user-*"]  // Only process task and user streams
+fn apply(
+    &mut self,
+    event: Self::Event,
+    _position: eventcore::StreamPosition,
+    _ctx: &mut Self::Context,
+) -> Result<(), Self::Error> {
+    // Only process task events, ignore user events
+    if let SystemEvent::Task(task_event) = event {
+        self.handle_task_event(&task_event);
     }
+    Ok(())
 }
 ```
 
 ### 3. Caching
 
-Use in-memory caching for frequently accessed data:
+Use in-memory caching for frequently accessed projection data:
 
 ```rust
 struct CachedProjection {

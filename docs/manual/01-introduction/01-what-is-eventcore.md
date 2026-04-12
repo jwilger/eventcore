@@ -31,7 +31,7 @@ These boundaries often don't match real business requirements:
 EventCore introduces **dynamic consistency boundaries** - each command defines which streams it needs:
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct TransferMoney {
     #[stream]
     from_account: StreamId,  // Read and write this stream
@@ -55,9 +55,9 @@ Instead of aggregates, EventCore uses streams - ordered sequences of events iden
 
 ```rust
 // Streams are just identifiers
-let alice_account = StreamId::from_static("account-alice");
-let bob_account = StreamId::from_static("account-bob");
-let order_123 = StreamId::from_static("order-123");
+let alice_account = StreamId::try_new("account-alice").unwrap();
+let bob_account = StreamId::try_new("account-bob").unwrap();
+let order_123 = StreamId::try_new("order-123").unwrap();
 ```
 
 ### 2. **Multi-Stream Commands**
@@ -66,7 +66,7 @@ Commands can read from and write to multiple streams atomically:
 
 ```rust
 // A command that involves multiple business entities
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct FulfillOrder {
     #[stream]
     order_id: StreamId,       // The order to fulfill
@@ -130,10 +130,9 @@ EventCore tracks stream versions to detect conflicts:
 ## Example: Complete Money Transfer
 
 ```rust
-use eventcore::prelude::*;
-use eventcore::Command;
+use eventcore::{Command, CommandError, CommandLogic, NewEvents, StreamId};
 
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct TransferMoney {
     #[stream]
     from_account: StreamId,
@@ -146,41 +145,40 @@ impl CommandLogic for TransferMoney {
     type State = AccountBalances;
     type Event = BankingEvent;
 
-    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-        // Update state based on events
-        match &event.payload {
-            BankingEvent::MoneyWithdrawn { amount, .. } => {
-                state.debit(&event.stream_id, *amount);
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        // Update state based on events (pure function: owned state in, owned state out)
+        match event {
+            BankingEvent::MoneyWithdrawn { account_id, amount, .. } => {
+                state.debit(account_id, *amount)
             }
-            BankingEvent::MoneyDeposited { amount, .. } => {
-                state.credit(&event.stream_id, *amount);
+            BankingEvent::MoneyDeposited { account_id, amount, .. } => {
+                state.credit(account_id, *amount)
             }
-            _ => {}
         }
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Check balance
         let from_balance = state.balance(&self.from_account);
-        require!(
-            from_balance >= self.amount.value(),
-            "Insufficient funds: balance={}, requested= {}",
-            from_balance,
-            self.amount
-        );
+        if from_balance < self.amount.value() {
+            return Err(CommandError::business_rule_violated(format!(
+                "Insufficient funds: balance={}, requested={}",
+                from_balance, self.amount
+            )));
+        }
 
         // Create atomic events for both accounts (domain events)
         let withdraw = BankingEvent::MoneyWithdrawn {
-            amount: self.amount.value(),
-            to: self.to_account.to_string(),
+            account_id: self.from_account.clone(),
+            amount: self.amount,
         };
 
         let deposit = BankingEvent::MoneyDeposited {
-            amount: self.amount.value(),
-            from: self.from_account.to_string(),
+            account_id: self.to_account.clone(),
+            amount: self.amount,
         };
 
-        Ok(NewEvents::from(vec![withdraw, deposit]))
+        Ok(vec![withdraw, deposit].into())
     }
 }
 ```

@@ -11,7 +11,7 @@ EventCore testing follows these principles:
 3. **Deterministic Tests** - Events provide repeatable test scenarios
 4. **Fast Feedback** - In-memory event store for rapid testing
 
-> **Note:** The examples below reference helper types such as `StoredEventBuilder` and `create_test_event`. Until `eventcore-testing` grows those fixtures, treat them as utilities you define inside your own tests.
+> **Note:** The examples below use `EventCollector` from `eventcore-testing` to collect events after command execution. This is the standard pattern for verifying command behavior in tests.
 
 ## Testing Commands
 
@@ -21,34 +21,38 @@ EventCore testing follows these principles:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::prelude::*;
+    use eventcore::{execute, RetryPolicy, CommandError, run_projection, StreamId};
     use eventcore_memory::InMemoryEventStore;
+    use eventcore_testing::EventCollector;
+    use std::sync::{Arc, Mutex};
 
     #[tokio::test]
     async fn test_create_task_success() {
-        // Arrange
-        let store = InMemoryEventStore::<SystemEvent>::new();
-        let executor = CommandExecutor::new(store);
+        // Given: An in-memory event store
+        let store = InMemoryEventStore::new();
 
-        let task_id = TaskId::new();
-        let command = CreateTask::new(
-            task_id,
-            TaskTitle::try_new("Write tests").unwrap(),
-            TaskDescription::try_new("Add comprehensive test coverage").unwrap(),
-            UserName::try_new("alice").unwrap(),
-        ).unwrap();
+        // And: A create task command
+        let command = CreateTask {
+            task_id: StreamId::try_new("task-123").unwrap(),
+            title: TaskTitle::try_new("Write tests").unwrap(),
+            description: TaskDescription::try_new("Add comprehensive test coverage").unwrap(),
+            creator: UserName::try_new("alice").unwrap(),
+            priority: Priority::default(),
+        };
 
-        // Act
-        let result = executor.execute(&command).await;
+        // When: The command is executed
+        execute(&store, command, RetryPolicy::new()).await.unwrap();
 
-        // Assert
-        assert!(result.is_ok());
-        let execution_result = result.unwrap();
-        assert_eq!(execution_result.events_written.len(), 1);
+        // Then: Verify events via EventCollector projection
+        let storage: Arc<Mutex<Vec<TaskEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let collector = EventCollector::new(storage.clone());
+        run_projection(collector, &store).await.unwrap();
 
-        // Verify the event
-        match &execution_result.events_written[0] {
-            SystemEvent::Task(TaskEvent::Created { title, creator, .. }) => {
+        let events = storage.lock().unwrap();
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            TaskEvent::Created { title, creator, .. } => {
                 assert_eq!(title.as_ref(), "Write tests");
                 assert_eq!(creator.as_ref(), "alice");
             }
@@ -58,31 +62,38 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_duplicate_task_fails() {
-        // Arrange
-        let store = InMemoryEventStore::<SystemEvent>::new();
-        let executor = CommandExecutor::new(store);
+        // Given: An in-memory event store with an existing task
+        let store = InMemoryEventStore::new();
 
-        let task_id = TaskId::new();
-        let command = CreateTask::new(
-            task_id,
-            TaskTitle::try_new("Task").unwrap(),
-            TaskDescription::try_new("").unwrap(),
-            UserName::try_new("alice").unwrap(),
-        ).unwrap();
+        let command = CreateTask {
+            task_id: StreamId::try_new("task-123").unwrap(),
+            title: TaskTitle::try_new("Task").unwrap(),
+            description: TaskDescription::try_new("").unwrap(),
+            creator: UserName::try_new("alice").unwrap(),
+            priority: Priority::default(),
+        };
 
-        // Act - Create first time
-        executor.execute(&command).await.unwrap();
+        // Create first time
+        execute(&store, command, RetryPolicy::new()).await.unwrap();
 
-        // Act - Try to create again
-        let result = executor.execute(&command).await;
+        // When: Try to create again with same stream
+        let duplicate = CreateTask {
+            task_id: StreamId::try_new("task-123").unwrap(),
+            title: TaskTitle::try_new("Task").unwrap(),
+            description: TaskDescription::try_new("").unwrap(),
+            creator: UserName::try_new("alice").unwrap(),
+            priority: Priority::default(),
+        };
 
-        // Assert
+        let result = execute(&store, duplicate, RetryPolicy::new()).await;
+
+        // Then: Should fail with BusinessRuleViolation
         assert!(result.is_err());
         match result.unwrap_err() {
-            CommandError::ValidationFailed(msg) => {
+            CommandError::BusinessRuleViolation(msg) => {
                 assert!(msg.contains("already exists"));
             }
-            _ => panic!("Expected ValidationFailed error"),
+            other => panic!("Expected BusinessRuleViolation, got: {:?}", other),
         }
     }
 }
@@ -93,49 +104,36 @@ mod tests {
 ```rust
 #[tokio::test]
 async fn test_assign_task_multi_stream() {
-    // Arrange
-    let store = InMemoryEventStore::<SystemEvent>::new();
-    let executor = CommandExecutor::new(store);
+    // Given: A store with a created task
+    let store = InMemoryEventStore::new();
 
-    // Create a task first
-    let task_id = TaskId::new();
-    let create = CreateTask::new(
-        task_id,
-        TaskTitle::try_new("Multi-stream test").unwrap(),
-        TaskDescription::try_new("").unwrap(),
-        UserName::try_new("alice").unwrap(),
-    ).unwrap();
+    let create = CreateTask {
+        task_id: StreamId::try_new("task-123").unwrap(),
+        title: TaskTitle::try_new("Multi-stream test").unwrap(),
+        description: TaskDescription::try_new("").unwrap(),
+        creator: UserName::try_new("alice").unwrap(),
+        priority: Priority::default(),
+    };
 
-    executor.execute(&create).await.unwrap();
+    execute(&store, create, RetryPolicy::new()).await.unwrap();
 
-    // Assign the task
-    let assign = AssignTask::new(
-        task_id,
-        UserName::try_new("bob").unwrap(),
-        UserName::try_new("alice").unwrap(),
-    ).unwrap();
+    // When: The task is assigned (multi-stream command)
+    let assign = AssignTask {
+        task_id: StreamId::try_new("task-123").unwrap(),
+        assignee_id: StreamId::try_new("user-bob").unwrap(),
+        assigned_by: UserName::try_new("alice").unwrap(),
+    };
 
-    // Act
-    let result = executor.execute(&assign).await.unwrap();
+    execute(&store, assign, RetryPolicy::new()).await.unwrap();
 
-    // Assert - Should affect both task and user streams
-    assert_eq!(result.streams_affected.len(), 2);
-    assert!(result.streams_affected.contains(&StreamId::from_static(&format!("task-{}", task_id))));
-    assert!(result.streams_affected.contains(&StreamId::from_static("user-bob")));
+    // Then: Events from both streams can be collected
+    let storage: Arc<Mutex<Vec<SystemEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let collector = EventCollector::new(storage.clone());
+    run_projection(collector, &store).await.unwrap();
 
-    // Verify events in both streams
-    let task_events = store.read_stream(
-        &StreamId::from_static(&format!("task-{}", task_id)),
-        ReadOptions::default()
-    ).await.unwrap();
-
-    let user_events = store.read_stream(
-        &StreamId::from_static("user-bob"),
-        ReadOptions::default()
-    ).await.unwrap();
-
-    assert_eq!(task_events.events.len(), 2); // Created + Assigned
-    assert_eq!(user_events.events.len(), 2); // TaskAssigned + WorkloadUpdated
+    let events = storage.lock().unwrap();
+    // Should have events from both the task and user streams
+    assert!(events.len() >= 2, "expected events from multiple streams");
 }
 ```
 
@@ -145,78 +143,66 @@ async fn test_assign_task_multi_stream() {
 
 ```rust
 #[tokio::test]
-async fn test_user_task_list_projection() {
-    // StoredEventBuilder is a project-specific helper shown here for illustration.
+async fn test_projection_via_execute_and_run() {
+    // Given: A store with a created and assigned task
+    let store = InMemoryEventStore::new();
 
-    // Arrange
-    let mut projection = UserTaskListProjection::default();
-    let task_id = TaskId::new();
-    let alice = UserName::try_new("alice").unwrap();
+    let create = CreateTask {
+        task_id: StreamId::try_new("task-123").unwrap(),
+        title: TaskTitle::try_new("Test task").unwrap(),
+        description: TaskDescription::try_new("").unwrap(),
+        creator: UserName::try_new("alice").unwrap(),
+        priority: Priority::default(),
+    };
+    execute(&store, create, RetryPolicy::new()).await.unwrap();
 
-    // Build test events
-    let events = vec![
-        StoredEventBuilder::new()
-            .with_stream_id(StreamId::from_static("task-123"))
-            .with_payload(SystemEvent::Task(TaskEvent::Created {
-                task_id,
-                title: TaskTitle::try_new("Test task").unwrap(),
-                description: TaskDescription::try_new("").unwrap(),
-                creator: alice.clone(),
-                created_at: Utc::now(),
-            }))
-            .build(),
-        StoredEventBuilder::new()
-            .with_stream_id(StreamId::from_static("task-123"))
-            .with_payload(SystemEvent::Task(TaskEvent::Assigned {
-                task_id,
-                assignee: alice.clone(),
-                assigned_by: alice.clone(),
-                assigned_at: Utc::now(),
-            }))
-            .build(),
-    ];
+    let assign = AssignTask {
+        task_id: StreamId::try_new("task-123").unwrap(),
+        assignee_id: StreamId::try_new("user-alice").unwrap(),
+        assigned_by: UserName::try_new("alice").unwrap(),
+    };
+    execute(&store, assign, RetryPolicy::new()).await.unwrap();
 
-    // Act
-    for event in events {
-        projection.apply(&event).await.unwrap();
-    }
+    // When: Running the projection
+    let projection = UserTaskListProjection::default();
+    run_projection(projection, &store).await.unwrap();
 
-    // Assert
-    let tasks = projection.get_user_tasks(&alice);
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].id, task_id);
-    assert_eq!(tasks[0].status, TaskStatus::Open);
+    // Then: The projection state reflects the commands executed
+    // (In practice, you'd use EventCollector or inspect projection state
+    //  via a shared reference pattern)
 }
 ```
 
 ### Testing Projection Accuracy
 
+Test projections by executing commands and then running the projection
+against the resulting event store:
+
 ```rust
 #[tokio::test]
 async fn test_statistics_projection_accuracy() {
-    let mut projection = TeamStatisticsProjection::default();
+    // Given: A store populated by executing multiple commands
+    let store = InMemoryEventStore::new();
 
-    // Create a series of events
-    let events = create_test_scenario(TestScenario {
-        tasks_created: 10,
-        tasks_assigned: 8,
-        tasks_completed: 5,
-        users: vec!["alice", "bob", "charlie"],
-    });
-
-    // Apply all events
-    for event in events {
-        projection.apply(&event).await.unwrap();
+    for i in 0..10 {
+        let create = CreateTask {
+            task_id: StreamId::try_new(format!("task-{}", i)).unwrap(),
+            title: TaskTitle::try_new("Task").unwrap(),
+            description: TaskDescription::try_new("").unwrap(),
+            creator: UserName::try_new("alice").unwrap(),
+            priority: Priority::default(),
+        };
+        execute(&store, create, RetryPolicy::new()).await.unwrap();
     }
 
-    // Verify statistics
-    assert_eq!(projection.total_tasks_created, 10);
-    assert_eq!(projection.tasks_by_status[&TaskStatus::Completed], 5);
-    assert_eq!(projection.tasks_by_status[&TaskStatus::Open], 2); // 10 - 8 assigned
-    assert_eq!(projection.tasks_by_status[&TaskStatus::InProgress], 3); // 8 - 5 completed
+    // When: Running an EventCollector to gather events
+    let storage: Arc<Mutex<Vec<SystemEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let collector = EventCollector::new(storage.clone());
+    run_projection(collector, &store).await.unwrap();
 
-    // Verify completion rate
-    assert_eq!(projection.completion_rate(), 50.0); // 5/10 * 100
+    // Then: All 10 creation events were captured
+    let events = storage.lock().unwrap();
+    assert_eq!(events.len(), 10);
 }
 ```
 
@@ -268,48 +254,43 @@ proptest! {
 ```rust
 #[tokio::test]
 async fn test_complete_task_workflow() {
-    // Setup
-    let store = InMemoryEventStore::<SystemEvent>::new();
-    let executor = CommandExecutor::new(store.clone());
-    let mut projection = UserTaskListProjection::default();
+    // Given: An in-memory event store
+    let store = InMemoryEventStore::new();
 
-    // Execute workflow
-    let task_id = TaskId::new();
-    let alice = UserName::try_new("alice").unwrap();
-    let bob = UserName::try_new("bob").unwrap();
-
-    // 1. Create task
-    let create = CreateTask::new(
-        task_id,
-        TaskTitle::try_new("Complete workflow").unwrap(),
-        TaskDescription::try_new("Test the entire flow").unwrap(),
-        alice.clone(),
-    ).unwrap();
-    executor.execute(&create).await.unwrap();
-
-    // 2. Assign to Bob
-    let assign = AssignTask::new(task_id, bob.clone(), alice.clone()).unwrap();
-    executor.execute(&assign).await.unwrap();
-
-    // 3. Bob completes the task
-    let complete = CompleteTask {
-        task_id: StreamId::from_static(&format!("task-{}", task_id)),
-        user_id: StreamId::from_static(&format!("user-{}", bob)),
-        completed_by: bob.clone(),
+    // Step 1: Create task
+    let create = CreateTask {
+        task_id: StreamId::try_new("task-workflow").unwrap(),
+        title: TaskTitle::try_new("Complete workflow").unwrap(),
+        description: TaskDescription::try_new("Test the entire flow").unwrap(),
+        creator: UserName::try_new("alice").unwrap(),
+        priority: Priority::default(),
     };
-    executor.execute(&complete).await.unwrap();
+    execute(&store, create, RetryPolicy::new()).await.unwrap();
 
-    // Update projection with all events
-    let all_events = store.read_all_events(ReadOptions::default()).await.unwrap();
-    for event in all_events {
-        projection.apply(&event).await.unwrap();
-    }
+    // Step 2: Assign to Bob
+    let assign = AssignTask {
+        task_id: StreamId::try_new("task-workflow").unwrap(),
+        assignee_id: StreamId::try_new("user-bob").unwrap(),
+        assigned_by: UserName::try_new("alice").unwrap(),
+    };
+    execute(&store, assign, RetryPolicy::new()).await.unwrap();
 
-    // Verify end state
-    let bob_tasks = projection.get_user_tasks(&bob);
-    assert_eq!(bob_tasks.len(), 1);
-    assert_eq!(bob_tasks[0].status, TaskStatus::Completed);
-    assert!(bob_tasks[0].completed_at.is_some());
+    // Step 3: Bob completes the task
+    let complete = CompleteTask {
+        task_id: StreamId::try_new("task-workflow").unwrap(),
+        user_id: StreamId::try_new("user-bob").unwrap(),
+        completed_by: UserName::try_new("bob").unwrap(),
+    };
+    execute(&store, complete, RetryPolicy::new()).await.unwrap();
+
+    // Then: Collect all events to verify the workflow
+    let storage: Arc<Mutex<Vec<SystemEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let collector = EventCollector::new(storage.clone());
+    run_projection(collector, &store).await.unwrap();
+
+    let events = storage.lock().unwrap();
+    // Should have events from create, assign, and complete
+    assert!(events.len() >= 3, "expected at least 3 events from the workflow");
 }
 ```
 
@@ -354,76 +335,50 @@ Failures return structured error messages (scenario + detail) so implementors
 can pinpoint missing behaviors quickly. Running these tests in CI fulfills ADR-013
 and ADR-015’s requirement that every backend prove semantic correctness.
 
-### Event Builders
+### EventCollector Pattern
+
+The recommended testing pattern uses `EventCollector` from `eventcore-testing`
+to collect events after command execution:
 
 ```rust
-// Helper builders live alongside your tests until shared fixtures land.
+use eventcore::{execute, RetryPolicy, run_projection};
+use eventcore_memory::InMemoryEventStore;
+use eventcore_testing::EventCollector;
+use std::sync::{Arc, Mutex};
 
-fn create_test_event(payload: SystemEvent) -> StoredEvent<SystemEvent> {
-    StoredEventBuilder::new()
-        .with_id(EventId::new())
-        .with_stream_id(StreamId::from_static("test-stream"))
-        .with_version(EventVersion::new(1))
-        .with_payload(payload)
-        .with_metadata(
-            EventMetadataBuilder::new()
-                .with_user_id(UserId::from("test-user"))
-                .build()
-        )
-        .build()
+#[tokio::test]
+async fn test_with_event_collector() {
+    // Execute commands against the store
+    let store = InMemoryEventStore::new();
+    execute(&store, my_command, RetryPolicy::new()).await.unwrap();
+
+    // Collect events via projection
+    let storage: Arc<Mutex<Vec<MyEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let collector = EventCollector::new(storage.clone());
+    run_projection(collector, &store).await.unwrap();
+
+    // Assert on collected events
+    let events = storage.lock().unwrap();
+    assert_eq!(events.len(), 1);
 }
 ```
 
 ### Test Scenarios
 
-```rust
-// Define your own scenario helpers to keep tests readable.
+See `eventcore-examples/tests/` for complete working examples including:
 
-struct TaskScenario;
-
-impl TestScenario for TaskScenario {
-    type Event = SystemEvent;
-
-    fn events(&self) -> Vec<EventToWrite<Self::Event>> {
-        vec![
-            // Series of events that create a test scenario
-            create_task_event("task-1", "Test Task 1"),
-            assign_task_event("task-1", "alice"),
-            complete_task_event("task-1", "alice"),
-        ]
-    }
-}
-```
-
-### Assertion Helpers
-
-```rust
-// Assertions helpers can also live locally until the crate exposes them.
-
-#[tokio::test]
-async fn test_event_ordering() {
-    let events = vec![/* ... */];
-
-    // Assert events are properly ordered
-    assert_events_ordered(&events);
-
-    // Assert no duplicate event IDs
-    assert_unique_event_ids(&events);
-
-    // Assert version progression
-    assert_stream_version_progression(&events, &StreamId::from_static("test"));
-}
-```
+- `single_stream_command_test.rs` -- basic command execution and error handling
+- `multi_stream_atomic_test.rs` -- multi-stream atomicity and concurrent transfers
+- `retry_policy_test.rs` -- retry behavior on version conflicts
+- `scenario_test.rs` -- GWT-style testing with `TestScenario`
 
 ## Testing Error Cases
 
 ### Command Validation Errors
 
 ```rust
-#[tokio::test]
-async fn test_invalid_command_inputs() {
-    let executor = CommandExecutor::new(InMemoryEventStore::<SystemEvent>::new());
-
+#[test]
+fn test_invalid_domain_types() {
     // Test empty title
     let result = TaskTitle::try_new("");
     assert!(result.is_err());
@@ -444,30 +399,40 @@ async fn test_invalid_command_inputs() {
 ```rust
 #[tokio::test]
 async fn test_concurrent_modifications() {
-    let store = InMemoryEventStore::<SystemEvent>::new();
-    let executor = CommandExecutor::new(store);
+    let store = Arc::new(InMemoryEventStore::new());
 
     // Create a task
-    let task_id = TaskId::new();
-    let create = CreateTask::new(
-        task_id,
-        TaskTitle::try_new("Concurrent test").unwrap(),
-        TaskDescription::try_new("").unwrap(),
-        UserName::try_new("alice").unwrap(),
-    ).unwrap();
-    executor.execute(&create).await.unwrap();
+    let create = CreateTask {
+        task_id: StreamId::try_new("task-concurrent").unwrap(),
+        title: TaskTitle::try_new("Concurrent test").unwrap(),
+        description: TaskDescription::try_new("").unwrap(),
+        creator: UserName::try_new("alice").unwrap(),
+        priority: Priority::default(),
+    };
+    execute(store.as_ref(), create, RetryPolicy::new()).await.unwrap();
 
-    // Simulate concurrent updates
-    let assign1 = AssignTask::new(task_id, UserName::try_new("bob").unwrap(), UserName::try_new("alice").unwrap()).unwrap();
-    let assign2 = AssignTask::new(task_id, UserName::try_new("charlie").unwrap(), UserName::try_new("alice").unwrap()).unwrap();
+    // Simulate concurrent assignments
+    let store1 = Arc::clone(&store);
+    let store2 = Arc::clone(&store);
 
-    // Execute both concurrently
+    let assign1 = AssignTask {
+        task_id: StreamId::try_new("task-concurrent").unwrap(),
+        assignee_id: StreamId::try_new("user-bob").unwrap(),
+        assigned_by: UserName::try_new("alice").unwrap(),
+    };
+    let assign2 = AssignTask {
+        task_id: StreamId::try_new("task-concurrent").unwrap(),
+        assignee_id: StreamId::try_new("user-charlie").unwrap(),
+        assigned_by: UserName::try_new("alice").unwrap(),
+    };
+
+    // Execute both concurrently -- RetryPolicy handles version conflicts
     let (result1, result2) = tokio::join!(
-        executor.execute(&assign1),
-        executor.execute(&assign2)
+        execute(store1.as_ref(), assign1, RetryPolicy::new()),
+        execute(store2.as_ref(), assign2, RetryPolicy::new()),
     );
 
-    // One should succeed, one should retry and then succeed
+    // Both should succeed (one may retry due to version conflict)
     assert!(result1.is_ok() || result2.is_ok());
 }
 ```
@@ -477,32 +442,30 @@ async fn test_concurrent_modifications() {
 ```rust
 #[tokio::test]
 #[ignore] // Run with --ignored flag
-async fn test_high_volume_event_processing() {
+async fn test_high_volume_command_execution() {
     use std::time::Instant;
 
-    let mut projection = UserTaskListProjection::default();
-    let event_count = 10_000;
+    let store = InMemoryEventStore::new();
+    let command_count = 1_000;
 
-    // Generate events
-    let events: Vec<_> = (0..event_count)
-        .map(|i| create_task_assigned_event(i))
-        .collect();
-
-    // Measure processing time
     let start = Instant::now();
 
-    for event in events {
-        projection.apply(&event).await.unwrap();
+    for i in 0..command_count {
+        let command = CreateTask {
+            task_id: StreamId::try_new(format!("task-perf-{}", i)).unwrap(),
+            title: TaskTitle::try_new("Perf test").unwrap(),
+            description: TaskDescription::try_new("").unwrap(),
+            creator: UserName::try_new("alice").unwrap(),
+            priority: Priority::default(),
+        };
+        execute(&store, command, RetryPolicy::new()).await.unwrap();
     }
 
     let duration = start.elapsed();
-    let events_per_second = event_count as f64 / duration.as_secs_f64();
+    let ops_per_second = command_count as f64 / duration.as_secs_f64();
 
-    println!("Processed {} events in {:?}", event_count, duration);
-    println!("Rate: {:.2} events/second", events_per_second);
-
-    // Assert reasonable performance
-    assert!(events_per_second > 1000.0, "Projection too slow");
+    println!("Executed {} commands in {:?}", command_count, duration);
+    println!("Rate: {:.2} ops/second", ops_per_second);
 }
 ```
 
@@ -536,23 +499,19 @@ EventCore provides excellent debugging support:
 ```rust
 #[tokio::test]
 async fn test_with_debugging() {
-    // Enable debug logging
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Debug)
-        .try_init();
+    // Given: An event store with some commands executed
+    let store = InMemoryEventStore::new();
 
-    let store = InMemoryEventStore::<SystemEvent>::new();
+    // ... execute commands ...
 
-    // Print all events after execution
-    let events = store.read_all_events(ReadOptions::default()).await.unwrap();
+    // Then: Collect all events for debugging
+    let storage: Arc<Mutex<Vec<MyEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let collector = EventCollector::new(storage.clone());
+    run_projection(collector, &store).await.unwrap();
 
-    for event in &events {
+    let events = storage.lock().unwrap();
+    for event in events.iter() {
         println!("Event: {:?}", event);
-        println!("  Stream: {}", event.stream_id);
-        println!("  Version: {}", event.version);
-        println!("  Payload: {:?}", event.payload);
-        println!("  Metadata: {:?}", event.metadata);
-        println!();
     }
 }
 ```
