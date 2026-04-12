@@ -24,7 +24,7 @@ Examples include:
 EventCore implements the process manager pattern:
 
 ```rust
-use eventcore::process::{ProcessManager, ProcessState, ProcessResult};
+use eventcore::{Command, CommandLogic, CommandError, NewEvents, execute, RetryPolicy};
 
 #[derive(Command, Clone)]
 struct OrderFulfillmentProcess {
@@ -65,13 +65,13 @@ impl CommandLogic for OrderFulfillmentProcess {
     type State = OrderFulfillmentState;
     type Event = ProcessEvent;
 
-    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-        match &event.payload {
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        let mut state = state;
+        match event {
             ProcessEvent::Started { order_id, timeout_at } => {
                 state.order_id = Some(*order_id);
                 state.current_step = FulfillmentStep::PaymentPending;
                 state.timeout_at = *timeout_at;
-                state.created_at = event.occurred_at;
             }
             ProcessEvent::StepCompleted { step } => {
                 state.current_step = step.clone();
@@ -92,6 +92,7 @@ impl CommandLogic for OrderFulfillmentProcess {
                 state.retry_count += 1;
             }
         }
+        state
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
@@ -171,35 +172,35 @@ impl OrderFulfillmentProcess {
 Processes react to events from other parts of the system:
 
 ```rust
-#[async_trait]
-impl EventHandler<SystemEvent> for OrderFulfillmentProcess {
-    async fn handle_event(
-        &self,
-        event: &StoredEvent<SystemEvent>,
-        executor: &CommandExecutor,
+// Event-driven coordination: a projection or listener reacts to system events
+// and advances the process by executing commands via execute().
+impl OrderFulfillmentProcess {
+    async fn handle_system_event(
+        event: &SystemEvent,
+        store: &impl EventStore,
     ) -> Result<(), ProcessError> {
-        match &event.payload {
+        match event {
             SystemEvent::Payment(PaymentEvent::Confirmed { order_id, .. }) => {
                 // Payment confirmed - advance process
                 let process_command = AdvanceOrderProcess {
                     process_id: derive_process_id(order_id),
                     trigger: ProcessTrigger::PaymentConfirmed,
                 };
-                executor.execute(&process_command).await?;
+                execute(store, process_command, RetryPolicy::new()).await?;
             }
             SystemEvent::Inventory(InventoryEvent::Reserved { order_id, .. }) => {
                 let process_command = AdvanceOrderProcess {
                     process_id: derive_process_id(order_id),
                     trigger: ProcessTrigger::InventoryReserved,
                 };
-                executor.execute(&process_command).await?;
+                execute(store, process_command, RetryPolicy::new()).await?;
             }
             SystemEvent::Shipping(ShippingEvent::Dispatched { order_id, tracking, .. }) => {
                 let process_command = AdvanceOrderProcess {
                     process_id: derive_process_id(order_id),
                     trigger: ProcessTrigger::Shipped { tracking_number: tracking.clone() },
                 };
-                executor.execute(&process_command).await?;
+                execute(store, process_command, RetryPolicy::new()).await?;
             }
             _ => {} // Ignore other events
         }
@@ -395,7 +396,6 @@ impl ProcessTimeout {
 }
 
 // Timeout scheduler for processes
-#[async_trait]
 trait ProcessTimeoutScheduler {
     async fn schedule_timeout(
         &self,
@@ -409,9 +409,9 @@ trait ProcessTimeoutScheduler {
     ) -> Result<(), TimeoutError>;
 }
 
-struct InMemoryTimeoutScheduler {
+struct InMemoryTimeoutScheduler<S: EventStore> {
     timeouts: Arc<RwLock<BTreeMap<DateTime<Utc>, Vec<StreamId>>>>,
-    executor: CommandExecutor,
+    store: S,
 }
 
 impl InMemoryTimeoutScheduler {
@@ -441,7 +441,7 @@ impl InMemoryTimeoutScheduler {
         for process_id in expired {
             let timeout_command = ProcessTimeoutCommand { process_id, timed_out_at: now };
 
-            if let Err(e) = self.executor.execute(&timeout_command).await {
+            if let Err(e) = execute(&self.store, timeout_command, RetryPolicy::new()).await {
                 tracing::error!("Failed to execute timeout command: {}", e);
             }
         }

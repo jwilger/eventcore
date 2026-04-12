@@ -17,19 +17,17 @@ Edit `Cargo.toml` to include EventCore and related dependencies:
 [package]
 name = "taskmaster"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 # EventCore core functionality
 eventcore = "0.1"
-eventcore-macros = "0.1"
 
 # For development/testing - switch to eventcore-postgres for production
 eventcore-memory = "0.1"
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
-async-trait = "0.1"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -48,6 +46,7 @@ clap = { version = "4.5", features = ["derive"] }
 
 [dev-dependencies]
 # Testing utilities
+eventcore-testing = "0.1"
 proptest = "1.6"
 ```
 
@@ -97,7 +96,7 @@ mod domain;
 mod projections;
 
 use clap::{Parser, Subcommand};
-use eventcore::prelude::*;
+use eventcore::{execute, RetryPolicy};
 use eventcore_memory::InMemoryEventStore;
 
 #[derive(Parser)]
@@ -126,8 +125,7 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize event store (in-memory for now)
-    let event_store = InMemoryEventStore::new();
-    let executor = CommandExecutor::new(event_store);
+    let store = InMemoryEventStore::new();
 
     let cli = Cli::parse();
 
@@ -142,20 +140,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Demo => {
             println!("Running demo...");
-            run_demo(executor).await?;
+            run_demo(&store).await?;
         }
     }
 
     Ok(())
 }
 
-async fn run_demo<ES: EventStore>(executor: CommandExecutor<ES>)
+async fn run_demo(store: &InMemoryEventStore)
 -> Result<(), Box<dyn std::error::Error>>
-where
-    ES::Event: From<domain::events::TaskEvent> + TryInto<domain::events::TaskEvent>,
 {
-    println!("🚀 EventCore Task Management Demo");
-    println!("================================\n");
+    println!("EventCore Task Management Demo");
+    println!("==============================\n");
 
     // We'll add demo code as we build features
 
@@ -378,12 +374,26 @@ pub enum TaskEvent {
     },
 }
 
-// Required for EventCore's type conversion
-impl TryFrom<&TaskEvent> for TaskEvent {
-    type Error = std::convert::Infallible;
+// Implement the Event trait for stream routing
+impl eventcore::Event for TaskEvent {
+    fn stream_id(&self) -> &eventcore::StreamId {
+        match self {
+            TaskEvent::Created { task_id, .. }
+            | TaskEvent::Assigned { task_id, .. }
+            | TaskEvent::Unassigned { task_id, .. }
+            | TaskEvent::PriorityChanged { task_id, .. }
+            | TaskEvent::CommentAdded { task_id, .. }
+            | TaskEvent::Completed { task_id, .. }
+            | TaskEvent::Reopened { task_id, .. }
+            | TaskEvent::Cancelled { task_id, .. } => {
+                // task_id would need to be a StreamId or convertible to one
+                todo!("implement stream_id routing")
+            }
+        }
+    }
 
-    fn try_from(value: &TaskEvent) -> Result<Self, Self::Error> {
-        Ok(value.clone())
+    fn event_type_name() -> &'static str {
+        "TaskEvent"
     }
 }
 ```
@@ -466,7 +476,9 @@ mod tests {
 Run the tests:
 
 ```bash
-cargo test
+cargo nextest run --workspace
+# Fallback if nextest is not installed:
+# cargo test --workspace
 ```
 
 ## Environment Setup for SQLite (Optional)
@@ -475,24 +487,14 @@ If you want persistence without running a database server, use the SQLite adapte
 
 ```toml
 [dependencies]
-eventcore = { version = "0.1", features = ["sqlite"] }
+eventcore-sqlite = "0.1"
 ```
 
 ```rust
-use eventcore::sqlite::{SqliteEventStore, SqliteConfig};
+use eventcore_sqlite::SqliteEventStore;
 
 // File-backed store - data persists across restarts
-let store = SqliteEventStore::new(SqliteConfig {
-    path: PathBuf::from("./taskmaster.db"),
-    encryption_key: None,
-})?;
-store.migrate().await?;
-
-// Optional: encrypt the database
-let store = SqliteEventStore::new(SqliteConfig {
-    path: PathBuf::from("./taskmaster.db"),
-    encryption_key: Some("my-secret-key".to_string()),
-})?;
+let store = SqliteEventStore::new("./taskmaster.db").await?;
 ```
 
 No external services needed - the database is embedded in your application.
@@ -516,7 +518,7 @@ docker run -d \
 
 ```toml
 [dependencies]
-eventcore = { version = "0.1", features = ["postgres"] }
+eventcore-postgres = "0.1"
 ```
 
 3. Set environment variable:

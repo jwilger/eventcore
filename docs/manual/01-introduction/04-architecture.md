@@ -15,7 +15,7 @@ EventCore follows a clean, layered architecture:
          └───────────────────────┴───────────────────────┘
                                  │
                     ┌────────────▼────────────┐
-                    │    Command Executor     │
+                    │   execute() + Retry     │
                     │  (Validation & Retry)   │
                     └────────────┬────────────┘
                                  │
@@ -34,7 +34,7 @@ EventCore follows a clean, layered architecture:
 Commands encapsulate business operations. They declare what streams they need and contain the business logic:
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct ApproveOrder {
     #[stream]
     order: StreamId,
@@ -52,25 +52,21 @@ struct ApproveOrder {
 - Generate events representing what happened
 - Ensure consistency within their boundaries
 
-### 2. Command Executor
+### 2. Command Execution
 
-The executor orchestrates command execution with automatic retry logic:
+The `execute()` free function orchestrates command execution with automatic retry logic:
 
 ```rust
-let executor = CommandExecutor::builder()
-    .with_store(event_store)
-    .with_retry_policy(RetryPolicy::exponential_backoff())
-    .build();
+use eventcore::{execute, RetryPolicy};
 
-let result = executor.execute(&command).await?;
-let stream_declarations = command.stream_declarations();
+let result = execute(&store, command, RetryPolicy::new()).await?;
 ```
 
 **Execution Flow:**
 
 1. **Read Phase**: Fetch all declared streams
-2. **Reconstruct State**: Apply events to build current state
-3. **Execute Command**: Run business logic
+2. **Reconstruct State**: Apply events to build current state via `CommandLogic::apply()`
+3. **Execute Command**: Run business logic via `CommandLogic::handle()`
 4. **Write Phase**: Atomically write new events
 5. **Retry on Conflict**: Handle optimistic concurrency
 
@@ -79,11 +75,9 @@ let stream_declarations = command.stream_declarations();
 The event store provides durable, ordered storage of events:
 
 ```rust
-#[async_trait]
-pub trait EventStore: Send + Sync {
-    async fn read_stream(&self, stream_id: &StreamId) -> Result<Vec<StoredEvent>>;
-    async fn write_events(&self, events: Vec<EventToWrite>) -> Result<()>;
-}
+// The EventStore trait is defined in eventcore-types.
+// Implementations exist for PostgreSQL, SQLite, and in-memory stores.
+// See eventcore_memory::InMemoryEventStore for the simplest example.
 ```
 
 **Guarantees:**
@@ -95,15 +89,22 @@ pub trait EventStore: Send + Sync {
 
 ### 4. Projections
 
-Projections build read models from events:
+Projections build read models from events. They implement the `Projector` trait
+and are run via the `run_projection()` free function:
 
 ```rust
-impl CqrsProjection for OrderSummaryProjection {
+impl Projector for OrderSummaryProjection {
     type Event = OrderEvent;
-    type Error = ProjectionError;
+    type Error = Infallible;
+    type Context = ();
 
-    async fn apply(&mut self, event: &StoredEvent<Self::Event>) -> Result<(), Self::Error> {
-        match &event.payload {
+    fn apply(
+        &mut self,
+        event: Self::Event,
+        _position: StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        match &event {
             OrderEvent::Approved { .. } => {
                 self.approved_count += 1;
             }
@@ -111,7 +112,14 @@ impl CqrsProjection for OrderSummaryProjection {
         }
         Ok(())
     }
+
+    fn name(&self) -> &str {
+        "order-summary"
+    }
 }
+
+// Run the projection against the store:
+run_projection(projection, &store).await?;
 ```
 
 **Capabilities:**
@@ -132,13 +140,13 @@ HTTP Request
     ↓
 Command Creation ──────→ #[derive(Command)] macro generates boilerplate
     ↓
-Executor.execute()
+execute(&store, cmd, policy)
     ↓
 Read Streams ──────────→ PostgreSQL: SELECT events WHERE stream_id IN (...)
     ↓
-Reconstruct State ─────→ Fold events into current state
+Reconstruct State ─────→ Fold events via CommandLogic::apply()
     ↓
-Command.handle() ──────→ Business logic validates and generates events
+CommandLogic::handle() ─→ Business logic validates and generates events
     ↓
 Write Events ──────────→ PostgreSQL: INSERT events (atomic transaction)
     ↓
@@ -152,11 +160,11 @@ Events Written
     ↓
 Event Notification
     ↓
-Projection Runner ─────→ Subscribes to event streams
+run_projection() ──────→ Polls event streams
     ↓
 Load Event
     ↓
-Projection.apply() ────→ Update read model state
+Projector.apply() ��────→ Update read model state
     ↓
 Save Checkpoint ───────→ Track position for resume
     ↓
@@ -200,16 +208,9 @@ EventCore uses optimistic concurrency control:
 4. **Automatic Retry**: Executor retries with fresh data
 
 ```rust
-// Internally tracked by EventCore
-struct StreamVersion {
-    stream_id: StreamId,
-    version: EventVersion,
-}
-
-// Automatic retry on conflicts
-let result = executor
-    .execute(&command)
-    .await?;  // Retries handled internally
+// Automatic retry on conflicts via RetryPolicy
+let result = execute(&store, command, RetryPolicy::new()).await?;
+// Retries are handled internally based on the RetryPolicy
 ```
 
 ## Type Safety
@@ -219,22 +220,26 @@ EventCore leverages Rust's type system for correctness:
 ### Stream Access Control
 
 ```rust
-// Compile-time enforcement
-impl TransferMoney {
-    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        let declarations = self.stream_declarations();
+// Stream enforcement via #[derive(Command)] and the Event trait
+impl CommandLogic for TransferMoney {
+    type Event = BankEvent;
+    type State = TransferState;
 
-        // ✅ Can only emit events for declared streams
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        state.apply(event)
+    }
+
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
+        // Events carry their stream_id via the Event trait.
+        // The executor validates that each event's stream_id() matches
+        // a declared #[stream] field.
         let events = vec![BankEvent::TransferInitiated {
             from: self.from_account.clone(),
             to: self.to_account.clone(),
             amount: self.amount,
         }];
 
-        // ❌ Infrastructure rejects events that target undeclared streams
-        // BankEvent::AuditOnly { stream: other_stream } -> would fail validation
-
-        Ok(NewEvents::from(events))
+        Ok(events.into())
     }
 }
 ```
@@ -314,19 +319,17 @@ EventCore is optimized for correctness and developer productivity:
 EventCore provides structured error handling:
 
 ```rust
-pub enum CommandError {
-    ValidationFailed(String),      // Business rule violations
-    ConcurrencyConflict,          // Version conflicts (retried)
-    StreamNotFound(StreamId),     // Missing streams
-    EventStoreFailed(String),     // Infrastructure errors
-}
+// CommandError variants (simplified):
+// - BusinessRuleViolation(String) — Business rule violations
+// - VersionConflict — Optimistic concurrency conflicts (retried automatically)
+// - StoreError — Infrastructure errors from the EventStore
 ```
 
 Errors are categorized for appropriate handling:
 
-- **Retriable**: Concurrency conflicts, transient failures
-- **Non-retriable**: Validation failures, business rule violations
-- **Fatal**: Infrastructure failures, panic recovery
+- **Retriable**: Version conflicts (handled automatically by RetryPolicy)
+- **Non-retriable**: Business rule violations
+- **Fatal**: Infrastructure/store errors
 
 ## Monitoring and Observability
 

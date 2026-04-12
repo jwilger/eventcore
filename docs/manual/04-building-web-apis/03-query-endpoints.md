@@ -708,7 +708,6 @@ impl QueryComplexityGuard {
 ### Query Authorization
 
 ```rust
-#[async_trait]
 trait QueryAuthorizer {
     async fn can_view_task(&self, user: &AuthenticatedUser, task_id: &str) -> bool;
     async fn can_view_user_tasks(&self, user: &AuthenticatedUser, target_user_id: &str) -> bool;
@@ -717,7 +716,6 @@ trait QueryAuthorizer {
 
 struct RoleBasedAuthorizer;
 
-#[async_trait]
 impl QueryAuthorizer for RoleBasedAuthorizer {
     async fn can_view_task(&self, user: &AuthenticatedUser, task_id: &str) -> bool {
         // Admin can see all

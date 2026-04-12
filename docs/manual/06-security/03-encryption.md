@@ -253,14 +253,19 @@ Encrypt all Protected Health Information (PHI):
 ## Example: Secure User Events
 
 ```rust
-use eventcore::Event;
+use eventcore::{Event, StreamId};
 
+// Application-level event enum with encryption support
 #[derive(Debug, Serialize, Deserialize)]
-struct SecureUserEvent {
+#[serde(tag = "type")]
+enum SecureUserEvent {
     #[serde(flatten)]
-    base: Event,
-    #[serde(flatten)]
-    payload: SecureUserPayload,
+    Payload(SecureUserPayload),
+}
+
+impl Event for SecureUserEvent {
+    fn stream_id(&self) -> &StreamId { /* ... */ }
+    fn event_type_name() -> &'static str { "SecureUserEvent" }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -295,15 +300,12 @@ impl<'a> SecureEventBuilder<'a> {
         let email_hash = self.crypto.hash_email(&email);
         let encrypted_pii = self.crypto.encrypt_pii(&pii).await?;
 
-        Ok(SecureUserEvent {
-            base: Event::new(),
-            payload: SecureUserPayload::UserRegistered {
+        Ok(SecureUserEvent::Payload(SecureUserPayload::UserRegistered {
                 user_id,
                 username,
                 email_hash,
                 encrypted_pii,
-            },
-        })
+            }))
     }
 }
 ```

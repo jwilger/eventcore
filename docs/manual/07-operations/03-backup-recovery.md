@@ -298,7 +298,7 @@ impl BackupManager {
         Ok(event_count)
     }
 
-    fn calculate_event_range(&self, events: &[StoredEvent]) -> EventRange {
+    fn calculate_event_range(&self, events: &[BackupEvent]) -> EventRange {
         if events.is_empty() {
             let now = Utc::now();
             return EventRange {
@@ -357,7 +357,7 @@ impl BackupWriter {
         Ok(())
     }
 
-    async fn write_event(&mut self, event: &StoredEvent) -> Result<(), BackupError> {
+    async fn write_event(&mut self, event: &BackupEvent) -> Result<(), BackupError> {
         let event_line = match self.compression {
             CompressionType::None => {
                 let json = serde_json::to_string(event)?;
@@ -810,7 +810,7 @@ impl BackupVerifier {
         Ok(events_valid)
     }
 
-    fn is_event_structurally_valid(&self, event: &StoredEvent) -> bool {
+    fn is_event_structurally_valid(&self, event: &BackupEvent) -> bool {
         // Verify required fields
         if event.id.is_nil() || event.stream_id.as_ref().is_empty() {
             return false;
@@ -830,7 +830,7 @@ impl BackupVerifier {
         true
     }
 
-    fn is_event_ordering_valid(&self, event: &StoredEvent) -> bool {
+    fn is_event_ordering_valid(&self, event: &BackupEvent) -> bool {
         // This would need to track ordering within streams
         // Simplified implementation for example
         true
@@ -926,7 +926,7 @@ impl IntegrityMonitor {
         Ok(report)
     }
 
-    async fn sample_events(&self) -> Result<Vec<StoredEvent>, MonitoringError> {
+    async fn sample_events(&self) -> Result<Vec<BackupEvent>, MonitoringError> {
         // Sample a percentage of events for integrity checking
         let sample_size = ((self.get_total_event_count().await? as f64)
             * self.monitoring_config.sample_percentage / 100.0) as usize;
@@ -936,7 +936,7 @@ impl IntegrityMonitor {
             .map_err(MonitoringError::EventStoreError)
     }
 
-    async fn check_event_integrity(&self, event: &StoredEvent) -> Result<EventIntegrityCheck, MonitoringError> {
+    async fn check_event_integrity(&self, event: &BackupEvent) -> Result<EventIntegrityCheck, MonitoringError> {
         let mut check = EventIntegrityCheck {
             event_id: event.id,
             stream_id: event.stream_id.clone(),
@@ -945,7 +945,7 @@ impl IntegrityMonitor {
         };
 
         // Check payload can be deserialized
-        if let Err(_) = serde_json::from_value::<serde_json::Value>(event.payload.clone()) {
+        if let Err(_) = serde_json::to_value(&event) {
             check.valid = false;
             check.issues.push("Payload deserialization failed".to_string());
         }

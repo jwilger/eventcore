@@ -55,15 +55,10 @@ pub struct EventToWrite<E> {
     pub expected_version: ExpectedVersion,
 }
 
-/// Event as stored in the event store
-pub struct StoredEvent<E> {
-    pub id: EventId,                  // UUIDv7 for global ordering
-    pub stream_id: StreamId,          // Which stream this belongs to
-    pub version: EventVersion,        // Position in the stream
-    pub payload: E,                   // Your domain event
-    pub metadata: EventMetadata,      // Who, when, why
-    pub occurred_at: DateTime<Utc>,   // When it happened
-}
+// Events are stored and returned as your concrete event type.
+// EventCore does not wrap events in a StoredEvent struct —
+// the Event trait's stream_id() method provides stream routing,
+// and StreamPosition (UUIDv7) provides global ordering.
 ```
 
 ### Event IDs and Ordering
@@ -120,7 +115,6 @@ let metadata = EventMetadata::new()
 EventCore defines a trait that storage adapters implement:
 
 ```rust
-#[async_trait]
 pub trait EventStore: Send + Sync {
     type Event: Send + Sync;
     type Error: Error + Send + Sync;
@@ -161,7 +155,7 @@ Streams maintain version numbers for optimistic concurrency:
 pub struct StreamEvents<E> {
     pub stream_id: StreamId,
     pub version: EventVersion,    // Current version after these events
-    pub events: Vec<StoredEvent<E>>,
+    pub events: Vec<E>,
 }
 
 // Version control options
@@ -588,24 +582,16 @@ Create test events easily:
 ```rust
 // Helper builders live in your test module; implement what you need for your domain.
 
-fn create_account_opened_event() -> StoredEvent<BankEvent> {
-    StoredEventBuilder::new()
-        .with_stream_id(StreamId::from_static("account-123"))
-        .with_version(EventVersion::new(1))
-        .with_payload(BankEvent::AccountOpened {
-            owner: "Alice".to_string(),
-            initial_balance: 1000,
-        })
-        .with_metadata(
-            EventMetadataBuilder::new()
-                .with_user_id(UserId::from("alice@example.com"))
-                .build()
-        )
-        .build()
+fn create_account_opened_event() -> BankEvent {
+    BankEvent::AccountOpened {
+        account_id: StreamId::try_new("account-123").unwrap(),
+        owner: "Alice".to_string(),
+        initial_balance: 1000,
+    }
 }
 ```
 
-> **Note:** `StoredEventBuilder` in this example represents a project-specific helper; feel free to adapt it to your needs until official testing fixtures are published.
+> **Note:** Events are plain enum variants — construct them directly without wrappers.
 
 ### Event Assertions
 

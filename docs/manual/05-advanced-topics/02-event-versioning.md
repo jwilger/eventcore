@@ -9,7 +9,7 @@ Event versioning is a systematic approach to managing changes in event schemas w
 Apply semantic versioning principles to events:
 
 ```rust
-use eventcore::serialization::EventVersion;
+// Application-level event versioning pattern
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct EventSchemaVersion {
@@ -90,7 +90,7 @@ struct UserEventV3 {
 EventCore provides automatic version handling:
 
 ```rust
-use eventcore::serialization::{VersionedSerializer, SerializationFormat};
+// Application-level versioned serializer
 
 #[derive(Clone)]
 struct EventSerializer {
@@ -158,7 +158,7 @@ struct VersionedPayload {
 Handle complex version transitions:
 
 ```rust
-use eventcore::serialization::{MigrationChain, Migration};
+// Application-level migration chain
 
 struct UserEventMigrationChain {
     migrations: Vec<Box<dyn Migration<UserEvent, UserEvent>>>,
@@ -238,59 +238,37 @@ fn split_username(username: &str) -> (String, String) {
 Integrate versioning with the event store:
 
 ```rust
-#[async_trait]
-impl EventStore for VersionedEventStore {
-    type Event = VersionedEvent;
-    type Error = EventStoreError;
-
-    async fn write_events(
+// Versioned event store wraps an inner store and handles serialization/migration.
+// EventCore's EventStore trait uses free-function execution via execute(&store, command, policy).
+// This wrapper can be used as the store argument to execute().
+impl VersionedEventStore {
+    async fn write_versioned_events(
         &self,
-        events: Vec<EventToWrite<Self::Event>>,
-    ) -> Result<WriteResult, Self::Error> {
+        events: Vec<EventToWrite>,
+    ) -> Result<WriteResult, EventStoreError> {
         let versioned_events: Result<Vec<_>, _> = events
             .into_iter()
             .map(|event| {
-                let payload = self.serializer.serialize_event(&event.payload)?;
-                Ok(EventToWrite {
-                    stream_id: event.stream_id,
-                    payload,
-                    metadata: event.metadata,
-                    expected_version: event.expected_version,
-                })
+                let payload = self.serializer.serialize_event(&event)?;
+                Ok(payload)
             })
             .collect();
 
         self.inner.write_events(versioned_events?).await
     }
 
-    async fn read_stream(
+    async fn read_versioned_stream(
         &self,
         stream_id: &StreamId,
-        options: ReadOptions,
-    ) -> Result<StreamEvents<Self::Event>, Self::Error> {
-        let raw_events = self.inner.read_stream(stream_id, options).await?;
+    ) -> Result<Vec<VersionedEvent>, EventStoreError> {
+        let raw_events = self.inner.read_stream(stream_id).await?;
 
-        let events: Result<Vec<_>, _> = raw_events
-            .events
+        raw_events
             .into_iter()
             .map(|event| {
-                let payload = self.serializer.deserialize_event(&event.payload)?;
-                Ok(StoredEvent {
-                    id: event.id,
-                    stream_id: event.stream_id,
-                    version: event.version,
-                    payload,
-                    metadata: event.metadata,
-                    occurred_at: event.occurred_at,
-                })
+                self.serializer.deserialize_event(&event)
             })
-            .collect();
-
-        Ok(StreamEvents {
-            stream_id: raw_events.stream_id,
-            version: raw_events.version,
-            events: events?,
-        })
+            .collect()
     }
 }
 ```
@@ -300,15 +278,12 @@ impl EventStore for VersionedEventStore {
 Projections that handle multiple event versions:
 
 ```rust
-#[async_trait]
-impl Projection for UserProjection {
-    type Event = VersionedEvent;
-    type Error = ProjectionError;
-
-    async fn apply(&mut self, event: &StoredEvent<Self::Event>) -> Result<(), Self::Error> {
-        match &event.payload {
+// Version-aware projection handling
+impl UserProjection {
+    fn apply_event(&mut self, event: &VersionedEvent, occurred_at: DateTime<Utc>) -> Result<(), ProjectionError> {
+        match event {
             VersionedEvent::User(user_event) => {
-                self.apply_user_event(user_event, event.occurred_at).await?;
+                self.apply_user_event(user_event, occurred_at)?;
             }
             _ => {} // Ignore other event types
         }
@@ -317,7 +292,7 @@ impl Projection for UserProjection {
 }
 
 impl UserProjection {
-    async fn apply_user_event(
+    fn apply_user_event(
         &mut self,
         event: &UserEvent,
         occurred_at: DateTime<Utc>
@@ -458,7 +433,7 @@ where
 Handle old event versions efficiently:
 
 ```rust
-use eventcore::archival::{EventArchiver, CompressionLevel};
+// Application-level event archival
 
 struct VersionedEventArchiver {
     archiver: EventArchiver,
@@ -481,7 +456,7 @@ impl VersionedEventArchiver {
         for event in events {
             let age_days = (Utc::now() - event.occurred_at).num_days() as u32;
 
-            match event.payload.version() {
+            match event.version() {
                 v if v < (CURRENT_VERSION - self.retention_policy.keep_latest_versions) => {
                     if age_days > self.retention_policy.delete_after_years * 365 {
                         // Delete very old events

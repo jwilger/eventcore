@@ -9,13 +9,12 @@ EventCore is authentication-agnostic but provides hooks for integrating your aut
 EventCore's metadata system captures user identity for audit trails:
 
 ```rust
-use eventcore::{CommandExecutor, UserId};
+use eventcore::{execute, RetryPolicy};
 
-// Execute command with authenticated user
-let user_id = UserId::try_new("user@example.com")?;
-let result = executor
-    .execute_as_user(command, user_id)
-    .await?;
+// Execute command with authenticated user context.
+// EventCore is authentication-agnostic; capture user identity
+// in your application layer and pass it via command fields or metadata.
+let result = execute(&store, command, RetryPolicy::new()).await?;
 ```
 
 ### Middleware Pattern
@@ -61,7 +60,6 @@ async fn auth_middleware(
 Implement fine-grained access control:
 
 ```rust
-#[async_trait]
 trait StreamAuthorization {
     async fn can_read(&self, user: &User, stream_id: &StreamId) -> bool;
     async fn can_write(&self, user: &User, stream_id: &StreamId) -> bool;
@@ -141,7 +139,6 @@ struct AccessContext {
     environment: Environment,
 }
 
-#[async_trait]
 trait AccessPolicy {
     async fn evaluate(&self, context: &AccessContext) -> Decision;
 }
@@ -172,7 +169,6 @@ impl AbacAuthorizer {
 Filter projections based on user permissions:
 
 ```rust
-#[async_trait]
 impl ReadModelStore for SecureAccountStore {
     async fn get_account(
         &self,

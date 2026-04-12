@@ -61,7 +61,6 @@ impl Default for ApiVersion {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for ApiVersion
 where
     S: Send + Sync,

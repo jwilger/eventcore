@@ -8,7 +8,7 @@ We take the security of EventCore seriously. If you believe you have found a sec
 
 ### How to Report
 
-1. Go to the [Security tab](https://github.com/eventsourcing/eventcore/security) in our GitHub repository
+1. Go to the [Security tab](https://github.com/jwilger/eventcore/security) in our GitHub repository
 2. Click "Report a vulnerability"
 3. Provide a clear description of the vulnerability including:
    - Type of vulnerability (e.g., SQL injection, resource exhaustion)
@@ -36,7 +36,8 @@ We take the security of EventCore seriously. If you believe you have found a sec
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| 0.6.x   | :white_check_mark: |
+| < 0.6   | :x:                |
 
 ## Security Considerations for Contributors
 
@@ -150,11 +151,8 @@ let email = Email::try_new(untrusted_input)
 Protect against resource exhaustion:
 
 ```rust
-// Configure executor with appropriate limits
-let executor = CommandExecutor::builder(event_store)
-    .with_timeout(Duration::from_secs(30))
-    .with_max_retries(3)
-    .build();
+// Execute commands with retry policy
+execute(store, command, RetryPolicy::new()).await?;
 
 // Implement rate limiting at API layer
 rate_limiter.check_rate_limit(user_id)?;

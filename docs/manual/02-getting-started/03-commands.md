@@ -20,11 +20,10 @@ Let's implement task creation:
 ```rust
 use crate::domain::{events::*, types::*};
 use chrono::Utc;
-use eventcore::{prelude::*, CommandLogic, StreamDeclarations};
-use eventcore::Command;
+use eventcore::{Command, CommandError, CommandLogic, NewEvents, StreamId};
 
 /// Command to create a new task
-#[derive(Command, Clone)]
+#[derive(Command)]
 pub struct CreateTask {
     /// The task stream - will contain all task events
     #[stream]
@@ -37,50 +36,39 @@ pub struct CreateTask {
     pub priority: Priority,
 }
 
-impl CreateTask {
-    /// Smart constructor ensures valid StreamId
-    pub fn new(
-        task_id: TaskId,
-        title: TaskTitle,
-        description: TaskDescription,
-        creator: UserName,
-    ) -> Result<Self, CommandError> {
-        Ok(Self {
-            task_id: StreamId::from_static(&format!("task-{}", task_id)),
-            title,
-            description,
-            creator,
-            priority: Priority::default(),
-        })
-    }
-}
-
 /// State for create task command - tracks if task exists
 #[derive(Default)]
 pub struct CreateTaskState {
     exists: bool,
 }
 
+impl CreateTaskState {
+    pub fn exists(&self) -> bool {
+        self.exists
+    }
+}
+
 impl CommandLogic for CreateTask {
     type State = CreateTaskState;
     type Event = TaskEvent;
 
-    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-        match &event.payload {
+    fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+        match event {
             TaskEvent::Created { .. } => {
                 state.exists = true;
             }
             _ => {} // Other events don't affect creation
         }
+        state
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Business rule: Can't create a task that already exists
-        require!(
-            !state.exists,
-            "Task {} already exists",
-            self.task_id
-        );
+        if state.exists() {
+            return Err(CommandError::business_rule_violated(
+                format!("Task {} already exists", self.task_id.as_ref())
+            ));
+        }
 
         // Generate the TaskCreated event
         let event = TaskEvent::Created {
@@ -91,26 +79,23 @@ impl CommandLogic for CreateTask {
             created_at: Utc::now(),
         };
 
-        // Return domain events. The executor will map events to streams via event.stream_id().
-        Ok(NewEvents::from(vec![event]))
+        // Return domain events. The executor maps events to streams via event.stream_id().
+        Ok(vec![event].into())
     }
 }
 ```
 
 ### Key Points
 
-1. **#[derive(Command)]** generates:
-   - The `stream_declarations()` method returning a `StreamDeclarations` value
+1. **#[derive(Command)]** generates the `CommandStreams` implementation
 
-2. **#[stream] attribute** declares which streams this command needs
+2. **#[stream] attribute** declares which streams this command reads/writes
 
-3. **apply() method** reconstructs state from events
+3. **apply() method** reconstructs state from events (pure: takes owned state, returns owned state)
 
-4. **handle() method** contains your business logic and returns `NewEvents` (no direct storage writes)
+4. **handle() method** contains your business logic and returns `Result<NewEvents<Self::Event>, CommandError>`
 
-5. **require! macro** provides clean validation with good error messages
-
-6. **Executors** are responsible for mapping returned events to storage writes and enforcing declared streams
+5. **execute() free function** runs the command: `execute(&store, command, RetryPolicy::new()).await?`
 
 ## Multi-Stream Command: Assign Task
 
@@ -121,12 +106,11 @@ Task assignment affects both the task and the user:
 ```rust
 use crate::domain::{events::*, types::*};
 use chrono::Utc;
-use eventcore::{prelude::*, CommandLogic, StreamDeclarations};
-use eventcore::Command;
+use eventcore::{Command, CommandError, CommandLogic, NewEvents, StreamId};
 
 /// Command to assign a task to a user
 /// This is a multi-stream command affecting both task and user streams
-#[derive(Command, Clone)]
+#[derive(Command)]
 pub struct AssignTask {
     #[stream]
     pub task_id: StreamId,
@@ -135,20 +119,6 @@ pub struct AssignTask {
     pub assignee_id: StreamId,
 
     pub assigned_by: UserName,
-}
-
-impl AssignTask {
-    pub fn new(
-        task_id: TaskId,
-        assignee: UserName,
-        assigned_by: UserName,
-    ) -> Result<Self, CommandError> {
-        Ok(Self {
-            task_id: StreamId::from_static(&format!("task-{}", task_id)),
-            assignee_id: StreamId::from_static(&format!("user-{}", assignee)),
-            assigned_by,
-        })
-    }
 }
 
 /// State that combines task and user information
@@ -170,9 +140,9 @@ impl CommandLogic for AssignTask {
     type State = AssignTaskState;
     type Event = SystemEvent;
 
-    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+    fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
         // Apply events from different streams
-        match &event.payload {
+        match event {
             SystemEvent::Task(task_event) => {
                 match task_event {
                     TaskEvent::Created { title, .. } => {
@@ -205,31 +175,19 @@ impl CommandLogic for AssignTask {
                 }
             }
         }
+        state
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Validate business rules
-        require!(
-            state.task_exists,
-            "Cannot assign non-existent task"
-        );
-
-        require!(
-            state.task_status != TaskStatus::Completed,
-            "Cannot assign completed task"
-        );
-
-        require!(
-            state.task_status != TaskStatus::Cancelled,
-            "Cannot assign cancelled task"
-        );
-
-        // Check if already assigned to this user
-        if let Some(current) = &state.current_assignee {
-            require!(
-                current != &state.user_name.clone().unwrap_or_default(),
-                "Task is already assigned to this user"
-            );
+        if !state.task_exists {
+            return Err(CommandError::business_rule_violated("Cannot assign non-existent task"));
+        }
+        if state.task_status == TaskStatus::Completed {
+            return Err(CommandError::business_rule_violated("Cannot assign completed task"));
+        }
+        if state.task_status == TaskStatus::Cancelled {
+            return Err(CommandError::business_rule_violated("Cannot assign cancelled task"));
         }
 
         let now = Utc::now();
@@ -263,14 +221,7 @@ impl CommandLogic for AssignTask {
             assigned_at: now,
         }));
 
-        // Update user workload
-        events.push(SystemEvent::User(UserEvent::WorkloadUpdated {
-            user_name: UserName::from(&self.assignee_id),
-            active_tasks: state.active_task_count + 1,
-            completed_today: 0, // Would calculate from state
-        }));
-
-        Ok(NewEvents::from(events))
+        Ok(events.into())
     }
 }
 ```
@@ -289,11 +240,10 @@ impl CommandLogic for AssignTask {
 ```rust
 use crate::domain::{events::*, types::*};
 use chrono::Utc;
-use eventcore::{prelude::*, CommandLogic, StreamDeclarations};
-use eventcore::Command;
+use eventcore::{Command, CommandError, CommandLogic, NewEvents, StreamId};
 
 /// Command to complete a task
-#[derive(Command, Clone)]
+#[derive(Command)]
 pub struct CompleteTask {
     #[stream]
     pub task_id: StreamId,
@@ -318,8 +268,8 @@ impl CommandLogic for CompleteTask {
     type State = CompleteTaskState;
     type Event = SystemEvent;
 
-    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-        match &event.payload {
+    fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+        match event {
             SystemEvent::Task(task_event) => {
                 match task_event {
                     TaskEvent::Created { .. } => {
@@ -348,31 +298,28 @@ impl CommandLogic for CompleteTask {
                 }
             }
         }
+        state
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         // Business rules
-        require!(
-            state.task_exists,
-            "Cannot complete non-existent task"
-        );
-
-        require!(
-            state.task_status != TaskStatus::Completed,
-            "Task is already completed"
-        );
-
-        require!(
-            state.task_status != TaskStatus::Cancelled,
-            "Cannot complete cancelled task"
-        );
+        if !state.task_exists {
+            return Err(CommandError::business_rule_violated("Cannot complete non-existent task"));
+        }
+        if state.task_status == TaskStatus::Completed {
+            return Err(CommandError::business_rule_violated("Task is already completed"));
+        }
+        if state.task_status == TaskStatus::Cancelled {
+            return Err(CommandError::business_rule_violated("Cannot complete cancelled task"));
+        }
 
         // Only assigned user can complete (or admin)
         if let Some(assignee) = &state.assignee {
-            require!(
-                assignee == &self.completed_by || self.completed_by.as_ref() == "admin",
-                "Only assigned user or admin can complete task"
-            );
+            if assignee != &self.completed_by && self.completed_by.as_ref() != "admin" {
+                return Err(CommandError::business_rule_violated(
+                    "Only assigned user or admin can complete task"
+                ));
+            }
         }
 
         let now = Utc::now();
@@ -394,7 +341,7 @@ impl CommandLogic for CompleteTask {
             completed_at: now,
         }));
 
-        Ok(NewEvents::from(events))
+        Ok(events.into())
     }
 }
 ```
@@ -441,63 +388,35 @@ mod command_tests {
     use super::*;
     use crate::domain::commands::*;
     use crate::domain::types::*;
+    use eventcore::{execute, RetryPolicy, run_projection};
     use eventcore_memory::InMemoryEventStore;
+    use eventcore_testing::EventCollector;
+    use std::sync::{Arc, Mutex};
 
     #[tokio::test]
     async fn test_create_task() {
-        // Setup
+        // Given: An in-memory event store
         let store = InMemoryEventStore::new();
-        let executor = CommandExecutor::new(store);
 
-        // Create command
-        let task_id = TaskId::new();
-        let command = CreateTask::new(
-            task_id,
-            TaskTitle::try_new("Write tests").unwrap(),
-            TaskDescription::try_new("Add unit tests").unwrap(),
-            UserName::try_new("alice").unwrap(),
-        ).unwrap();
+        // And: A create task command
+        let command = CreateTask {
+            task_id: StreamId::try_new("task-123").unwrap(),
+            title: TaskTitle::try_new("Write tests").unwrap(),
+            description: TaskDescription::try_new("Add unit tests").unwrap(),
+            creator: UserName::try_new("alice").unwrap(),
+            priority: Priority::default(),
+        };
 
-        // Execute
-        let result = executor.execute(&command).await.unwrap();
+        // When: The command is executed
+        execute(&store, command, RetryPolicy::new()).await.unwrap();
 
-        // Verify
-        assert_eq!(result.events_written.len(), 1);
-        assert_eq!(result.streams_affected.len(), 1);
+        // Then: Events are written (verify via projection)
+        let storage: Arc<Mutex<Vec<TaskEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let collector = EventCollector::new(storage.clone());
+        run_projection(collector, &store).await.unwrap();
 
-        // Try to create again - should fail
-        let result = executor.execute(&command).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_assign_task() {
-        let store = InMemoryEventStore::new();
-        let executor = CommandExecutor::new(store);
-
-        // First create a task
-        let task_id = TaskId::new();
-        let create = CreateTask::new(
-            task_id,
-            TaskTitle::try_new("Test task").unwrap(),
-            TaskDescription::try_new("Description").unwrap(),
-            UserName::try_new("alice").unwrap(),
-        ).unwrap();
-
-        executor.execute(&create).await.unwrap();
-
-        // Now assign it
-        let assign = AssignTask::new(
-            task_id,
-            UserName::try_new("bob").unwrap(),
-            UserName::try_new("alice").unwrap(),
-        ).unwrap();
-
-        let result = executor.execute(&assign).await.unwrap();
-
-        // Should write to both task and user streams
-        assert_eq!(result.events_written.len(), 3); // Assigned + UserAssigned + Workload
-        assert_eq!(result.streams_affected.len(), 2); // task and user streams
+        let events = storage.lock().unwrap();
+        assert_eq!(events.len(), 1);
     }
 }
 ```
@@ -507,53 +426,54 @@ mod command_tests {
 Update the demo in `src/main.rs`:
 
 ```rust
-async fn run_demo<ES: EventStore>(executor: CommandExecutor<ES>)
+use eventcore::{execute, RetryPolicy, StreamId};
+
+async fn run_demo(store: &InMemoryEventStore)
 -> Result<(), Box<dyn std::error::Error>>
-where
-    ES::Event: From<SystemEvent> + TryInto<SystemEvent>,
 {
-    println!("🚀 EventCore Task Management Demo");
-    println!("================================\n");
+    println!("EventCore Task Management Demo");
+    println!("==============================\n");
 
     // Create a task
-    let task_id = TaskId::new();
-    println!("1. Creating task {}...", task_id);
+    let task_stream = StreamId::try_new("task-demo-1")?;
+    println!("1. Creating task...");
 
-    let create = CreateTask::new(
-        task_id,
-        TaskTitle::try_new("Build awesome features").unwrap(),
-        TaskDescription::try_new("Use EventCore to build great things").unwrap(),
-        UserName::try_new("alice").unwrap(),
-    )?;
+    let create = CreateTask {
+        task_id: task_stream.clone(),
+        title: TaskTitle::try_new("Build awesome features").unwrap(),
+        description: TaskDescription::try_new("Use EventCore to build great things").unwrap(),
+        creator: UserName::try_new("alice").unwrap(),
+        priority: Priority::default(),
+    };
 
-    let result = executor.execute(&create).await?;
-    println!("   ✅ Task created with {} event(s)\n", result.events_written.len());
+    execute(store, create, RetryPolicy::new()).await?;
+    println!("   Task created!\n");
 
     // Assign the task
     println!("2. Assigning task to Bob...");
 
-    let assign = AssignTask::new(
-        task_id,
-        UserName::try_new("bob").unwrap(),
-        UserName::try_new("alice").unwrap(),
-    )?;
+    let assign = AssignTask {
+        task_id: task_stream.clone(),
+        assignee_id: StreamId::try_new("user-bob")?,
+        assigned_by: UserName::try_new("alice").unwrap(),
+    };
 
-    let result = executor.execute(&assign).await?;
-    println!("   ✅ Task assigned, {} stream(s) updated\n", result.streams_affected.len());
+    execute(store, assign, RetryPolicy::new()).await?;
+    println!("   Task assigned!\n");
 
     // Complete the task
     println!("3. Bob completes the task...");
 
     let complete = CompleteTask {
-        task_id: StreamId::from_static(&format!("task-{}", task_id)),
-        user_id: StreamId::from_static("user-bob"),
+        task_id: task_stream,
+        user_id: StreamId::try_new("user-bob")?,
         completed_by: UserName::try_new("bob").unwrap(),
     };
 
-    let result = executor.execute(&complete).await?;
-    println!("   ✅ Task completed!\n", );
+    execute(store, complete, RetryPolicy::new()).await?;
+    println!("   Task completed!\n");
 
-    println!("Demo complete! 🎉");
+    println!("Demo complete!");
     Ok(())
 }
 ```

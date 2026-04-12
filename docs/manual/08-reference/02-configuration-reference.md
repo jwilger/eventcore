@@ -177,29 +177,15 @@ impl Default for MigrationConfig {
 
 ### Command Execution Configuration
 
-#### CommandExecutorConfig
+#### Command Execution Configuration
 
-Configuration for command execution behavior.
+EventCore uses the free function `execute(&store, command, RetryPolicy::new())` as its canonical entry point. Configuration is passed via `RetryPolicy` and the event store's own configuration, rather than a separate executor config struct.
 
 ```rust
-#[derive(Debug, Clone)]
-pub struct CommandExecutorConfig {
-    pub retry_config: RetryConfig,
-    pub timeout_config: TimeoutConfig,
-    pub concurrency_config: ConcurrencyConfig,
-    pub metrics_config: MetricsConfig,
-}
+use eventcore::{execute, RetryPolicy};
 
-impl Default for CommandExecutorConfig {
-    fn default() -> Self {
-        Self {
-            retry_config: RetryConfig::default(),
-            timeout_config: TimeoutConfig::default(),
-            concurrency_config: ConcurrencyConfig::default(),
-            metrics_config: MetricsConfig::default(),
-        }
-    }
-}
+// Execute with default retry policy
+let result = execute(&store, command, RetryPolicy::new()).await?;
 ```
 
 #### RetryConfig
@@ -1082,7 +1068,7 @@ EventCore supports multiple configuration sources with the following precedence 
 ### Loading Configuration in Code
 
 ```rust
-use eventcore::config::{EventCoreConfig, ConfigBuilder};
+// Application-level configuration loading (not part of eventcore core)
 
 // Load from environment and files
 let config = EventCoreConfig::from_env()

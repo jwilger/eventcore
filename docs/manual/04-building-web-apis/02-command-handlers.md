@@ -29,7 +29,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
-use eventcore::prelude::*;
+use eventcore::{execute, RetryPolicy};
 
 #[derive(Debug, Deserialize)]
 struct AssignTaskRequest {
@@ -64,14 +64,8 @@ async fn assign_task(
         assigned_by: user.id.clone(),
     };
 
-    // 3. Execute with context
-    let result = state.executor
-        .execute_with_context(
-            &command,
-            ExecutionContext::new()
-                .with_user_id(user.id)
-                .with_correlation_id(extract_correlation_id(&request))
-        )
+    // 3. Execute command
+    execute(&state.event_store, command, RetryPolicy::new())
         .await
         .map_err(ApiError::from_command_error)?;
 
@@ -111,7 +105,6 @@ struct AuthenticatedUser {
     roles: Vec<String>,
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
@@ -178,7 +171,7 @@ async fn delete_task(
         deleted_by: user.id,
     };
 
-    state.executor.execute(&command).await?;
+    execute(&state.event_store, command, RetryPolicy::new()).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -289,7 +282,6 @@ use axum::extract::FromRequest;
 #[derive(Debug, Clone)]
 struct IdempotencyKey(String);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for IdempotencyKey
 where
     S: Send + Sync,

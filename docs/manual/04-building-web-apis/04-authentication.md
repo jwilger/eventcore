@@ -103,8 +103,7 @@ async fn login(
         password: Password::from(request.password),
     };
 
-    let result = state.executor
-        .execute(&command)
+    execute(&state.event_store, command, RetryPolicy::new())
         .await
         .map_err(|_| ApiError::unauthorized("Invalid credentials"))?;
 
@@ -129,7 +128,7 @@ async fn login(
         expires_at: Utc::now() + state.jwt_config.refresh_token_duration,
     };
 
-    state.executor.execute(&store_command).await?;
+    execute(&state.event_store, store_command, RetryPolicy::new()).await?;
 
     Ok(Json(LoginResponse {
         access_token,
@@ -156,7 +155,6 @@ pub struct AuthenticatedUser {
     pub permissions: Vec<String>,
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
@@ -198,7 +196,6 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
 // Optional authentication extractor
 pub struct OptionalAuth(pub Option<AuthenticatedUser>);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for OptionalAuth
 where
     S: Send + Sync,
@@ -318,7 +315,6 @@ async fn create_task_handler(
 ### Resource-Based Access Control
 
 ```rust
-#[async_trait]
 trait ResourceAuthorizer {
     async fn can_read(&self, user: &AuthenticatedUser, resource_id: &str) -> bool;
     async fn can_write(&self, user: &AuthenticatedUser, resource_id: &str) -> bool;
@@ -329,7 +325,6 @@ struct TaskAuthorizer {
     projection: Arc<TaskProjection>,
 }
 
-#[async_trait]
 impl ResourceAuthorizer for TaskAuthorizer {
     async fn can_read(&self, user: &AuthenticatedUser, task_id: &str) -> bool {
         // Admins can read all
@@ -441,7 +436,6 @@ struct ApiKey {
     rate_limit: Option<u32>,
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for ApiKey
 where
     S: Send + Sync,
@@ -559,7 +553,7 @@ async fn oauth_callback(
         name: user_info.name,
     };
 
-    state.executor.execute(&command).await?;
+    execute(&state.event_store, command, RetryPolicy::new()).await?;
 
     // Create JWT tokens
     let user = get_user_by_email(&user_info.email).await?;

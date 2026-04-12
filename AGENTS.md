@@ -8,7 +8,7 @@
 - **Lint:** `cargo clippy --all-targets --all-features -- -D warnings`
 - **Format:** `cargo fmt --all`
 - **Mutation testing:** `cargo mutants` (zero surviving mutants required)
-- **Architecture docs:** `docs/ARCHITECTURE.md`
+- **Architecture docs:** `docs/manual/01-introduction/04-architecture.md`
 - **ADRs:** `docs/adr/`
 
 ## Development Rules

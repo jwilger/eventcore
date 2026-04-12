@@ -44,7 +44,7 @@ While event sourcing should be the default, EventCore specifically excels by sol
 **Example**: E-commerce order fulfillment
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct FulfillOrder {
     #[stream]
     order: StreamId,         // Update order status
@@ -66,7 +66,7 @@ struct FulfillOrder {
 **Example**: Payment processing
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct ProcessPayment {
     #[stream]
     customer_account: StreamId,
@@ -93,7 +93,7 @@ struct ProcessPayment {
 **Example**: Project management tool
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct MoveTaskToColumn {
     #[stream]
     task: StreamId,
@@ -119,7 +119,7 @@ struct MoveTaskToColumn {
 **Example**: Healthcare records
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct UpdatePatientRecord {
     #[stream]
     patient: StreamId,
@@ -143,7 +143,7 @@ struct UpdatePatientRecord {
 **Example**: Insurance claim processing
 
 ```rust
-#[derive(Command, Clone)]
+#[derive(Command)]
 struct ProcessClaim {
     #[stream]
     claim: StreamId,

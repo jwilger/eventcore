@@ -18,11 +18,11 @@ This chapter provides comprehensive troubleshooting guidance for EventCore appli
 
 ```rust
 // Enable detailed command tracing
-#[tracing::instrument(skip(command, executor), level = "debug")]
-async fn debug_command_execution<C: Command>(
-    command: &C,
-    executor: &CommandExecutor,
-) -> CommandResult<ExecutionResult> {
+#[tracing::instrument(skip(command, store), level = "debug")]
+async fn debug_command_execution<C: CommandLogic>(
+    command: C,
+    store: &impl EventStore,
+) -> Result<ExecutionResult, CommandError> {
     let start = std::time::Instant::now();
 
     tracing::debug!(
@@ -40,14 +40,13 @@ async fn debug_command_execution<C: Command>(
 
     // Time each phase
     let read_start = std::time::Instant::now();
-    let result = executor.execute(command).await;
+    let result = execute(store, command, RetryPolicy::new()).await;
     let total_duration = start.elapsed();
 
     match &result {
         Ok(execution_result) => {
             tracing::info!(
                 total_duration_ms = total_duration.as_millis(),
-                events_written = execution_result.events_written.len(),
                 "Command completed successfully"
             );
         }
@@ -111,16 +110,17 @@ async fn debug_command_execution<C: Command>(
 3. **Lock contention on streams**
 
    ```rust
-   // Implement lock timeout and retry
-   async fn execute_with_lock_retry<C: Command>(
-       command: &C,
-       executor: &CommandExecutor,
+   // Note: EventCore's execute() already handles retries via RetryPolicy.
+   // For custom retry logic around concurrency conflicts:
+   async fn execute_with_lock_retry<C: CommandLogic + Clone>(
+       command: C,
+       store: &impl EventStore,
        max_retries: u32,
-   ) -> CommandResult<ExecutionResult> {
+   ) -> Result<ExecutionResult, CommandError> {
        let mut retry_count = 0;
 
        loop {
-           match executor.execute(command).await {
+           match execute(store, command.clone(), RetryPolicy::none()).await {
                Ok(result) => return Ok(result),
                Err(CommandError::ConcurrencyConflict(streams)) => {
                    retry_count += 1;
@@ -440,14 +440,14 @@ impl CorruptionDetector {
         Ok(report)
     }
 
-    fn validate_event_structure(&self, event: &StoredEvent) -> Result<(), String> {
+    fn validate_event_structure(&self, event: &DiagnosticEvent) -> Result<(), String> {
         // Check UUID format
         if event.id.is_nil() {
             return Err("Nil event ID".to_string());
         }
 
-        // Check payload can be deserialized
-        match serde_json::from_value::<serde_json::Value>(event.payload.clone()) {
+        // Check event can be serialized for validation
+        match serde_json::to_value(&event) {
             Ok(_) => {}
             Err(e) => return Err(format!("Invalid payload JSON: {}", e)),
         }
@@ -832,12 +832,12 @@ impl CommandTracer {
     }
 }
 
-// Usage in command executor
-pub async fn execute_with_tracing<C: Command>(
-    command: &C,
-    executor: &CommandExecutor,
+// Usage with execute()
+pub async fn execute_with_tracing<C: CommandLogic>(
+    command: C,
+    store: &impl EventStore,
     tracer: &CommandTracer,
-) -> CommandResult<ExecutionResult> {
+) -> Result<ExecutionResult, CommandError> {
     let trace_id = tracer.start_trace(command);
 
     // Phase 1: Stream Reading
@@ -845,16 +845,14 @@ pub async fn execute_with_tracing<C: Command>(
         "streams_to_read".to_string() => command.stream_declarations().len().to_string(),
     });
 
-    let result = executor.execute(command).await;
+    let result = execute(store, command, RetryPolicy::new()).await;
 
     tracer.complete_phase(trace_id);
 
     // Complete trace
     let trace_result = match &result {
         Ok(execution_result) => Ok(format!(
-            "Events written: {}, Streams affected: {}",
-            execution_result.events_written.len(),
-            execution_result.affected_streams.len()
+            "Command executed successfully"
         )),
         Err(e) => Err(e.to_string()),
     };

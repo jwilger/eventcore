@@ -71,9 +71,11 @@ impl PerformanceMetrics {
 
 ... (sections unchanged) ...
 
-impl OptimizedCommandExecutor {
-async fn execute_with_caching<C: Command>(&self, command: &C) -> CommandResult<ExecutionResult> {
-let stream_declarations = self.read_streams_for_command(command).await?;
+// Application-level caching wrapper around execute()
+// Note: eventcore does not provide a CommandExecutor struct — execute() is a free function
+impl CachedExecutionLayer {
+async fn execute_with_caching<C: CommandLogic, S: EventStore>(&self, store: &S, command: C) -> Result<ExecutionResponse, CommandError> {
+let stream_declarations = self.read_streams_for_command(&command).await?;
 
         // Try to get cached state
         let cached_state = self.get_cached_state::<C>(&stream_declarations).await;
@@ -98,7 +100,7 @@ let stream_declarations = self.read_streams_for_command(command).await?;
         Ok(result)
     }
 
-    async fn get_cached_state<C: Command>(&self, stream_declarations: &StreamDeclarations) -> Option<C::State> {
+    async fn get_cached_state<C: CommandLogic>(&self, stream_declarations: &StreamDeclarations) -> Option<C::State> {
         let cache = self.state_cache.read().await;
 
         // Check if all streams are cached and up-to-date
@@ -117,7 +119,7 @@ let stream_declarations = self.read_streams_for_command(command).await?;
         self.reconstruct_from_cache(stream_declarations).await
     }
 
-    async fn cache_state<C: Command>(&self, stream_declarations: &StreamDeclarations, state: &C::State) {
+    async fn cache_state<C: CommandLogic>(&self, stream_declarations: &StreamDeclarations, state: &C::State) {
         let mut cache = self.state_cache.write().await;
 
         for stream_data in stream_declarations.iter() {

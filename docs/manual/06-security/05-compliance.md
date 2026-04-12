@@ -65,7 +65,6 @@ impl GdprCompliantEventStore {
 Export user data in machine-readable format:
 
 ```rust
-#[async_trait]
 trait GdprExport {
     async fn export_user_data(
         &self,
@@ -232,12 +231,12 @@ impl HipaaRole {
 ### Financial Controls
 
 ```rust
-struct SoxCompliantExecutor {
-    executor: CommandExecutor,
+struct SoxCompliantExecutor<S: EventStore> {
+    store: S,
     approvals: ApprovalService,
 }
 
-impl SoxCompliantExecutor {
+impl<S: EventStore> SoxCompliantExecutor<S> {
     async fn execute_financial_command(
         &self,
         command: FinancialCommand,
@@ -254,19 +253,10 @@ impl SoxCompliantExecutor {
                 .await?;
         }
 
-        // Execute with full audit trail
-        let result = self.executor
-            .execute_with_metadata(
-                command,
-                metadata! {
-                    "sox_requester" => requester.id,
-                    "sox_timestamp" => Timestamp::now(),
-                    "sox_ip" => requester.ip_address,
-                },
-            )
-            .await?;
+        // Execute with full audit trail via execute()
+        execute(&self.store, command, RetryPolicy::new()).await?;
 
-        Ok(result)
+        Ok(())
     }
 }
 ```
