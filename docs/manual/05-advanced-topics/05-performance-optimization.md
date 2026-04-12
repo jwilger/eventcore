@@ -72,8 +72,9 @@ impl PerformanceMetrics {
 ... (sections unchanged) ...
 
 // Application-level caching wrapper around execute()
-impl OptimizedCommandExecutor {
-async fn execute_with_caching<C: CommandLogic>(&self, command: C) -> Result<ExecutionResult, CommandError> {
+// Note: eventcore does not provide a CommandExecutor struct — execute() is a free function
+impl CachedExecutionLayer {
+async fn execute_with_caching<C: CommandLogic, S: EventStore>(&self, store: &S, command: C) -> Result<ExecutionResponse, CommandError> {
 let stream_declarations = self.read_streams_for_command(&command).await?;
 
         // Try to get cached state

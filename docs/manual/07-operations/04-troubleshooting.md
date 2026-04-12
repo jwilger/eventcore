@@ -440,7 +440,7 @@ impl CorruptionDetector {
         Ok(report)
     }
 
-    fn validate_event_structure(&self, event: &StoredEvent) -> Result<(), String> {
+    fn validate_event_structure(&self, event: &DiagnosticEvent) -> Result<(), String> {
         // Check UUID format
         if event.id.is_nil() {
             return Err("Nil event ID".to_string());
