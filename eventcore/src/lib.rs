@@ -9,11 +9,11 @@ mod projection_pipeline;
 
 // Re-export all public types from eventcore-types so consumers only need to depend on `eventcore`
 pub use eventcore_types::{
-    AttemptNumber, BackoffMultiplier, BatchSize, CheckpointStore, CommandError, CommandLogic,
-    CommandStreams, DelayMilliseconds, Event, EventFilter, EventPage, EventReader, EventStore,
-    EventStoreError, EventStreamReader, EventStreamSlice, FailureContext, FailureStrategy,
-    MaxConsecutiveFailures, MaxRetries, MaxRetryAttempts, NewEvents, Operation, Projector,
-    RetryCount, StreamDeclarations, StreamDeclarationsError, StreamId, StreamPosition,
+    AttemptNumber, BackoffMultiplier, BatchSize, BusinessRuleMessage, CheckpointStore,
+    CommandError, CommandLogic, CommandStreams, DelayMilliseconds, Event, EventFilter, EventPage,
+    EventReader, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, FailureContext,
+    FailureStrategy, MaxConsecutiveFailures, MaxRetries, MaxRetryAttempts, NewEvents, Operation,
+    Projector, RetryCount, StreamDeclarations, StreamDeclarationsError, StreamId, StreamPosition,
     StreamPrefix, StreamResolver, StreamVersion, StreamWriteEntry, StreamWrites,
 };
 
@@ -74,7 +74,7 @@ pub use eventcore_sqlite as sqlite;
 /// # #[derive(Debug, thiserror::Error)]
 /// # enum MyError { #[error("insufficient-funds")] InsufficientFunds }
 /// # impl From<MyError> for CommandError {
-/// #     fn from(e: MyError) -> Self { CommandError::BusinessRuleViolation(e.to_string()) }
+/// #     fn from(e: MyError) -> Self { CommandError::BusinessRuleViolation(Box::new(e)) }
 /// # }
 /// # fn check(balance: u64, amount: u64) -> Result<(), CommandError> {
 /// require!(balance >= amount, MyError::InsufficientFunds);
@@ -94,7 +94,7 @@ macro_rules! require {
         if !$condition {
             let message = ::std::format!($format, $($arg),+);
             return ::core::result::Result::Err(
-                $crate::CommandError::BusinessRuleViolation(message),
+                ::core::convert::Into::<$crate::CommandError>::into(message),
             );
         }
     };
@@ -595,7 +595,11 @@ mod tests {
                 &self,
                 _stream_id: StreamId,
             ) -> Result<EventStreamReader<E>, EventStoreError> {
-                Err(EventStoreError::VersionConflict)
+                Err(EventStoreError::VersionConflict {
+                    stream_id: _stream_id,
+                    expected: StreamVersion::new(0),
+                    actual: StreamVersion::new(1),
+                })
             }
 
             async fn append_events(
@@ -710,7 +714,11 @@ mod tests {
                 if !*injected {
                     // First call: inject conflict
                     *injected = true;
-                    Err(EventStoreError::VersionConflict)
+                    Err(EventStoreError::VersionConflict {
+                        stream_id: StreamId::try_new("conflict-test").expect("valid"),
+                        expected: StreamVersion::new(0),
+                        actual: StreamVersion::new(1),
+                    })
                 } else {
                     // Subsequent calls: succeed normally
                     self.inner.append_events(writes).await
@@ -862,7 +870,11 @@ mod tests {
             _writes: StreamWrites,
         ) -> Result<EventStreamSlice, EventStoreError> {
             // ALWAYS return VersionConflict - simulates persistent conflicts
-            Err(EventStoreError::VersionConflict)
+            Err(EventStoreError::VersionConflict {
+                stream_id: StreamId::try_new("always-conflict").expect("valid"),
+                expected: StreamVersion::new(0),
+                actual: StreamVersion::new(1),
+            })
         }
     }
 
@@ -902,7 +914,11 @@ mod tests {
             if *count < self.conflicts_to_inject {
                 // Inject conflict
                 *count += 1;
-                Err(EventStoreError::VersionConflict)
+                Err(EventStoreError::VersionConflict {
+                    stream_id: StreamId::try_new("conflict-n-times").expect("valid"),
+                    expected: StreamVersion::new(0),
+                    actual: StreamVersion::new(1),
+                })
             } else {
                 // Succeed normally
                 self.inner.append_events(writes).await

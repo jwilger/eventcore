@@ -48,14 +48,14 @@ fn extract_named_fields(input: &DeriveInput) -> syn::Result<&Punctuated<Field, s
     let Data::Struct(data_struct) = &input.data else {
         return Err(Error::new_spanned(
             &input.ident,
-            "EventCore: #[derive(Command)] only supports structs with named fields",
+            "EventCore: #[derive(Command)] can only be applied to structs, not enums or unions",
         ));
     };
 
     let Fields::Named(fields) = &data_struct.fields else {
         return Err(Error::new_spanned(
             &input.ident,
-            "EventCore: #[derive(Command)] only supports structs with named fields",
+            "EventCore: #[derive(Command)] requires named fields; tuple structs are not supported",
         ));
     };
 
@@ -103,7 +103,7 @@ fn stream_expression(field: &Field) -> syn::Result<TokenStream2> {
     let Some(field_ident) = &field.ident else {
         return Err(Error::new_spanned(
             field,
-            "EventCore: #[derive(Command)] only supports structs with named fields",
+            "EventCore: #[derive(Command)] requires named fields",
         ));
     };
 

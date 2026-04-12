@@ -13,7 +13,7 @@ enum WithdrawError {
 
 impl From<WithdrawError> for CommandError {
     fn from(e: WithdrawError) -> Self {
-        CommandError::BusinessRuleViolation(e.to_string())
+        CommandError::BusinessRuleViolation(Box::new(e))
     }
 }
 

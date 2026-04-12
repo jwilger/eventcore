@@ -37,7 +37,7 @@ pub enum AuthenticateAdminError {
 
 impl From<AuthenticateAdminError> for CommandError {
     fn from(e: AuthenticateAdminError) -> Self {
-        CommandError::business_rule_violated(e.to_string())
+        CommandError::BusinessRuleViolation(Box::new(e))
     }
 }
 
@@ -52,6 +52,8 @@ state.require_setup_completed().map_err(AuthenticateAdminError::from)?;
 - Error messages use kebab-case machine-readable identifiers
 - `thiserror` is a workspace dependency — use it via the workspace
 - Command error enums implement `From<...> for CommandError`
+- `From` impls wrap the original error with `Box::new(e)`, preserving the error chain
+- Do not stringify errors with `.to_string()` — this discards the error source chain
 - Test assertion helpers accept typed errors via `Into<CommandError>`,
   not raw strings — this matches `require!` macro usage
 

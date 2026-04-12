@@ -73,8 +73,8 @@ impl CommandLogic for ManualTransfer {
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         if state.already_completed() {
-            return Err(CommandError::BusinessRuleViolation(
-                "transfer already applied to both streams".to_string(),
+            return Err(CommandError::from(
+                "transfer already applied to both streams",
             ));
         }
 
@@ -113,8 +113,8 @@ impl CommandLogic for DerivedTransfer {
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         if state.already_completed() {
-            return Err(CommandError::BusinessRuleViolation(
-                "transfer already applied to both streams".to_string(),
+            return Err(CommandError::from(
+                "transfer already applied to both streams",
             ));
         }
 

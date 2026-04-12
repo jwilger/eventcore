@@ -89,7 +89,7 @@ async fn developer_retries_after_postgres_version_conflict() {
         .count();
     let conflict_count = [&first_result, &second_result]
         .into_iter()
-        .filter(|result| matches!(result, Err(EventStoreError::VersionConflict)))
+        .filter(|result| matches!(result, Err(EventStoreError::VersionConflict { .. })))
         .count();
 
     // And: Developer retries with expected version 1 after reloading state

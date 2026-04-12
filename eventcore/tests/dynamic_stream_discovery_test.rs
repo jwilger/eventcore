@@ -193,7 +193,11 @@ impl EventStore for ConflictOnceStore {
         };
 
         if should_conflict {
-            return Err(EventStoreError::VersionConflict);
+            return Err(EventStoreError::VersionConflict {
+                stream_id: StreamId::try_new("conflict-inject").expect("valid"),
+                expected: StreamVersion::new(0),
+                actual: StreamVersion::new(1),
+            });
         }
 
         self.inner.append_events(writes).await

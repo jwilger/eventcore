@@ -70,5 +70,5 @@ async fn chaos_mode_can_force_version_conflict_on_write() {
     };
 
     // Then: the write is rejected as a version conflict
-    assert_eq!(error, EventStoreError::VersionConflict);
+    assert!(matches!(error, EventStoreError::VersionConflict { .. }));
 }

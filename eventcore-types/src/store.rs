@@ -211,7 +211,7 @@ pub trait EventStore {
     ///
     /// match store.append_events(writes).await {
     ///     Ok(_) => println!("Events persisted"),
-    ///     Err(EventStoreError::VersionConflict) => println!("Concurrent modification detected"),
+    ///     Err(EventStoreError::VersionConflict { .. }) => println!("Concurrent modification detected"),
     /// }
     /// ```
     fn append_events(
@@ -377,8 +377,12 @@ pub enum EventStoreError {
     /// Returned when append_events detects that the expected version
     /// does not match the current stream version, indicating a concurrent
     /// modification occurred between read and write.
-    #[error("version conflict detected")]
-    VersionConflict,
+    #[error("version conflict on stream {stream_id}: expected version {expected}, found {actual}")]
+    VersionConflict {
+        stream_id: StreamId,
+        expected: StreamVersion,
+        actual: StreamVersion,
+    },
 }
 
 /// Event stream reader generic over event payload type.

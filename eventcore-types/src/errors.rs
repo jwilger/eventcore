@@ -2,6 +2,16 @@ use thiserror::Error;
 
 use crate::store::EventStoreError;
 
+/// String-based error for business rule violations created from string messages.
+///
+/// This type is used internally by the `require!` macro and the `From<String>`/`From<&str>`
+/// implementations on `CommandError`. It is public because the `require!` macro generates
+/// code at call sites that needs access to it, but it should be considered an implementation
+/// detail.
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct BusinessRuleMessage(String);
+
 /// Error type for command execution failures.
 ///
 /// Represents all possible failure modes during command execution.
@@ -11,11 +21,11 @@ use crate::store::EventStoreError;
 pub enum CommandError {
     /// Business rule violation detected in command logic.
     ///
-    /// This error indicates the command violated a domain-specific business
-    /// rule (e.g., insufficient funds, duplicate entity). These errors are
-    /// permanent and will not succeed on retry with the same input.
-    #[error("business rule violation: {0}")]
-    BusinessRuleViolation(String),
+    /// This error wraps the original typed error, preserving the Rust error
+    /// chain convention. Use `Box::new(e)` to wrap typed errors, or use the
+    /// `From<String>`/`From<&str>` impls for string-based errors.
+    #[error(transparent)]
+    BusinessRuleViolation(Box<dyn std::error::Error + Send + Sync>),
 
     /// Version conflict detected during optimistic concurrency control.
     ///
@@ -42,14 +52,21 @@ pub enum CommandError {
     ValidationError(String),
 }
 
+impl CommandError {
+    /// Create a business rule violation from any error type.
+    pub fn business_rule_violated(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        CommandError::BusinessRuleViolation(Box::new(error))
+    }
+}
+
 impl From<String> for CommandError {
     fn from(message: String) -> Self {
-        CommandError::BusinessRuleViolation(message)
+        CommandError::BusinessRuleViolation(Box::new(BusinessRuleMessage(message)))
     }
 }
 
 impl From<&str> for CommandError {
     fn from(message: &str) -> Self {
-        CommandError::BusinessRuleViolation(message.to_string())
+        CommandError::BusinessRuleViolation(Box::new(BusinessRuleMessage(message.to_string())))
     }
 }
