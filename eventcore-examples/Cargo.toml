@@ -6,8 +6,8 @@ description = "Integration tests and example applications for EventCore"
 license.workspace = true
 repository.workspace = true
 
-[lints.rust]
-warnings = "deny"
+[lints]
+workspace = true
 
 [dependencies]
 

@@ -115,35 +115,20 @@ let metadata = EventMetadata::new()
 EventCore defines a trait that storage adapters implement:
 
 ```rust
-pub trait EventStore: Send + Sync {
-    type Event: Send + Sync;
-    type Error: Error + Send + Sync;
-
-    /// Read events from a specific stream
-    async fn read_stream(
+pub trait EventStore {
+    /// Read all events from a single stream, returning an EventStreamReader
+    /// that provides the events and the current stream version.
+    fn read_stream<E: Event>(
         &self,
-        stream_id: &StreamId,
-        options: ReadOptions,
-    ) -> Result<StreamEvents<Self::Event>, Self::Error>;
+        stream_id: StreamId,
+    ) -> impl Future<Output = Result<EventStreamReader<E>, EventStoreError>> + Send;
 
-    /// Read events from multiple streams
-    async fn read_streams(
+    /// Atomically append events to one or more streams with optimistic
+    /// concurrency control via expected stream versions.
+    fn append_events(
         &self,
-        stream_ids: &[StreamId],
-        options: ReadOptions,
-    ) -> Result<Vec<StreamEvents<Self::Event>>, Self::Error>;
-
-    /// Write events atomically to multiple streams
-    async fn write_events(
-        &self,
-        events: Vec<EventToWrite<Self::Event>>,
-    ) -> Result<WriteResult, Self::Error>;
-
-    /// Subscribe to real-time events
-    async fn subscribe(
-        &self,
-        options: SubscriptionOptions,
-    ) -> Result<Box<dyn EventSubscription<Self::Event>>, Self::Error>;
+        writes: StreamWrites,
+    ) -> impl Future<Output = Result<EventStreamSlice, EventStoreError>> + Send;
 }
 ```
 

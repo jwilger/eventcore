@@ -6,7 +6,6 @@
 
 mod common;
 
-use common::PostgresTestFixture;
 use eventcore_postgres::PostgresProjectorCoordinator;
 use eventcore_types::{ProjectorCoordinator, StreamPosition};
 use sqlx::Row;
@@ -15,10 +14,11 @@ use uuid::Uuid;
 #[tokio::test]
 async fn trigger_assigns_sequential_versions() {
     // Given: A Postgres database with the eventcore schema
-    let fixture = PostgresTestFixture::new().await;
+    let _store = common::create_test_store().await;
+    let connection_string = common::connection_string();
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
-        .connect(&fixture.connection_string)
+        .connect(&connection_string)
         .await
         .expect("should connect to test database");
 
@@ -29,7 +29,7 @@ async fn trigger_assigns_sequential_versions() {
         "SELECT set_config('eventcore.expected_versions', '{{\"{}\":0}}', true)",
         stream_id
     );
-    sqlx::query(&config_query)
+    let _ = sqlx::query(&config_query)
         .execute(&pool)
         .await
         .expect("should set expected versions");
@@ -60,17 +60,18 @@ async fn trigger_assigns_sequential_versions() {
 #[tokio::test]
 async fn trigger_prevents_update_on_event_log() {
     // Given: A Postgres database with events appended to a stream
-    let fixture = PostgresTestFixture::new().await;
+    let _store = common::create_test_store().await;
+    let connection_string = common::connection_string();
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
-        .connect(&fixture.connection_string)
+        .connect(&connection_string)
         .await
         .expect("should connect to test database");
 
     let stream_id = format!("immutability-test-{}", Uuid::now_v7());
 
     // Insert an event to have something to update
-    sqlx::query(&format!(
+    let _ = sqlx::query(&format!(
         "SELECT set_config('eventcore.expected_versions', '{{\"{}\":0}}', true)",
         stream_id
     ))
@@ -79,7 +80,7 @@ async fn trigger_prevents_update_on_event_log() {
     .expect("should set expected versions");
 
     let event_id = Uuid::now_v7();
-    sqlx::query(
+    let _ = sqlx::query(
         "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata)
          VALUES ($1, $2, $3, $4, $5)",
     )
@@ -114,17 +115,18 @@ async fn trigger_prevents_update_on_event_log() {
 #[tokio::test]
 async fn trigger_prevents_delete_on_event_log() {
     // Given: A Postgres database with events appended to a stream
-    let fixture = PostgresTestFixture::new().await;
+    let _store = common::create_test_store().await;
+    let connection_string = common::connection_string();
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
-        .connect(&fixture.connection_string)
+        .connect(&connection_string)
         .await
         .expect("should connect to test database");
 
     let stream_id = format!("delete-prevention-test-{}", Uuid::now_v7());
 
     // Insert an event to have something to delete
-    sqlx::query(&format!(
+    let _ = sqlx::query(&format!(
         "SELECT set_config('eventcore.expected_versions', '{{\"{}\":0}}', true)",
         stream_id
     ))
@@ -133,7 +135,7 @@ async fn trigger_prevents_delete_on_event_log() {
     .expect("should set expected versions");
 
     let event_id = Uuid::now_v7();
-    sqlx::query(
+    let _ = sqlx::query(
         "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata)
          VALUES ($1, $2, $3, $4, $5)",
     )
@@ -178,8 +180,6 @@ fn compute_lock_key(subscription_name: &str) -> i64 {
 
 /// Helper to check if an advisory lock is held by querying pg_locks
 async fn is_advisory_lock_held(pool: &sqlx::Pool<sqlx::Postgres>, lock_key: i64) -> bool {
-    // pg_locks stores advisory locks with classid=0 for session locks acquired via pg_advisory_lock
-    // The objid column contains the lock key
     let result = sqlx::query(
         "SELECT COUNT(*) as count FROM pg_locks
          WHERE locktype = 'advisory' AND objid = $1 AND granted = true",
@@ -195,17 +195,12 @@ async fn is_advisory_lock_held(pool: &sqlx::Pool<sqlx::Postgres>, lock_key: i64)
 
 #[tokio::test(flavor = "multi_thread")]
 async fn advisory_lock_released_on_guard_drop_verifies_pg_locks() {
-    // This test directly queries pg_locks to verify the advisory lock is actually released
-    // when the guard is dropped. This catches the bug where unlock happens on a different
-    // connection than the one that acquired the lock.
+    let _store = common::create_test_store().await;
+    let connection_string = common::connection_string();
 
-    // Given: A Postgres database and coordinator with a multi-connection pool
-    let fixture = PostgresTestFixture::new().await;
-
-    // Use a pool with multiple connections to ensure we can force different connections
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
-        .connect(&fixture.connection_string)
+        .connect(&connection_string)
         .await
         .expect("should connect to test database");
 
@@ -225,45 +220,34 @@ async fn advisory_lock_released_on_guard_drop_verifies_pg_locks() {
         "advisory lock should be held after acquiring leadership"
     );
 
-    // Force pool churn: acquire and release multiple connections to ensure
-    // the original connection that held the lock is not the "preferred" one anymore.
-    // This exposes the bug where unlock happens on a different connection.
+    // Force pool churn
     for _ in 0..10 {
         let _conn = pool.acquire().await.expect("should acquire connection");
-        // Connection is dropped here, going back to pool
     }
 
     // When: We drop the guard (releasing leadership)
     drop(guard);
 
     // Then: The advisory lock should no longer be visible in pg_locks
-    // This assertion will FAIL if the unlock happened on a different connection
-    // because pg_advisory_unlock only works on the connection that acquired the lock
     assert!(
         !is_advisory_lock_held(&pool, lock_key).await,
-        "advisory lock should be released after dropping guard - \
-         if this fails, the unlock likely happened on a different connection than acquire"
+        "advisory lock should be released after dropping guard"
     );
 }
 
 #[tokio::test]
 async fn postgres_event_store_saves_and_loads_checkpoint() {
-    // Given: A PostgresEventStore instance
     use eventcore_types::CheckpointStore;
-    let fixture = PostgresTestFixture::new().await;
+    let store = common::create_test_store().await;
 
-    // When: We save a checkpoint position through the CheckpointStore trait
     let position = StreamPosition::new(Uuid::now_v7());
     let subscription_name = format!("event-store-checkpoint-test-{}", Uuid::now_v7());
-    fixture
-        .store
+    store
         .save(&subscription_name, position)
         .await
         .expect("should save checkpoint");
 
-    // Then: We can load the same position back
-    let loaded = fixture
-        .store
+    let loaded = store
         .load(&subscription_name)
         .await
         .expect("should load checkpoint");
@@ -272,13 +256,12 @@ async fn postgres_event_store_saves_and_loads_checkpoint() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn advisory_lock_held_blocks_second_acquisition_verified_via_pg_locks() {
-    // This test verifies advisory lock behavior by checking pg_locks directly
+    let _store = common::create_test_store().await;
+    let connection_string = common::connection_string();
 
-    // Given: A Postgres database and coordinator
-    let fixture = PostgresTestFixture::new().await;
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
-        .connect(&fixture.connection_string)
+        .connect(&connection_string)
         .await
         .expect("should connect to test database");
 
@@ -286,59 +269,47 @@ async fn advisory_lock_held_blocks_second_acquisition_verified_via_pg_locks() {
     let subscription_name = format!("pg-locks-blocking-test-{}", Uuid::now_v7());
     let lock_key = compute_lock_key(&subscription_name);
 
-    // Initially: No lock should be held
     assert!(
         !is_advisory_lock_held(&pool, lock_key).await,
         "no advisory lock should be held initially"
     );
 
-    // When: First instance acquires leadership
     let guard = coordinator
         .try_acquire(&subscription_name)
         .await
         .expect("should acquire leadership");
 
-    // Then: Lock should be visible in pg_locks
     assert!(
         is_advisory_lock_held(&pool, lock_key).await,
         "advisory lock should be held after first acquisition"
     );
 
-    // And: Second acquisition should fail
     let second_result = coordinator.try_acquire(&subscription_name).await;
     assert!(
         second_result.is_err(),
         "second acquisition should fail while lock is held"
     );
 
-    // When: First guard is dropped
     drop(guard);
 
-    // Then: Lock should be released (verifiable via pg_locks)
     assert!(
         !is_advisory_lock_held(&pool, lock_key).await,
         "advisory lock should be released after guard drop"
     );
 
-    // And: New acquisition should succeed
     let third_guard = coordinator
         .try_acquire(&subscription_name)
         .await
         .expect("should acquire leadership after previous guard dropped");
 
-    // Cleanup
     drop(third_guard);
 }
 
 #[tokio::test]
 async fn postgres_event_store_implements_projector_coordinator() {
-    // Given: A PostgresEventStore instance
     use eventcore_types::ProjectorCoordinator;
-    let fixture = PostgresTestFixture::new().await;
+    let store = common::create_test_store().await;
 
-    // When: We try to acquire leadership through the store
-    let guard = fixture.store.try_acquire("test-projector").await;
-
-    // Then: It should succeed
+    let guard = store.try_acquire("test-projector").await;
     assert!(guard.is_ok(), "should acquire leadership");
 }

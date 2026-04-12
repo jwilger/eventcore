@@ -65,12 +65,12 @@ impl EventReader for FailNTimesReader {
     where
         E: Event,
     {
-        self.poll_count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.poll_count.fetch_add(1, Ordering::SeqCst);
         self.poll_times.lock().unwrap().push(Instant::now());
 
         let remaining = self.failures_remaining.load(Ordering::SeqCst);
         if remaining > 0 {
-            self.failures_remaining.fetch_sub(1, Ordering::SeqCst);
+            let _ = self.failures_remaining.fetch_sub(1, Ordering::SeqCst);
             // Simulate transient database error with a proper error type
             return Err(MockDatabaseError(
                 "transient database connection timeout".to_string(),
@@ -101,7 +101,7 @@ impl Projector for ApplyCounterProjector {
         _position: StreamPosition,
         _ctx: &mut Self::Context,
     ) -> Result<(), Self::Error> {
-        self.apply_count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.apply_count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -123,7 +123,7 @@ async fn runner_retries_transient_database_errors_with_exponential_backoff() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    store.append_events(writes).await.expect("append succeeds");
+    let _ = store.append_events(writes).await.expect("append succeeds");
 
     // And: Mock reader that fails 3 times then succeeds
     let poll_count = Arc::new(AtomicUsize::new(0));
@@ -246,7 +246,7 @@ async fn runner_resets_consecutive_failure_count_on_successful_poll() {
         .expect("register stream")
         .append(event1)
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes1)
         .await
         .expect("first append succeeds");
@@ -293,7 +293,7 @@ async fn runner_resets_consecutive_failure_count_on_successful_poll() {
         .expect("register stream")
         .append(event2)
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes2)
         .await
         .expect("second append succeeds");
@@ -349,7 +349,7 @@ impl<S: EventReader + Sync + Send> EventReader for PollCountingReader<S> {
         filter: EventFilter,
         page: EventPage,
     ) -> Result<Vec<(E, StreamPosition)>, Self::Error> {
-        self.poll_count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.poll_count.fetch_add(1, Ordering::SeqCst);
         self.inner.read_events(filter, page).await
     }
 }
@@ -367,7 +367,7 @@ async fn batch_mode_exits_after_single_poll() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    store.append_events(writes).await.expect("append succeeds");
+    let _ = store.append_events(writes).await.expect("append succeeds");
 
     // And: Counting reader to track poll count
     let poll_count = Arc::new(AtomicUsize::new(0));
@@ -415,7 +415,7 @@ async fn custom_retry_configuration_is_respected() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    store.append_events(writes).await.expect("append succeeds");
+    let _ = store.append_events(writes).await.expect("append succeeds");
 
     // And: Mock reader that fails 3 times (will exceed custom max_retries of 2)
     let poll_count = Arc::new(AtomicUsize::new(0));

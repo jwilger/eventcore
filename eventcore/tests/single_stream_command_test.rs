@@ -103,10 +103,7 @@ impl CommandLogic for Deposit {
         state
     }
 
-    fn handle(
-        &self,
-        _state: Self::State,
-    ) -> Result<NewEvents<Self::Event>, eventcore::CommandError> {
+    fn handle(&self, _state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         Ok(vec![TestDomainEvents::MoneyDeposited {
             account_id: self.account_id.clone(),
             amount: self.amount,
@@ -136,10 +133,7 @@ impl CommandLogic for Withdraw {
         state.apply_event(event)
     }
 
-    fn handle(
-        &self,
-        state: Self::State,
-    ) -> Result<NewEvents<Self::Event>, eventcore::CommandError> {
+    fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         if !state.has_sufficient_funds(self.amount) {
             let requested: u16 = self.amount.into();
             return Err(CommandError::BusinessRuleViolation(format!(
@@ -180,7 +174,7 @@ async fn main_success() {
     };
 
     // When: Developer executes the command
-    execute(&store, command, RetryPolicy::new())
+    let _ = execute(&store, command, RetryPolicy::new())
         .await
         .expect("command execution to succeed");
 
@@ -224,7 +218,7 @@ async fn insufficient_funds_returns_business_rule_violation() {
         account_id: account_id.clone(),
         amount: initial_amount,
     };
-    execute(&store, seed_deposit, RetryPolicy::new())
+    let _ = execute(&store, seed_deposit, RetryPolicy::new())
         .await
         .expect("initial deposit to succeed");
 

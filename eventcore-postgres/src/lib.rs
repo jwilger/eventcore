@@ -106,7 +106,7 @@ impl PostgresEventStore {
 
     #[cfg_attr(test, mutants::skip)] // infallible: panics on failure
     pub async fn ping(&self) {
-        query("SELECT 1")
+        let _ = query("SELECT 1")
             .execute(&self.pool)
             .await
             .expect("postgres ping failed");
@@ -190,7 +190,7 @@ impl EventStore for PostgresEventStore {
             .map_err(|error| map_sqlx_error(error, Operation::BeginTransaction))?;
 
         // Set expected versions in session config for trigger validation
-        query("SELECT set_config('eventcore.expected_versions', $1, true)")
+        let _ = query("SELECT set_config('eventcore.expected_versions', $1, true)")
             .bind(expected_versions_json.to_string())
             .execute(&mut *tx)
             .await
@@ -206,7 +206,7 @@ impl EventStore for PostgresEventStore {
             } = entry;
 
             let event_id = Uuid::now_v7();
-            query(
+            let _ = query(
                 "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata)
                  VALUES ($1, $2, $3, $4, $5)",
             )
@@ -249,7 +249,7 @@ impl CheckpointStore for PostgresEventStore {
 
     async fn save(&self, name: &str, position: StreamPosition) -> Result<(), Self::Error> {
         let position_uuid: Uuid = position.into_inner();
-        query(
+        let _ = query(
             "INSERT INTO eventcore_subscription_versions (subscription_name, last_position, updated_at)
              VALUES ($1, $2, NOW())
              ON CONFLICT (subscription_name) DO UPDATE SET last_position = $2, updated_at = NOW()",
@@ -464,7 +464,7 @@ impl CheckpointStore for PostgresCheckpointStore {
 
     async fn save(&self, name: &str, position: StreamPosition) -> Result<(), Self::Error> {
         let position_uuid: Uuid = position.into_inner();
-        query(
+        let _ = query(
             "INSERT INTO eventcore_subscription_versions (subscription_name, last_position, updated_at)
              VALUES ($1, $2, NOW())
              ON CONFLICT (subscription_name) DO UPDATE SET last_position = $2, updated_at = NOW()",
@@ -556,7 +556,7 @@ impl Drop for CoordinationGuard {
                 tokio::task::block_in_place(|| {
                     handle.block_on(async {
                         // Unlock on the SAME connection that acquired the lock
-                        if let Err(e) = sqlx::query("SELECT pg_advisory_unlock($1)")
+                        if let Err(e) = query("SELECT pg_advisory_unlock($1)")
                             .bind(lock_key)
                             .execute(&mut *connection)
                             .await
@@ -575,8 +575,8 @@ impl Drop for CoordinationGuard {
                 // Note: This task may not execute before process shutdown. In that case,
                 // the advisory lock is released when the PostgreSQL session ends (the
                 // connection closes). See struct-level documentation for details.
-                tokio::spawn(async move {
-                    if let Err(e) = sqlx::query("SELECT pg_advisory_unlock($1)")
+                drop(tokio::spawn(async move {
+                    if let Err(e) = query("SELECT pg_advisory_unlock($1)")
                         .bind(lock_key)
                         .execute(&mut *connection)
                         .await
@@ -587,7 +587,7 @@ impl Drop for CoordinationGuard {
                             "failed to release advisory lock on drop (async)"
                         );
                     }
-                });
+                }));
             }
         }
     }
@@ -666,7 +666,7 @@ async fn try_acquire_advisory_lock(
         .map_err(CoordinationError::DatabaseError)?;
 
     // Attempt to acquire advisory lock (non-blocking) on this specific connection
-    let row = sqlx::query("SELECT pg_try_advisory_lock($1)")
+    let row = query("SELECT pg_try_advisory_lock($1)")
         .bind(lock_key)
         .fetch_one(&mut *connection)
         .await

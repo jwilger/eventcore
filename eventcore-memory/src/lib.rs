@@ -781,7 +781,7 @@ mod tests {
             .and_then(|w| w.append(event3))
             .expect("append should succeed");
 
-        store
+        let _ = store
             .append_events(writes)
             .await
             .expect("append to succeed");

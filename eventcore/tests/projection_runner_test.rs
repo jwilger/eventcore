@@ -55,7 +55,7 @@ async fn seed_events_and_get_positions(
             .expect("register stream")
             .append(event)
             .expect("append event");
-        store
+        let _ = store
             .append_events(writes)
             .await
             .expect("append to succeed");
@@ -96,7 +96,7 @@ impl Projector for EventCounterProjector {
         _position: StreamPosition,
         _ctx: &mut Self::Context,
     ) -> Result<(), Self::Error> {
-        self.count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -120,7 +120,7 @@ async fn minimal_projector_processes_events_with_sensible_defaults() {
         .expect("register stream")
         .append(event1)
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes1)
         .await
         .expect("append to succeed");
@@ -133,7 +133,7 @@ async fn minimal_projector_processes_events_with_sensible_defaults() {
         .expect("register stream")
         .append(event2)
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes2)
         .await
         .expect("second append to succeed");
@@ -146,7 +146,7 @@ async fn minimal_projector_processes_events_with_sensible_defaults() {
     let runner = ProjectionRunner::new(projector, &store);
 
     // And: Developer runs the projection (with timeout for test)
-    tokio::time::timeout(std::time::Duration::from_secs(1), runner.run())
+    tokio::time::timeout(Duration::from_secs(1), runner.run())
         .await
         .expect("runner should complete within timeout")
         .expect("runner should succeed");
@@ -179,7 +179,7 @@ async fn projector_resumes_from_checkpoint_after_restart() {
             .expect("register stream")
             .append(event)
             .expect("append event");
-        store
+        let _ = store
             .append_events(writes)
             .await
             .expect("append to succeed");
@@ -197,7 +197,7 @@ async fn projector_resumes_from_checkpoint_after_restart() {
     let runner =
         ProjectionRunner::new(projector, &store).with_checkpoint_store(checkpoint_store.clone());
 
-    tokio::time::timeout(std::time::Duration::from_secs(1), runner.run())
+    tokio::time::timeout(Duration::from_secs(1), runner.run())
         .await
         .expect("runner should complete within timeout")
         .expect("runner should succeed");
@@ -216,7 +216,7 @@ async fn projector_resumes_from_checkpoint_after_restart() {
     let runner2 =
         ProjectionRunner::new(restarted_projector, &store).with_checkpoint_store(checkpoint_store);
 
-    tokio::time::timeout(std::time::Duration::from_secs(1), runner2.run())
+    tokio::time::timeout(Duration::from_secs(1), runner2.run())
         .await
         .expect("runner should complete within timeout")
         .expect("runner should succeed");
@@ -265,7 +265,7 @@ async fn runner_waits_before_polling_again_when_no_events() {
     });
 
     // Wait long enough to observe multiple poll attempts with backoff
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
     let _ = cancel_tx.send(());
     runner_handle
         .await
@@ -318,7 +318,7 @@ impl Projector for ApplyCountingProjector {
         _position: StreamPosition,
         _ctx: &mut Self::Context,
     ) -> Result<(), Self::Error> {
-        self.count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -347,7 +347,7 @@ impl<S: EventReader + Sync> EventReader for PollCountingReader<S> {
         filter: EventFilter,
         page: EventPage,
     ) -> impl Future<Output = Result<Vec<(E, StreamPosition)>, Self::Error>> + Send {
-        self.poll_count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.poll_count.fetch_add(1, Ordering::SeqCst);
         self.inner.read_events(filter, page)
     }
 }
@@ -415,7 +415,7 @@ async fn runner_stops_on_fatal_error_and_preserves_checkpoint() {
     let runner =
         ProjectionRunner::new(projector, &store).with_checkpoint_store(checkpoint_store.clone());
 
-    let result = tokio::time::timeout(std::time::Duration::from_secs(1), runner.run()).await;
+    let result = tokio::time::timeout(Duration::from_secs(1), runner.run()).await;
 
     // Then: Runner returns an error (fatal error from projector)
     assert!(
@@ -449,7 +449,7 @@ async fn runner_stops_on_fatal_error_and_preserves_checkpoint() {
     let runner2 =
         ProjectionRunner::new(restarted_projector, &store).with_checkpoint_store(checkpoint_store);
 
-    let result2 = tokio::time::timeout(std::time::Duration::from_secs(1), runner2.run()).await;
+    let result2 = tokio::time::timeout(Duration::from_secs(1), runner2.run()).await;
 
     // Then: Restarted runner also fails (checkpoint prevented reprocessing positions 0-1)
     assert!(
@@ -546,7 +546,7 @@ async fn runner_skips_failed_event_and_continues_processing() {
     let runner =
         ProjectionRunner::new(projector, &store).with_checkpoint_store(checkpoint_store.clone());
 
-    let result = tokio::time::timeout(std::time::Duration::from_secs(1), runner.run()).await;
+    let result = tokio::time::timeout(Duration::from_secs(1), runner.run()).await;
 
     // Then: Runner completes successfully (does not return error)
     assert!(
@@ -596,7 +596,7 @@ async fn runner_skips_failed_event_and_continues_processing() {
     let runner2 =
         ProjectionRunner::new(restarted_projector, &store).with_checkpoint_store(checkpoint_store);
 
-    let result2 = tokio::time::timeout(std::time::Duration::from_secs(1), runner2.run()).await;
+    let result2 = tokio::time::timeout(Duration::from_secs(1), runner2.run()).await;
 
     // Then: Restarted runner completes successfully
     assert!(
@@ -697,7 +697,7 @@ async fn runner_retries_failed_event_then_escalates_to_fatal() {
     let runner =
         ProjectionRunner::new(projector, &store).with_checkpoint_store(checkpoint_store.clone());
 
-    let result = tokio::time::timeout(std::time::Duration::from_secs(5), runner.run()).await;
+    let result = tokio::time::timeout(Duration::from_secs(5), runner.run()).await;
 
     // Then: Runner returns an error after retries exhausted
     assert!(
@@ -749,7 +749,7 @@ async fn runner_retries_failed_event_then_escalates_to_fatal() {
     let runner2 =
         ProjectionRunner::new(restarted_projector, &store).with_checkpoint_store(checkpoint_store);
 
-    let result2 = tokio::time::timeout(std::time::Duration::from_secs(5), runner2.run()).await;
+    let result2 = tokio::time::timeout(Duration::from_secs(5), runner2.run()).await;
 
     // Then: Restarted runner also fails after retries
     assert!(
@@ -804,7 +804,7 @@ impl Projector for RetryThenFatalProjector {
         position: StreamPosition,
         _ctx: &mut Self::Context,
     ) -> Result<(), Self::Error> {
-        self.apply_count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.apply_count.fetch_add(1, Ordering::SeqCst);
         if position == self.fail_at_position {
             return Err(format!("transient error at position {}", position));
         }
@@ -850,7 +850,7 @@ async fn runner_uses_default_poll_config_when_not_specified() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("append to succeed");
@@ -865,7 +865,7 @@ async fn runner_uses_default_poll_config_when_not_specified() {
     let runner = ProjectionRunner::new(projector, &store).with_poll_config(default_config);
 
     // And: Runner executes
-    tokio::time::timeout(std::time::Duration::from_secs(1), runner.run())
+    tokio::time::timeout(Duration::from_secs(1), runner.run())
         .await
         .expect("runner should complete within timeout")
         .expect("runner should succeed");
@@ -900,7 +900,7 @@ async fn event_reader_blanket_impl_forwards_read_events_correctly() {
             .expect("register stream")
             .append(event)
             .expect("append event");
-        store
+        let _ = store
             .append_events(writes)
             .await
             .expect("append to succeed");
@@ -945,7 +945,7 @@ async fn runner_respects_custom_poll_interval_when_events_found() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("append to succeed");
@@ -1234,7 +1234,7 @@ async fn run_projection_holds_leadership_during_event_processing() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    backend
+    let _ = backend
         .event_store
         .append_events(writes)
         .await
@@ -1258,7 +1258,7 @@ async fn run_projection_holds_leadership_during_event_processing() {
     });
 
     // And: Wait for the projector to start processing (it's now holding the guard)
-    started.wait();
+    let _ = started.wait();
 
     // Then: Another attempt to acquire leadership for the same projector should fail
     let second_acquire_result = backend.coordinator.try_acquire("blocking-projector").await;
@@ -1268,7 +1268,7 @@ async fn run_projection_holds_leadership_during_event_processing() {
     );
 
     // Cleanup: Allow the projector to finish and wait for the thread
-    can_finish.wait();
+    let _ = can_finish.wait();
     let _ = projection_handle.join();
 }
 
@@ -1300,9 +1300,9 @@ impl Projector for BlockingProjector {
         _ctx: &mut Self::Context,
     ) -> Result<(), Self::Error> {
         // Signal that we've started processing (guard is held at this point)
-        self.started.wait();
+        let _ = self.started.wait();
         // Wait for permission to finish (allows test to check the lock)
-        self.can_finish.wait();
+        let _ = self.can_finish.wait();
         Ok(())
     }
 
@@ -1333,7 +1333,7 @@ async fn run_projection_acquires_leadership_and_processes_events() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    backend
+    let _ = backend
         .event_store
         .append_events(writes)
         .await
@@ -1344,12 +1344,9 @@ async fn run_projection_acquires_leadership_and_processes_events() {
     let projector = EventCounterProjector::new(event_count.clone());
 
     // When: Developer calls run_projection with projector and backend
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        run_projection(projector, &backend),
-    )
-    .await
-    .expect("run_projection should complete within timeout");
+    let result = tokio::time::timeout(Duration::from_secs(1), run_projection(projector, &backend))
+        .await
+        .expect("run_projection should complete within timeout");
 
     // Then: run_projection succeeds
     assert!(result.is_ok(), "run_projection should succeed");

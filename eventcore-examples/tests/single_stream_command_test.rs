@@ -199,7 +199,7 @@ async fn deposit_command_emits_money_deposited_event() {
     };
 
     // When: The deposit command is executed
-    execute(&store, command, RetryPolicy::new())
+    let _ = execute(&store, command, RetryPolicy::new())
         .await
         .expect("command execution to succeed");
 
@@ -250,7 +250,7 @@ async fn insufficient_funds_returns_business_rule_violation() {
         account_id: account_id.clone(),
         amount: initial_amount,
     };
-    execute(&store, seed_deposit, RetryPolicy::new())
+    let _ = execute(&store, seed_deposit, RetryPolicy::new())
         .await
         .expect("initial deposit to succeed");
 

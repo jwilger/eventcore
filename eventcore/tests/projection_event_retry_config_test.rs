@@ -58,7 +58,7 @@ impl Projector for AlwaysFailAlwaysRetryProjector {
         _position: StreamPosition,
         _ctx: &mut Self::Context,
     ) -> Result<(), Self::Error> {
-        self.apply_count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.apply_count.fetch_add(1, Ordering::SeqCst);
         Err("transient error".to_string())
     }
 
@@ -86,7 +86,7 @@ async fn event_retry_config_limits_retries_and_escalates_to_fatal() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("append to succeed");
@@ -180,7 +180,7 @@ async fn default_retry_config_allows_retries_without_explicit_configuration() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("append to succeed");
@@ -257,7 +257,7 @@ async fn retry_delay_is_respected_during_retry() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("append to succeed");
@@ -368,7 +368,7 @@ async fn exponential_backoff_is_applied_during_retries() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("append to succeed");
@@ -451,7 +451,7 @@ async fn max_retry_delay_caps_exponential_backoff() {
         .expect("register stream")
         .append(event)
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("append to succeed");
@@ -555,7 +555,7 @@ impl Projector for ErrorTypeAwareProjector {
         _position: StreamPosition,
         _ctx: &mut Self::Context,
     ) -> Result<(), Self::Error> {
-        self.apply_count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.apply_count.fetch_add(1, Ordering::SeqCst);
         match self.error_type {
             ErrorType::Transient => Err("network timeout".to_string()),
             ErrorType::Permanent => Err("schema violation".to_string()),
@@ -590,7 +590,7 @@ async fn on_error_decides_retry_eligibility_config_only_applies_when_retry() {
         .expect("register stream")
         .append(event.clone())
         .expect("append event");
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("append to succeed");

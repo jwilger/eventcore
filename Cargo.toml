@@ -16,3 +16,38 @@ version = "0.6.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/jwilger/eventcore"
+
+[workspace.lints.rust]
+dead_code = "forbid"
+invalid_value = "forbid"
+overflowing_literals = "forbid"
+unconditional_recursion = "forbid"
+unreachable_pub = "forbid"
+unused_allocation = "forbid"
+unsafe_code = "forbid"
+bad_style = { level = "deny", priority = -1 }
+deprecated = "deny"
+meta_variable_misuse = "deny"
+non_ascii_idents = "deny"
+non_camel_case_types = "deny"
+non_snake_case = "deny"
+non_upper_case_globals = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+rust_2021_compatibility = { level = "deny", priority = -1 }
+trivial_casts = "deny"
+trivial_numeric_casts = "deny"
+unreachable_code = "deny"
+unused_assignments = "deny"
+unused_attributes = "deny"
+unused_extern_crates = "deny"
+unused_imports = "deny"
+unused_must_use = "deny"
+unused_mut = "deny"
+unused_parens = "deny"
+unused_qualifications = "deny"
+unused_results = "deny"
+unused_variables = "deny"
+warnings = "deny"
+
+[workspace.lints.clippy]
+allow_attributes = "deny"

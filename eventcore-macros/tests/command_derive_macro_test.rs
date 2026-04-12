@@ -171,10 +171,10 @@ async fn migrating_from_manual_impl_preserves_behavior() {
     let derived_store = InMemoryEventStore::new();
 
     // When: developer executes both variants to compare behavior before and after migration
-    execute(&manual_store, manual_command, RetryPolicy::new())
+    let _ = execute(&manual_store, manual_command, RetryPolicy::new())
         .await
         .expect("manual command to succeed");
-    execute(&derived_store, derived_command, RetryPolicy::new())
+    let _ = execute(&derived_store, derived_command, RetryPolicy::new())
         .await
         .expect("derived command to succeed");
 

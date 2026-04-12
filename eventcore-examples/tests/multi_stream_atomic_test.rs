@@ -162,7 +162,7 @@ async fn seed_account_balance(
         amount,
     };
 
-    execute(store, command, RetryPolicy::new())
+    let _ = execute(store, command, RetryPolicy::new())
         .await
         .expect("initial balance seed to succeed");
 }
