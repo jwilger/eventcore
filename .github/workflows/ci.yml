@@ -15,8 +15,29 @@ env:
   CARGO_NEXTEST_VERSION: 0.9.115
 
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - '**/Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+
   test:
     name: Test
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -87,6 +108,8 @@ jobs:
 
   clippy:
     name: Clippy
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -104,9 +127,11 @@ jobs:
 
   mutation:
     name: Mutation
-    needs: test
+    needs: [changes, test]
+    if: >-
+      needs.changes.outputs.rust == 'true' &&
+      contains(github.event.pull_request.labels.*.name, 'release')
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: postgres:17
@@ -123,34 +148,24 @@ jobs:
           - 5432:5432
 
     steps:
-      - name: Skip mutation testing on non-release PRs
-        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        run: echo "Skipping mutation testing — not a release PR"
-
       - uses: actions/checkout@v6
-        if: contains(github.event.pull_request.labels.*.name, 'release')
 
       - name: Install Rust
-        if: contains(github.event.pull_request.labels.*.name, 'release')
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache dependencies
-        if: contains(github.event.pull_request.labels.*.name, 'release')
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-mutants
-        if: contains(github.event.pull_request.labels.*.name, 'release')
         run: cargo install cargo-mutants --locked
 
       - name: Install cargo-nextest
-        if: contains(github.event.pull_request.labels.*.name, 'release')
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.115
 
       - name: Run mutation testing
         id: mutants
-        if: contains(github.event.pull_request.labels.*.name, 'release')
         env:
           POSTGRES_VERSION: 17
         run: |
@@ -165,7 +180,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload mutation report
-        if: contains(github.event.pull_request.labels.*.name, 'release') && always()
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: mutation-report
@@ -251,6 +266,8 @@ jobs:
 
   security-audit:
     name: Security Audit
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -265,3 +282,35 @@ jobs:
 
       - name: Run security audit
         run: cargo audit
+
+  gate:
+    name: CI Gate
+    if: always()
+    needs: [changes, test, format, clippy, mutation, security-audit]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        run: |
+          echo "changes: ${{ needs.changes.result }}"
+          echo "test: ${{ needs.test.result }}"
+          echo "format: ${{ needs.format.result }}"
+          echo "clippy: ${{ needs.clippy.result }}"
+          echo "mutation: ${{ needs.mutation.result }}"
+          echo "security-audit: ${{ needs.security-audit.result }}"
+
+          # Fail if any required job failed (skipped is OK)
+          for result in \
+            "${{ needs.changes.result }}" \
+            "${{ needs.test.result }}" \
+            "${{ needs.format.result }}" \
+            "${{ needs.clippy.result }}" \
+            "${{ needs.mutation.result }}" \
+            "${{ needs.security-audit.result }}"
+          do
+            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+              echo "::error::Required job reported: $result"
+              exit 1
+            fi
+          done
+
+          echo "All required jobs passed or were intentionally skipped."
