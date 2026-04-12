@@ -65,7 +65,12 @@ impl TestScenario {
         let storage: std::sync::Arc<std::sync::Mutex<Vec<C::Event>>> =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let collector = crate::EventCollector::new(storage.clone());
-        let _ = eventcore::run_projection(collector, &self.store).await;
+        let _ = eventcore::run_projection(
+            collector,
+            &self.store,
+            eventcore::ProjectionConfig::default(),
+        )
+        .await;
 
         let all_events = storage.lock().unwrap().clone();
 

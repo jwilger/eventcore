@@ -42,27 +42,24 @@ the established pattern in EventCore for free-function configuration.
 ## Decision
 
 Expose projection configuration through a `ProjectionConfig` struct
-passed to a new `run_projection_with_config()` free function. The
-existing `run_projection()` remains unchanged as the zero-config
-convenience function.
+passed directly to `run_projection()` as a required parameter. Since
+EventCore is pre-1.0, breaking changes are acceptable, and the cleanest
+API should win over backward compatibility.
 
 ### API Design
 
 ```rust
-// Batch mode — unchanged, zero-config convenience
-run_projection(projector, &backend).await?;
+// Batch mode — default config
+run_projection(projector, &backend, ProjectionConfig::default()).await?;
 
-// Configured — one additional parameter
+// Configured — custom config
 let config = ProjectionConfig::default()
     .continuous()
     .poll_interval(Duration::from_millis(200))
     .empty_poll_backoff(Duration::from_millis(50));
 
-run_projection_with_config(projector, &backend, config).await?;
+run_projection(projector, &backend, config).await?;
 ```
-
-`run_projection()` delegates to `run_projection_with_config()` with
-`ProjectionConfig::default()` (batch mode, default timing).
 
 ### `ProjectionConfig` Fields
 
@@ -95,13 +92,15 @@ ADR-036's approach creates the problems ADR-030 identified:
 - Internal builder pattern becomes public API (evolution constrained)
 - Users must manage leadership acquisition themselves (error-prone)
 
-**Why a new function instead of adding parameters to `run_projection()`?**
+**Why add the parameter directly to `run_projection()` instead of a
+separate function?**
 
-Adding a required parameter to `run_projection()` is a breaking change.
-A separate `run_projection_with_config()` preserves backward
-compatibility. The simple batch case (`run_projection()`) stays
-zero-config. This mirrors how many Rust APIs provide both
-`foo()` and `foo_with()` variants.
+EventCore is pre-1.0 software. Breaking changes are acceptable, and
+the cleanest API should take precedence over backward compatibility.
+A single `run_projection()` with `ProjectionConfig` is simpler than
+maintaining two functions (`run_projection` and
+`run_projection_with_config`). `ProjectionConfig::default()` keeps the
+simple case ergonomic.
 
 **Why not configuration through the Projector trait?**
 
@@ -124,14 +123,13 @@ mode during migrations and continuous mode in production.
 - Single public API for all projection modes (no confusion)
 - `ProjectionRunner` internals can evolve freely
 - Leadership acquisition handled automatically (less error-prone)
-- `run_projection()` stays zero-config for the simple case
 - Follows the `execute(store, command, policy)` precedent
+- Single function instead of two (`run_projection` + `run_projection_with_config`)
 
 ### Negative
 
-- One new public type (`ProjectionConfig`) and one new function
-- Configuration is less visible than the builder pattern
-  (one struct instead of named builder methods)
+- One new public type (`ProjectionConfig`) added to the API surface
+- Breaking change: callers of the old `run_projection(projector, &backend)` must add `ProjectionConfig::default()` parameter
 
 ### Migration from ADR-036
 
@@ -147,7 +145,7 @@ ProjectionRunner::new(my_projector, &backend)
 
 // New (ADR-0037): free function with config
 let config = ProjectionConfig::default().continuous();
-run_projection_with_config(my_projector, &backend, config).await?;
+run_projection(my_projector, &backend, config).await?;
 ```
 
 ## Related Decisions

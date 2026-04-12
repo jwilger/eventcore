@@ -81,36 +81,29 @@ Internal types (`PollConfig`, `EventRetryConfig`, `PollMode`) are not exposed;
 
 ## Files
 
-| File                                | Description                                                                       |
-| ----------------------------------- | --------------------------------------------------------------------------------- |
-| `eventcore/src/projection.rs`       | ProjectionConfig, run_projection(), run_projection_with_config(), internal runner |
-| `eventcore-types/src/projection.rs` | Projector, EventReader, CheckpointStore, ProjectorCoordinator traits              |
+| File                                | Description                                                          |
+| ----------------------------------- | -------------------------------------------------------------------- |
+| `eventcore/src/projection.rs`       | ProjectionConfig, run_projection(), internal runner                  |
+| `eventcore-types/src/projection.rs` | Projector, EventReader, CheckpointStore, ProjectorCoordinator traits |
 
 ## Public API (ADR-0037)
 
-Two paths for running projections:
-
-**Batch mode** — `run_projection()` convenience function:
-
-```rust
-run_projection(my_projector, &backend).await?;
-```
-
-Handles leadership acquisition, processes events once, exits. No
-configuration needed.
-
-**Configurable mode** — `run_projection_with_config()` with `ProjectionConfig`:
+`run_projection()` is the single entry point for all projection modes:
 
 ```rust
 use std::time::Duration;
-use eventcore::{ProjectionConfig, run_projection_with_config};
+use eventcore::{ProjectionConfig, run_projection};
 
+// Batch mode with defaults
+run_projection(my_projector, &backend, ProjectionConfig::default()).await?;
+
+// Continuous mode with custom config
 let config = ProjectionConfig::default()
     .continuous()
     .poll_interval(Duration::from_millis(200))
     .event_retry_max_attempts(MaxRetryAttempts::new(5));
 
-run_projection_with_config(my_projector, &backend, config).await?;
+run_projection(my_projector, &backend, config).await?;
 ```
 
 `ProjectionConfig` exposes all poll and retry knobs via builder methods.
@@ -118,7 +111,7 @@ Handles leadership acquisition automatically. Both batch and continuous
 modes are supported.
 
 **Internal implementation**: `ProjectionRunner` is a crate-internal struct
-used by `run_projection_with_config()`. It is not part of the public API.
+used by `run_projection()`. It is not part of the public API.
 `PollConfig`, `PollMode`, `EventRetryConfig`, and `NoCheckpointStore` are
 also internal types.
 

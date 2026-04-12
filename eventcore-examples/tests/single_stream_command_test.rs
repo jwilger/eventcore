@@ -7,7 +7,8 @@
 //! - Using `EventCollector` with `run_projection()` for assertions
 
 use eventcore::{
-    Command, CommandError, CommandLogic, Event, NewEvents, RetryPolicy, execute, run_projection,
+    Command, CommandError, CommandLogic, Event, NewEvents, ProjectionConfig, RetryPolicy, execute,
+    run_projection,
 };
 use eventcore_memory::InMemoryEventStore;
 use eventcore_testing::EventCollector;
@@ -227,7 +228,7 @@ async fn deposit_command_emits_money_deposited_event() {
     // Then: Events can be collected via projection
     let storage: Arc<Mutex<Vec<BankAccountEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let collector = EventCollector::new(storage.clone());
-    run_projection(collector, &store)
+    run_projection(collector, &store, ProjectionConfig::default())
         .await
         .expect("projection to complete");
 
@@ -311,7 +312,7 @@ async fn insufficient_funds_returns_business_rule_violation() {
     // And: No additional events were appended (only the original deposit)
     let storage: Arc<Mutex<Vec<BankAccountEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let collector = EventCollector::new(storage.clone());
-    run_projection(collector, &store)
+    run_projection(collector, &store, ProjectionConfig::default())
         .await
         .expect("projection to complete");
 

@@ -1,31 +1,31 @@
 //! Integration tests for ADR-0037: ProjectionConfig via free function
 //!
-//! Scenario: run_projection_with_config with default config processes events
+//! Scenario: run_projection with default config processes events
 //! - Given a backend with seeded events
-//! - When run_projection_with_config(projector, &backend, ProjectionConfig::default()) is called
-//! - Then all events are processed (same behavior as run_projection)
+//! - When run_projection(projector, &backend, ProjectionConfig::default()) is called
+//! - Then all events are processed
 //!
 //! Scenario: custom_poll_interval_is_used_in_continuous_mode
 //! - Given a backend with no events initially
 //! - And config with continuous mode and custom poll_interval(50ms)
-//! - When run_projection_with_config is spawned, and an event appended after a delay
+//! - When run_projection is spawned, and an event appended after a delay
 //! - Then the event is processed (proves polling continued with custom interval)
 //!
 //! Scenario: event_retry_max_attempts_limits_retries_via_config
 //! - Given a projector that always fails and returns FailureStrategy::Retry
 //! - And config with event_retry_max_attempts(2)
-//! - When events are seeded and run_projection_with_config is called
+//! - When events are seeded and run_projection is called
 //! - Then projection fails with ProjectionError after exhausting retries
 //!
 //! Scenario: max_consecutive_poll_failures_stops_projection_via_config
 //! - Given a backend that always fails on read_events
 //! - And config with continuous mode and max_consecutive_poll_failures(3)
-//! - When run_projection_with_config is called
+//! - When run_projection is called
 //! - Then projection stops after consecutive poll failures with ProjectionError
 
 use eventcore::{
     Event, FailureContext, FailureStrategy, ProjectionConfig, ProjectionError, Projector, StreamId,
-    StreamPosition, run_projection, run_projection_with_config,
+    StreamPosition, run_projection,
 };
 use eventcore_memory::{InMemoryCheckpointStore, InMemoryEventStore, InMemoryProjectorCoordinator};
 use eventcore_types::{
@@ -86,7 +86,7 @@ impl Projector for EventCounterProjector {
     }
 }
 
-/// Combined backend implementing all required traits for run_projection_with_config.
+/// Combined backend implementing all required traits for run_projection.
 struct TestBackend {
     event_store: InMemoryEventStore,
     checkpoint_store: InMemoryCheckpointStore,
@@ -167,7 +167,7 @@ impl EventStore for TestBackend {
 }
 
 #[tokio::test]
-async fn run_projection_with_config_with_default_config_processes_events() {
+async fn run_projection_with_default_config_processes_events() {
     // Given: A backend with seeded events
     let backend = TestBackend::new();
     let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
@@ -205,17 +205,17 @@ async fn run_projection_with_config_with_default_config_processes_events() {
     let event_count = Arc::new(AtomicUsize::new(0));
     let projector = EventCounterProjector::new(event_count.clone());
 
-    // When: run_projection_with_config is called with default config
+    // When: run_projection is called with default config
     let config = ProjectionConfig::default();
     let result = tokio::time::timeout(
         Duration::from_secs(1),
-        run_projection_with_config(projector, &backend, config),
+        run_projection(projector, &backend, config),
     )
     .await
     .expect("should complete within timeout");
 
     // Then: All events are processed (same behavior as run_projection)
-    assert!(result.is_ok(), "run_projection_with_config should succeed");
+    assert!(result.is_ok(), "run_projection should succeed");
     assert_eq!(
         event_count.load(Ordering::SeqCst),
         2,
@@ -234,9 +234,8 @@ async fn continuous_mode_processes_events_added_after_start() {
     let projector = EventCounterProjector::new(event_count.clone());
     let config = ProjectionConfig::default().continuous();
 
-    // When: run_projection_with_config is spawned in a background task
-    let task =
-        tokio::spawn(async move { run_projection_with_config(projector, backend, config).await });
+    // When: run_projection is spawned in a background task
+    let task = tokio::spawn(async move { run_projection(projector, backend, config).await });
 
     // And: An event is appended to the store after a short delay
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -284,9 +283,8 @@ async fn custom_poll_interval_is_used_in_continuous_mode() {
         .continuous()
         .poll_interval(Duration::from_millis(50));
 
-    // When: run_projection_with_config is spawned in a background task
-    let task =
-        tokio::spawn(async move { run_projection_with_config(projector, backend, config).await });
+    // When: run_projection is spawned in a background task
+    let task = tokio::spawn(async move { run_projection(projector, backend, config).await });
 
     // And: An event is appended to the store after a short delay
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -389,10 +387,10 @@ async fn event_retry_max_attempts_limits_retries_via_config() {
         )
         .event_retry_max_delay(Duration::from_millis(1));
 
-    // When: run_projection_with_config is called
+    // When: run_projection is called
     let result = tokio::time::timeout(
         Duration::from_secs(5),
-        run_projection_with_config(projector, &backend, config),
+        run_projection(projector, &backend, config),
     )
     .await
     .expect("should complete within timeout");
@@ -502,10 +500,10 @@ async fn max_consecutive_poll_failures_stops_projection_via_config() {
         ))
         .poll_failure_backoff(Duration::from_millis(1));
 
-    // When: run_projection_with_config is called
+    // When: run_projection is called
     let result = tokio::time::timeout(
         Duration::from_secs(5),
-        run_projection_with_config(projector, &backend, config),
+        run_projection(projector, &backend, config),
     )
     .await
     .expect("should complete within timeout");
@@ -551,7 +549,7 @@ async fn run_projection_returns_leadership_error_when_lock_already_held() {
     let projector = EventCounterProjector::new(event_count);
 
     // When: run_projection is called
-    let result = run_projection(projector, &backend).await;
+    let result = run_projection(projector, &backend, ProjectionConfig::default()).await;
 
     // Then: It should return a LeadershipError
     assert!(
@@ -601,7 +599,11 @@ async fn run_projection_holds_leadership_during_event_processing() {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(run_projection(projector, backend_clone.as_ref()))
+            .block_on(run_projection(
+                projector,
+                backend_clone.as_ref(),
+                ProjectionConfig::default(),
+            ))
     });
 
     // And: Wait for the projector to start processing (it's now holding the guard)
@@ -688,9 +690,12 @@ async fn run_projection_acquires_leadership_and_processes_events() {
     let projector = EventCounterProjector::new(event_count.clone());
 
     // When: Developer calls run_projection with projector and backend
-    let result = tokio::time::timeout(Duration::from_secs(1), run_projection(projector, &backend))
-        .await
-        .expect("run_projection should complete within timeout");
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        run_projection(projector, &backend, ProjectionConfig::default()),
+    )
+    .await
+    .expect("run_projection should complete within timeout");
 
     // Then: run_projection succeeds
     assert!(result.is_ok(), "run_projection should succeed");

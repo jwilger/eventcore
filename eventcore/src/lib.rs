@@ -18,9 +18,7 @@ pub use eventcore_types::{
 use eventcore_types::{EventStore, MaxRetries, StreamVersion, StreamWrites};
 
 // Re-export projection public API
-pub use projection::{
-    ProjectionConfig, ProjectionError, run_projection, run_projection_with_config,
-};
+pub use projection::{ProjectionConfig, ProjectionError, run_projection};
 
 // Re-export Command derive macro when the "macros" feature is enabled (default)
 // Users can disable with: eventcore = { version = "...", default-features = false }

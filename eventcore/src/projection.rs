@@ -130,7 +130,7 @@ pub(crate) enum PollMode {
 ///
 /// ```ignore
 /// // Preferred: Use run_projection for simple cases with automatic coordination
-/// run_projection(projector, &backend).await?;
+/// run_projection(projector, &backend, ProjectionConfig::default()).await?;
 ///
 /// // Advanced: Use ProjectionRunner for custom configuration
 /// let runner = ProjectionRunner::new(projector, &store)
@@ -412,11 +412,11 @@ pub enum ProjectionError {
     LeadershipError(String),
 }
 
-/// Configuration for running projections via [`run_projection_with_config`].
+/// Configuration for running projections via [`run_projection`].
 ///
 /// `ProjectionConfig` provides a builder-style API for configuring projection
 /// behavior. The default configuration produces batch mode with sensible timing
-/// defaults, matching the behavior of [`run_projection`].
+/// defaults, producing batch mode behavior.
 ///
 /// # Example
 ///
@@ -556,13 +556,11 @@ impl ProjectionConfig {
 /// - Event reading via `EventReader`
 /// - Checkpoint management via `CheckpointStore`
 ///
-/// This is the zero-config convenience function. For configurable projections,
-/// use [`run_projection_with_config`].
-///
 /// # Arguments
 ///
 /// * `projector` - The projector implementation to run
 /// * `backend` - A reference to a backend implementing EventReader, CheckpointStore, and ProjectorCoordinator
+/// * `config` - Configuration controlling polling mode, timing, and retry behavior
 ///
 /// # Returns
 ///
@@ -572,53 +570,20 @@ impl ProjectionConfig {
 /// # Example
 ///
 /// ```ignore
-/// // PostgreSQL provides all three traits
-/// run_projection(my_projector, &postgres_store).await?;
-/// ```
-pub async fn run_projection<P, B>(projector: P, backend: &B) -> Result<(), ProjectionError>
-where
-    P: Projector,
-    P::Event: Event + Clone,
-    P::Context: Default,
-    P::Error: std::fmt::Debug,
-    B: EventReader + CheckpointStore + eventcore_types::ProjectorCoordinator,
-    <B as EventReader>::Error: std::fmt::Display,
-{
-    run_projection_with_config(projector, backend, ProjectionConfig::default()).await
-}
-
-/// Runs a projector with explicit configuration against a backend.
+/// use eventcore::{ProjectionConfig, run_projection};
 ///
-/// This is the configurable entry point for running projections. It supports
-/// both batch and continuous modes, with full control over polling and retry
-/// behavior.
+/// // Batch mode with defaults
+/// run_projection(my_projector, &postgres_store, ProjectionConfig::default()).await?;
 ///
-/// For the zero-config batch mode convenience, use [`run_projection`].
-///
-/// # Arguments
-///
-/// * `projector` - The projector implementation to run
-/// * `backend` - A reference to a backend implementing EventReader, CheckpointStore, and ProjectorCoordinator
-/// * `config` - Configuration controlling polling mode, timing, and retry behavior
-///
-/// # Returns
-///
-/// Returns when the projector completes processing all events (batch mode),
-/// is cancelled, or encounters a fatal error.
-///
-/// # Example
-///
-/// ```ignore
+/// // Continuous mode with custom poll interval
 /// use std::time::Duration;
-/// use eventcore::{ProjectionConfig, run_projection_with_config};
-///
 /// let config = ProjectionConfig::default()
 ///     .continuous()
 ///     .poll_interval(Duration::from_millis(200));
 ///
-/// run_projection_with_config(my_projector, &backend, config).await?;
+/// run_projection(my_projector, &backend, config).await?;
 /// ```
-pub async fn run_projection_with_config<P, B>(
+pub async fn run_projection<P, B>(
     projector: P,
     backend: &B,
     config: ProjectionConfig,
