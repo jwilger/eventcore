@@ -26,24 +26,24 @@ impl CommandLogic for TransferMoney {
     type State = AccountState;
     type Event = BankEvent;
 
-    fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-        match &event.payload {
-            BankEvent::AccountOpened { initial_balance, owner } => {
-                state.exists = true;
-                state.balance = *initial_balance;
-                state.owner = owner.clone();
-                state.opened_at = event.occurred_at;
-            }
-            BankEvent::MoneyDeposited { amount, .. } => {
-                state.balance += amount;
-                state.transaction_count += 1;
-                state.last_activity = event.occurred_at;
-            }
-            BankEvent::MoneyWithdrawn { amount, .. } => {
-                state.balance = state.balance.saturating_sub(*amount);
-                state.transaction_count += 1;
-                state.last_activity = event.occurred_at;
-            }
+    fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+        match event {
+            BankEvent::AccountOpened { initial_balance, owner } => Self::State {
+                exists: true,
+                balance: *initial_balance,
+                owner: owner.clone(),
+                ..state
+            },
+            BankEvent::MoneyDeposited { amount, .. } => Self::State {
+                balance: state.balance + amount,
+                transaction_count: state.transaction_count + 1,
+                ..state
+            },
+            BankEvent::MoneyWithdrawn { amount, .. } => Self::State {
+                balance: state.balance.saturating_sub(*amount),
+                transaction_count: state.transaction_count + 1,
+                ..state
+            },
         }
     }
 }
@@ -62,7 +62,7 @@ When a command executes, EventCore:
 // EventCore does this automatically:
 let mut state = AccountState::default();
 for event in events_from_streams {
-    command.apply(&mut state, &event);
+    state = command.apply(state, &event);
 }
 // Your handle() method receives the final state
 ```
@@ -83,8 +83,8 @@ struct OrderState {
     customer: Option<CustomerId>,
 }
 
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-    match &event.payload {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+    match event {
         OrderEvent::Created { customer_id } => {
             state.exists = true;
             state.customer = Some(*customer_id);
@@ -98,6 +98,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
             state.status = OrderStatus::Placed;
         }
     }
+    state
 }
 ```
 
@@ -116,8 +117,8 @@ struct AnalyticsState {
     top_customers: BTreeSet<(Money, CustomerId)>,
 }
 
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-    match &event.payload {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+    match event {
         AnalyticsEvent::Purchase { customer, amount, date } => {
             // Update raw data
             state.total_revenue += amount;
@@ -144,6 +145,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
             state.daily_averages.insert(*date, daily_total / tx_count as u64);
         }
     }
+    state
 }
 ```
 
@@ -160,11 +162,11 @@ struct WorkflowState {
     last_transition: DateTime<Utc>,
 }
 
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-    match &event.payload {
-        WorkflowEvent::PhaseCompleted { phase, started_at } => {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+    match event {
+        WorkflowEvent::PhaseCompleted { phase, started_at, completed_at } => {
             // Record phase duration
-            let duration = event.occurred_at - started_at;
+            let duration = *completed_at - started_at;
             state.phase_durations.insert(*phase, duration);
 
             // Mark as completed
@@ -172,9 +174,10 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
 
             // Transition to next phase
             state.current_phase = phase.next_phase();
-            state.last_transition = event.occurred_at;
+            state.last_transition = *completed_at;
         }
     }
+    state
 }
 ```
 
@@ -211,26 +214,25 @@ struct PaymentState {
     recent_charges: Vec<ChargeAttempt>,
 }
 
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
     // Events from different streams update different parts of state
-    match (&event.stream_id, &event.payload) {
-        (stream_id, PaymentEvent::Order(order_event))
-            if stream_id == &self.order_id => {
+    // The event's stream_id() method identifies which stream it belongs to
+    match event {
+        PaymentEvent::Order(order_event) => {
             // Update order portion of state
             apply_order_event(&mut state.order, order_event);
         }
-        (stream_id, PaymentEvent::Customer(customer_event))
-            if stream_id == &self.customer_id => {
+        PaymentEvent::Customer(customer_event) => {
             // Update customer portion of state
             apply_customer_event(&mut state.customer, customer_event);
         }
-        (stream_id, PaymentEvent::PaymentMethod(pm_event))
-            if stream_id == &self.payment_method_id => {
+        PaymentEvent::PaymentMethod(pm_event) => {
             // Update payment method portion of state
             apply_payment_method_event(&mut state.payment_method, pm_event);
         }
-        _ => {} // Ignore events from other streams
+        _ => {} // Ignore unrelated events
     }
+    state
 }
 ```
 
@@ -253,9 +255,9 @@ struct AccountState {
     statistics: Option<AccountStatistics>,
 }
 
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
     // Always update core fields
-    match &event.payload {
+    match event {
         BankEvent::MoneyDeposited { amount, .. } => {
             state.balance += amount;
         }
@@ -264,13 +266,14 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
 
     // Only build history if requested
     if state.transaction_history.is_some() {
-        if let Some(tx) = event_to_transaction(&event) {
+        if let Some(tx) = event_to_transaction(event) {
             state.transaction_history
                 .as_mut()
                 .unwrap()
                 .push(tx);
         }
     }
+    state
 }
 
 // In handle(), decide what to load:
@@ -291,15 +294,12 @@ fn handle(&self, /* ... */) -> Result<NewEvents<Self::Event>, CommandError> {
 Skip irrelevant events during reconstruction:
 
 ```rust
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-    // Skip old events for performance
-    let cutoff_date = Utc::now() - Duration::days(90);
-    if event.occurred_at < cutoff_date {
-        return; // Skip events older than 90 days
-    }
-
-    match &event.payload {
-        // Process only recent events
+fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+    // Note: apply() should be deterministic. Time-based filtering
+    // is better handled at the read layer or via snapshots.
+    match event {
+        // Process events and return updated state
+        _ => state,
     }
 }
 ```
@@ -348,28 +348,28 @@ mod tests {
     #[test]
     fn test_balance_calculation() {
         let command = TransferMoney { /* ... */ };
-        let mut state = AccountState::default();
 
         // Create test events
         let events = vec![
-            create_event(BankEvent::AccountOpened {
+            BankEvent::AccountOpened {
                 initial_balance: 1000,
                 owner: "Alice".to_string(),
-            }),
-            create_event(BankEvent::MoneyDeposited {
+            },
+            BankEvent::MoneyDeposited {
                 amount: 500,
                 reference: "Salary".to_string(),
-            }),
-            create_event(BankEvent::MoneyWithdrawn {
+            },
+            BankEvent::MoneyWithdrawn {
                 amount: 200,
                 reference: "Rent".to_string(),
-            }),
+            },
         ];
 
-        // Apply events
-        for event in events {
-            command.apply(&mut state, &event);
-        }
+        // Apply events (owned state in, owned state out)
+        let state = events.iter().fold(
+            AccountState::default(),
+            |state, event| command.apply(state, event),
+        );
 
         // Verify final state
         assert_eq!(state.balance, 1300); // 1000 + 500 - 200
@@ -393,31 +393,30 @@ proptest! {
         withdrawals in prop::collection::vec(1..2000u64, 0..20),
     ) {
         let command = TransferMoney { /* ... */ };
-        let mut state = AccountState::default();
 
         // Open account
-        let open_event = create_event(BankEvent::AccountOpened {
+        let open_event = BankEvent::AccountOpened {
             initial_balance: 0,
             owner: "Test".to_string(),
-        });
-        command.apply(&mut state, &open_event);
+        };
+        let mut state = command.apply(AccountState::default(), &open_event);
 
         // Apply deposits
         for amount in deposits {
-            let event = create_event(BankEvent::MoneyDeposited {
+            let event = BankEvent::MoneyDeposited {
                 amount,
                 reference: "Deposit".to_string(),
-            });
-            command.apply(&mut state, &event);
+            };
+            state = command.apply(state, &event);
         }
 
         // Apply withdrawals
         for amount in withdrawals {
-            let event = create_event(BankEvent::MoneyWithdrawn {
+            let event = BankEvent::MoneyWithdrawn {
                 amount,
                 reference: "Withdrawal".to_string(),
-            });
-            command.apply(&mut state, &event);
+            };
+            state = command.apply(state, &event);
         }
 
         // Balance should never be negative due to saturating_sub
@@ -462,26 +461,28 @@ fn test_commutative_operations() {
 ❌ **Wrong**: Depending on external state
 
 ```rust
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-    match &event.payload {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+    match event {
         OrderEvent::Created { .. } => {
             // DON'T DO THIS - external dependency!
             state.tax_rate = fetch_current_tax_rate();
         }
     }
+    state
 }
 ```
 
 ✅ **Right**: Store everything in events
 
 ```rust
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-    match &event.payload {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+    match event {
         OrderEvent::Created { tax_rate, .. } => {
             // Tax rate was captured when event was created
             state.tax_rate = *tax_rate;
         }
     }
+    state
 }
 ```
 
@@ -490,13 +491,14 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
 ❌ **Wrong**: Using current time
 
 ```rust
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-    match &event.payload {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+    match event {
         OrderEvent::Created { .. } => {
             // DON'T DO THIS - non-deterministic!
-            state.age_in_days = (Utc::now() - event.occurred_at).num_days();
+            state.age_in_days = (Utc::now() - state.created_at).num_days();
         }
     }
+    state
 }
 ```
 
@@ -517,21 +519,22 @@ fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandEr
 ❌ **Wrong**: Keeping everything forever
 
 ```rust
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-    match &event.payload {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+    match event {
         LogEvent::Entry { message } => {
             // DON'T DO THIS - unbounded growth!
             state.all_log_entries.push(message.clone());
         }
     }
+    state
 }
 ```
 
 ✅ **Right**: Keep bounded state
 
 ```rust
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-    match &event.payload {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+    match event {
         LogEvent::Entry { message, level } => {
             // Keep only recent errors
             if *level == LogLevel::Error {
@@ -545,6 +548,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
             *state.entries_by_level.entry(*level).or_default() += 1;
         }
     }
+    state
 }
 ```
 
@@ -562,21 +566,21 @@ struct TemporalState {
     transitions: Vec<StateTransition>,
 }
 
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
     let old_value = state.current_value;
 
-    match &event.payload {
-        ValueEvent::Changed { new_value } => {
+    match event {
+        ValueEvent::Changed { new_value, changed_at } => {
             state.current_value = *new_value;
-            state.history.insert(event.occurred_at, *new_value);
+            state.history.insert(*changed_at, *new_value);
             state.transitions.push(StateTransition {
-                at: event.occurred_at,
+                at: *changed_at,
                 from: old_value,
                 to: *new_value,
-                event_id: event.id,
             });
         }
     }
+    state
 }
 
 impl TemporalState {
@@ -606,8 +610,8 @@ struct DerivedState {
     orders_by_status: HashMap<OrderStatus, usize>,
 }
 
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-    match &event.payload {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
+    match event {
         OrderEvent::Placed { order } => {
             // Update raw data
             state.orders.push(order.clone());
@@ -622,6 +626,7 @@ fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
                 .or_default() += 1;
         }
     }
+    state
 }
 ```
 

@@ -181,18 +181,21 @@ Attempting to persist an event for a stream not declared by `stream_declarations
 The `apply` method builds state by folding events:
 
 ```rust
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
-    match &event.payload {
-        BankEvent::AccountOpened { balance, .. } => {
-            state.exists = true;
-            state.balance = *balance;
-        }
-        BankEvent::MoneyDeposited { amount, .. } => {
-            state.balance += amount;
-        }
-        BankEvent::MoneyWithdrawn { amount, .. } => {
-            state.balance = state.balance.saturating_sub(*amount);
-        }
+fn apply(&self, state: Self::State, event: &Self::Event) -> Self::State {
+    match event {
+        BankEvent::AccountOpened { balance, .. } => Self::State {
+            exists: true,
+            balance: *balance,
+            ..state
+        },
+        BankEvent::MoneyDeposited { amount, .. } => Self::State {
+            balance: state.balance + amount,
+            ..state
+        },
+        BankEvent::MoneyWithdrawn { amount, .. } => Self::State {
+            balance: state.balance.saturating_sub(*amount),
+            ..state
+        },
     }
 }
 ```
@@ -324,15 +327,16 @@ struct PrecomputedState {
     daily_totals: HashMap<Date, u64>,  // Pre-aggregated
 }
 
-fn apply(&self, state: &mut Self::State, event: &StoredEvent<Self::Event>) {
+fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
     // Update pre-computed values incrementally
-    match &event.payload {
+    match event {
         BankEvent::MoneyTransferred { amount, date, .. } => {
             state.balance -= amount;
             *state.daily_totals.entry(*date).or_insert(0) += amount;
         }
         // ...
     }
+    state
 }
 ```
 
@@ -384,14 +388,14 @@ fn test_command_stream_declaration() {
 #[test]
 fn test_apply_events() {
     let cmd = TransferMoney { /* ... */ };
-    let mut state = AccountState::default();
+    let state = AccountState::default();
 
-    let event = create_test_event(BankEvent::AccountOpened {
+    let event = BankEvent::AccountOpened {
         balance: 1000,
         owner: "alice".to_string(),
-    });
+    };
 
-    cmd.apply(&mut state, &event);
+    let state = cmd.apply(state, &event);
 
     assert_eq!(state.balance, 1000);
     assert!(state.exists);

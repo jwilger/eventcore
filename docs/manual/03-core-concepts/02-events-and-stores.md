@@ -120,7 +120,6 @@ let metadata = EventMetadata::new()
 EventCore defines a trait that storage adapters implement:
 
 ```rust
-#[async_trait]
 pub trait EventStore: Send + Sync {
     type Event: Send + Sync;
     type Error: Error + Send + Sync;

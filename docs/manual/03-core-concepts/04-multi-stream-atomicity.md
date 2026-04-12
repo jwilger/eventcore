@@ -94,7 +94,7 @@ let mut state = OrderProcessingState::default();
 
 for (stream_id, data) in &stream_data {
     for event in &data.events {
-        command.apply(&mut state, event);
+        state = command.apply(state, event);
     }
 }
 ```
@@ -381,11 +381,11 @@ let options = ReadOptions::default()
 #[tokio::test]
 async fn test_multi_stream_atomicity() {
     let store = InMemoryEventStore::<BankEvent>::new();
-    let executor = CommandExecutor::new(store.clone());
+    let policy = RetryPolicy::new();
 
     // Setup initial state
-    create_account(&executor, "account-1", 1000).await;
-    create_account(&executor, "account-2", 500).await;
+    create_account(&store, "account-1", 1000).await;
+    create_account(&store, "account-2", 500).await;
 
     // Execute transfer
     let transfer = TransferMoney {
@@ -394,7 +394,7 @@ async fn test_multi_stream_atomicity() {
         amount: 300,
     };
 
-    executor.execute(&transfer).await.unwrap();
+    execute(&store, transfer, policy).await.unwrap();
 
     // Verify both accounts updated atomically
     let account1 = get_balance(&store, "account-1").await;
@@ -412,12 +412,12 @@ async fn test_multi_stream_atomicity() {
 #[tokio::test]
 async fn test_concurrent_transfers() {
     let store = InMemoryEventStore::<BankEvent>::new();
-    let executor = CommandExecutor::new(store);
+    let policy = RetryPolicy::new();
 
     // Setup accounts
-    create_account(&executor, "A", 1000).await;
-    create_account(&executor, "B", 1000).await;
-    create_account(&executor, "C", 1000).await;
+    create_account(&store, "A", 1000).await;
+    create_account(&store, "B", 1000).await;
+    create_account(&store, "C", 1000).await;
 
     // Concurrent transfers forming a cycle
     let transfer_ab = TransferMoney {
@@ -439,10 +439,11 @@ async fn test_concurrent_transfers() {
     };
 
     // Execute concurrently
+    let store_ref = &store;
     let (r1, r2, r3) = tokio::join!(
-        executor.execute(&transfer_ab),
-        executor.execute(&transfer_bc),
-        executor.execute(&transfer_ca),
+        execute(store_ref, transfer_ab, policy.clone()),
+        execute(store_ref, transfer_bc, policy.clone()),
+        execute(store_ref, transfer_ca, policy),
     );
 
     // All should succeed (with retries)

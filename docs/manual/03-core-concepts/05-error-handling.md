@@ -185,30 +185,16 @@ let amount = Money::try_new(-100)?; // Compile error - u64 can't be negative
 EventCore automatically retries on version conflicts:
 
 ```rust
-// This happens inside EventCore:
-pub async fn execute_with_retry<C: Command>(
-    command: &C,
-    max_retries: usize,
-) -> CommandResult<ExecutionResult> {
-    let mut attempts = 0;
+// EventCore handles retries via RetryPolicy:
+let policy = RetryPolicy::new()
+    .max_retries(MaxRetries::try_new(5).unwrap())
+    .backoff_strategy(BackoffStrategy::Exponential {
+        base_ms: DelayMilliseconds::new(100),
+    });
 
-    loop {
-        attempts += 1;
-
-        match execute_once(command).await {
-            Ok(result) => return Ok(result),
-
-            Err(CommandError::ConcurrencyConflict(_)) if attempts < max_retries => {
-                // Exponential backoff
-                let delay = Duration::from_millis(100 * 2_u64.pow(attempts as u32));
-                tokio::time::sleep(delay).await;
-                continue;
-            }
-
-            Err(e) => return Err(e),
-        }
-    }
-}
+// execute() automatically retries on version conflicts
+// using the configured policy
+execute(&store, command, policy).await?;
 ```
 
 ### Circuit Breaker Pattern
@@ -322,7 +308,7 @@ fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandEr
 Handle permanently failed commands:
 
 ```rust
-pub struct DeadLetterQueue<C: Command> {
+pub struct DeadLetterQueue<C> {
     failed_commands: Vec<FailedCommand<C>>,
 }
 
@@ -335,27 +321,31 @@ pub struct FailedCommand<C> {
     pub last_attempted: DateTime<Utc>,
 }
 
-impl<C: Command> CommandExecutor<C> {
-    pub async fn execute_with_dlq(
-        &self,
-        command: C,
-        dlq: &mut DeadLetterQueue<C>,
-    ) -> CommandResult<ExecutionResult> {
-        match self.execute_with_retry(&command, 5).await {
-            Ok(result) => Ok(result),
-            Err(e) if e.is_permanent() => {
-                // Add to DLQ for manual intervention
-                dlq.add(FailedCommand {
-                    command,
-                    error: e.clone(),
-                    attempts: 5,
-                    first_attempted: Utc::now(),
-                    last_attempted: Utc::now(),
-                });
-                Err(e)
-            }
-            Err(e) => Err(e),
+// Application-level DLQ wrapper around execute()
+pub async fn execute_with_dlq<C, S>(
+    store: &S,
+    command: C,
+    policy: RetryPolicy,
+    dlq: &mut DeadLetterQueue<C>,
+) -> Result<ExecutionResponse<C::Event>, CommandError>
+where
+    C: CommandLogic + CommandStreams + Clone,
+    S: EventStore<Event = C::Event>,
+{
+    match execute(store, command.clone(), policy).await {
+        Ok(result) => Ok(result),
+        Err(e) if e.is_permanent() => {
+            // Add to DLQ for manual intervention
+            dlq.add(FailedCommand {
+                command,
+                error: e.clone(),
+                attempts: 5,
+                first_attempted: Utc::now(),
+                last_attempted: Utc::now(),
+            });
+            Err(e)
         }
+        Err(e) => Err(e),
     }
 }
 ```
@@ -498,10 +488,10 @@ mod tests {
 #[tokio::test]
 async fn test_concurrent_modification_handling() {
     let store = InMemoryEventStore::new();
-    let executor = CommandExecutor::new(store);
+    let policy = RetryPolicy::new();
 
     // Setup
-    create_account(&executor, "account-1", 1000).await;
+    create_account(&store, "account-1", 1000).await;
 
     // Create two conflicting commands
     let withdraw1 = WithdrawMoney {
@@ -515,9 +505,10 @@ async fn test_concurrent_modification_handling() {
     };
 
     // Execute concurrently
+    let store_ref = &store;
     let (result1, result2) = tokio::join!(
-        executor.execute(&withdraw1),
-        executor.execute(&withdraw2)
+        execute(store_ref, withdraw1, policy.clone()),
+        execute(store_ref, withdraw2, policy)
     );
 
     // One should succeed, one should fail due to insufficient funds after retry
@@ -548,19 +539,20 @@ async fn test_resilience_under_chaos() {
         version_conflict_probability: 0.2, // 20% chance of conflicts
     });
 
-    let executor = CommandExecutor::new(chaos_store)
-        .with_max_retries(10);
+    let policy = RetryPolicy::new()
+        .max_retries(MaxRetries::try_new(10).unwrap());
 
     // Run many operations
     let mut handles = vec![];
     for i in 0..100 {
-        let executor = executor.clone();
+        let store = chaos_store.clone();
+        let policy = policy.clone();
         let handle = tokio::spawn(async move {
             let command = CreateTask {
                 title: format!("Task {}", i),
                 // ...
             };
-            executor.execute(&command).await
+            execute(&store, command, policy).await
         });
         handles.push(handle);
     }
@@ -596,30 +588,28 @@ lazy_static! {
     ).unwrap();
 }
 
-impl CommandExecutor {
-    async fn execute_with_metrics(&self, command: &impl Command) -> CommandResult<ExecutionResult> {
-        let start = Instant::now();
-        let mut retries = 0;
+// Application-level metrics wrapper around execute()
+async fn execute_with_metrics<C, S>(
+    store: &S,
+    command: C,
+    policy: RetryPolicy,
+) -> Result<ExecutionResponse<C::Event>, CommandError>
+where
+    C: CommandLogic + CommandStreams,
+    S: EventStore<Event = C::Event>,
+{
+    COMMAND_COUNTER.inc();
+    let timer = COMMAND_DURATION.start_timer();
 
-        loop {
-            match self.execute_once(command).await {
-                Ok(result) => {
-                    RETRY_COUNT.observe(retries as f64);
-                    return Ok(result);
-                }
-                Err(e) => {
-                    COMMAND_ERRORS.inc();
+    let result = execute(store, command, policy).await;
 
-                    if e.is_retriable() && retries < self.max_retries {
-                        retries += 1;
-                        continue;
-                    }
+    timer.observe_duration();
 
-                    return Err(e);
-                }
-            }
-        }
+    if result.is_err() {
+        COMMAND_ERRORS.inc();
     }
+
+    result
 }
 ```
 

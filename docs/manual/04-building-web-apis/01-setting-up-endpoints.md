@@ -42,14 +42,14 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use eventcore::prelude::*;
+use eventcore::{execute, RetryPolicy};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 // Application state shared across handlers
 #[derive(Clone)]
 struct AppState {
-    executor: CommandExecutor<PostgresEventStore>,
+    event_store: PostgresEventStore,
     projections: Arc<RwLock<ProjectionManager>>,
 }
 
@@ -60,11 +60,10 @@ async fn main() {
         "postgresql://localhost/eventcore"
     ).await.unwrap();
 
-    let executor = CommandExecutor::new(event_store);
     let projections = Arc::new(RwLock::new(ProjectionManager::new()));
 
     let state = AppState {
-        executor,
+        event_store,
         projections,
     };
 
@@ -121,8 +120,7 @@ async fn create_task(
     };
 
     // Execute command
-    state.executor
-        .execute(&command)
+    execute(&state.event_store, command, RetryPolicy::new())
         .await
         .map_err(|e| ApiError::from_command_error(e))?;
 
@@ -215,10 +213,10 @@ actix-rt = "2"
 
 ```rust
 use actix_web::{web, App, HttpServer, HttpResponse, Result};
-use eventcore::prelude::*;
+use eventcore::{execute, RetryPolicy};
 
 struct AppData {
-    executor: CommandExecutor<PostgresEventStore>,
+    event_store: PostgresEventStore,
 }
 
 #[actix_web::main]
@@ -228,7 +226,7 @@ async fn main() -> std::io::Result<()> {
     ).await.unwrap();
 
     let app_data = web::Data::new(AppData {
-        executor: CommandExecutor::new(event_store),
+        event_store,
     });
 
     HttpServer::new(move || {
@@ -274,10 +272,10 @@ rocket = { version = "0.5", features = ["json"] }
 
 ```rust
 use rocket::{State, serde::json::Json};
-use eventcore::prelude::*;
+use eventcore::{execute, RetryPolicy};
 
 struct AppState {
-    executor: CommandExecutor<PostgresEventStore>,
+    event_store: PostgresEventStore,
 }
 
 #[rocket::post("/tasks", data = "<request>")]
@@ -294,7 +292,7 @@ fn rocket() -> _ {
 
     rocket::build()
         .manage(AppState {
-            executor: CommandExecutor::new(event_store),
+            event_store,
         })
         .mount("/api/v1", rocket::routes![
             create_task,
@@ -491,7 +489,7 @@ async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
     let mut checks = HashMap::new();
 
     // Check event store
-    match state.executor.event_store().health_check().await {
+    match state.event_store.health_check().await {
         Ok(_) => checks.insert("event_store".to_string(), CheckResult::healthy()),
         Err(e) => checks.insert("event_store".to_string(), CheckResult::unhealthy(e)),
     };
@@ -601,7 +599,7 @@ mod tests {
     async fn create_test_app() -> Router {
         let event_store = InMemoryEventStore::new();
         let state = AppState {
-            executor: CommandExecutor::new(event_store),
+            event_store,
             projections: Arc::new(RwLock::new(ProjectionManager::new())),
         };
 
