@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "eventcore",
+    "eventcore-bench",
     "eventcore-examples",
     "eventcore-macros",
     "eventcore-memory",
@@ -51,3 +52,6 @@ warnings = "deny"
 
 [workspace.lints.clippy]
 allow_attributes = "deny"
+
+[profile.bench]
+debug = true

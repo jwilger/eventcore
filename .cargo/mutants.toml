@@ -7,6 +7,8 @@ exclude_re = [
     # Skip blanket impl for EventReader on references - trivial forwarding only
     "impl EventReader for &T.*::read_all",
     "impl EventReader for &T.*::read_after",
+    # Benchmark crate has no behavioral tests
+    "eventcore-bench/",
 ]
 
 # Note: To enforce 100% mutation coverage locally, run: cargo mutants --workspace --check
