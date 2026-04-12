@@ -202,8 +202,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventcore::StreamVersion;
     use eventcore_memory::InMemoryEventStore;
+    use eventcore_types::StreamVersion;
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]

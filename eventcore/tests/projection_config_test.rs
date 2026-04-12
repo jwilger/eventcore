@@ -24,12 +24,14 @@
 //! - Then projection stops after consecutive poll failures with ProjectionError
 
 use eventcore::{
-    BackoffMultiplier, CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore,
-    FailureContext, FailureStrategy, MaxConsecutiveFailures, MaxRetryAttempts, ProjectionConfig,
-    Projector, StreamId, StreamPosition, StreamVersion, StreamWrites, run_projection_with_config,
+    Event, FailureContext, FailureStrategy, ProjectionConfig, ProjectionError, Projector, StreamId,
+    StreamPosition, run_projection, run_projection_with_config,
 };
 use eventcore_memory::{InMemoryCheckpointStore, InMemoryEventStore, InMemoryProjectorCoordinator};
-use eventcore_types::ProjectorCoordinator;
+use eventcore_types::{
+    BackoffMultiplier, CheckpointStore, EventFilter, EventPage, EventReader, EventStore,
+    MaxConsecutiveFailures, MaxRetryAttempts, ProjectorCoordinator, StreamVersion, StreamWrites,
+};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::num::NonZeroU32;
@@ -519,5 +521,184 @@ async fn max_consecutive_poll_failures_stops_projection_via_config() {
         event_count.load(Ordering::SeqCst),
         0,
         "no events should have been processed since all reads failed"
+    );
+}
+
+// ============================================================================
+// Leadership coordination tests (migrated from projection_runner_test)
+// ============================================================================
+
+/// Integration test for ADR-029: run_projection returns LeadershipError when lock held
+///
+/// Scenario: run_projection returns LeadershipError when leadership cannot be acquired
+/// - Given a backend where leadership is already held by another process
+/// - When run_projection is called
+/// - Then it should return ProjectionError::LeadershipError
+#[tokio::test]
+async fn run_projection_returns_leadership_error_when_lock_already_held() {
+    // Given: A backend with leadership already held for the projector's subscription
+    let backend = TestBackend::new();
+
+    // Pre-acquire the lock to simulate another process holding leadership
+    let _held_lock = backend
+        .coordinator
+        .try_acquire("event-counter")
+        .await
+        .expect("should acquire lock");
+
+    // And: A projector that would use that same subscription name
+    let event_count = Arc::new(AtomicUsize::new(0));
+    let projector = EventCounterProjector::new(event_count);
+
+    // When: run_projection is called
+    let result = run_projection(projector, &backend).await;
+
+    // Then: It should return a LeadershipError
+    assert!(
+        matches!(result, Err(ProjectionError::LeadershipError(_))),
+        "expected LeadershipError, got {:?}",
+        result
+    );
+}
+
+/// Integration test for ADR-029: Leadership guard held during event processing
+///
+/// Scenario: Leadership is maintained while run_projection processes events
+/// - Given a backend with events to process
+/// - And a projector that blocks during apply() to allow lock verification
+/// - When run_projection is called and begins processing
+/// - Then another attempt to acquire leadership for the same projector should fail
+#[tokio::test]
+async fn run_projection_holds_leadership_during_event_processing() {
+    // Given: A shared backend that all tasks can access
+    let backend = Arc::new(TestBackend::new());
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    // And: Seed an event into the store
+    let event = CounterIncremented {
+        counter_id: counter_id.clone(),
+    };
+    let writes = StreamWrites::new()
+        .register_stream(counter_id.clone(), StreamVersion::new(0))
+        .expect("register stream")
+        .append(event)
+        .expect("append event");
+    let _ = backend
+        .event_store
+        .append_events(writes)
+        .await
+        .expect("append to succeed");
+
+    // And: Synchronization primitives for coordinating with the projector
+    let started = Arc::new(std::sync::Barrier::new(2));
+    let can_finish = Arc::new(std::sync::Barrier::new(2));
+    let projector = BlockingProjector::new(started.clone(), can_finish.clone());
+
+    // When: run_projection is called in a separate thread (blocking projector needs real thread)
+    let backend_clone = backend.clone();
+    let projection_handle = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(run_projection(projector, backend_clone.as_ref()))
+    });
+
+    // And: Wait for the projector to start processing (it's now holding the guard)
+    let _ = started.wait();
+
+    // Then: Another attempt to acquire leadership for the same projector should fail
+    let second_acquire_result = backend.coordinator.try_acquire("blocking-projector").await;
+    assert!(
+        second_acquire_result.is_err(),
+        "second attempt to acquire leadership should fail while first projection is processing"
+    );
+
+    // Cleanup: Allow the projector to finish and wait for the thread
+    let _ = can_finish.wait();
+    let _ = projection_handle.join();
+}
+
+/// Projector that blocks during apply() using barriers for synchronization.
+struct BlockingProjector {
+    started: Arc<std::sync::Barrier>,
+    can_finish: Arc<std::sync::Barrier>,
+}
+
+impl BlockingProjector {
+    fn new(started: Arc<std::sync::Barrier>, can_finish: Arc<std::sync::Barrier>) -> Self {
+        Self {
+            started,
+            can_finish,
+        }
+    }
+}
+
+impl Projector for BlockingProjector {
+    type Event = CounterIncremented;
+    type Error = std::convert::Infallible;
+    type Context = ();
+
+    fn apply(
+        &mut self,
+        _event: Self::Event,
+        _position: StreamPosition,
+        _ctx: &mut Self::Context,
+    ) -> Result<(), Self::Error> {
+        let _ = self.started.wait();
+        let _ = self.can_finish.wait();
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "blocking-projector"
+    }
+}
+
+/// Integration test for ADR-029: run_projection free function API
+///
+/// Scenario: Developer uses simplified run_projection API
+/// - Given a projector implementing the Projector trait
+/// - And a backend implementing EventReader + CheckpointStore + ProjectorCoordinator
+/// - When run_projection is called with the projector and backend
+/// - Then it should acquire leadership, process events, and manage checkpoints
+#[tokio::test]
+async fn run_projection_acquires_leadership_and_processes_events() {
+    // Given: A backend implementing all required traits
+    let backend = TestBackend::new();
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+
+    // And: Seed one event into the store
+    let event = CounterIncremented {
+        counter_id: counter_id.clone(),
+    };
+    let writes = StreamWrites::new()
+        .register_stream(counter_id.clone(), StreamVersion::new(0))
+        .expect("register stream")
+        .append(event)
+        .expect("append event");
+    let _ = backend
+        .event_store
+        .append_events(writes)
+        .await
+        .expect("append to succeed");
+
+    // And: A minimal projector that counts events
+    let event_count = Arc::new(AtomicUsize::new(0));
+    let projector = EventCounterProjector::new(event_count.clone());
+
+    // When: Developer calls run_projection with projector and backend
+    let result = tokio::time::timeout(Duration::from_secs(1), run_projection(projector, &backend))
+        .await
+        .expect("run_projection should complete within timeout");
+
+    // Then: run_projection succeeds
+    assert!(result.is_ok(), "run_projection should succeed");
+
+    // And: The event was processed
+    assert_eq!(
+        event_count.load(Ordering::SeqCst),
+        1,
+        "projector should have processed one event"
     );
 }

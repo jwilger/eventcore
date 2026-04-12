@@ -378,6 +378,7 @@ version = "0.6.0"
 dependencies = [
  "eventcore",
  "eventcore-memory",
+ "eventcore-types",
  "proc-macro2",
  "quote",
  "serde",

@@ -3,7 +3,7 @@
 //! This module provides the runtime infrastructure for event projection:
 //! - `ProjectionRunner`: Orchestrates projector execution with event polling
 
-use crate::{
+use eventcore_types::{
     BackoffMultiplier, CheckpointStore, Event, EventReader, MaxConsecutiveFailures,
     MaxRetryAttempts, Projector, StreamPosition,
 };
@@ -23,15 +23,15 @@ use std::time::Duration;
 ///     .with_poll_config(config);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PollConfig {
+pub(crate) struct PollConfig {
     /// Interval between polls when events are available.
-    pub poll_interval: Duration,
+    pub(crate) poll_interval: Duration,
     /// Additional backoff delay when no events are found.
-    pub empty_poll_backoff: Duration,
+    pub(crate) empty_poll_backoff: Duration,
     /// Additional backoff delay after a poll failure.
-    pub poll_failure_backoff: Duration,
+    pub(crate) poll_failure_backoff: Duration,
     /// Maximum consecutive poll failures before stopping.
-    pub max_consecutive_poll_failures: MaxConsecutiveFailures,
+    pub(crate) max_consecutive_poll_failures: MaxConsecutiveFailures,
 }
 
 impl Default for PollConfig {
@@ -69,15 +69,15 @@ impl Default for PollConfig {
 ///     .with_event_retry_config(retry_config);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
-pub struct EventRetryConfig {
+pub(crate) struct EventRetryConfig {
     /// Maximum number of retry attempts before escalating to Fatal.
-    pub max_retry_attempts: MaxRetryAttempts,
+    pub(crate) max_retry_attempts: MaxRetryAttempts,
     /// Initial delay between retry attempts.
-    pub retry_delay: Duration,
+    pub(crate) retry_delay: Duration,
     /// Multiplier for exponential backoff (e.g., 2.0 doubles delay each retry).
-    pub retry_backoff_multiplier: BackoffMultiplier,
+    pub(crate) retry_backoff_multiplier: BackoffMultiplier,
     /// Maximum delay between retry attempts (caps exponential growth).
-    pub max_retry_delay: Duration,
+    pub(crate) max_retry_delay: Duration,
 }
 
 impl Default for EventRetryConfig {
@@ -98,7 +98,7 @@ impl Default for EventRetryConfig {
 /// - `Batch`: Process all available events then stop
 /// - `Continuous`: Keep polling for new events until stopped
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PollMode {
+pub(crate) enum PollMode {
     /// Process available events once then stop.
     Batch,
     /// Continuously poll for new events until stopped.
@@ -138,7 +138,7 @@ pub enum PollMode {
 ///     .with_event_retry_config(retry_config);
 /// runner.run().await?;
 /// ```
-pub struct ProjectionRunner<E, R, P, C>
+pub(crate) struct ProjectionRunner<E, R, P, C>
 where
     E: Event,
     R: EventReader,
@@ -158,12 +158,12 @@ where
 ///
 /// Used as the default checkpoint store type when no checkpoint store is configured.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NoCheckpointStore;
+pub(crate) struct NoCheckpointStore;
 
 /// Error type for NoCheckpointStore (never actually returned).
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("no checkpoint store configured")]
-pub struct NoCheckpointError;
+pub(crate) struct NoCheckpointError;
 
 impl CheckpointStore for NoCheckpointStore {
     type Error = NoCheckpointError;
@@ -194,7 +194,7 @@ where
     /// # Returns
     ///
     /// A new `ProjectionRunner` ready to be started with `run()`.
-    pub fn new(projector: P, store: R) -> Self {
+    pub(crate) fn new(projector: P, store: R) -> Self {
         Self {
             projector,
             store,
@@ -220,7 +220,7 @@ where
     /// # Returns
     ///
     /// A new runner with the checkpoint store configured.
-    pub fn with_checkpoint_store<C: CheckpointStore>(
+    pub(crate) fn with_checkpoint_store<C: CheckpointStore>(
         self,
         checkpoint_store: C,
     ) -> ProjectionRunner<P::Event, R, P, C> {
@@ -263,7 +263,7 @@ where
     /// let runner = ProjectionRunner::new(projector, &store)
     ///     .with_poll_mode(PollMode::Continuous);
     /// ```
-    pub fn with_poll_mode(mut self, mode: PollMode) -> Self {
+    pub(crate) fn with_poll_mode(mut self, mode: PollMode) -> Self {
         self.poll_mode = mode;
         self
     }
@@ -288,7 +288,7 @@ where
     /// let runner = ProjectionRunner::new(projector, &store)
     ///     .with_poll_config(config);
     /// ```
-    pub fn with_poll_config(mut self, config: PollConfig) -> Self {
+    pub(crate) fn with_poll_config(mut self, config: PollConfig) -> Self {
         self.poll_config = config;
         self
     }
@@ -322,7 +322,7 @@ where
     /// let runner = ProjectionRunner::new(projector, &store)
     ///     .with_event_retry_config(retry_config);
     /// ```
-    pub fn with_event_retry_config(mut self, config: EventRetryConfig) -> Self {
+    pub(crate) fn with_event_retry_config(mut self, config: EventRetryConfig) -> Self {
         self.event_retry_config = config;
         self
     }
@@ -344,7 +344,7 @@ where
     /// Returns an error if:
     /// - Event store operations fail
     /// - The projector returns a fatal error
-    pub async fn run(self) -> Result<(), ProjectionError>
+    pub(crate) async fn run(self) -> Result<(), ProjectionError>
     where
         P::Error: std::fmt::Debug,
         R::Error: std::fmt::Display,
