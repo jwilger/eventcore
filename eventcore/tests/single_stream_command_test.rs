@@ -136,7 +136,7 @@ impl CommandLogic for Withdraw {
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         if !state.has_sufficient_funds(self.amount) {
             let requested: u16 = self.amount.into();
-            return Err(CommandError::BusinessRuleViolation(format!(
+            return Err(CommandError::from(format!(
                 "insufficient funds for account {}: balance={}, attempted_withdrawal={}",
                 self.account_id.as_ref(),
                 state.balance_cents(),
@@ -236,8 +236,8 @@ async fn insufficient_funds_returns_business_rule_violation() {
     };
 
     // Then: CommandError::BusinessRuleViolation is returned with actionable context
-    let message = match error {
-        CommandError::BusinessRuleViolation(message) => message,
+    let message = match &error {
+        CommandError::BusinessRuleViolation(err) => err.to_string(),
         _ => panic!("expected business rule violation error"),
     };
     assert!(

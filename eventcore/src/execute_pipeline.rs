@@ -499,9 +499,7 @@ mod tests {
             }
 
             fn handle(&self, _state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-                Err(CommandError::BusinessRuleViolation(
-                    "test-violation".to_string(),
-                ))
+                Err(CommandError::from("test-violation"))
             }
         }
 

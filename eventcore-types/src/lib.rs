@@ -24,7 +24,7 @@ pub use command::{
     CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamDeclarationsError,
     StreamResolver,
 };
-pub use errors::CommandError;
+pub use errors::{BusinessRuleMessage, CommandError};
 pub use projection::{
     AttemptNumber, BackoffMultiplier, BatchSize, CheckpointStore, DelayMilliseconds, EventFilter,
     EventPage, EventReader, FailureContext, FailureStrategy, MaxConsecutiveFailures, MaxRetries,

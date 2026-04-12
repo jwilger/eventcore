@@ -34,7 +34,7 @@ enum WithdrawError {
 
 impl From<WithdrawError> for CommandError {
     fn from(e: WithdrawError) -> Self {
-        CommandError::BusinessRuleViolation(e.to_string())
+        CommandError::BusinessRuleViolation(Box::new(e))
     }
 }
 
@@ -289,8 +289,8 @@ async fn insufficient_funds_returns_business_rule_violation() {
     };
 
     // Then: CommandError::BusinessRuleViolation is returned
-    let message = match error {
-        CommandError::BusinessRuleViolation(message) => message,
+    let message = match &error {
+        CommandError::BusinessRuleViolation(err) => err.to_string(),
         _ => panic!("expected BusinessRuleViolation error, got: {:?}", error),
     };
 

@@ -98,9 +98,7 @@ impl CommandLogic for ManualWithdrawCommand {
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         if state.available_funds < self.amount {
-            return Err(CommandError::BusinessRuleViolation(
-                "insufficient funds".to_string(),
-            ));
+            return Err(CommandError::from("insufficient funds"));
         }
 
         Ok(NewEvents::default())
@@ -147,8 +145,8 @@ fn developer_formats_error_messages_inside_command_logic() {
     assert!(
         matches!(
             result,
-            Err(CommandError::BusinessRuleViolation(message))
-                if message == "Insufficient: have 25, need 75"
+            Err(CommandError::BusinessRuleViolation(ref err))
+                if err.to_string() == "Insufficient: have 25, need 75"
         ),
         "require! should propagate formatted error messages for developers"
     );
@@ -180,11 +178,14 @@ fn developer_migrates_manual_validation_to_require_without_behavior_changes() {
     let macro_success = literal_command.handle(sufficient_state);
 
     // Then: migration keeps error messaging and success behavior identical.
-    let failure_behavior_identical = match (manual_fail, macro_fail) {
+    let failure_behavior_identical = match (&manual_fail, &macro_fail) {
         (
-            Err(CommandError::BusinessRuleViolation(manual_message)),
-            Err(CommandError::BusinessRuleViolation(macro_message)),
-        ) => manual_message == "insufficient funds" && macro_message == "insufficient funds",
+            Err(CommandError::BusinessRuleViolation(manual_err)),
+            Err(CommandError::BusinessRuleViolation(macro_err)),
+        ) => {
+            manual_err.to_string() == "insufficient funds"
+                && macro_err.to_string() == "insufficient funds"
+        }
         _ => false,
     };
     let success_behavior_identical = manual_success.is_ok() && macro_success.is_ok();
@@ -205,7 +206,7 @@ enum WithdrawError {
 
 impl From<WithdrawError> for CommandError {
     fn from(e: WithdrawError) -> Self {
-        CommandError::BusinessRuleViolation(e.to_string())
+        CommandError::BusinessRuleViolation(Box::new(e))
     }
 }
 
@@ -250,9 +251,10 @@ fn developer_uses_typed_error_with_require_macro() {
 
     // Then: the macro returns a business rule violation using the typed error's Display impl.
     match result {
-        Err(CommandError::BusinessRuleViolation(message)) => {
+        Err(CommandError::BusinessRuleViolation(ref err)) => {
             assert_eq!(
-                message, "insufficient-funds",
+                err.to_string(),
+                "insufficient-funds",
                 "require! should convert typed error via Into<CommandError>"
             );
         }
