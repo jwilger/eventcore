@@ -1,0 +1,47 @@
+[package]
+name = "eventcore-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Performance benchmarks for EventCore"
+publish = false
+
+# Standalone lint config: workspace lints are too strict for benchmark code.
+# Each bench binary compiles fixtures independently (dead_code false positives),
+# and Criterion's builder API returns unused &mut refs (unused_results noise).
+[lints.rust]
+unsafe_code = "forbid"
+dead_code = "allow"
+unreachable_pub = "allow"
+unused_results = "allow"
+
+[lints.clippy]
+allow_attributes = "deny"
+
+[[bench]]
+name = "execute"
+harness = false
+
+[[bench]]
+name = "store_operations"
+harness = false
+
+[[bench]]
+name = "serialization"
+harness = false
+
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
+eventcore = { path = "../eventcore", features = ["sqlite", "postgres"] }
+eventcore-macros = { path = "../eventcore-macros" }
+eventcore-memory = { path = "../eventcore-memory" }
+eventcore-postgres = { path = "../eventcore-postgres" }
+eventcore-sqlite = { path = "../eventcore-sqlite" }
+eventcore-types = { path = "../eventcore-types" }
+nutype = { version = "0.6.2", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+tokio = { version = "1.51.1", features = ["rt-multi-thread", "macros"] }
+uuid = { version = "1.23.0", features = ["v7"] }
