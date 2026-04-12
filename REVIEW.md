@@ -68,6 +68,7 @@ Every invariant below is a hard rule. Verify each applicable item on every commi
 - [ ] Command state fields are private with behavior exposed through methods.
 - [ ] Public API is clean: types, traits, and functions that consumers need are re-exported through `lib.rs`.
 - [ ] Borrows (`&T`) are used instead of `clone()` where the receiver does not need ownership.
+- [ ] Refactors that reduce API surface preserve internal functionality. Code made unreachable by visibility changes has a new reachability path before the old path is removed.
 
 ### 6. Design Principles
 
@@ -123,6 +124,7 @@ The review MUST reject commits that:
 13. Violate any architectural invariant without a complete EXCEPTION annotation
 14. Add dead code workarounds to suppress compiler warnings
 15. Extract inner values from domain types (`into_inner()`, `into()`) in domain logic or test assertions instead of using domain operations
+16. Remove functionality (delete types, methods, behaviors, or their tests) during a refactor without the removal being an explicit part of the task plan. Visibility reduction (`pub` to `pub(crate)`) is not removal, but deleting code that becomes "dead" after a visibility change is — the dead code signals the migration is incomplete, not that the code is unnecessary.
 
 ## What to Allow
 
