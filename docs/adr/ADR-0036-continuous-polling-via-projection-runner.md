@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-0037](ADR-0037-projection-config-via-free-function.md)
 
 ## Context
 
