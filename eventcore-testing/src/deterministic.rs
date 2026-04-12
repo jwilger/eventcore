@@ -4,7 +4,8 @@
 //! for testing retry logic and conflict handling.
 
 use eventcore_types::{
-    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamId, StreamWrites,
+    Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamId,
+    StreamVersion, StreamWrites,
 };
 
 /// A wrapper around an event store that injects a deterministic number
@@ -69,7 +70,11 @@ where
         );
 
         if remaining.is_ok() {
-            return Err(EventStoreError::VersionConflict);
+            return Err(EventStoreError::VersionConflict {
+                stream_id: StreamId::try_new("deterministic-conflict").expect("valid"),
+                expected: StreamVersion::new(0),
+                actual: StreamVersion::new(1),
+            });
         }
 
         self.inner.append_events(writes).await

@@ -3,12 +3,12 @@ use eventcore_types::{
     EventStoreError, ProjectorCoordinator, StreamId, StreamPosition, StreamPrefix, StreamVersion,
     StreamWrites,
 };
-use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("[{scenario}] {detail}")]
 pub struct ContractTestFailure {
     scenario: &'static str,
     detail: String,
@@ -41,14 +41,6 @@ impl ContractTestFailure {
         Self::new(scenario, detail)
     }
 }
-
-impl fmt::Display for ContractTestFailure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}", self.scenario, self.detail)
-    }
-}
-
-impl std::error::Error for ContractTestFailure {}
 
 pub type ContractTestResult = Result<(), ContractTestFailure>;
 
@@ -203,7 +195,7 @@ where
     let conflicting_writes = append_contract_event(SCENARIO, conflicting_writes, &stream_id)?;
 
     match store.append_events(conflicting_writes).await {
-        Err(EventStoreError::VersionConflict) => Ok(()),
+        Err(EventStoreError::VersionConflict { .. }) => Ok(()),
         Err(error) => Err(ContractTestFailure::store_error(
             SCENARIO,
             "append_events",
@@ -361,7 +353,7 @@ where
     let writes = append_contract_event(SCENARIO, writes, &right_stream)?;
 
     match store.append_events(writes).await {
-        Err(EventStoreError::VersionConflict) => {
+        Err(EventStoreError::VersionConflict { .. }) => {
             let left_reader = store
                 .read_stream::<ContractTestEvent>(left_stream.clone())
                 .await

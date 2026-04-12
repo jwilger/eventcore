@@ -147,7 +147,11 @@ impl EventStore for InMemoryEventStore {
                 .unwrap_or_else(|| StreamVersion::new(0));
 
             if current_version != *expected_version {
-                return Err(EventStoreError::VersionConflict);
+                return Err(EventStoreError::VersionConflict {
+                    stream_id: stream_id.clone(),
+                    expected: *expected_version,
+                    actual: current_version,
+                });
             }
         }
 
@@ -232,16 +236,18 @@ impl CheckpointStore for InMemoryEventStore {
     type Error = InMemoryCheckpointError;
 
     async fn load(&self, name: &str) -> Result<Option<StreamPosition>, Self::Error> {
-        let data = self.data.lock().map_err(|e| InMemoryCheckpointError {
-            message: format!("failed to acquire lock: {}", e),
-        })?;
+        let data = self
+            .data
+            .lock()
+            .map_err(|e| InMemoryCheckpointError::LockFailed(e.to_string()))?;
         Ok(data.checkpoints.get(name).copied())
     }
 
     async fn save(&self, name: &str, position: StreamPosition) -> Result<(), Self::Error> {
-        let mut data = self.data.lock().map_err(|e| InMemoryCheckpointError {
-            message: format!("failed to acquire lock: {}", e),
-        })?;
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| InMemoryCheckpointError::LockFailed(e.to_string()))?;
         let _ = data.checkpoints.insert(name.to_string(), position);
         Ok(())
     }
@@ -314,44 +320,24 @@ impl InMemoryCheckpointStore {
 ///
 /// Since the in-memory store uses an `RwLock`, the only possible error
 /// is a poisoned lock from a panic in another thread.
-#[derive(Debug, Clone)]
-pub struct InMemoryCheckpointError {
-    message: String,
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum InMemoryCheckpointError {
+    #[error("failed to acquire lock: {0}")]
+    LockFailed(String),
 }
-
-impl std::fmt::Display for InMemoryCheckpointError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl std::error::Error for InMemoryCheckpointError {}
 
 /// Error type for in-memory coordinator operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum InMemoryCoordinationError {
     /// Leadership is already held by another instance.
+    #[error(
+        "leadership not acquired for subscription '{subscription_name}': another instance holds the lock"
+    )]
     LeadershipNotAcquired { subscription_name: String },
     /// Lock was poisoned by a panic in another thread.
+    #[error("lock poisoned: {message}")]
     LockPoisoned { message: String },
 }
-
-impl std::fmt::Display for InMemoryCoordinationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LeadershipNotAcquired { subscription_name } => {
-                write!(
-                    f,
-                    "leadership not acquired for subscription: {}",
-                    subscription_name
-                )
-            }
-            Self::LockPoisoned { message } => write!(f, "lock poisoned: {}", message),
-        }
-    }
-}
-
-impl std::error::Error for InMemoryCoordinationError {}
 
 /// Guard that releases leadership when dropped.
 #[derive(Debug)]
@@ -427,9 +413,7 @@ impl CheckpointStore for InMemoryCheckpointStore {
         let guard = self
             .checkpoints
             .read()
-            .map_err(|e| InMemoryCheckpointError {
-                message: format!("failed to acquire read lock: {}", e),
-            })?;
+            .map_err(|e| InMemoryCheckpointError::LockFailed(e.to_string()))?;
         Ok(guard.get(name).copied())
     }
 
@@ -437,9 +421,7 @@ impl CheckpointStore for InMemoryCheckpointStore {
         let mut guard = self
             .checkpoints
             .write()
-            .map_err(|e| InMemoryCheckpointError {
-                message: format!("failed to acquire write lock: {}", e),
-            })?;
+            .map_err(|e| InMemoryCheckpointError::LockFailed(e.to_string()))?;
         let _ = guard.insert(name.to_string(), position);
         Ok(())
     }

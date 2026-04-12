@@ -273,7 +273,7 @@ impl<C: CommandLogic> ExecutePipeline<C> {
                                 .expect("attempts are 1-based"),
                         )))
                     }
-                    Err(EventStoreError::VersionConflict) => {
+                    Err(EventStoreError::VersionConflict { .. }) => {
                         if self.attempt < self.policy.max_retries.into() {
                             let delay_ms = crate::compute_retry_delay_ms(
                                 &self.policy.backoff_strategy,
@@ -444,7 +444,11 @@ mod tests {
         let _read = pipeline.step();
         let _append = pipeline.resume(StoreEffectResult::StreamRead(Ok(empty_reader())));
         let step = pipeline.resume(StoreEffectResult::EventsAppended(Err(
-            EventStoreError::VersionConflict,
+            EventStoreError::VersionConflict {
+                stream_id: StreamId::try_new("test-conflict").expect("valid stream id"),
+                expected: StreamVersion::new(0),
+                actual: StreamVersion::new(1),
+            },
         )));
 
         // Should yield Sleep for retry backoff

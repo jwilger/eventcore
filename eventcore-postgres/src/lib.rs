@@ -3,7 +3,7 @@ use std::time::Duration;
 use eventcore_types::{
     CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
     EventStreamReader, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
-    StreamWriteEntry, StreamWrites,
+    StreamVersion, StreamWriteEntry, StreamWrites,
 };
 use nutype::nutype;
 use serde_json::{Value, json};
@@ -359,7 +359,7 @@ fn map_sqlx_error(error: sqlx::Error, operation: Operation) -> EventStoreError {
                 error = %db_error,
                 "[postgres.version_conflict] optimistic concurrency check failed"
             );
-            return EventStoreError::VersionConflict;
+            return parse_version_conflict_from_db_error(db_error.message());
         }
     }
 
@@ -369,6 +369,53 @@ fn map_sqlx_error(error: sqlx::Error, operation: Operation) -> EventStoreError {
         "[postgres.database_error] database operation failed"
     );
     EventStoreError::StoreFailure { operation }
+}
+
+/// Parse version conflict details from the PostgreSQL trigger error message.
+///
+/// The trigger produces messages like:
+///   `version_conflict: stream "my-stream" expected version 0, actual 1`
+///
+/// If parsing fails, falls back to a VersionConflict with a sentinel stream_id
+/// indicating the details could not be extracted.
+fn parse_version_conflict_from_db_error(message: &str) -> EventStoreError {
+    // Pattern: version_conflict: stream "STREAM_ID" expected version EXPECTED, actual ACTUAL
+    if let Some(parsed) = try_parse_conflict_message(message) {
+        return parsed;
+    }
+
+    // Fallback: unique constraint violation (23505) or unparseable trigger message.
+    // Use a sentinel stream_id since we don't have the details.
+    let fallback_stream_id =
+        StreamId::try_new("unknown-conflict-stream").expect("static stream id is valid");
+    EventStoreError::VersionConflict {
+        stream_id: fallback_stream_id,
+        expected: StreamVersion::new(0),
+        actual: StreamVersion::new(0),
+    }
+}
+
+fn try_parse_conflict_message(message: &str) -> Option<EventStoreError> {
+    let rest = message.strip_prefix("version_conflict: stream \"")?;
+    let stream_end = rest.find('"')?;
+    let stream_id_str = &rest[..stream_end];
+    let after_stream = &rest[stream_end..];
+
+    let expected_str = after_stream
+        .strip_prefix("\" expected version ")?
+        .split(',')
+        .next()?;
+    let actual_str = after_stream.rsplit("actual ").next()?;
+
+    let expected = expected_str.trim().parse::<usize>().ok()?;
+    let actual = actual_str.trim().parse::<usize>().ok()?;
+    let stream_id = StreamId::try_new(stream_id_str).ok()?;
+
+    Some(EventStoreError::VersionConflict {
+        stream_id,
+        expected: StreamVersion::new(expected),
+        actual: StreamVersion::new(actual),
+    })
 }
 
 /// Error type for PostgresCheckpointStore operations.
@@ -487,8 +534,10 @@ impl CheckpointStore for PostgresCheckpointStore {
 #[derive(Debug, Error)]
 pub enum CoordinationError {
     /// Leadership could not be acquired (another instance holds the lock).
-    #[error("leadership not acquired: another instance holds the lock")]
-    LeadershipNotAcquired,
+    #[error(
+        "leadership not acquired for subscription '{subscription_name}': another instance holds the lock"
+    )]
+    LeadershipNotAcquired { subscription_name: String },
 
     /// Database operation failed.
     #[error("database operation failed: {0}")]
@@ -681,7 +730,9 @@ async fn try_acquire_advisory_lock(
         })
     } else {
         // Lock not acquired - connection will be returned to pool here
-        Err(CoordinationError::LeadershipNotAcquired)
+        Err(CoordinationError::LeadershipNotAcquired {
+            subscription_name: subscription_name.to_string(),
+        })
     }
 }
 

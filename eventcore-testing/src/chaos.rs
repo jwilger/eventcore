@@ -2,7 +2,7 @@ use std::{future::Future, sync::Mutex};
 
 use eventcore_types::{
     Event, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, Operation, StreamId,
-    StreamWrites,
+    StreamVersion, StreamWrites,
 };
 use nutype::nutype;
 use rand::{Rng, SeedableRng, random, rngs::StdRng};
@@ -172,7 +172,11 @@ where
 
         async move {
             if should_conflict {
-                return Err(EventStoreError::VersionConflict);
+                return Err(EventStoreError::VersionConflict {
+                    stream_id: StreamId::try_new("chaos-conflict").expect("valid"),
+                    expected: StreamVersion::new(0),
+                    actual: StreamVersion::new(1),
+                });
             }
 
             if should_fail {

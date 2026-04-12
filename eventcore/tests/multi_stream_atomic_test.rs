@@ -299,7 +299,11 @@ impl EventStore for ConflictInjectingStore {
                 .await
                 .expect("conflict injector should append audit event");
 
-            return Err(EventStoreError::VersionConflict);
+            return Err(EventStoreError::VersionConflict {
+                stream_id: self.conflict_stream.clone(),
+                expected: expected_version,
+                actual: expected_version.increment(),
+            });
         }
 
         self.inner.append_events(writes).await

@@ -595,7 +595,11 @@ mod tests {
                 &self,
                 _stream_id: StreamId,
             ) -> Result<EventStreamReader<E>, EventStoreError> {
-                Err(EventStoreError::VersionConflict)
+                Err(EventStoreError::VersionConflict {
+                    stream_id: _stream_id,
+                    expected: StreamVersion::new(0),
+                    actual: StreamVersion::new(1),
+                })
             }
 
             async fn append_events(
@@ -710,7 +714,11 @@ mod tests {
                 if !*injected {
                     // First call: inject conflict
                     *injected = true;
-                    Err(EventStoreError::VersionConflict)
+                    Err(EventStoreError::VersionConflict {
+                        stream_id: StreamId::try_new("conflict-test").expect("valid"),
+                        expected: StreamVersion::new(0),
+                        actual: StreamVersion::new(1),
+                    })
                 } else {
                     // Subsequent calls: succeed normally
                     self.inner.append_events(writes).await
@@ -862,7 +870,11 @@ mod tests {
             _writes: StreamWrites,
         ) -> Result<EventStreamSlice, EventStoreError> {
             // ALWAYS return VersionConflict - simulates persistent conflicts
-            Err(EventStoreError::VersionConflict)
+            Err(EventStoreError::VersionConflict {
+                stream_id: StreamId::try_new("always-conflict").expect("valid"),
+                expected: StreamVersion::new(0),
+                actual: StreamVersion::new(1),
+            })
         }
     }
 
@@ -902,7 +914,11 @@ mod tests {
             if *count < self.conflicts_to_inject {
                 // Inject conflict
                 *count += 1;
-                Err(EventStoreError::VersionConflict)
+                Err(EventStoreError::VersionConflict {
+                    stream_id: StreamId::try_new("conflict-n-times").expect("valid"),
+                    expected: StreamVersion::new(0),
+                    actual: StreamVersion::new(1),
+                })
             } else {
                 // Succeed normally
                 self.inner.append_events(writes).await

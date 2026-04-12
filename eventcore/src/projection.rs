@@ -161,16 +161,9 @@ where
 pub struct NoCheckpointStore;
 
 /// Error type for NoCheckpointStore (never actually returned).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("no checkpoint store configured")]
 pub struct NoCheckpointError;
-
-impl std::fmt::Display for NoCheckpointError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "no checkpoint store configured")
-    }
-}
-
-impl std::error::Error for NoCheckpointError {}
 
 impl CheckpointStore for NoCheckpointStore {
     type Error = NoCheckpointError;

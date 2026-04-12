@@ -17,6 +17,28 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 // =============================================================================
+// Error Types
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+enum WithdrawError {
+    #[error(
+        "insufficient funds for account {account_id}: balance={balance}, attempted_withdrawal={attempted}"
+    )]
+    InsufficientFunds {
+        account_id: String,
+        balance: u16,
+        attempted: u16,
+    },
+}
+
+impl From<WithdrawError> for CommandError {
+    fn from(e: WithdrawError) -> Self {
+        CommandError::BusinessRuleViolation(e.to_string())
+    }
+}
+
+// =============================================================================
 // Domain Types
 // =============================================================================
 
@@ -145,13 +167,12 @@ impl CommandLogic for Withdraw {
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
         if !state.has_sufficient_funds(self.amount) {
-            let requested: u16 = self.amount.into();
-            return Err(CommandError::BusinessRuleViolation(format!(
-                "insufficient funds for account {}: balance={}, attempted_withdrawal={}",
-                self.account_id.as_ref(),
-                state.balance_cents(),
-                requested
-            )));
+            return Err(WithdrawError::InsufficientFunds {
+                account_id: self.account_id.as_ref().to_string(),
+                balance: state.balance_cents(),
+                attempted: self.amount.into(),
+            }
+            .into());
         }
 
         Ok(vec![BankAccountEvent::MoneyWithdrawn {

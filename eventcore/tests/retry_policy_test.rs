@@ -1,7 +1,7 @@
 use eventcore::{
     CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
     EventStreamReader, EventStreamSlice, MetricsHook, NewEvents, RetryContext, RetryPolicy,
-    StreamDeclarations, StreamId, StreamWrites, execute,
+    StreamDeclarations, StreamId, StreamVersion, StreamWrites, execute,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
@@ -92,7 +92,11 @@ impl EventStore for ConflictNTimesStore {
         if *count < self.conflicts_to_inject {
             // Inject conflict
             *count += 1;
-            Err(EventStoreError::VersionConflict)
+            Err(EventStoreError::VersionConflict {
+                stream_id: StreamId::try_new("conflict-test").expect("valid"),
+                expected: StreamVersion::new(0),
+                actual: StreamVersion::new(1),
+            })
         } else {
             // Succeed normally
             self.inner.append_events(writes).await

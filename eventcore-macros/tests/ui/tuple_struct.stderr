@@ -1,4 +1,4 @@
-error: EventCore: #[derive(Command)] only supports structs with named fields
+error: EventCore: #[derive(Command)] requires named fields; tuple structs are not supported
  --> tests/ui/tuple_struct.rs:6:8
   |
 6 | struct TupleCommand(#[stream] StreamId);

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use eventcore_types::{
     CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
     EventStreamReader, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
-    StreamWriteEntry, StreamWrites,
+    StreamVersion, StreamWriteEntry, StreamWrites,
 };
 use rusqlite::OptionalExtension;
 use rusqlite::params;
@@ -48,8 +48,13 @@ pub enum SqliteCheckpointError {
 
 #[derive(Debug, Error)]
 pub enum SqliteCoordinationError {
-    #[error("leadership not acquired: another instance holds the lock")]
+    #[error(
+        "leadership not acquired for subscription '{subscription_name}': another instance holds the lock"
+    )]
     LeadershipNotAcquired { subscription_name: String },
+
+    #[error("coordination lock poisoned: {message}")]
+    LockPoisoned { message: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +197,11 @@ fn try_acquire_lock(
     locks: &std::sync::RwLock<HashSet<String>>,
     subscription_name: &str,
 ) -> Result<(), SqliteCoordinationError> {
-    let mut guard = locks.write().expect("coordination lock poisoned");
+    let mut guard = locks
+        .write()
+        .map_err(|e| SqliteCoordinationError::LockPoisoned {
+            message: e.to_string(),
+        })?;
     if guard.contains(subscription_name) {
         return Err(SqliteCoordinationError::LeadershipNotAcquired {
             subscription_name: subscription_name.to_string(),
@@ -374,7 +383,11 @@ impl EventStore for SqliteEventStore {
                         actual = current,
                         "[sqlite.version_conflict] optimistic concurrency check failed"
                     );
-                    return Err(EventStoreError::VersionConflict);
+                    return Err(EventStoreError::VersionConflict {
+                        stream_id: stream_id.clone(),
+                        expected: *expected_version,
+                        actual: StreamVersion::new(current),
+                    });
                 }
             }
 
@@ -394,9 +407,11 @@ impl EventStore for SqliteEventStore {
                 } = entry;
 
                 let event_id = Uuid::now_v7().to_string();
-                let version_counter = current_versions
-                    .get_mut(stream_id)
-                    .expect("stream must be registered");
+                let version_counter = current_versions.get_mut(stream_id).ok_or_else(|| {
+                    EventStoreError::UndeclaredStream {
+                        stream_id: stream_id.clone(),
+                    }
+                })?;
                 *version_counter += 1;
                 let version = *version_counter;
 
