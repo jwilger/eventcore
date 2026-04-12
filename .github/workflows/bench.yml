@@ -44,7 +44,7 @@ jobs:
       - name: Run benchmarks
         env:
           POSTGRES_PORT: 5432
-        run: cargo bench -p eventcore-bench -- --output-format bencher 2>&1 | tee output.txt
+        run: cargo bench -p eventcore-bench -- --output-format bencher | tee output.txt
 
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
