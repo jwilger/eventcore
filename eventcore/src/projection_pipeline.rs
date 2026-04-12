@@ -5,7 +5,7 @@ use eventcore_types::{
     RetryCount, StreamPosition,
 };
 
-use crate::projection::{EventRetryConfig, PollConfig, PollMode, ProjectionError};
+use crate::projection::{EventRetryConfig, PollConfig, ProjectionError};
 
 /// Effects yielded by the projection pipeline state machine.
 #[derive(Debug)]
@@ -54,7 +54,6 @@ pub(crate) enum ProjectionStep {
 pub(crate) struct ProjectionPipeline<P: Projector> {
     projector: P,
     has_checkpoint_store: bool,
-    poll_mode: PollMode,
     poll_config: PollConfig,
     event_retry_config: EventRetryConfig,
     phase: ProjectionPhase<P>,
@@ -113,11 +112,6 @@ enum ProjectionPhase<P: Projector> {
         ctx: P::Context,
         consecutive_failures: u32,
     },
-    /// Waiting for poll interval sleep.
-    AwaitingPollSleep {
-        last_checkpoint: Option<StreamPosition>,
-        ctx: P::Context,
-    },
     /// Terminal state.
     Done,
 }
@@ -131,7 +125,6 @@ where
     pub(crate) fn new(
         projector: P,
         has_checkpoint_store: bool,
-        poll_mode: PollMode,
         poll_config: PollConfig,
         event_retry_config: EventRetryConfig,
     ) -> Self {
@@ -148,7 +141,6 @@ where
         Self {
             projector,
             has_checkpoint_store,
-            poll_mode,
             poll_config,
             event_retry_config,
             phase,
@@ -196,23 +188,8 @@ where
                 mut ctx,
             } => {
                 if event_index >= events.len() {
-                    // All events processed — decide next action
-                    let found_events = !events.is_empty();
-                    if self.poll_mode == PollMode::Batch {
-                        return ProjectionStep::Done(Ok(()));
-                    }
-
-                    let delay = if found_events {
-                        self.poll_config.poll_interval
-                    } else {
-                        self.poll_config.empty_poll_backoff
-                    };
-
-                    self.phase = ProjectionPhase::AwaitingPollSleep {
-                        last_checkpoint,
-                        ctx,
-                    };
-                    return ProjectionStep::Yield(ProjectionEffect::Sleep { duration: delay });
+                    // All events processed — batch mode always completes
+                    return ProjectionStep::Done(Ok(()));
                 }
 
                 let (ref event, position) = events[event_index];
@@ -328,8 +305,7 @@ where
             | ProjectionPhase::AwaitingCheckpointSave { .. }
             | ProjectionPhase::AwaitingSkipCheckpointSave { .. }
             | ProjectionPhase::AwaitingEventRetrySleep { .. }
-            | ProjectionPhase::AwaitingPollFailureSleep { .. }
-            | ProjectionPhase::AwaitingPollSleep { .. } => {
+            | ProjectionPhase::AwaitingPollFailureSleep { .. } => {
                 panic!("step() called while awaiting a result — call resume() instead")
             }
 
@@ -498,19 +474,6 @@ where
                     last_checkpoint,
                     ctx,
                     consecutive_failures,
-                };
-                self.step()
-            }
-
-            ProjectionPhase::AwaitingPollSleep {
-                last_checkpoint,
-                ctx,
-            } => {
-                // Sleep done — poll again
-                self.phase = ProjectionPhase::PollEvents {
-                    last_checkpoint,
-                    ctx,
-                    consecutive_failures: 0,
                 };
                 self.step()
             }

@@ -7,10 +7,12 @@
 
 use eventcore::{
     AttemptNumber, CommandError, CommandLogic, CommandStreams, DelayMilliseconds, Event,
-    EventStore, EventStoreError, EventStreamReader, EventStreamSlice, MetricsHook, NewEvents,
-    RetryContext, RetryPolicy, StreamDeclarations, StreamId, StreamVersion, StreamWrites, execute,
+    MetricsHook, NewEvents, RetryContext, RetryPolicy, StreamDeclarations, StreamId, execute,
 };
 use eventcore_memory::InMemoryEventStore;
+use eventcore_types::{
+    EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamVersion, StreamWrites,
+};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};

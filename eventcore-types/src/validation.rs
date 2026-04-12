@@ -6,7 +6,7 @@
 /// Validation predicate: reject glob metacharacters.
 ///
 /// Per ADR-017, domain types like StreamId reserve glob metacharacters
-/// (*, ?, [, ]) to enable future pattern matching without ambiguity or
+/// (*, ?, \[, \]) to enable future pattern matching without ambiguity or
 /// escaping complexity.
 pub(crate) fn no_glob_metacharacters(s: &str) -> bool {
     !s.contains(['*', '?', '[', ']'])
@@ -20,7 +20,7 @@ mod tests {
     /// Property: Any string without glob metacharacters passes validation.
     ///
     /// This generates arbitrary strings that explicitly exclude the four
-    /// glob metacharacters (*, ?, [, ]) and verifies they all pass.
+    /// glob metacharacters (*, ?, \[, \]) and verifies they all pass.
     #[test]
     fn strings_without_metacharacters_pass_validation() {
         proptest!(|(s in "[^*?\\[\\]]*")| {
