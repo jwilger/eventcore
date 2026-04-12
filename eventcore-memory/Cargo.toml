@@ -6,6 +6,9 @@ description = "In-memory event store adapter for EventCore event sourcing librar
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 eventcore-types = { version = "0.6.0", path = "../eventcore-types" }
 serde_json = "1.0"

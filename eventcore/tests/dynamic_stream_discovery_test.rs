@@ -298,7 +298,8 @@ impl CheckoutState {
             | CheckoutEvent::PaymentMethodCaptured { payment_stream } => {
                 self.payment_stream_loaded = true;
                 self.payment_events_observed += 1;
-                self.discovered_payment_stream
+                let _ = self
+                    .discovered_payment_stream
                     .get_or_insert_with(|| payment_stream.clone());
             }
             CheckoutEvent::PaymentCaptured { .. } => {}
@@ -337,7 +338,8 @@ impl CommandLogic for ProcessPaymentCommand {
     }
 
     fn handle(&self, state: Self::State) -> Result<NewEvents<Self::Event>, CommandError> {
-        self.captured_state
+        let _ = self
+            .captured_state
             .lock()
             .expect("capture mutex should not be poisoned")
             .replace(state.clone());
@@ -429,7 +431,7 @@ async fn seed_order_payment_link<S: EventStore>(
         })
         .expect("order stream seeding should register and append event");
 
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("order stream seed write succeeds");
@@ -445,7 +447,7 @@ async fn seed_payment_method_history<S: EventStore>(store: &S, payment_stream: &
         })
         .expect("payment stream seeding should register and append event");
 
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("payment stream seed write succeeds");

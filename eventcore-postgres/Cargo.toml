@@ -6,6 +6,9 @@ description = "PostgreSQL event store adapter for EventCore event sourcing libra
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 eventcore-types = { version = "0.6.0", path = "../eventcore-types" }
 nutype = { version = "0.6.2", features = ["serde"] }

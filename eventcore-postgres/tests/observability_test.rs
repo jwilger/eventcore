@@ -1,14 +1,34 @@
 mod common;
 
-use common::{PostgresTestFixture, TestEvent, unique_stream_id};
-use eventcore_types::{EventStore, StreamVersion, StreamWrites};
+use eventcore_types::{Event, EventStore, StreamId, StreamVersion, StreamWrites};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TestEvent {
+    stream_id: StreamId,
+    payload: String,
+}
+
+impl Event for TestEvent {
+    fn stream_id(&self) -> &StreamId {
+        &self.stream_id
+    }
+
+    fn event_type_name() -> &'static str {
+        "TestEvent"
+    }
+}
+
+fn unique_stream_id(prefix: &str) -> StreamId {
+    StreamId::try_new(format!("{}-{}", prefix, Uuid::now_v7())).expect("valid stream id")
+}
 
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn developer_observes_postgres_tracing_spans() {
     // Given: A migrated Postgres store instrumented with tracing spans
-    let fixture = PostgresTestFixture::new().await;
-    let store = &fixture.store;
+    let store = common::create_test_store().await;
 
     // And: A stream with a single event write (unique per test run)
     let stream_id = unique_stream_id("observability-test");
@@ -22,7 +42,7 @@ async fn developer_observes_postgres_tracing_spans() {
         })
         .expect("should build stream writes for observability test");
 
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("postgres store should append events for observability test");

@@ -2,9 +2,30 @@ mod common;
 
 use std::sync::Arc;
 
-use common::{PostgresTestFixture, TestEvent, unique_stream_id};
-use eventcore_types::{EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
+use eventcore_types::{Event, EventStore, EventStoreError, StreamId, StreamVersion, StreamWrites};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Barrier;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TestEvent {
+    stream_id: StreamId,
+    payload: String,
+}
+
+impl Event for TestEvent {
+    fn stream_id(&self) -> &StreamId {
+        &self.stream_id
+    }
+
+    fn event_type_name() -> &'static str {
+        "TestEvent"
+    }
+}
+
+fn unique_stream_id(prefix: &str) -> StreamId {
+    StreamId::try_new(format!("{}-{}", prefix, Uuid::now_v7())).expect("valid stream id")
+}
 
 fn build_single_stream_writes(
     stream_id: &StreamId,
@@ -26,8 +47,7 @@ fn build_single_stream_writes(
 #[tracing_test::traced_test]
 async fn developer_retries_after_postgres_version_conflict() {
     // Given: A migrated Postgres store that enforces optimistic concurrency
-    let fixture = PostgresTestFixture::new().await;
-    let store = fixture.store.clone();
+    let store = common::create_test_store().await;
 
     // Unique stream ID per test run for parallel execution
     let stream_id = unique_stream_id("account/concurrency");
@@ -43,18 +63,18 @@ async fn developer_retries_after_postgres_version_conflict() {
     let first_store = store.clone();
     let first_barrier = barrier.clone();
     let first_handle = tokio::spawn(async move {
-        first_barrier.wait().await;
+        let _ = first_barrier.wait().await;
         first_store.append_events(first_writes).await
     });
 
     let second_store = store.clone();
     let second_barrier = barrier.clone();
     let second_handle = tokio::spawn(async move {
-        second_barrier.wait().await;
+        let _ = second_barrier.wait().await;
         second_store.append_events(second_writes).await
     });
 
-    barrier.wait().await;
+    let _ = barrier.wait().await;
 
     let first_result = first_handle
         .await

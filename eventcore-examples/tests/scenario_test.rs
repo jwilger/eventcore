@@ -143,7 +143,7 @@ async fn deposit_into_empty_account() {
     let account_id = StreamId::try_new(uuid::Uuid::now_v7().to_string()).expect("valid stream id");
     let amount = test_amount(100);
 
-    TestScenario::new()
+    let _ = TestScenario::new()
         .when(Deposit {
             account_id: account_id.clone(),
             amount,
@@ -163,7 +163,7 @@ async fn deposit_into_empty_account() {
 async fn withdraw_from_funded_account() {
     let account_id = StreamId::try_new(uuid::Uuid::now_v7().to_string()).expect("valid stream id");
 
-    TestScenario::new()
+    let _ = TestScenario::new()
         .given_events(
             account_id.clone(),
             vec![BankAccountEvent::MoneyDeposited {
@@ -198,7 +198,7 @@ async fn withdraw_from_funded_account() {
 async fn withdraw_with_insufficient_funds() {
     let account_id = StreamId::try_new(uuid::Uuid::now_v7().to_string()).expect("valid stream id");
 
-    TestScenario::new()
+    let _ = TestScenario::new()
         .given_events(
             account_id.clone(),
             vec![BankAccountEvent::MoneyDeposited {

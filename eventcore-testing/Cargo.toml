@@ -6,8 +6,8 @@ description = "Testing utilities and shared test suite for EventCore event store
 license.workspace = true
 repository.workspace = true
 
-[lints.rust]
-warnings = "deny"
+[lints]
+workspace = true
 
 [dependencies]
 eventcore = { version = "0.6.0", path = "../eventcore" }

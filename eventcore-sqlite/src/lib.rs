@@ -174,7 +174,7 @@ fn checkpoint_save(
     name: &str,
     position_str: &str,
 ) -> Result<(), SqliteCheckpointError> {
-    conn.execute(
+    let _ = conn.execute(
         "INSERT INTO eventcore_subscription_versions (subscription_name, last_position, updated_at)
          VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
          ON CONFLICT (subscription_name) DO UPDATE SET last_position = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
@@ -198,7 +198,7 @@ fn try_acquire_lock(
             subscription_name: subscription_name.to_string(),
         });
     }
-    guard.insert(subscription_name.to_string());
+    let _ = guard.insert(subscription_name.to_string());
     Ok(())
 }
 
@@ -407,7 +407,7 @@ impl EventStore for SqliteEventStore {
                     }
                 })?;
 
-                tx.execute(
+                let _ = tx.execute(
                     "INSERT INTO eventcore_events (event_id, stream_id, stream_version, event_type, event_data, metadata)
                      VALUES (?1, ?2, ?3, ?4, ?5, '{}')",
                     params![
@@ -463,36 +463,49 @@ impl EventReader for SqliteEventStore {
                     // UUIDv7 event IDs sort lexicographically in chronological order,
                     // so text comparison (`event_id > ?1`) preserves insertion order
                     // for cursor-based pagination.
-                    (Some(pfx), Some(after_id)) => (
-                        "SELECT event_id, event_data FROM eventcore_events WHERE event_id > ?1 AND stream_id LIKE ?2 ORDER BY event_id LIMIT ?3"
-                            .to_string(),
-                        vec![
-                            Box::new(after_id.clone()) as Box<dyn rusqlite::types::ToSql>,
+                    (Some(pfx), Some(after_id)) => {
+                        let params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+                            Box::new(after_id.clone()),
                             Box::new(format!("{}%", pfx)),
                             Box::new(limit),
-                        ],
-                    ),
-                    (Some(pfx), None) => (
-                        "SELECT event_id, event_data FROM eventcore_events WHERE stream_id LIKE ?1 ORDER BY event_id LIMIT ?2"
-                            .to_string(),
-                        vec![
-                            Box::new(format!("{}%", pfx)) as Box<dyn rusqlite::types::ToSql>,
+                        ];
+                        (
+                            "SELECT event_id, event_data FROM eventcore_events WHERE event_id > ?1 AND stream_id LIKE ?2 ORDER BY event_id LIMIT ?3"
+                                .to_string(),
+                            params,
+                        )
+                    }
+                    (Some(pfx), None) => {
+                        let params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+                            Box::new(format!("{}%", pfx)),
                             Box::new(limit),
-                        ],
-                    ),
-                    (None, Some(after_id)) => (
-                        "SELECT event_id, event_data FROM eventcore_events WHERE event_id > ?1 ORDER BY event_id LIMIT ?2"
-                            .to_string(),
-                        vec![
-                            Box::new(after_id.clone()) as Box<dyn rusqlite::types::ToSql>,
+                        ];
+                        (
+                            "SELECT event_id, event_data FROM eventcore_events WHERE stream_id LIKE ?1 ORDER BY event_id LIMIT ?2"
+                                .to_string(),
+                            params,
+                        )
+                    }
+                    (None, Some(after_id)) => {
+                        let params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+                            Box::new(after_id.clone()),
                             Box::new(limit),
-                        ],
-                    ),
-                    (None, None) => (
-                        "SELECT event_id, event_data FROM eventcore_events ORDER BY event_id LIMIT ?1"
-                            .to_string(),
-                        vec![Box::new(limit) as Box<dyn rusqlite::types::ToSql>],
-                    ),
+                        ];
+                        (
+                            "SELECT event_id, event_data FROM eventcore_events WHERE event_id > ?1 ORDER BY event_id LIMIT ?2"
+                                .to_string(),
+                            params,
+                        )
+                    }
+                    (None, None) => {
+                        let params: Vec<Box<dyn rusqlite::types::ToSql>> =
+                            vec![Box::new(limit)];
+                        (
+                            "SELECT event_id, event_data FROM eventcore_events ORDER BY event_id LIMIT ?1"
+                                .to_string(),
+                            params,
+                        )
+                    }
                 };
 
             let params_refs: Vec<&dyn rusqlite::types::ToSql> =
@@ -605,7 +618,7 @@ pub struct SqliteCoordinationGuard {
 impl Drop for SqliteCoordinationGuard {
     fn drop(&mut self) {
         if let Ok(mut guard) = self.locks.write() {
-            guard.remove(&self.subscription_name);
+            let _ = guard.remove(&self.subscription_name);
         } else {
             error!(
                 subscription = %self.subscription_name,

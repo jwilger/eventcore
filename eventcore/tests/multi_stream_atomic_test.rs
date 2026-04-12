@@ -255,7 +255,7 @@ impl EventStore for ConflictInjectingStore {
     async fn read_stream<E: Event>(
         &self,
         stream_id: StreamId,
-    ) -> Result<eventcore::EventStreamReader<E>, EventStoreError> {
+    ) -> Result<EventStreamReader<E>, EventStoreError> {
         self.inner.read_stream(stream_id).await
     }
 
@@ -293,7 +293,8 @@ impl EventStore for ConflictInjectingStore {
                 .and_then(|writes| writes.append(audit_event))
                 .expect("conflict injector should append audit event payload");
 
-            self.inner
+            let _ = self
+                .inner
                 .append_events(writes_to_inject)
                 .await
                 .expect("conflict injector should append audit event");
@@ -341,7 +342,7 @@ async fn seed_account_balance(
         amount,
     };
 
-    execute(store, command, RetryPolicy::new())
+    let _ = execute(store, command, RetryPolicy::new())
         .await
         .expect("initial balance seed to succeed");
 }

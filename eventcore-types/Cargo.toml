@@ -6,8 +6,8 @@ description = "Shared vocabulary types and traits for EventCore event sourcing l
 license.workspace = true
 repository.workspace = true
 
-[lints.rust]
-warnings = "deny"
+[lints]
+workspace = true
 
 [dependencies]
 nutype = { version = "0.6.2", features = ["serde"] }

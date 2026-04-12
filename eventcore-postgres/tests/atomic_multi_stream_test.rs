@@ -1,14 +1,36 @@
 mod common;
 
-use common::{PostgresTestFixture, TestEvent, unique_stream_id};
-use eventcore_types::{EventStore, StreamId, StreamVersion, StreamWrites};
+use eventcore_types::{Event, EventStore, StreamId, StreamVersion, StreamWrites};
+use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
+use uuid::Uuid;
+
+/// A simple test event for integration tests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TestEvent {
+    stream_id: StreamId,
+    payload: String,
+}
+
+impl Event for TestEvent {
+    fn stream_id(&self) -> &StreamId {
+        &self.stream_id
+    }
+
+    fn event_type_name() -> &'static str {
+        "TestEvent"
+    }
+}
+
+fn unique_stream_id(prefix: &str) -> StreamId {
+    StreamId::try_new(format!("{}-{}", prefix, Uuid::now_v7())).expect("valid stream id")
+}
 
 #[tokio::test]
 async fn developer_observes_atomic_multi_stream_commit() {
     // Given: a migrated Postgres store
-    let fixture = PostgresTestFixture::new().await;
-    let store = &fixture.store;
+    let store = common::create_test_store().await;
+    let connection_string = common::connection_string();
 
     // Use unique stream IDs for parallel test execution
     let source_stream = unique_stream_id("account/source");
@@ -17,18 +39,15 @@ async fn developer_observes_atomic_multi_stream_commit() {
     // And: a multi-stream write registering both accounts at version 0 with one event each
     let writes = build_multi_stream_writes(&source_stream, &destination_stream);
 
-    store
+    let _ = store
         .append_events(writes)
         .await
         .expect("postgres store should append multi-stream batch");
 
-    let committed_rows = count_rows_with_transaction(
-        &fixture.connection_string,
-        &source_stream,
-        &destination_stream,
-    )
-    .await
-    .expect("atomic verification should read committed rows inside a transaction");
+    let committed_rows =
+        count_rows_with_transaction(&connection_string, &source_stream, &destination_stream)
+            .await
+            .expect("atomic verification should read committed rows inside a transaction");
 
     assert!(
         committed_rows == 2,
