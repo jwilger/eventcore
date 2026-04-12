@@ -19,8 +19,8 @@ pub use eventcore_types::{
 
 // Re-export projection runtime components
 pub use projection::{
-    EventRetryConfig, NoCheckpointStore, PollConfig, PollMode, ProjectionError, ProjectionRunner,
-    run_projection,
+    EventRetryConfig, NoCheckpointStore, PollConfig, PollMode, ProjectionConfig, ProjectionError,
+    ProjectionRunner, run_projection, run_projection_with_config,
 };
 
 // Re-export Command derive macro when the "macros" feature is enabled (default)
