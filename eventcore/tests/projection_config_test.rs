@@ -200,3 +200,49 @@ async fn run_projection_with_config_with_default_config_processes_events() {
         "projector should have processed both events"
     );
 }
+
+#[tokio::test]
+async fn continuous_mode_processes_events_added_after_start() {
+    // Given: A backend with no events initially
+    // Leak the backend so it can be shared across the spawn boundary.
+    let backend: &'static TestBackend = Box::leak(Box::new(TestBackend::new()));
+
+    // And: A projector configured with ProjectionConfig::default().continuous()
+    let event_count = Arc::new(AtomicUsize::new(0));
+    let projector = EventCounterProjector::new(event_count.clone());
+    let config = ProjectionConfig::default().continuous();
+
+    // When: run_projection_with_config is spawned in a background task
+    let task =
+        tokio::spawn(async move { run_projection_with_config(projector, backend, config).await });
+
+    // And: An event is appended to the store after a short delay
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let counter_id = StreamId::try_new("counter-1").expect("valid stream id");
+    let event = CounterIncremented {
+        counter_id: counter_id.clone(),
+    };
+    let writes = StreamWrites::new()
+        .register_stream(counter_id.clone(), StreamVersion::new(0))
+        .expect("register stream")
+        .append(event)
+        .expect("append event");
+    let _ = backend
+        .event_store
+        .append_events(writes)
+        .await
+        .expect("append to succeed");
+
+    // Then: The projector processes the new event
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let count = event_count.load(Ordering::SeqCst);
+
+    // And: The projection can be cancelled
+    task.abort();
+    let _ = task.await;
+
+    assert_eq!(
+        count, 1,
+        "projector should have processed the event added after start"
+    );
+}
