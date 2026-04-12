@@ -7,21 +7,18 @@ mod execute_pipeline;
 mod projection;
 mod projection_pipeline;
 
-// Re-export all public types from eventcore-types so consumers only need to depend on `eventcore`
+// Re-export application-developer types from eventcore-types
 pub use eventcore_types::{
-    AttemptNumber, BackoffMultiplier, BatchSize, BusinessRuleMessage, CheckpointStore,
-    CommandError, CommandLogic, CommandStreams, DelayMilliseconds, Event, EventFilter, EventPage,
-    EventReader, EventStore, EventStoreError, EventStreamReader, EventStreamSlice, FailureContext,
-    FailureStrategy, MaxConsecutiveFailures, MaxRetries, MaxRetryAttempts, NewEvents, Operation,
-    Projector, RetryCount, StreamDeclarations, StreamDeclarationsError, StreamId, StreamPosition,
-    StreamPrefix, StreamResolver, StreamVersion, StreamWriteEntry, StreamWrites,
+    AttemptNumber, CommandError, CommandLogic, CommandStreams, DelayMilliseconds, Event,
+    FailureContext, FailureStrategy, NewEvents, Projector, StreamDeclarations, StreamId,
+    StreamPosition, StreamResolver,
 };
 
-// Re-export projection runtime components
-pub use projection::{
-    EventRetryConfig, NoCheckpointStore, PollConfig, PollMode, ProjectionError, ProjectionRunner,
-    run_projection,
-};
+// Internal imports for types used by this crate but not re-exported
+use eventcore_types::{EventStore, MaxRetries, StreamVersion, StreamWrites};
+
+// Re-export projection public API
+pub use projection::{ProjectionConfig, ProjectionError, run_projection};
 
 // Re-export Command derive macro when the "macros" feature is enabled (default)
 // Users can disable with: eventcore = { version = "...", default-features = false }
@@ -444,6 +441,7 @@ where
 mod tests {
     use super::*;
     use eventcore_memory::InMemoryEventStore;
+    use eventcore_types::{EventStoreError, EventStreamReader, EventStreamSlice};
     use serde::{Deserialize, Serialize};
     use std::sync::Arc;
 

@@ -1,8 +1,9 @@
 use eventcore::{
-    Command, CommandError, CommandLogic, CommandStreams, Event, EventStore, NewEvents, RetryPolicy,
+    Command, CommandError, CommandLogic, CommandStreams, Event, NewEvents, RetryPolicy,
     StreamDeclarations, StreamId, execute,
 };
 use eventcore_memory::InMemoryEventStore;
+use eventcore_types::EventStore;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

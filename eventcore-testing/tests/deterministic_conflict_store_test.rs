@@ -1,6 +1,7 @@
-use eventcore::{Event, EventStore, StreamId, StreamVersion, StreamWrites};
+use eventcore::{Event, StreamId};
 use eventcore_memory::InMemoryEventStore;
 use eventcore_testing::deterministic::DeterministicConflictStore;
+use eventcore_types::{EventStore, StreamVersion, StreamWrites};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

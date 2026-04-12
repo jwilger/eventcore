@@ -9,8 +9,8 @@
 //! ALL events are written or NONE are.
 
 use eventcore::{
-    Command, CommandError, CommandLogic, Event, NewEvents, RetryPolicy, StreamId, execute,
-    run_projection,
+    Command, CommandError, CommandLogic, Event, NewEvents, ProjectionConfig, RetryPolicy, StreamId,
+    execute, run_projection,
 };
 use eventcore_memory::InMemoryEventStore;
 use eventcore_testing::EventCollector;
@@ -215,7 +215,7 @@ async fn transfer_money_succeeds_when_funds_are_sufficient() {
     // And: Collect all events via projection
     let storage: Arc<Mutex<Vec<TransferEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let collector = EventCollector::new(storage.clone());
-    run_projection(collector, &store)
+    run_projection(collector, &store, ProjectionConfig::default())
         .await
         .expect("projection to complete");
 
@@ -337,7 +337,7 @@ async fn concurrent_transfers_produce_consistent_final_state() {
     // And: Collect all events via projection
     let storage: Arc<Mutex<Vec<TransferEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let collector = EventCollector::new(storage.clone());
-    run_projection(collector, store.as_ref())
+    run_projection(collector, store.as_ref(), ProjectionConfig::default())
         .await
         .expect("projection to complete");
 

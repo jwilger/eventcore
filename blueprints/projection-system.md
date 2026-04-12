@@ -56,23 +56,20 @@ run_projection(projector, backend)
 
 ### Configuration
 
-**PollConfig:**
+**ProjectionConfig** (public builder):
 
-- `poll_interval` — Delay between polls when events were found
-- `empty_poll_backoff` — Delay when no events found (longer to reduce load)
-- `max_consecutive_poll_failures` — Infrastructure failure threshold before giving up
+- `continuous()` — Switch to continuous polling mode (default: batch)
+- `poll_interval(Duration)` — Delay between polls when events were found
+- `empty_poll_backoff(Duration)` — Delay when no events found (longer to reduce load)
+- `poll_failure_backoff(Duration)` — Delay after poll failure
+- `max_consecutive_poll_failures(MaxConsecutiveFailures)` — Infrastructure failure threshold
+- `event_retry_max_attempts(MaxRetryAttempts)` — Per-event retry limit
+- `event_retry_delay(Duration)` — Initial backoff delay
+- `event_retry_backoff_multiplier(BackoffMultiplier)` — Exponential growth factor (≥ 1.0)
+- `event_retry_max_delay(Duration)` — Backoff cap
 
-**EventRetryConfig:**
-
-- `max_retry_attempts` — Per-event retry limit
-- `base_retry_delay` — Initial backoff delay
-- `backoff_multiplier` — Exponential growth factor (≥ 1.0)
-- `max_retry_delay` — Backoff cap
-
-**PollMode:**
-
-- `Batch` — Process once and exit (useful for testing and one-shot projections)
-- `Continuous` — Poll forever with configurable sleep intervals
+Internal types (`PollConfig`, `EventRetryConfig`, `PollMode`) are not exposed;
+`ProjectionConfig` translates builder settings into these internal types.
 
 ### Failure Strategy
 
@@ -86,35 +83,37 @@ run_projection(projector, backend)
 
 | File                                | Description                                                          |
 | ----------------------------------- | -------------------------------------------------------------------- |
-| `eventcore/src/projection.rs`       | ProjectionRunner, PollConfig, EventRetryConfig, run_projection()     |
+| `eventcore/src/projection.rs`       | ProjectionConfig, run_projection(), internal runner                  |
 | `eventcore-types/src/projection.rs` | Projector, EventReader, CheckpointStore, ProjectorCoordinator traits |
 
-## Public API (ADR-0036)
+## Public API (ADR-0037)
 
-Two paths for running projections:
-
-**Batch mode** — `run_projection()` convenience function:
+`run_projection()` is the single entry point for all projection modes:
 
 ```rust
-run_projection(my_projector, &backend).await?;
+use std::time::Duration;
+use eventcore::{ProjectionConfig, run_projection};
+
+// Batch mode with defaults
+run_projection(my_projector, &backend, ProjectionConfig::default()).await?;
+
+// Continuous mode with custom config
+let config = ProjectionConfig::default()
+    .continuous()
+    .poll_interval(Duration::from_millis(200))
+    .event_retry_max_attempts(MaxRetryAttempts::new(5));
+
+run_projection(my_projector, &backend, config).await?;
 ```
 
-Handles leadership acquisition, processes events once, exits. No
-configuration needed.
+`ProjectionConfig` exposes all poll and retry knobs via builder methods.
+Handles leadership acquisition automatically. Both batch and continuous
+modes are supported.
 
-**Continuous mode** — `ProjectionRunner` builder:
-
-```rust
-let _guard = backend.try_acquire(projector.name()).await?;
-ProjectionRunner::new(my_projector, &backend)
-    .with_poll_mode(PollMode::Continuous)
-    .with_poll_config(PollConfig::default())
-    .with_checkpoint_store(&backend)
-    .run()
-    .await?;
-```
-
-Caller manages leadership and configures polling behavior explicitly.
+**Internal implementation**: `ProjectionRunner` is a crate-internal struct
+used by `run_projection()`. It is not part of the public API.
+`PollConfig`, `PollMode`, `EventRetryConfig`, and `NoCheckpointStore` are
+also internal types.
 
 ## Related Systems
 
@@ -126,4 +125,6 @@ Caller manages leadership and configures polling behavior explicitly.
 - ADR-024: Projector configuration
 - ADR-028: Non-blocking advisory lock acquisition
 - ADR-029: Projection runner API simplification
+- ADR-030: Layered API surface for application vs. backend developers
 - ADR-036: Continuous polling via ProjectionRunner
+- ADR-037: ProjectionConfig via free function

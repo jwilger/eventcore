@@ -2,11 +2,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use eventcore::{
-    CommandError, CommandLogic, CommandStreams, Event, EventStore, EventStoreError,
-    EventStreamReader, EventStreamSlice, NewEvents, RetryPolicy, StreamDeclarations, StreamId,
-    StreamResolver, StreamVersion, StreamWrites, execute,
+    CommandError, CommandLogic, CommandStreams, Event, NewEvents, RetryPolicy, StreamDeclarations,
+    StreamId, StreamResolver, execute,
 };
 use eventcore_memory::InMemoryEventStore;
+use eventcore_types::{
+    EventStore, EventStoreError, EventStreamReader, EventStreamSlice, StreamVersion, StreamWrites,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 
