@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/jwilger/eventcore/compare/eventcore-types-v0.6.0...eventcore-types-v0.7.0) - 2026-04-13
+
+### Bug Fixes
+
+- add Send+Sync bounds to CommandLogic for Send futures ([#332](https://github.com/jwilger/eventcore/pull/332))
+- improve error message consistency, context, and safety across all crates ([#352](https://github.com/jwilger/eventcore/pull/352))
+
+### Features
+
+- enhance require! macro to accept typed error values ([#335](https://github.com/jwilger/eventcore/pull/335))
+- add required event_type_name() to Event trait for stable storage ([#344](https://github.com/jwilger/eventcore/pull/344))
+
+### Miscellaneous Tasks
+
+- consolidate workspace lints and enforce strict lint policy ([#351](https://github.com/jwilger/eventcore/pull/351))
+
+### Refactoring
+
+- replace into_inner() with into() for nutype domain types ([#334](https://github.com/jwilger/eventcore/pull/334))
+
 ## [0.6.0](https://github.com/jwilger/eventcore/compare/eventcore-types-v0.5.1...eventcore-types-v0.6.0) - 2026-03-15
 
 ### Bug Fixes
