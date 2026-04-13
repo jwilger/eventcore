@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/jwilger/eventcore/compare/eventcore-sqlite-v0.6.0...eventcore-sqlite-v0.7.0) - 2026-04-13
+
+### Bug Fixes
+
+- apply PRAGMA key before WAL mode in SQLite encrypted stores ([#333](https://github.com/jwilger/eventcore/pull/333))
+- improve error message consistency, context, and safety across all crates ([#352](https://github.com/jwilger/eventcore/pull/352))
+
+### Miscellaneous Tasks
+
+- consolidate workspace lints and enforce strict lint policy ([#351](https://github.com/jwilger/eventcore/pull/351))
+
 ## [0.6.0](https://github.com/jwilger/eventcore/compare/eventcore-sqlite-v0.5.1...eventcore-sqlite-v0.6.0) - 2026-03-15
 
 ### Bug Fixes

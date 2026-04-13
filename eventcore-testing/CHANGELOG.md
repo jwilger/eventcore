@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/jwilger/eventcore/compare/eventcore-testing-v0.6.0...eventcore-testing-v0.7.0) - 2026-04-13
+
+### Bug Fixes
+
+- make InMemoryEventStore error on read_stream type mismatch ([#342](https://github.com/jwilger/eventcore/pull/342))
+- improve error message consistency, context, and safety across all crates ([#352](https://github.com/jwilger/eventcore/pull/352))
+
+### Features
+
+- add required event_type_name() to Event trait for stable storage ([#344](https://github.com/jwilger/eventcore/pull/344))
+- add TestScenario GWT testing helpers to eventcore-testing ([#346](https://github.com/jwilger/eventcore/pull/346))
+
+### Miscellaneous Tasks
+
+- consolidate workspace lints and enforce strict lint policy ([#351](https://github.com/jwilger/eventcore/pull/351))
+
+### Refactoring
+
+- expose projection config via free function API, then reduce public surface ([#357](https://github.com/jwilger/eventcore/pull/357))
+
 ## [0.6.0](https://github.com/jwilger/eventcore/compare/eventcore-testing-v0.5.1...eventcore-testing-v0.6.0) - 2026-03-15
 
 ### Bug Fixes
