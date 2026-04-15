@@ -469,6 +469,10 @@ impl EventReader for SqliteEventStore {
             page.after_position().map(|p| p.into_inner().to_string());
         let limit = page.limit().into_inner() as i64;
         let prefix = filter.stream_prefix().map(|p| p.as_ref().to_string());
+        let type_filter = filter
+            .event_type()
+            .unwrap_or_else(|| E::event_type_name())
+            .to_string();
 
         let rows = tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
@@ -482,10 +486,11 @@ impl EventReader for SqliteEventStore {
                         let params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
                             Box::new(after_id.clone()),
                             Box::new(format!("{}%", pfx)),
+                            Box::new(type_filter.clone()),
                             Box::new(limit),
                         ];
                         (
-                            "SELECT event_id, event_data FROM eventcore_events WHERE event_id > ?1 AND stream_id LIKE ?2 ORDER BY event_id LIMIT ?3"
+                            "SELECT event_id, event_data FROM eventcore_events WHERE event_id > ?1 AND stream_id LIKE ?2 AND event_type = ?3 ORDER BY event_id LIMIT ?4"
                                 .to_string(),
                             params,
                         )
@@ -493,10 +498,11 @@ impl EventReader for SqliteEventStore {
                     (Some(pfx), None) => {
                         let params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
                             Box::new(format!("{}%", pfx)),
+                            Box::new(type_filter.clone()),
                             Box::new(limit),
                         ];
                         (
-                            "SELECT event_id, event_data FROM eventcore_events WHERE stream_id LIKE ?1 ORDER BY event_id LIMIT ?2"
+                            "SELECT event_id, event_data FROM eventcore_events WHERE stream_id LIKE ?1 AND event_type = ?2 ORDER BY event_id LIMIT ?3"
                                 .to_string(),
                             params,
                         )
@@ -504,19 +510,20 @@ impl EventReader for SqliteEventStore {
                     (None, Some(after_id)) => {
                         let params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
                             Box::new(after_id.clone()),
+                            Box::new(type_filter.clone()),
                             Box::new(limit),
                         ];
                         (
-                            "SELECT event_id, event_data FROM eventcore_events WHERE event_id > ?1 ORDER BY event_id LIMIT ?2"
+                            "SELECT event_id, event_data FROM eventcore_events WHERE event_id > ?1 AND event_type = ?2 ORDER BY event_id LIMIT ?3"
                                 .to_string(),
                             params,
                         )
                     }
                     (None, None) => {
                         let params: Vec<Box<dyn rusqlite::types::ToSql>> =
-                            vec![Box::new(limit)];
+                            vec![Box::new(type_filter.clone()), Box::new(limit)];
                         (
-                            "SELECT event_id, event_data FROM eventcore_events ORDER BY event_id LIMIT ?1"
+                            "SELECT event_id, event_data FROM eventcore_events WHERE event_type = ?1 ORDER BY event_id LIMIT ?2"
                                 .to_string(),
                             params,
                         )

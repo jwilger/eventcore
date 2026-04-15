@@ -277,6 +277,11 @@ impl EventReader for PostgresEventStore {
         let after_event_id: Option<Uuid> = page.after_position().map(|p| p.into_inner());
         let limit: i64 = page.limit().into_inner() as i64;
 
+        // Filter by event_type in SQL so non-matching types don't consume
+        // batch slots (fixes issue #372). Use explicit filter if set,
+        // otherwise derive from E::event_type_name().
+        let type_filter = filter.event_type().unwrap_or_else(|| E::event_type_name());
+
         let rows = if let Some(prefix) = filter.stream_prefix() {
             let prefix_str = prefix.as_ref();
 
@@ -284,12 +289,14 @@ impl EventReader for PostgresEventStore {
                 let query_str = r#"
                     SELECT event_id, event_data, stream_id
                     FROM eventcore_events
-                    WHERE event_id > $1
-                      AND stream_id LIKE $2 || '%'
+                    WHERE event_type = $1
+                      AND event_id > $2
+                      AND stream_id LIKE $3 || '%'
                     ORDER BY event_id
-                    LIMIT $3
+                    LIMIT $4
                 "#;
                 query(query_str)
+                    .bind(type_filter)
                     .bind(after_id)
                     .bind(prefix_str)
                     .bind(limit)
@@ -299,11 +306,13 @@ impl EventReader for PostgresEventStore {
                 let query_str = r#"
                     SELECT event_id, event_data, stream_id
                     FROM eventcore_events
-                    WHERE stream_id LIKE $1 || '%'
+                    WHERE event_type = $1
+                      AND stream_id LIKE $2 || '%'
                     ORDER BY event_id
-                    LIMIT $2
+                    LIMIT $3
                 "#;
                 query(query_str)
+                    .bind(type_filter)
                     .bind(prefix_str)
                     .bind(limit)
                     .fetch_all(&self.pool)
@@ -313,11 +322,13 @@ impl EventReader for PostgresEventStore {
             let query_str = r#"
                 SELECT event_id, event_data, stream_id
                 FROM eventcore_events
-                WHERE event_id > $1
+                WHERE event_type = $1
+                  AND event_id > $2
                 ORDER BY event_id
-                LIMIT $2
+                LIMIT $3
             "#;
             query(query_str)
+                .bind(type_filter)
                 .bind(after_id)
                 .bind(limit)
                 .fetch_all(&self.pool)
@@ -326,10 +337,15 @@ impl EventReader for PostgresEventStore {
             let query_str = r#"
                 SELECT event_id, event_data, stream_id
                 FROM eventcore_events
+                WHERE event_type = $1
                 ORDER BY event_id
-                LIMIT $1
+                LIMIT $2
             "#;
-            query(query_str).bind(limit).fetch_all(&self.pool).await
+            query(query_str)
+                .bind(type_filter)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
         }
         .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
 
