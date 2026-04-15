@@ -271,6 +271,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let report = scenarios::transfers::run(&config, 10).await;
             print!("{report}");
 
+            // Projection needs a clean store to validate correctness
+            // (previous scenarios pollute the database with unrelated events)
+            if matches!(backend, BackendChoice::Postgres) {
+                backends::clean_postgres_database().await?;
+            }
             let proj_config = StressConfig {
                 iterations: Some(100),
                 ..config.clone()
