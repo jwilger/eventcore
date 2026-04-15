@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.7.0...eventcore-postgres-v0.7.1) - 2026-04-15
+
+### Bug Fixes
+
+- filter read_events by event_type to prevent projection stalls ([#373](https://github.com/jwilger/eventcore/pull/373))
+
+### Features
+
+- add load-testing/stress-testing suite ([#370](https://github.com/jwilger/eventcore/pull/370))
+
 ## [0.7.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v0.6.0...eventcore-postgres-v0.7.0) - 2026-04-13
 
 ### Bug Fixes
