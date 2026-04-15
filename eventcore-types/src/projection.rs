@@ -513,6 +513,7 @@ impl EventPage {
 #[derive(Debug, Clone)]
 pub struct EventFilter {
     stream_prefix: Option<StreamPrefix>,
+    event_type: Option<String>,
 }
 
 impl EventFilter {
@@ -523,6 +524,7 @@ impl EventFilter {
     pub fn all() -> Self {
         Self {
             stream_prefix: None,
+            event_type: None,
         }
     }
 
@@ -541,7 +543,19 @@ impl EventFilter {
     pub fn prefix(prefix: StreamPrefix) -> Self {
         Self {
             stream_prefix: Some(prefix),
+            event_type: None,
         }
+    }
+
+    /// Restrict this filter to events of the given type.
+    ///
+    /// When set, only events whose stored `event_type` matches the given
+    /// name will be returned by `read_events`. This filtering happens at
+    /// the query level (before pagination limits), so non-matching events
+    /// do not consume batch slots.
+    pub fn with_event_type(mut self, event_type: String) -> Self {
+        self.event_type = Some(event_type);
+        self
     }
 
     /// Get the stream prefix filter, if any.
@@ -550,6 +564,14 @@ impl EventFilter {
     /// if this filter matches all streams.
     pub fn stream_prefix(&self) -> Option<&StreamPrefix> {
         self.stream_prefix.as_ref()
+    }
+
+    /// Get the event type filter, if any.
+    ///
+    /// Returns `Some(&str)` if an event type filter is set, or `None`
+    /// if this filter matches all event types.
+    pub fn event_type(&self) -> Option<&str> {
+        self.event_type.as_deref()
     }
 }
 
