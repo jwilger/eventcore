@@ -5,7 +5,7 @@ use eventcore_types::{
     StreamVersion, StreamWrites,
 };
 use nutype::nutype;
-use rand::{Rng, SeedableRng, random, rngs::StdRng};
+use rand::{RngExt, SeedableRng, random, rngs::StdRng};
 
 /// Probability of injecting read/write failures for chaos testing.
 ///

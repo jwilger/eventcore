@@ -1,0 +1,42 @@
+[package]
+name = "eventcore-stress"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Load and stress testing tool for EventCore backends"
+publish = false
+
+# Standalone lint config: workspace lints are too strict for stress test code.
+# Binary crate compiles domain types that may appear dead from the binary's
+# perspective, and stress test runners intentionally discard some results.
+[lints.rust]
+unsafe_code = "forbid"
+dead_code = "allow"
+unreachable_pub = "allow"
+unused_results = "allow"
+
+[lints.clippy]
+allow_attributes = "deny"
+
+[[bin]]
+name = "eventcore-stress"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+eventcore = { path = "../eventcore", features = ["sqlite", "postgres"] }
+eventcore-macros = { path = "../eventcore-macros" }
+eventcore-memory = { path = "../eventcore-memory" }
+eventcore-postgres = { path = "../eventcore-postgres" }
+eventcore-sqlite = { path = "../eventcore-sqlite" }
+eventcore-types = { path = "../eventcore-types" }
+hdrhistogram = "7"
+nutype = { version = "0.6.2", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+uuid = { version = "1", features = ["v7"] }
+rand = "0.10"
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres"] }
