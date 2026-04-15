@@ -9,6 +9,8 @@ exclude_re = [
     "impl EventReader for &T.*::read_after",
     # Benchmark crate has no behavioral tests
     "eventcore-bench/",
+    # Stress test binary has no behavioral tests
+    "eventcore-stress/",
 ]
 
 # Note: To enforce 100% mutation coverage locally, run: cargo mutants --workspace --check
