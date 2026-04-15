@@ -154,6 +154,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 iterations,
             };
             backends::print_backend_info(&backend);
+            if matches!(backend, BackendChoice::Postgres) {
+                backends::clean_postgres_database().await?;
+            }
             let report = scenarios::contention::run(&config).await;
             print!("{report}");
         }
@@ -172,6 +175,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 iterations,
             };
             backends::print_backend_info(&backend);
+            if matches!(backend, BackendChoice::Postgres) {
+                backends::clean_postgres_database().await?;
+            }
             let report = scenarios::transfers::run(&config, accounts).await;
             print!("{report}");
         }
@@ -189,6 +195,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 iterations,
             };
             backends::print_backend_info(&backend);
+            if matches!(backend, BackendChoice::Postgres) {
+                backends::clean_postgres_database().await?;
+            }
             let report = scenarios::throughput::run(&config).await;
             print!("{report}");
         }
@@ -206,6 +215,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 iterations,
             };
             backends::print_backend_info(&backend);
+            if matches!(backend, BackendChoice::Postgres) {
+                backends::clean_postgres_database().await?;
+            }
             let report = scenarios::projection::run(&config).await;
             print!("{report}");
         }
@@ -223,6 +235,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 iterations,
             };
             backends::print_backend_info(&backend);
+            if matches!(backend, BackendChoice::Postgres) {
+                backends::clean_postgres_database().await?;
+            }
             if let Some(report) = scenarios::pool_saturation::run(&config).await {
                 print!("{report}");
             }
@@ -240,6 +255,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 iterations: None,
             };
             backends::print_backend_info(&backend);
+
+            if matches!(backend, BackendChoice::Postgres) {
+                backends::clean_postgres_database().await?;
+            }
 
             println!("\n--- Running all scenarios ---\n");
 
