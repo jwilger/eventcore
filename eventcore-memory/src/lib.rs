@@ -28,6 +28,8 @@ struct GlobalLogEntry {
     event_id: Uuid,
     /// Stream identifier, extracted at write time for efficient filtering
     stream_id: String,
+    /// Event type name, stored at write time for efficient type filtering
+    event_type: String,
     /// Event data as JSON value
     event_data: serde_json::Value,
 }
@@ -160,17 +162,18 @@ impl EventStore for InMemoryEventStore {
             let StreamWriteEntry {
                 stream_id,
                 event,
-                event_type: _,
+                event_type,
                 event_data,
             } = entry;
 
             // Generate UUID7 for this event (monotonic, timestamp-ordered)
             let event_id = Uuid::now_v7();
 
-            // Store in global log for EventReader with indexed stream_id and event_id
+            // Store in global log for EventReader with indexed stream_id, event_type, and event_id
             data.global_log.push(GlobalLogEntry {
                 event_id,
                 stream_id: stream_id.as_ref().to_string(),
+                event_type: event_type.to_string(),
                 event_data,
             });
 
@@ -219,6 +222,13 @@ impl EventReader for InMemoryEventStore {
                     None => true,
                     Some(prefix) => entry.stream_id.starts_with(prefix.as_ref()),
                 }
+            })
+            .filter(|entry| {
+                // Filter by event_type BEFORE take() so non-matching types
+                // don't consume batch slots (fixes issue #372).
+                // Use explicit filter if set, otherwise derive from E::event_type_name().
+                let type_filter = filter.event_type().unwrap_or_else(|| E::event_type_name());
+                entry.event_type == type_filter
             })
             .take(page.limit().into_inner())
             .filter_map(|entry| {

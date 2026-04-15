@@ -174,7 +174,8 @@ where
                 ctx,
                 consecutive_failures,
             } => {
-                let filter = EventFilter::all();
+                let filter = EventFilter::all()
+                    .with_event_type(<P::Event as Event>::event_type_name().to_string());
                 let page = match last_checkpoint {
                     Some(position) => EventPage::after(position, BatchSize::new(1000)),
                     None => EventPage::first(BatchSize::new(1000)),
