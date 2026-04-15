@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use eventcore::{RetryPolicy, StreamId, execute};
 use eventcore_types::EventStore;
-use rand::Rng;
+use rand::RngExt;
 
 use crate::config::{BackendChoice, StressConfig};
 use crate::domain::{TransferEvent, TransferMoney, new_stream_id, test_amount};
