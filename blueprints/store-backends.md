@@ -47,8 +47,12 @@ Each backend implements `EventStore`, `EventReader`, `CheckpointStore`, and `Pro
 
 **Key features:**
 
-- Optional SQLCipher encryption via `apply_encryption_key()`
-- WAL journaling mode for better read concurrency
+- Optional SQLCipher encryption via `apply_encryption_key()` (opt-in `encryption` feature)
+- Vendored vanilla SQLite by default via `bundled` feature; disable defaults to bring your own
+- `rusqlite` re-exported at crate root so consumers don't redeclare it
+- `from_connection` constructor on `SqliteEventStore` and `SqliteCheckpointStore`
+  for bring-your-own-connection setups
+- WAL journaling mode for better read concurrency (applied to crate-built connections)
 - Manual version checking (no trigger-based validation)
 - In-memory coordination locks (single-process only)
 
