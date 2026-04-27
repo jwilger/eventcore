@@ -25,10 +25,12 @@ async fn event_store_accepts_externally_constructed_connection() {
         .await
         .expect("migration should succeed against consumer-supplied connection");
 
-    // Then: the store is usable end-to-end via the EventStore trait. The
-    // contract suite already exercises the trait surface; here we just need
-    // to demonstrate that migrate succeeded and the store is constructed.
-    let _: &SqliteEventStore = &store;
+    // Then: re-running migrate on the same store is idempotent — proving the
+    // store-and-connection pair is live end-to-end, not just constructed.
+    store
+        .migrate()
+        .await
+        .expect("migrate should be idempotent against consumer-supplied connection");
 }
 
 #[tokio::test]

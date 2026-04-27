@@ -18,9 +18,10 @@ or to bring your own `rusqlite` features, disable default features:
 eventcore-sqlite = { version = "0.7", default-features = false }
 ```
 
-Enabling `encryption` together with `bundled` is unsupported — pick one
-bundled variant. Most consumers should disable defaults when opting in to
-encryption:
+When both `bundled` and `encryption` are active, `libsqlite3-sys` links
+SQLCipher (which is itself a SQLite fork) — there is no link-time conflict,
+but if you want encryption without also pulling in the vanilla vendored
+SQLite source, disable defaults:
 
 ```toml
 eventcore-sqlite = { version = "0.7", default-features = false, features = ["encryption"] }
@@ -38,10 +39,15 @@ use eventcore_sqlite::rusqlite;
 let conn = rusqlite::Connection::open_in_memory()?;
 ```
 
-Prefer the re-export over a direct `rusqlite` dependency. Cargo will unify
-versions automatically when both crates declare compatible ranges; if the
-ranges do not overlap, Cargo emits a clear compile-time error rather than
-linking two incompatible copies.
+Prefer the re-export over a direct `rusqlite` dependency. Cargo unifies
+versions automatically when ranges overlap. If your declared range and
+`eventcore-sqlite`'s range do not overlap, Cargo will resolve two
+SemVer-incompatible copies of `rusqlite` (e.g. `0.31.x` and `0.32.x`) into
+the dependency graph rather than failing resolution; the mismatch then
+surfaces as a compile-time type error at the call site when you try to
+hand a `Connection` from one version to an API that expects the other.
+Using the re-export sidesteps the whole issue by guaranteeing you reference
+the same `rusqlite` `eventcore-sqlite` was built against.
 
 ## Bring your own connection
 
