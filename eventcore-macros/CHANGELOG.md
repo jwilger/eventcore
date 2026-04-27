@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/jwilger/eventcore/compare/eventcore-macros-v0.8.0...eventcore-macros-v0.8.1) - 2026-04-27
+
+### Deps
+
+- *(deps)* bump the minor-and-patch group across 1 directory with 11 updates ([#383](https://github.com/jwilger/eventcore/pull/383))
+
 ## [0.7.0](https://github.com/jwilger/eventcore/compare/eventcore-macros-v0.6.0...eventcore-macros-v0.7.0) - 2026-04-13
 
 ### Bug Fixes
