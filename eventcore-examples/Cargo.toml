@@ -17,7 +17,7 @@ eventcore-macros = { path = "../eventcore-macros" }
 eventcore-memory = { path = "../eventcore-memory" }
 eventcore-testing = { path = "../eventcore-testing" }
 eventcore-types = { path = "../eventcore-types" }
-nutype = { version = "0.6.2", features = ["serde"] }
+nutype = { version = "0.7.0", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
 tokio = { version = "1.52.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
