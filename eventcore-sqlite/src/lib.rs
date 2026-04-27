@@ -7,6 +7,7 @@ use eventcore_types::{
     EventStreamReader, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
     StreamVersion, StreamWriteEntry, StreamWrites,
 };
+pub use rusqlite;
 use rusqlite::OptionalExtension;
 use rusqlite::params;
 use thiserror::Error;
@@ -241,6 +242,21 @@ impl SqliteEventStore {
             conn: Arc::new(Mutex::new(conn)),
             locks: Arc::new(std::sync::RwLock::new(HashSet::new())),
         })
+    }
+
+    /// Construct a store from a connection the consumer has already opened
+    /// and configured.
+    ///
+    /// The connection is taken as-is. The consumer is responsible for any
+    /// pragmas (journal mode, encryption keys, attached databases, etc.).
+    /// Use this constructor when you need fine-grained control over connection
+    /// setup; otherwise prefer [`SqliteEventStore::new`] or
+    /// [`SqliteEventStore::in_memory`].
+    pub fn from_connection(conn: rusqlite::Connection) -> Self {
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+            locks: Arc::new(std::sync::RwLock::new(HashSet::new())),
+        }
     }
 
     pub async fn migrate(&self) -> Result<(), SqliteEventStoreError> {
@@ -678,6 +694,20 @@ impl SqliteCheckpointStore {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    /// Construct a checkpoint store from a connection the consumer has
+    /// already opened and configured.
+    ///
+    /// The connection is taken as-is. The consumer is responsible for any
+    /// pragmas (journal mode, encryption keys, attached databases, etc.).
+    /// Use this constructor when you need fine-grained control over connection
+    /// setup; otherwise prefer [`SqliteCheckpointStore::new`] or
+    /// [`SqliteCheckpointStore::in_memory`].
+    pub fn from_connection(conn: rusqlite::Connection) -> Self {
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+        }
     }
 
     pub async fn migrate(&self) -> Result<(), SqliteEventStoreError> {

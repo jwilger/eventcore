@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- The `encryption` feature is no longer enabled by default. Consumers who
+  rely on SQLCipher must opt in explicitly via
+  `features = ["encryption"]`. The default feature set is now `bundled`,
+  which vendors vanilla SQLite without OpenSSL/SQLCipher native linking.
+
+### Features
+
+- Re-export `rusqlite` at the crate root so consumers can use
+  `eventcore_sqlite::rusqlite` without declaring a separate dependency.
+- Add `SqliteEventStore::from_connection` and
+  `SqliteCheckpointStore::from_connection` for consumers that need to
+  bring their own pre-configured `rusqlite::Connection`.
+
 ## [0.7.1](https://github.com/jwilger/eventcore/compare/eventcore-sqlite-v0.7.0...eventcore-sqlite-v0.7.1) - 2026-04-15
 
 ### Bug Fixes

@@ -10,7 +10,16 @@ repository.workspace = true
 workspace = true
 
 [features]
-default = ["encryption"]
+default = ["bundled"]
+# Vendor a vanilla SQLite C library so the crate works out of the box without
+# requiring a system libsqlite3. Disable default features to link against a
+# system-provided SQLite or to bring your own rusqlite features.
+bundled = ["rusqlite/bundled"]
+# Opt in to SQLCipher with vendored OpenSSL for at-rest encryption. This pulls
+# in native crypto code; consumers should not enable it unless they actually
+# need encrypted databases. When both `bundled` and `encryption` are active,
+# libsqlite3-sys links SQLCipher; consumers who want encryption without the
+# vanilla SQLite dep can disable defaults.
 encryption = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
 
 [dependencies]
