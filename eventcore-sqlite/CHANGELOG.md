@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/jwilger/eventcore/compare/eventcore-sqlite-v0.7.1...eventcore-sqlite-v0.8.0) - 2026-04-27
+
+### Features
+
+- *(sqlite)* make encryption opt-in, re-export rusqlite, add BYOC constructors ([#379](https://github.com/jwilger/eventcore/pull/379))
+
 ### Breaking Changes
 
 - The `encryption` feature is no longer enabled by default. Consumers who
