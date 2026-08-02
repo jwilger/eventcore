@@ -1,0 +1,17 @@
+schema_version = 1
+
+[delivery]
+mode = "pull-request"
+trunk_branch = "main"
+
+[features]
+worktrees = true
+tiber = true
+agentic_systems = false
+eval_case_reporting = false
+
+[worktrees]
+root = ".worktrees"
+
+[tiber]
+max_queued = 5
