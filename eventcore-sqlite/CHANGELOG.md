@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [1.0.2](https://github.com/jwilger/eventcore/compare/eventcore-sqlite-v1.0.1...eventcore-sqlite-v1.0.2) - 2026-08-02
+
+### Documentation
+
+- align release docs with crates.io and github ([#3](https://github.com/jwilger/eventcore/pull/3))
+
+### Miscellaneous Tasks
+
+- update repository references after transfer ([#4](https://github.com/jwilger/eventcore/pull/4))
+
 ## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-sqlite-v1.0.0...eventcore-sqlite-v1.0.1) - 2026-06-15
 
 ### Documentation
