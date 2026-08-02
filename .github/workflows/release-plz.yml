@@ -37,7 +37,7 @@ permissions:
 jobs:
   release-plz:
     name: release-plz
-    uses: jwilger/gha-workflows/.github/workflows/rust-release-plz.yml@4f29cb994188c20786a9fda85ebabd113c910d89
+    uses: jwilger/gha-workflows/.github/workflows/rust-release-plz.yml@017ca09a54090c441a12a0234e7bd0f96d485b8f
     with:
       runs-on: ubuntu-latest
     secrets:
