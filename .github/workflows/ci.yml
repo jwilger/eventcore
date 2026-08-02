@@ -161,7 +161,7 @@ jobs:
         id: mutants
         env:
           POSTGRES_VERSION: 17
-          POSTGRES_HOST: postgres
+          POSTGRES_HOST: localhost
           POSTGRES_PORT: "5432"
         run: |
           cargo mutants --workspace 2>&1 | tee mutation-output.txt
