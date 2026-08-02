@@ -192,7 +192,7 @@ jobs:
           set -euo pipefail
 
           # Group SURVIVED lines by source file
-          declare -A by_file
+          declare -A by_file=()
           while IFS= read -r line; do
             file=$(printf '%s\n' "$line" | sed -n 's/^SURVIVED:[[:space:]]\+\(.*\.rs\):[0-9].*/\1/p')
             [ -z "$file" ] && continue
