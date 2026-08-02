@@ -1,11 +1,11 @@
 schema_version = 1
 
 [delivery]
-mode = "pull-request"
+mode = "direct-to-trunk"
 trunk_branch = "main"
 
 [features]
-worktrees = true
+worktrees = false
 tiber = true
 agentic_systems = false
 eval_case_reporting = false
