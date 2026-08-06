@@ -209,6 +209,11 @@ macro_rules! __eventcore_register_model_descriptor {
             $crate::model::Descriptor::mapping($name, $sources, $target, $temporal_sources)
         }
     };
+    (assumption, $name:expr, $target:expr $(,)?) => {
+        $crate::__private::inventory::submit! {
+            $crate::model::Descriptor::assumption($name, $target)
+        }
+    };
 }
 
 // Re-export PostgreSQL backend when the "postgres" feature is enabled

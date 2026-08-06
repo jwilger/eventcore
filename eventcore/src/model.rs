@@ -483,17 +483,25 @@ pub trait ModelView {
 
 /// Options controlling an information-completeness check.
 #[cfg(feature = "experimental-model-check")]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CheckOptions {
-    allow_assumptions: bool,
+    allow_all_assumptions: bool,
+    allowed_assumptions: BTreeSet<&'static str>,
 }
 
 #[cfg(feature = "experimental-model-check")]
 impl CheckOptions {
     /// Permits explicitly registered assumption boundaries.
     #[must_use]
-    pub const fn allow_assumptions(mut self) -> Self {
-        self.allow_assumptions = true;
+    pub fn allow_assumptions(mut self) -> Self {
+        self.allow_all_assumptions = true;
+        self
+    }
+
+    /// Permits one named assumption boundary.
+    #[must_use]
+    pub fn allow_assumption(mut self, name: &'static str) -> Self {
+        let _ = self.allowed_assumptions.insert(name);
         self
     }
 }
@@ -580,6 +588,7 @@ pub fn check_with(options: CheckOptions) -> Result<CheckReport, CheckError> {
     let mut warnings = Vec::new();
     let mut fields = BTreeMap::new();
     let mut mappings: BTreeMap<&str, Vec<&Descriptor>> = BTreeMap::new();
+    let mut assumptions: BTreeMap<&str, Vec<&Descriptor>> = BTreeMap::new();
     let mut identifiers = BTreeSet::new();
 
     for descriptor in descriptors {
@@ -598,27 +607,59 @@ pub fn check_with(options: CheckOptions) -> Result<CheckReport, CheckError> {
             DescriptorKind::Mapping { target, .. } => {
                 mappings.entry(target).or_default().push(descriptor);
             }
+            DescriptorKind::Assumption { target, .. } => {
+                assumptions.entry(target).or_default().push(descriptor);
+            }
         }
     }
 
-    let mut memo = BTreeMap::new();
+    let graph = CheckerGraph {
+        fields: &fields,
+        mappings: &mappings,
+        assumptions: &assumptions,
+        options: &options,
+    };
+    let mut evaluation = CheckerEvaluation::default();
     for (field, descriptor) in &fields {
         if let DescriptorKind::Field { root, .. } = descriptor.kind
             && root
         {
-            let _ = memo.insert((*field).to_owned(), true);
+            let _ = evaluation.memo.insert((*field).to_owned(), true);
             continue;
         }
-        let mut visiting = BTreeSet::new();
-        if !is_complete(
-            field,
-            &fields,
-            &mappings,
-            &mut memo,
-            &mut visiting,
-            &mut errors,
-        ) {
+        evaluation.visiting.clear();
+        if !is_complete(field, &graph, &mut evaluation) {
             continue;
+        }
+    }
+
+    let consumed_fields: BTreeSet<&str> = mappings
+        .values()
+        .flatten()
+        .flat_map(|descriptor| match descriptor.kind {
+            DescriptorKind::Mapping { sources, .. } => sources.to_vec(),
+            _ => Vec::new(),
+        })
+        .collect();
+    for (field, descriptor) in &fields {
+        let DescriptorKind::Field { root, role, .. } = descriptor.kind else {
+            continue;
+        };
+        if root && !consumed_fields.contains(field) {
+            warnings.push(diagnostic(
+                "ECM102",
+                *field,
+                "modeled origin is not consumed by any mapping",
+                "remove the unused field or add an executable mapping that consumes it",
+            ));
+        }
+        if role == "event" && !consumed_fields.contains(field) {
+            warnings.push(diagnostic(
+                "ECM103",
+                *field,
+                "modeled event field is not consumed downstream",
+                "add a projection/view mapping or mark the event boundary intentionally opaque",
+            ));
         }
     }
 
@@ -637,64 +678,109 @@ pub fn check_with(options: CheckOptions) -> Result<CheckReport, CheckError> {
         ));
     }
 
-    if options.allow_assumptions {
-        // Assumption descriptors are reserved for the next alpha slice. Keeping
-        // the option now makes strict behavior forward-compatible.
-    }
-
-    sort_diagnostics(&mut errors);
+    sort_diagnostics(&mut evaluation.errors);
     sort_diagnostics(&mut warnings);
-    if errors.is_empty() {
+    if evaluation.errors.is_empty() {
         Ok(CheckReport {
-            status: CheckStatus::Verified,
+            status: if evaluation.used_assumption {
+                CheckStatus::Assumed
+            } else {
+                CheckStatus::Verified
+            },
             warnings,
         })
     } else {
         Err(CheckError {
-            diagnostics: errors,
+            diagnostics: evaluation.errors,
         })
     }
 }
 
 #[cfg(feature = "experimental-model-check")]
-fn is_complete(
-    field: &str,
-    fields: &BTreeMap<&str, &Descriptor>,
-    mappings: &BTreeMap<&str, Vec<&Descriptor>>,
-    memo: &mut BTreeMap<String, bool>,
-    visiting: &mut BTreeSet<String>,
-    errors: &mut Vec<CheckDiagnostic>,
-) -> bool {
-    if let Some(result) = memo.get(field) {
+struct CheckerGraph<'a> {
+    fields: &'a BTreeMap<&'a str, &'a Descriptor>,
+    mappings: &'a BTreeMap<&'a str, Vec<&'a Descriptor>>,
+    assumptions: &'a BTreeMap<&'a str, Vec<&'a Descriptor>>,
+    options: &'a CheckOptions,
+}
+
+#[cfg(feature = "experimental-model-check")]
+#[derive(Default)]
+struct CheckerEvaluation {
+    used_assumption: bool,
+    memo: BTreeMap<String, bool>,
+    visiting: BTreeSet<String>,
+    errors: Vec<CheckDiagnostic>,
+}
+
+#[cfg(feature = "experimental-model-check")]
+fn is_complete(field: &str, graph: &CheckerGraph<'_>, evaluation: &mut CheckerEvaluation) -> bool {
+    let CheckerGraph {
+        fields,
+        mappings,
+        assumptions,
+        options,
+    } = graph;
+    if let Some(result) = evaluation.memo.get(field) {
         return *result;
     }
     if let Some(descriptor) = fields.get(field)
         && let DescriptorKind::Field { root, .. } = descriptor.kind
         && root
     {
-        let _ = memo.insert(field.to_owned(), true);
+        let _ = evaluation.memo.insert(field.to_owned(), true);
         return true;
     }
-    if !visiting.insert(field.to_owned()) {
-        errors.push(diagnostic(
+    if !evaluation.visiting.insert(field.to_owned()) {
+        evaluation.errors.push(diagnostic(
             "ECM006",
             field,
             "ordinary provenance cycle has no explicit temporal seed",
             "use `previous(...)` with a modeled default/absence seed",
         ));
-        let _ = memo.insert(field.to_owned(), false);
+        let _ = evaluation.memo.insert(field.to_owned(), false);
+        return false;
+    }
+
+    if let Some(boundaries) = assumptions.get(field) {
+        let accepted = boundaries.iter().find_map(|boundary| {
+            let DescriptorKind::Assumption { name, .. } = boundary.kind else {
+                return None;
+            };
+            (options.allow_all_assumptions || options.allowed_assumptions.contains(name))
+                .then_some(name)
+        });
+        if accepted.is_some() {
+            evaluation.used_assumption = true;
+            let _ = evaluation.visiting.remove(field);
+            let _ = evaluation.memo.insert(field.to_owned(), true);
+            return true;
+        }
+        for boundary in boundaries {
+            let DescriptorKind::Assumption { name, .. } = boundary.kind else {
+                continue;
+            };
+            evaluation.errors.push(diagnostic(
+                "ECM008",
+                name,
+                format!("assumption boundary for `{field}` is not enabled"),
+                format!("use `CheckOptions::default().allow_assumption(\"{name}\")` or replace it with an executable mapping"),
+            ));
+        }
+        let _ = evaluation.visiting.remove(field);
+        let _ = evaluation.memo.insert(field.to_owned(), false);
         return false;
     }
 
     let Some(recipes) = mappings.get(field) else {
-        errors.push(diagnostic(
+        evaluation.errors.push(diagnostic(
             "ECM003",
             field,
             "non-root modeled field has no executable producer",
             "add a mapping, default, absence, or explicit origin",
         ));
-        let _ = visiting.remove(field);
-        let _ = memo.insert(field.to_owned(), false);
+        let _ = evaluation.visiting.remove(field);
+        let _ = evaluation.memo.insert(field.to_owned(), false);
         return false;
     };
 
@@ -711,7 +797,7 @@ fn is_complete(
         };
         for (source, temporal) in sources.iter().zip(temporal_sources.iter()) {
             if !fields.contains_key(source) {
-                errors.push(diagnostic(
+                evaluation.errors.push(diagnostic(
                     "ECM004",
                     name,
                     format!("mapping source `{source}` is not a modeled field"),
@@ -720,8 +806,8 @@ fn is_complete(
                 complete = false;
                 continue;
             }
-            if visiting.contains(*source) && !temporal {
-                errors.push(diagnostic(
+            if evaluation.visiting.contains(*source) && !temporal {
+                evaluation.errors.push(diagnostic(
                     "ECM006",
                     name,
                     format!("mapping closes an ordinary cycle through `{source}`"),
@@ -730,9 +816,9 @@ fn is_complete(
                 complete = false;
                 continue;
             }
-            if visiting.contains(*source) {
+            if evaluation.visiting.contains(*source) {
                 if !has_non_temporal_seed(source, fields, mappings) {
-                    errors.push(diagnostic(
+                    evaluation.errors.push(diagnostic(
                         "ECM007",
                         name,
                         format!("temporal source `{source}` has no non-temporal seed"),
@@ -742,13 +828,13 @@ fn is_complete(
                 }
                 continue;
             }
-            if !is_complete(source, fields, mappings, memo, visiting, errors) {
+            if !is_complete(source, graph, evaluation) {
                 complete = false;
             }
         }
     }
-    let _ = visiting.remove(field);
-    let _ = memo.insert(field.to_owned(), complete);
+    let _ = evaluation.visiting.remove(field);
+    let _ = evaluation.memo.insert(field.to_owned(), complete);
     complete
 }
 
@@ -817,6 +903,10 @@ pub enum DescriptorKind {
         target: &'static str,
         temporal_sources: &'static [bool],
     },
+    Assumption {
+        name: &'static str,
+        target: &'static str,
+    },
 }
 
 /// A checker descriptor registered in the linked program image.
@@ -854,10 +944,19 @@ impl Descriptor {
         }
     }
 
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn assumption(name: &'static str, target: &'static str) -> Self {
+        Self {
+            kind: DescriptorKind::Assumption { name, target },
+        }
+    }
+
     fn stable_id(&self) -> &'static str {
         match self.kind {
             DescriptorKind::Field { field, .. } => field,
             DescriptorKind::Mapping { name, .. } => name,
+            DescriptorKind::Assumption { name, .. } => name,
         }
     }
 }
@@ -870,7 +969,7 @@ mod tests {
     use super::*;
 
     #[cfg(feature = "experimental-model-check")]
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     #[derive(Debug)]
     struct InitialState;
@@ -902,19 +1001,18 @@ mod tests {
 
         let fields = BTreeMap::from([("Input.amount", &INPUT), ("History.balance", &BALANCE)]);
         let mappings = BTreeMap::from([("History.balance", vec![&RECURRENCE])]);
-        let mut memo = BTreeMap::new();
-        let mut visiting = BTreeSet::new();
-        let mut errors = Vec::new();
+        let assumptions = BTreeMap::new();
+        let options = CheckOptions::default();
+        let graph = CheckerGraph {
+            fields: &fields,
+            mappings: &mappings,
+            assumptions: &assumptions,
+            options: &options,
+        };
+        let mut evaluation = CheckerEvaluation::default();
 
-        assert!(!is_complete(
-            "History.balance",
-            &fields,
-            &mappings,
-            &mut memo,
-            &mut visiting,
-            &mut errors,
-        ));
-        assert!(errors.iter().any(|error| error.code == "ECM007"));
+        assert!(!is_complete("History.balance", &graph, &mut evaluation));
+        assert!(evaluation.errors.iter().any(|error| error.code == "ECM007"));
     }
 
     #[cfg(feature = "experimental-model-check")]
@@ -937,18 +1035,17 @@ mod tests {
 
         let fields = BTreeMap::from([("Input.amount", &INPUT), ("History.balance", &BALANCE)]);
         let mappings = BTreeMap::from([("History.balance", vec![&RECURRENCE, &SEED])]);
-        let mut memo = BTreeMap::new();
-        let mut visiting = BTreeSet::new();
-        let mut errors = Vec::new();
+        let assumptions = BTreeMap::new();
+        let options = CheckOptions::default();
+        let graph = CheckerGraph {
+            fields: &fields,
+            mappings: &mappings,
+            assumptions: &assumptions,
+            options: &options,
+        };
+        let mut evaluation = CheckerEvaluation::default();
 
-        assert!(is_complete(
-            "History.balance",
-            &fields,
-            &mappings,
-            &mut memo,
-            &mut visiting,
-            &mut errors,
-        ));
-        assert!(errors.is_empty());
+        assert!(is_complete("History.balance", &graph, &mut evaluation));
+        assert!(evaluation.errors.is_empty());
     }
 }

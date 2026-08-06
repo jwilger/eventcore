@@ -345,7 +345,20 @@ fn expand_model_component(
     let ident = &input.ident;
 
     let Data::Struct(data) = &input.data else {
-        if matches!(kind, ModelComponentKind::Event | ModelComponentKind::Effect) {
+        if let Data::Enum(data) = &input.data
+            && matches!(kind, ModelComponentKind::Event | ModelComponentKind::Effect)
+        {
+            for variant in &data.variants {
+                if matches!(&variant.fields, Fields::Unit)
+                    || matches!(&variant.fields, Fields::Unnamed(fields) if fields.unnamed.len() == 1)
+                {
+                    continue;
+                }
+                return Err(Error::new_spanned(
+                    &variant.fields,
+                    "EventCore: modeled enum variants must be unit variants or have one typed payload; use a named payload struct for multiple fields",
+                ));
+            }
             return Ok(quote! { impl #marker_trait for #ident {} });
         }
 
@@ -480,6 +493,17 @@ fn expand_model_component(
             #roots,
         ); )*
     };
+    let assumption_registration = fields.iter().filter_map(|field| {
+        let name = model_assumption_name(field)?;
+        let field = field.ident.as_ref()?;
+        Some(quote! {
+            ::eventcore::__eventcore_register_model_descriptor!(
+                assumption,
+                #name,
+                concat!(stringify!(#ident), ".", stringify!(#field)),
+            );
+        })
+    });
 
     let streams = if matches!(kind, ModelComponentKind::Command) {
         let stream_fields: Vec<_> = fields
@@ -526,6 +550,7 @@ fn expand_model_component(
         #state_initialization
         #streams
         #registration
+        #(#assumption_registration)*
     })
 }
 
@@ -675,6 +700,25 @@ fn has_model_marker(field: &Field, expected: &str) -> bool {
             && attribute
                 .parse_args::<syn::Ident>()
                 .is_ok_and(|marker| marker == expected)
+    })
+}
+
+#[cfg(feature = "experimental-modeling")]
+fn model_assumption_name(field: &Field) -> Option<syn::LitStr> {
+    field.attrs.iter().find_map(|attribute| {
+        if !attribute.path().is_ident("model") {
+            return None;
+        }
+        let mut assumption = None;
+        attribute
+            .parse_nested_meta(|meta| {
+                if meta.path.is_ident("assumption") {
+                    assumption = Some(meta.value()?.parse()?);
+                }
+                Ok(())
+            })
+            .ok()?;
+        assumption
     })
 }
 

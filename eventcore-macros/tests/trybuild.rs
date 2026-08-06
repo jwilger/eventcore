@@ -48,3 +48,15 @@ fn modeled_input_requires_an_explicit_origin_for_raw_values() {
     let t = TestCases::new();
     t.compile_fail("tests/ui/modeled_input_without_origin.rs");
 }
+
+#[test]
+fn modeled_events_allow_unit_and_single_payload_variants() {
+    let t = TestCases::new();
+    t.pass("tests/ui/modeled_event_enum_pass.rs");
+}
+
+#[test]
+fn modeled_events_reject_multi_field_tuple_variants() {
+    let t = TestCases::new();
+    t.compile_fail("tests/ui/modeled_event_multi_payload.rs");
+}

@@ -37,6 +37,12 @@ producers, unknown sources, duplicate descriptor names, and ordinary cycles.
 It does **not** prove that a formula represents the intended business rule;
 continue to test command decisions and projections normally.
 
+For an intentionally opaque native persistence boundary, annotate the field
+with `#[model(assumption = "descriptive-name")]`. Strict `check()` rejects
+that boundary. A test may explicitly permit it with
+`CheckOptions::default().allow_assumption("descriptive-name")`; the resulting
+report is `Assumed`, never `Verified`.
+
 `ModeledCommand` delegates to `execute`, preserving EventCore's stream reads,
 optimistic concurrency, and atomic appends. `checked_projection` adapts a
 pure `ModelProjection` plus an imperative `ProjectionSink` to the existing
