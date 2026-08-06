@@ -10,6 +10,10 @@
 //! the infrastructure: loading state, detecting concurrent writes, retrying on
 //! conflict, and committing atomically.
 //!
+//! APIs exposed only through feature flags whose names start with
+//! `experimental-` are disabled by default and are not covered by EventCore's
+//! stable compatibility guarantee while they retain that prefix.
+//!
 //! ## Core concepts
 //!
 //! - **Stream** — an ordered, append-only sequence of events identified by a
