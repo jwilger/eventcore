@@ -528,6 +528,12 @@ pub enum CheckStatus {
     Verified,
     /// The model is complete only through an accepted explicit assumption.
     Assumed,
+}
+
+/// Final status of a failed model check.
+#[cfg(feature = "experimental-model-check")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckFailureStatus {
     /// One or more modeled fields or registrations are incomplete.
     Incomplete,
 }
@@ -583,10 +589,17 @@ pub struct CheckReport {
 #[derive(Debug, Error)]
 #[error("event model is incomplete")]
 pub struct CheckError {
-    /// Verification status for a failed check.
-    pub status: CheckStatus,
     /// Errors sorted by code and subject.
     pub diagnostics: Vec<CheckDiagnostic>,
+}
+
+#[cfg(feature = "experimental-model-check")]
+impl CheckError {
+    /// Returns the final status of this failed check.
+    #[must_use]
+    pub const fn status(&self) -> CheckFailureStatus {
+        CheckFailureStatus::Incomplete
+    }
 }
 
 /// Runs strict information-completeness checking for all linked modeled
@@ -624,7 +637,6 @@ fn check_references(
 
     if descriptors.is_empty() {
         return Err(CheckError {
-            status: CheckStatus::Incomplete,
             diagnostics: vec![diagnostic(
                 "ECM001",
                 "registry",
@@ -758,7 +770,6 @@ fn check_references(
         })
     } else {
         Err(CheckError {
-            status: CheckStatus::Incomplete,
             diagnostics: evaluation.errors,
         })
     }
@@ -1307,7 +1318,7 @@ mod tests {
     fn checker_reports_empty_registry_and_unused_boundaries() {
         let empty = check_descriptors(&[], CheckOptions::default())
             .expect_err("an empty explicit descriptor set is not a model");
-        assert_eq!(empty.status, CheckStatus::Incomplete);
+        assert_eq!(empty.status(), CheckFailureStatus::Incomplete);
         assert_eq!(empty.diagnostics[0].code, "ECM001");
 
         let descriptors = [
@@ -1351,7 +1362,7 @@ mod tests {
         let error = check_descriptors(&descriptors, CheckOptions::default())
             .expect_err("every mapping and assumption target must be registered");
 
-        assert_eq!(error.status, CheckStatus::Incomplete);
+        assert_eq!(error.status(), CheckFailureStatus::Incomplete);
         assert_eq!(
             error
                 .diagnostics
