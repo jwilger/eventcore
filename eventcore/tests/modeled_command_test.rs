@@ -103,6 +103,7 @@ impl ModelCommandLogic for Transfer {
         {
             return Err("transfer source and target must differ".into());
         }
+        let _event_stream = TransferSourceToEvent::apply(self);
         let _amount = self.amount;
         Ok(ModeledEvents::none("example does not emit events"))
     }

@@ -343,6 +343,8 @@ fn expand_model_component(
         ModelComponentKind::Output => quote! { ::eventcore::model::ModelOutput },
     };
     let ident = &input.ident;
+    let visibility = &input.vis;
+    let marker_visibility = marker_visibility(visibility);
 
     let Data::Struct(data) = &input.data else {
         if let Data::Enum(data) = &input.data
@@ -364,7 +366,13 @@ fn expand_model_component(
             } else {
                 "effect"
             };
-            return Ok(expand_modeled_enum(ident, marker_trait, data, role));
+            return Ok(expand_modeled_enum(
+                ident,
+                visibility,
+                marker_trait,
+                data,
+                role,
+            ));
         }
 
         return Err(Error::new_spanned(
@@ -406,10 +414,10 @@ fn expand_model_component(
 
     let field_markers = quote! {
         #[doc(hidden)]
-        pub mod #module_ident {
+        #visibility mod #module_ident {
             use super::*;
 
-            #( pub struct #marker_idents; )*
+            #( #marker_visibility struct #marker_idents; )*
             #( impl ::eventcore::model::ModelField for #marker_idents {
                 type Value = #field_types;
             } )*
@@ -419,12 +427,12 @@ fn expand_model_component(
     let accessors = quote! {
         impl #ident {
             #( #[doc(hidden)]
-            pub fn #getter_idents(&self) -> &#field_types {
+            #visibility fn #getter_idents(&self) -> &#field_types {
                 &self.#field_idents
             }
 
             #[doc(hidden)]
-            pub fn #value_idents(
+            #visibility fn #value_idents(
                 value: #field_types,
             ) -> ::eventcore::model::FieldValue<#module_ident::#marker_idents> {
                 ::eventcore::model::FieldValue::from_value(value)
@@ -440,6 +448,7 @@ fn expand_model_component(
         field_types: &field_types,
         state_idents: &state_idents,
         marker_idents: &marker_idents,
+        visibility,
         accepts_raw_values: &fields
             .iter()
             .map(|field| matches!(kind, ModelComponentKind::Input) && has_model_origin(field))
@@ -558,10 +567,12 @@ fn expand_model_component(
 #[cfg(feature = "experimental-modeling")]
 fn expand_modeled_enum(
     ident: &syn::Ident,
+    visibility: &syn::Visibility,
     marker_trait: TokenStream2,
     data: &syn::DataEnum,
     role: &'static str,
 ) -> TokenStream2 {
+    let marker_visibility = marker_visibility(visibility);
     let module_ident = format_ident!("__eventcore_model_{}", ident.to_string().to_lowercase());
     let payload_variants: Vec<_> = data
         .variants
@@ -606,9 +617,9 @@ fn expand_modeled_enum(
         impl #marker_trait for #ident {}
 
         #[doc(hidden)]
-        pub mod #module_ident {
+        #visibility mod #module_ident {
             use super::*;
-            #( pub struct #payload_markers; )*
+            #( #marker_visibility struct #payload_markers; )*
             #( impl ::eventcore::model::ModelField for #payload_markers {
                 type Value = #payload_types;
             } )*
@@ -616,14 +627,14 @@ fn expand_modeled_enum(
 
         impl #ident {
             #( #[doc(hidden)]
-            pub fn #payload_value_fns(
+            #visibility fn #payload_value_fns(
                 value: #payload_types,
             ) -> ::eventcore::model::FieldValue<#module_ident::#payload_markers> {
                 ::eventcore::model::FieldValue::from_value(value)
             }
 
             #[must_use]
-            pub fn #payload_constructor_fns(
+            #visibility fn #payload_constructor_fns(
                 value: impl ::eventcore::model::IntoFieldValue<#module_ident::#payload_markers>,
             ) -> ::eventcore::model::Modeled<Self> {
                 ::eventcore::model::Modeled::from_built(Self::#payload_variants_idents(
@@ -632,7 +643,7 @@ fn expand_modeled_enum(
             } )*
 
             #( #[must_use]
-            pub fn #unit_constructor_fns() -> ::eventcore::model::Modeled<Self> {
+            #visibility fn #unit_constructor_fns() -> ::eventcore::model::Modeled<Self> {
                 ::eventcore::model::Modeled::from_built(Self::#unit_variants)
             } )*
         }
@@ -656,6 +667,7 @@ struct ModelBuilderSpec<'a> {
     field_types: &'a [&'a Type],
     state_idents: &'a [syn::Ident],
     marker_idents: &'a [syn::Ident],
+    visibility: &'a syn::Visibility,
     accepts_raw_values: &'a [bool],
     is_command: bool,
 }
@@ -670,6 +682,7 @@ fn expand_model_builder(spec: ModelBuilderSpec<'_>) -> TokenStream2 {
         field_types,
         state_idents,
         marker_idents,
+        visibility,
         accepts_raw_values,
         is_command,
     } = spec;
@@ -722,7 +735,7 @@ fn expand_model_builder(spec: ModelBuilderSpec<'_>) -> TokenStream2 {
 
         quote! {
             impl<#(#others),*> #builder_ident<#(#input_states),*> {
-                pub fn #field(self, #argument) -> #builder_ident<#(#output_states),*> {
+                #visibility fn #field(self, #argument) -> #builder_ident<#(#output_states),*> {
                     #builder_ident {
                         #( #output_values, )*
                     }
@@ -749,13 +762,13 @@ fn expand_model_builder(spec: ModelBuilderSpec<'_>) -> TokenStream2 {
 
     quote! {
         #[doc(hidden)]
-        pub struct #builder_ident<#(#state_idents = ::eventcore::model::Unset),*> {
+        #visibility struct #builder_ident<#(#state_idents = ::eventcore::model::Unset),*> {
             #( #field_idents: #state_idents, )*
         }
 
         impl #ident {
             #[must_use]
-            pub fn model_builder() -> #builder_ident<#(#initial_states),*> {
+            #visibility fn model_builder() -> #builder_ident<#(#initial_states),*> {
                 #builder_ident {
                     #( #initial_values, )*
                 }
@@ -766,7 +779,7 @@ fn expand_model_builder(spec: ModelBuilderSpec<'_>) -> TokenStream2 {
 
         impl #builder_ident<#(#set_states),*> {
             #[must_use]
-            pub fn build(self) -> #output {
+            #visibility fn build(self) -> #output {
                 #finish
             }
         }
@@ -784,6 +797,14 @@ fn pascal_case(ident: &syn::Ident) -> syn::Ident {
         }
     }
     format_ident!("{value}")
+}
+
+#[cfg(feature = "experimental-modeling")]
+fn marker_visibility(visibility: &syn::Visibility) -> TokenStream2 {
+    match visibility {
+        syn::Visibility::Inherited => quote! { pub(super) },
+        _ => quote! { #visibility },
+    }
 }
 
 #[cfg(feature = "experimental-modeling")]
@@ -1041,10 +1062,10 @@ fn expand_mapping(definition: &MappingDefinition) -> syn::Result<TokenStream2> {
             let arguments = source_values.iter();
             let signature = mapping_signature(&source_idents, &source_types);
             return Ok(quote! {
-                pub struct #name;
+                pub(crate) struct #name;
 
                 impl #name {
-                    pub fn apply(#signature) -> ::core::result::Result<::eventcore::model::FieldValue<#target_marker>, #error> {
+                    pub(crate) fn apply(#signature) -> ::core::result::Result<::eventcore::model::FieldValue<#target_marker>, #error> {
                         #function(#(#arguments),*) .map(#target_owner::#target_value)
                     }
                 }
@@ -1068,10 +1089,10 @@ fn expand_mapping(definition: &MappingDefinition) -> syn::Result<TokenStream2> {
     let signature = mapping_signature(&source_idents, &source_types);
 
     Ok(quote! {
-        pub struct #name;
+        pub(crate) struct #name;
 
         impl #name {
-            pub fn apply(#signature) -> ::eventcore::model::FieldValue<#target_marker> {
+            pub(crate) fn apply(#signature) -> ::eventcore::model::FieldValue<#target_marker> {
                 #target_owner::#target_value(#transform)
             }
         }

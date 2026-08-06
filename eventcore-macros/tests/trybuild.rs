@@ -90,3 +90,9 @@ fn modeled_named_origins_and_state_root_recipes_compile() {
     let t = TestCases::new();
     t.pass("tests/ui/modeled_root_recipes_pass.rs");
 }
+
+#[test]
+fn private_modeled_components_do_not_leak_field_types() {
+    let t = TestCases::new();
+    t.pass("tests/ui/modeled_private_component_pass.rs");
+}
