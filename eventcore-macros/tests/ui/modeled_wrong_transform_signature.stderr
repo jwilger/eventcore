@@ -1,0 +1,19 @@
+error[E0308]: mismatched types
+  --> tests/ui/modeled_wrong_transform_signature.rs:20:1
+   |
+20 | / mapping! {
+21 | |     InvalidTransform:
+22 | |         Request.amount => Transfer.amount
+23 | |         using takes_the_wrong_type;
+   | |               -------------------- arguments to this function are incorrect
+24 | | }
+   | |_^ expected `&str`, found `&u64`
+   |
+   = note: expected reference `&str`
+              found reference `&u64`
+note: function defined here
+  --> tests/ui/modeled_wrong_transform_signature.rs:16:4
+   |
+16 | fn takes_the_wrong_type(_amount: &str) -> u64 {
+   |    ^^^^^^^^^^^^^^^^^^^^ -------------
+   = note: this error originates in the macro `mapping` (in Nightly builds, run with -Z macro-backtrace for more info)

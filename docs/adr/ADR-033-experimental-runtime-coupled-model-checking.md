@@ -37,6 +37,13 @@ cycles. It treats explicit input and modeled default state as roots. The
 checker is designed for test targets and contributes no release-binary code
 when neither experimental feature is enabled.
 
+Field occurrences, rather than a matrix of conversion methods, express
+provenance; semantic Rust types continue to express domain roles. Macro
+registration is automatic, normalized before analysis, and isolated behind
+the checker feature. A custom SQL or native projection sink is an explicit
+assumption boundary: strict checks reject it, and an opted-in named assumption
+can produce only `Assumed`, never `Verified`.
+
 This is an alpha experiment, not an official modeling direction. It will be
 released only as `1.1.0-alpha.1` after validation in downstream projects; it
 must not be published or marked as the latest stable release automatically.

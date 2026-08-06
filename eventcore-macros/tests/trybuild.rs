@@ -96,3 +96,21 @@ fn private_modeled_components_do_not_leak_field_types() {
     let t = TestCases::new();
     t.pass("tests/ui/modeled_private_component_pass.rs");
 }
+
+#[test]
+fn modeled_fallible_mapping_compiles() {
+    let t = TestCases::new();
+    t.pass("tests/ui/modeled_fallible_mapping_pass.rs");
+}
+
+#[test]
+fn modeled_mapping_rejects_an_incompatible_transform_signature() {
+    let t = TestCases::new();
+    t.compile_fail("tests/ui/modeled_wrong_transform_signature.rs");
+}
+
+#[test]
+fn modeled_components_reject_generic_owners() {
+    let t = TestCases::new();
+    t.compile_fail("tests/ui/modeled_generic_component.rs");
+}

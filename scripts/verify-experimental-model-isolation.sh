@@ -55,3 +55,33 @@ rm -rf "$isolation_target"
 isolation_target=$(mktemp -d)
 CARGO_TARGET_DIR="$isolation_target" cargo build -p eventcore --lib --release --no-default-features --features experimental-model-check
 assert_checker_sentinel present
+
+# A consumer cannot reach the model module without opting in, while a
+# runtime-only consumer can. This checks the public feature boundary rather
+# than relying on Cargo.lock, which legitimately retains test dependencies.
+consumer_dir=$(mktemp -d)
+trap 'rm -rf "$isolation_target" "$consumer_dir"' EXIT
+workspace_root=$(pwd)
+mkdir "$consumer_dir/src"
+cat > "$consumer_dir/Cargo.toml" <<EOF
+[package]
+name = "eventcore-feature-boundary-check"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+eventcore = { path = "$workspace_root/eventcore", default-features = false }
+EOF
+cat > "$consumer_dir/src/main.rs" <<'EOF'
+fn main() {
+    let _ = core::marker::PhantomData::<eventcore::model::Modeled<()>>;
+}
+EOF
+
+if CARGO_TARGET_DIR="$isolation_target" cargo check --manifest-path "$consumer_dir/Cargo.toml" --quiet; then
+  echo "eventcore::model is available without experimental-modeling" >&2
+  exit 1
+fi
+
+sed -i 's/default-features = false/default-features = false, features = ["experimental-modeling"]/' "$consumer_dir/Cargo.toml"
+CARGO_TARGET_DIR="$isolation_target" cargo check --manifest-path "$consumer_dir/Cargo.toml" --quiet

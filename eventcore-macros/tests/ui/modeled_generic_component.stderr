@@ -1,0 +1,5 @@
+error: EventCore: modeled component owners cannot be generic in the experimental API
+ --> tests/ui/modeled_generic_component.rs:4:8
+  |
+4 | struct GenericRequest<T> {
+  |        ^^^^^^^^^^^^^^

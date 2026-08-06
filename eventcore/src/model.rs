@@ -671,9 +671,7 @@ fn check_references(
             continue;
         }
         evaluation.visiting.clear();
-        if !is_complete(field, &graph, &mut evaluation) {
-            continue;
-        }
+        let _ = is_complete(field, &graph, &mut evaluation);
     }
 
     let consumed_fields: BTreeSet<&str> = mappings
@@ -1305,6 +1303,147 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.code == "ECM103")
+        );
+    }
+
+    #[cfg(feature = "experimental-model-check")]
+    #[test]
+    fn checker_warns_only_for_actual_unused_boundaries() {
+        let complete = [
+            Descriptor::field("input", "Input.value", true),
+            Descriptor::field("command", "Command.unused", false),
+            Descriptor::field("event", "Event.consumed", false),
+            Descriptor::field("output", "Output.value", false),
+            Descriptor::mapping(
+                "CommandFromInput",
+                &["Input.value"],
+                "Command.unused",
+                &[false],
+            ),
+            Descriptor::mapping(
+                "EventFromInput",
+                &["Input.value"],
+                "Event.consumed",
+                &[false],
+            ),
+            Descriptor::mapping(
+                "OutputFromEvent",
+                &["Event.consumed"],
+                "Output.value",
+                &[false],
+            ),
+        ];
+        let report = check_descriptors(&complete, CheckOptions::default())
+            .expect("complete, consumed boundaries should not warn");
+        assert!(report.warnings.is_empty());
+    }
+
+    #[cfg(feature = "experimental-model-check")]
+    #[test]
+    fn checker_accepts_allow_all_assumptions_and_marks_the_result_assumed() {
+        let descriptors = [
+            Descriptor::field("output", "Output.value", false),
+            Descriptor::assumption("native-sink", "Output.value"),
+        ];
+        let report = check_descriptors(&descriptors, CheckOptions::default().allow_assumptions())
+            .expect("an explicitly allowed assumption is a valid boundary");
+        assert_eq!(report.status, CheckStatus::Assumed);
+    }
+
+    #[cfg(feature = "experimental-model-check")]
+    #[test]
+    fn checker_treats_explicit_roots_as_complete_but_not_option_or_collections() {
+        let rooted = [
+            Descriptor::field("input", "Request.actor", true),
+            Descriptor::field("state", "History.default_balance", true),
+            Descriptor::field("state", "History.absent_note", true),
+            Descriptor::field("output", "View.balance", false),
+            Descriptor::mapping(
+                "RenderBalance",
+                &[
+                    "Request.actor",
+                    "History.default_balance",
+                    "History.absent_note",
+                ],
+                "View.balance",
+                &[false, false, false],
+            ),
+        ];
+        assert_eq!(
+            check_descriptors(&rooted, CheckOptions::default())
+                .expect("explicit origins and state recipes are roots")
+                .status,
+            CheckStatus::Verified
+        );
+
+        let implicit_container_values = [
+            Descriptor::field("read_model", "History.optional_note", false),
+            Descriptor::field("read_model", "History.items", false),
+        ];
+        let error = check_descriptors(&implicit_container_values, CheckOptions::default())
+            .expect_err("Option and collections are not implicit roots");
+        assert_eq!(
+            error
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "ECM003")
+                .count(),
+            2
+        );
+    }
+
+    #[cfg(feature = "experimental-model-check")]
+    #[test]
+    fn checker_rejects_ordinary_cycles_and_sorts_unresolved_diagnostics() {
+        let cycle = [
+            Descriptor::field("read_model", "History.left", false),
+            Descriptor::field("read_model", "History.right", false),
+            Descriptor::mapping(
+                "LeftFromRight",
+                &["History.right"],
+                "History.left",
+                &[false],
+            ),
+            Descriptor::mapping(
+                "RightFromLeft",
+                &["History.left"],
+                "History.right",
+                &[false],
+            ),
+        ];
+        let cycle_error = check_descriptors(&cycle, CheckOptions::default())
+            .expect_err("non-temporal cycles have no seed");
+        assert!(
+            cycle_error
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "ECM006")
+        );
+
+        let unresolved = [
+            Descriptor::field("output", "View.a", false),
+            Descriptor::field("output", "View.b", false),
+            Descriptor::mapping("Zed", &["Missing.z"], "View.a", &[false]),
+            Descriptor::mapping("Alpha", &["Missing.a"], "View.b", &[false]),
+        ];
+        let forward = check_descriptors(&unresolved, CheckOptions::default())
+            .expect_err("unknown sources are rejected");
+        let reverse_descriptors = [
+            Descriptor::mapping("Alpha", &["Missing.a"], "View.b", &[false]),
+            Descriptor::mapping("Zed", &["Missing.z"], "View.a", &[false]),
+            Descriptor::field("output", "View.b", false),
+            Descriptor::field("output", "View.a", false),
+        ];
+        let reverse = check_descriptors(&reverse_descriptors, CheckOptions::default())
+            .expect_err("registration order cannot affect diagnostics");
+        assert_eq!(forward.diagnostics, reverse.diagnostics);
+        assert_eq!(
+            forward
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.subject.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Alpha", "Zed"]
         );
     }
 }
