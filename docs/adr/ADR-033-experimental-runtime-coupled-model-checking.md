@@ -49,3 +49,6 @@ must not be published or marked as the latest stable release automatically.
   not establish intended business formulas or external-system truth.
 - Applications opt in explicitly and may continue using only stable APIs.
 - The public experimental API can change before stabilization.
+- A follow-up ADR is required before this lane is stabilized, enabled by
+  default, or removed; that decision must incorporate trial-project feedback
+  and the alpha verification results.
