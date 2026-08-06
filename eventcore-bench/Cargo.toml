@@ -34,9 +34,13 @@ harness = false
 name = "serialization"
 harness = false
 
+[[bench]]
+name = "model_check"
+harness = false
+
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
-eventcore = { path = "../eventcore", features = ["sqlite", "postgres"] }
+eventcore = { path = "../eventcore", features = ["sqlite", "postgres", "experimental-model-check"] }
 eventcore-macros = { path = "../eventcore-macros" }
 eventcore-memory = { path = "../eventcore-memory" }
 eventcore-postgres = { path = "../eventcore-postgres" }

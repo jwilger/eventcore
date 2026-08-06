@@ -121,6 +121,20 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features
 
+  experimental-model-isolation:
+    name: Experimental Model Feature Isolation
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify checker dependency isolation
+        run: bash scripts/verify-experimental-model-isolation.sh
+
   mutation:
     name: Mutation
     needs: [changes, test]

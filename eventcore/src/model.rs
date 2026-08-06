@@ -570,7 +570,27 @@ pub fn check() -> Result<CheckReport, CheckError> {
 /// Runs information-completeness checking with explicit options.
 #[cfg(feature = "experimental-model-check")]
 pub fn check_with(options: CheckOptions) -> Result<CheckReport, CheckError> {
-    let mut descriptors: Vec<_> = inventory::iter::<Descriptor>.into_iter().collect();
+    check_references(inventory::iter::<Descriptor>.into_iter().collect(), options)
+}
+
+/// Checks an explicit descriptor set without using the linked-program registry.
+///
+/// This is useful for benchmark and checker-unit fixtures. Applications should
+/// normally use [`check`] so registration continues to come from executable
+/// modeled derives and mappings.
+#[cfg(feature = "experimental-model-check")]
+pub fn check_descriptors(
+    descriptors: &[Descriptor],
+    options: CheckOptions,
+) -> Result<CheckReport, CheckError> {
+    check_references(descriptors.iter().collect(), options)
+}
+
+#[cfg(feature = "experimental-model-check")]
+fn check_references(
+    mut descriptors: Vec<&Descriptor>,
+    options: CheckOptions,
+) -> Result<CheckReport, CheckError> {
     descriptors.sort_by_key(|descriptor| descriptor.stable_id());
 
     if descriptors.is_empty() {
@@ -578,8 +598,8 @@ pub fn check_with(options: CheckOptions) -> Result<CheckReport, CheckError> {
             diagnostics: vec![diagnostic(
                 "ECM001",
                 "registry",
-                "no modeled descriptors were linked into this test binary",
-                "enable `experimental-model-check` and reference the application model from this test",
+                "no modeled descriptors were supplied for checking",
+                "enable `experimental-model-check` and link the application model, or provide benchmark descriptors explicitly",
             )],
         });
     }
@@ -619,7 +639,10 @@ pub fn check_with(options: CheckOptions) -> Result<CheckReport, CheckError> {
         assumptions: &assumptions,
         options: &options,
     };
-    let mut evaluation = CheckerEvaluation::default();
+    let mut evaluation = CheckerEvaluation {
+        errors,
+        ..CheckerEvaluation::default()
+    };
     for (field, descriptor) in &fields {
         if let DescriptorKind::Field { root, .. } = descriptor.kind
             && root
@@ -1047,5 +1070,18 @@ mod tests {
 
         assert!(is_complete("History.balance", &graph, &mut evaluation));
         assert!(evaluation.errors.is_empty());
+    }
+
+    #[cfg(feature = "experimental-model-check")]
+    #[test]
+    fn explicit_descriptor_checks_retain_duplicate_registration_errors() {
+        let descriptors = [
+            Descriptor::field("input", "Input.amount", true),
+            Descriptor::field("input", "Input.amount", true),
+        ];
+
+        let error = check_descriptors(&descriptors, CheckOptions::default())
+            .expect_err("duplicate descriptors must not be discarded during evaluation");
+        assert!(error.diagnostics.iter().any(|error| error.code == "ECM002"));
     }
 }

@@ -56,3 +56,15 @@ projection effect.
 
 Release builds that do not enable either feature contain none of this module,
 its macro expansions, or the inventory registry.
+
+## Performance checks
+
+`eventcore-bench` includes `model_check`, which measures the real checker at
+100, 1,000, and 10,000 field nodes plus modeled-wrapper versus legacy command
+logic. It intentionally has no wall-clock CI assertion. On the pinned local
+development environment, the 10,000-node linear check is expected to remain
+well below the alpha target of 100 ms; run it with:
+
+```sh
+cargo bench -p eventcore-bench --bench model_check
+```
