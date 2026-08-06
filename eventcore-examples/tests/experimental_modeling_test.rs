@@ -9,12 +9,12 @@ use std::{
 };
 
 use eventcore::{
-    Event, ModelCommand, ModelEvent, ModelInput, ModelOutput, ModelReadModel, ModelState,
-    ProjectionConfig, Projector, RetryPolicy, StreamId, StreamIdentity, StreamPosition, execute,
-    mapping,
+    Event, ModelCommand, ModelEffect, ModelEvent, ModelInput, ModelOutput, ModelReadModel,
+    ModelState, ProjectionConfig, Projector, RetryPolicy, StreamId, StreamIdentity, StreamPosition,
+    execute, mapping,
     model::{
-        InMemoryProjectionSink, ModelCommandLogic, ModelEffect, ModelEffectApplication,
-        ModelProjection, ModelView, Modeled, ModeledEvents, ModeledIgnore, ProjectionAction,
+        InMemoryProjectionSink, ModelCommandLogic, ModelEffectApplication, ModelProjection,
+        ModelView, Modeled, ModeledEvents, ModeledIgnore, ProjectionAction,
         StreamIdentity as StreamIdentityTrait, checked_projection,
     },
     run_projection,
@@ -73,6 +73,7 @@ impl std::fmt::Display for InvalidAmount {
 impl std::error::Error for InvalidAmount {}
 
 static AMOUNT_MAPPING_CALLS: AtomicUsize = AtomicUsize::new(0);
+static PROJECTION_MAPPING_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 fn validated_amount(amount: &u64) -> Result<u64, InvalidAmount> {
     let _ = AMOUNT_MAPPING_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -138,12 +139,23 @@ impl ModelCommandLogic for Transfer {
     }
 }
 
+#[derive(ModelInput)]
+struct AccountHistorySeed {
+    #[model(origin = generated)]
+    balance: u64,
+}
+
 #[derive(Clone, ModelReadModel)]
 struct AccountHistory {
     balance: u64,
 }
 
-mapping! { EventAmountToBalance: BankEvent.amount => AccountHistory.balance using clone; }
+fn seed_balance(balance: &u64) -> u64 {
+    let _ = PROJECTION_MAPPING_CALLS.fetch_add(1, Ordering::Relaxed);
+    *balance
+}
+
+mapping! { SeedBalance: AccountHistorySeed.balance => AccountHistory.balance using seed_balance; }
 
 #[derive(ModelOutput)]
 struct AccountView {
@@ -165,18 +177,29 @@ impl ModelView for AccountHistoryView {
     }
 }
 
+#[derive(ModelEffect)]
 struct BalanceEffect {
     amount: u64,
 }
 
-impl ModelEffect for BalanceEffect {}
+fn event_amount_to_effect(amount: &u64) -> u64 {
+    let _ = PROJECTION_MAPPING_CALLS.fetch_add(1, Ordering::Relaxed);
+    *amount
+}
+
+fn credit_balance(balance: &u64, amount: &u64) -> u64 {
+    let _ = PROJECTION_MAPPING_CALLS.fetch_add(1, Ordering::Relaxed);
+    *balance + *amount
+}
+
+mapping! { EventAmountToEffect: BankEvent.amount => BalanceEffect.amount using event_amount_to_effect; }
+mapping! { CreditBalance: (previous(AccountHistory.balance), BalanceEffect.amount) => AccountHistory.balance using credit_balance; }
 
 impl ModelEffectApplication<AccountHistory> for BalanceEffect {
     fn apply_to(self, previous: Modeled<AccountHistory>) -> Modeled<AccountHistory> {
-        let previous = previous.into_inner();
-        Modeled::from_built(AccountHistory {
-            balance: previous.balance + self.amount,
-        })
+        AccountHistory::model_builder()
+            .balance(CreditBalance::apply((previous.as_ref(), &self)))
+            .build()
     }
 }
 
@@ -201,16 +224,23 @@ impl ModelProjection for AccountProjector {
                 "zero-value gateway event",
             )));
         }
-        Ok(ProjectionAction::Apply(Modeled::from_built(
-            BalanceEffect {
-                amount: event.amount,
-            },
-        )))
+        Ok(ProjectionAction::Apply(
+            BalanceEffect::model_builder()
+                .amount(EventAmountToEffect::apply(&event))
+                .build(),
+        ))
     }
 }
 
 fn stream(value: &str) -> StreamId {
     StreamId::try_new(value.to_owned()).expect("valid stream id")
+}
+
+fn initial_history(balance: u64) -> Modeled<AccountHistory> {
+    let seed = AccountHistorySeed::model_builder().balance(balance).build();
+    AccountHistory::model_builder()
+        .balance(SeedBalance::apply(seed.as_ref()))
+        .build()
 }
 
 #[tokio::test]
@@ -240,7 +270,7 @@ async fn modeled_bank_transfer_is_checked_and_executes_through_eventcore() {
         .expect("modeled command executes through the stable executor");
     assert_eq!(response.attempts(), 1);
 
-    let sink = InMemoryProjectionSink::new(Modeled::from_built(AccountHistory { balance: 0 }));
+    let sink = InMemoryProjectionSink::new(initial_history(0));
     let observed_history = sink.clone();
     run_projection(
         checked_projection(AccountProjector, sink),
@@ -250,10 +280,15 @@ async fn modeled_bank_transfer_is_checked_and_executes_through_eventcore() {
     .await
     .expect("modeled projector runs through EventCore's projection runner");
     assert_eq!(observed_history.state().as_ref().balance, 25);
+    assert_eq!(
+        PROJECTION_MAPPING_CALLS.load(Ordering::Relaxed),
+        3,
+        "the seeded read model, event effect, and temporal balance mapping all execute",
+    );
 
     let mut projector = checked_projection(
         AccountProjector,
-        InMemoryProjectionSink::new(Modeled::from_built(AccountHistory { balance: 25 })),
+        InMemoryProjectionSink::new(initial_history(25)),
     );
     projector
         .apply(
