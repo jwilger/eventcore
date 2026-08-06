@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v1.0.2...eventcore-postgres-v1.1.0) - 2026-08-06
+
+### Features
+
+- *(model)* add experimental runtime-coupled checking
+
+### Bug Fixes
+
+- *(release)* gate stable publication on release PR
+
 ## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-postgres-v1.0.0...eventcore-postgres-v1.0.1) - 2026-06-15
 
 ### Documentation
