@@ -12,6 +12,8 @@ workspace = true
 [features]
 default = ["macros"]
 macros = ["dep:eventcore-macros"]
+experimental-modeling = ["macros", "eventcore-macros/experimental-modeling"]
+experimental-model-check = ["experimental-modeling", "dep:inventory"]
 postgres = ["dep:eventcore-postgres"]
 sqlite = ["dep:eventcore-sqlite"]
 
@@ -38,6 +40,7 @@ eventcore-postgres = { version = "1.0.2", path = "../eventcore-postgres", option
 # Optional dependency for SQLite backend (enabled via feature flag)
 eventcore-sqlite = { version = "1.0.2", path = "../eventcore-sqlite", optional = true }
 futures = "0.3.32"
+inventory = { version = "0.3.24", optional = true }
 
 [dev-dependencies]
 eventcore-memory = { path = "../eventcore-memory" }

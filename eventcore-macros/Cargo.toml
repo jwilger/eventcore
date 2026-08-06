@@ -12,6 +12,9 @@ workspace = true
 [lib]
 proc-macro = true
 
+[features]
+experimental-modeling = []
+
 [dependencies]
 proc-macro2 = "1.0"
 quote = "1.0"
@@ -19,7 +22,7 @@ syn = { version = "2.0", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
 trybuild = "1.0"
-eventcore = { path = "../eventcore" }
+eventcore = { path = "../eventcore", features = ["experimental-modeling"] }
 eventcore-memory = { path = "../eventcore-memory" }
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1.23.1", features = ["v7"] }

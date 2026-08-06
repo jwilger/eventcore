@@ -144,6 +144,9 @@ mod execute_pipeline;
 mod projection;
 mod projection_pipeline;
 
+#[cfg(feature = "experimental-modeling")]
+pub mod model;
+
 // Re-export application-developer types from eventcore-types
 pub use eventcore_types::{
     AttemptNumber, CommandError, CommandLogic, CommandStreams, DelayMilliseconds, Event,
@@ -161,6 +164,52 @@ pub use projection::{ProjectionConfig, ProjectionError, run_projection};
 // Users can disable with: eventcore = { version = "...", default-features = false }
 #[cfg(feature = "macros")]
 pub use eventcore_macros::Command;
+
+#[cfg(feature = "experimental-modeling")]
+pub use eventcore_macros::{
+    ModelCommand, ModelEffect, ModelEvent, ModelInput, ModelOutput, ModelReadModel, ModelState,
+    StreamIdentity,
+};
+
+#[cfg(feature = "experimental-modeling")]
+pub use eventcore_macros::mapping;
+
+/// Registration hook emitted by experimental model macros when the checker is
+/// unavailable. Keeping this a macro avoids evaluating checker-only tokens in
+/// ordinary production builds.
+#[cfg(all(
+    feature = "experimental-modeling",
+    not(feature = "experimental-model-check")
+))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __eventcore_register_model_descriptor {
+    ($($tokens:tt)*) => {};
+}
+
+#[cfg(feature = "experimental-model-check")]
+#[doc(hidden)]
+pub mod __private {
+    pub use inventory;
+}
+
+/// Registration hook emitted by experimental model macros when checking is
+/// enabled. The generated metadata is intentionally absent without the feature.
+#[cfg(feature = "experimental-model-check")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __eventcore_register_model_descriptor {
+    (field, $role:expr, $owner:expr, $field:expr, $root:expr $(,)?) => {
+        $crate::__private::inventory::submit! {
+            $crate::model::Descriptor::field($role, concat!($owner, ".", $field), $root)
+        }
+    };
+    (mapping, $name:expr, $sources:expr, $target:expr, $temporal_sources:expr $(,)?) => {
+        $crate::__private::inventory::submit! {
+            $crate::model::Descriptor::mapping($name, $sources, $target, $temporal_sources)
+        }
+    };
+}
 
 // Re-export PostgreSQL backend when the "postgres" feature is enabled
 #[cfg(feature = "postgres")]
