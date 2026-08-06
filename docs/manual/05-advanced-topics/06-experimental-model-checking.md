@@ -38,6 +38,8 @@ The same mapping is executable and registered for `eventcore::model::check()`.
 The checker verifies structural provenance: it follows mappings from modeled
 outputs back to explicit inputs and default state roots. It rejects missing
 producers, unknown sources, duplicate descriptor names, and ordinary cycles.
+Diagnostics have stable codes, remediation text, dependency traces for
+provenance failures, and source locations captured from derives or mappings.
 It does **not** prove that a formula represents the intended business rule;
 continue to test command decisions and projections normally.
 

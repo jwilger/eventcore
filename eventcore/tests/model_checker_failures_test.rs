@@ -18,8 +18,16 @@ fn checker_reports_a_non_root_field_without_an_executable_producer() {
 
     let error = eventcore::model::check().expect_err("the field has no mapping or root recipe");
 
-    assert!(error
+    let diagnostic = error
         .diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.code == "ECM003" && diagnostic.subject.contains("balance")));
+        .find(|diagnostic| diagnostic.code == "ECM003" && diagnostic.subject.contains("balance"))
+        .expect("missing producer diagnostic names the incomplete field");
+    assert_eq!(diagnostic.trace, vec!["UnproducedBalance.balance"]);
+    assert!(
+        diagnostic
+            .location
+            .as_deref()
+            .is_some_and(|location| location.contains("model_checker_failures_test.rs"))
+    );
 }

@@ -201,17 +201,32 @@ pub mod __private {
 macro_rules! __eventcore_register_model_descriptor {
     (field, $role:expr, $owner:expr, $field:expr, $root:expr $(,)?) => {
         $crate::__private::inventory::submit! {
-            $crate::model::Descriptor::field($role, concat!($owner, ".", $field), $root)
+            $crate::model::Descriptor::field_at(
+                $role,
+                concat!($owner, ".", $field),
+                $root,
+                concat!(file!(), ":", line!()),
+            )
         }
     };
     (mapping, $name:expr, $sources:expr, $target:expr, $temporal_sources:expr $(,)?) => {
         $crate::__private::inventory::submit! {
-            $crate::model::Descriptor::mapping($name, $sources, $target, $temporal_sources)
+            $crate::model::Descriptor::mapping_at(
+                $name,
+                $sources,
+                $target,
+                $temporal_sources,
+                concat!(file!(), ":", line!()),
+            )
         }
     };
     (assumption, $name:expr, $target:expr $(,)?) => {
         $crate::__private::inventory::submit! {
-            $crate::model::Descriptor::assumption($name, $target)
+            $crate::model::Descriptor::assumption_at(
+                $name,
+                $target,
+                concat!(file!(), ":", line!()),
+            )
         }
     };
 }

@@ -536,6 +536,10 @@ pub struct CheckDiagnostic {
     pub message: String,
     /// Suggested next action.
     pub help: String,
+    /// Provenance path observed while checking, when applicable.
+    pub trace: Vec<String>,
+    /// Source location captured from the modeled derive or mapping, when known.
+    pub location: Option<String>,
 }
 
 #[cfg(feature = "experimental-model-check")]
@@ -545,7 +549,14 @@ impl std::fmt::Display for CheckDiagnostic {
             formatter,
             "{}: {}\n  {}\nhelp: {}",
             self.code, self.subject, self.message, self.help
-        )
+        )?;
+        if !self.trace.is_empty() {
+            write!(formatter, "\ntrace: {}", self.trace.join(" -> "))?;
+        }
+        if let Some(location) = &self.location {
+            write!(formatter, "\nlocation: {location}")?;
+        }
+        Ok(())
     }
 }
 
@@ -621,11 +632,12 @@ fn check_references(
 
     for descriptor in descriptors {
         if !identifiers.insert(descriptor.stable_id()) {
-            errors.push(diagnostic(
+            errors.push(diagnostic_at(
                 "ECM002",
                 descriptor.stable_id(),
                 "duplicate modeled descriptor registration",
                 "give the component or mapping a unique name",
+                descriptor.location(),
             ));
         }
         match descriptor.kind {
@@ -742,6 +754,7 @@ struct CheckerEvaluation {
     memo: BTreeMap<String, bool>,
     visiting: BTreeSet<String>,
     errors: Vec<CheckDiagnostic>,
+    path: Vec<String>,
 }
 
 #[cfg(feature = "experimental-model-check")]
@@ -763,15 +776,19 @@ fn is_complete(field: &str, graph: &CheckerGraph<'_>, evaluation: &mut CheckerEv
         return true;
     }
     if !evaluation.visiting.insert(field.to_owned()) {
-        evaluation.errors.push(diagnostic(
+        let mut trace = evaluation.path.clone();
+        trace.push(field.to_owned());
+        evaluation.errors.push(diagnostic_with_trace(
             "ECM006",
             field,
             "ordinary provenance cycle has no explicit temporal seed",
             "use `previous(...)` with a modeled default/absence seed",
+            trace,
         ));
         let _ = evaluation.memo.insert(field.to_owned(), false);
         return false;
     }
+    evaluation.path.push(field.to_owned());
 
     if let Some(boundaries) = assumptions.get(field) {
         let accepted = boundaries.iter().find_map(|boundary| {
@@ -785,6 +802,7 @@ fn is_complete(field: &str, graph: &CheckerGraph<'_>, evaluation: &mut CheckerEv
             evaluation.used_assumption = true;
             let _ = evaluation.visiting.remove(field);
             let _ = evaluation.memo.insert(field.to_owned(), true);
+            let _ = evaluation.path.pop();
             return true;
         }
         for boundary in boundaries {
@@ -800,18 +818,25 @@ fn is_complete(field: &str, graph: &CheckerGraph<'_>, evaluation: &mut CheckerEv
         }
         let _ = evaluation.visiting.remove(field);
         let _ = evaluation.memo.insert(field.to_owned(), false);
+        let _ = evaluation.path.pop();
         return false;
     }
 
     let Some(recipes) = mappings.get(field) else {
-        evaluation.errors.push(diagnostic(
+        let location = fields
+            .get(field)
+            .map_or("<unknown>", |descriptor| descriptor.location());
+        evaluation.errors.push(diagnostic_with_trace_at(
             "ECM003",
             field,
             "non-root modeled field has no executable producer",
             "add a mapping, default, absence, or explicit origin",
+            evaluation.path.clone(),
+            location,
         ));
         let _ = evaluation.visiting.remove(field);
         let _ = evaluation.memo.insert(field.to_owned(), false);
+        let _ = evaluation.path.pop();
         return false;
     };
 
@@ -828,11 +853,15 @@ fn is_complete(field: &str, graph: &CheckerGraph<'_>, evaluation: &mut CheckerEv
         };
         for (source, temporal) in sources.iter().zip(temporal_sources.iter()) {
             if !fields.contains_key(source) {
-                evaluation.errors.push(diagnostic(
+                let mut trace = evaluation.path.clone();
+                trace.push((*source).to_owned());
+                evaluation.errors.push(diagnostic_with_trace_at(
                     "ECM004",
                     name,
                     format!("mapping source `{source}` is not a modeled field"),
                     "derive a modeled component for the source owner or correct the mapping path",
+                    trace,
+                    recipe.location(),
                 ));
                 complete = false;
                 continue;
@@ -866,6 +895,7 @@ fn is_complete(field: &str, graph: &CheckerGraph<'_>, evaluation: &mut CheckerEv
     }
     let _ = evaluation.visiting.remove(field);
     let _ = evaluation.memo.insert(field.to_owned(), complete);
+    let _ = evaluation.path.pop();
     complete
 }
 
@@ -907,6 +937,63 @@ fn diagnostic(
         subject: subject.into(),
         message: message.into(),
         help: help.into(),
+        trace: Vec::new(),
+        location: None,
+    }
+}
+
+#[cfg(feature = "experimental-model-check")]
+fn diagnostic_at(
+    code: &'static str,
+    subject: impl Into<String>,
+    message: impl Into<String>,
+    help: impl Into<String>,
+    location: &'static str,
+) -> CheckDiagnostic {
+    CheckDiagnostic {
+        code,
+        subject: subject.into(),
+        message: message.into(),
+        help: help.into(),
+        trace: Vec::new(),
+        location: Some(location.to_owned()),
+    }
+}
+
+#[cfg(feature = "experimental-model-check")]
+fn diagnostic_with_trace(
+    code: &'static str,
+    subject: impl Into<String>,
+    message: impl Into<String>,
+    help: impl Into<String>,
+    trace: Vec<String>,
+) -> CheckDiagnostic {
+    CheckDiagnostic {
+        code,
+        subject: subject.into(),
+        message: message.into(),
+        help: help.into(),
+        trace,
+        location: None,
+    }
+}
+
+#[cfg(feature = "experimental-model-check")]
+fn diagnostic_with_trace_at(
+    code: &'static str,
+    subject: impl Into<String>,
+    message: impl Into<String>,
+    help: impl Into<String>,
+    trace: Vec<String>,
+    location: &'static str,
+) -> CheckDiagnostic {
+    CheckDiagnostic {
+        code,
+        subject: subject.into(),
+        message: message.into(),
+        help: help.into(),
+        trace,
+        location: Some(location.to_owned()),
     }
 }
 
@@ -927,16 +1014,19 @@ pub enum DescriptorKind {
         role: &'static str,
         field: &'static str,
         root: bool,
+        location: &'static str,
     },
     Mapping {
         name: &'static str,
         sources: &'static [&'static str],
         target: &'static str,
         temporal_sources: &'static [bool],
+        location: &'static str,
     },
     Assumption {
         name: &'static str,
         target: &'static str,
+        location: &'static str,
     },
 }
 
@@ -952,8 +1042,24 @@ impl Descriptor {
     #[doc(hidden)]
     #[must_use]
     pub const fn field(role: &'static str, field: &'static str, root: bool) -> Self {
+        Self::field_at(role, field, root, "<explicit descriptor>")
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn field_at(
+        role: &'static str,
+        field: &'static str,
+        root: bool,
+        location: &'static str,
+    ) -> Self {
         Self {
-            kind: DescriptorKind::Field { role, field, root },
+            kind: DescriptorKind::Field {
+                role,
+                field,
+                root,
+                location,
+            },
         }
     }
 
@@ -965,12 +1071,31 @@ impl Descriptor {
         target: &'static str,
         temporal_sources: &'static [bool],
     ) -> Self {
+        Self::mapping_at(
+            name,
+            sources,
+            target,
+            temporal_sources,
+            "<explicit descriptor>",
+        )
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn mapping_at(
+        name: &'static str,
+        sources: &'static [&'static str],
+        target: &'static str,
+        temporal_sources: &'static [bool],
+        location: &'static str,
+    ) -> Self {
         Self {
             kind: DescriptorKind::Mapping {
                 name,
                 sources,
                 target,
                 temporal_sources,
+                location,
             },
         }
     }
@@ -978,8 +1103,22 @@ impl Descriptor {
     #[doc(hidden)]
     #[must_use]
     pub const fn assumption(name: &'static str, target: &'static str) -> Self {
+        Self::assumption_at(name, target, "<explicit descriptor>")
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn assumption_at(
+        name: &'static str,
+        target: &'static str,
+        location: &'static str,
+    ) -> Self {
         Self {
-            kind: DescriptorKind::Assumption { name, target },
+            kind: DescriptorKind::Assumption {
+                name,
+                target,
+                location,
+            },
         }
     }
 
@@ -988,6 +1127,14 @@ impl Descriptor {
             DescriptorKind::Field { field, .. } => field,
             DescriptorKind::Mapping { name, .. } => name,
             DescriptorKind::Assumption { name, .. } => name,
+        }
+    }
+
+    fn location(&self) -> &'static str {
+        match self.kind {
+            DescriptorKind::Field { location, .. }
+            | DescriptorKind::Mapping { location, .. }
+            | DescriptorKind::Assumption { location, .. } => location,
         }
     }
 }
