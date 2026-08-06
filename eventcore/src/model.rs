@@ -1239,4 +1239,72 @@ mod tests {
             .expect_err("duplicate descriptors must not be discarded during evaluation");
         assert!(error.diagnostics.iter().any(|error| error.code == "ECM002"));
     }
+
+    #[cfg(feature = "experimental-model-check")]
+    #[test]
+    fn multi_input_mapping_requires_every_source_and_every_alternative() {
+        let complete = [
+            Descriptor::field("input", "Input.left", true),
+            Descriptor::field("input", "Input.right", true),
+            Descriptor::field("output", "Output.sum", false),
+            Descriptor::mapping(
+                "Sum",
+                &["Input.left", "Input.right"],
+                "Output.sum",
+                &[false, false],
+            ),
+        ];
+        assert_eq!(
+            check_descriptors(&complete, CheckOptions::default())
+                .expect("both sources make the AND-edge complete")
+                .status,
+            CheckStatus::Verified
+        );
+
+        let incomplete_alternative = [
+            Descriptor::field("input", "Input.left", true),
+            Descriptor::field("output", "Output.sum", false),
+            Descriptor::mapping("Good", &["Input.left"], "Output.sum", &[false]),
+            Descriptor::mapping("Broken", &["Missing.right"], "Output.sum", &[false]),
+        ];
+        let error = check_descriptors(&incomplete_alternative, CheckOptions::default())
+            .expect_err("all registered producer alternatives must be complete");
+        assert!(
+            error
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "ECM004")
+        );
+    }
+
+    #[cfg(feature = "experimental-model-check")]
+    #[test]
+    fn checker_reports_empty_registry_and_unused_boundaries() {
+        let empty = check_descriptors(&[], CheckOptions::default())
+            .expect_err("an empty explicit descriptor set is not a model");
+        assert_eq!(empty.diagnostics[0].code, "ECM001");
+
+        let descriptors = [
+            Descriptor::field("input", "Input.used", true),
+            Descriptor::field("input", "Input.unused", true),
+            Descriptor::field("event", "Event.value", false),
+            Descriptor::field("output", "Output.value", false),
+            Descriptor::mapping("EventFromInput", &["Input.used"], "Event.value", &[false]),
+            Descriptor::mapping("OutputFromInput", &["Input.used"], "Output.value", &[false]),
+        ];
+        let report = check_descriptors(&descriptors, CheckOptions::default())
+            .expect("the output remains complete even with unused boundaries");
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "ECM102")
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "ECM103")
+        );
+    }
 }
