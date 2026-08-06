@@ -34,24 +34,6 @@ The in-memory store lives in the `eventcore-memory` crate. The PostgreSQL and
 SQLite backends are enabled via the `postgres` and `sqlite` features on the
 `eventcore` crate.
 
-## Experimental model checking
-
-EventCore 1.1 introduces an opt-in experiment for runtime-coupled Event
-Modeling checks. Experimental APIs are distributed in standard EventCore
-releases but remain outside the stable API contract while their clearly named
-feature flags retain the `experimental-` prefix. Enable `experimental-modeling`
-to use typed modeled builders and `experimental-model-check` in test targets to
-validate executable field provenance:
-
-```toml
-[dev-dependencies]
-eventcore = { version = "1.1", features = ["experimental-model-check"] }
-```
-
-See the [experimental model-checking manual chapter](docs/manual/05-advanced-topics/06-experimental-model-checking.md)
-and the executable bank-transfer example in
-`eventcore-examples/tests/experimental_modeling_test.rs`.
-
 ```rust
 use eventcore::{
     Command, CommandError, CommandLogic, Event, NewEvents, RetryPolicy,
@@ -109,6 +91,24 @@ let command = DepositMoney {
 };
 execute(&store, command, RetryPolicy::new()).await?;
 ```
+
+## Experimental model checking
+
+EventCore 1.1 introduces an opt-in experiment for runtime-coupled Event
+Modeling checks. Experimental APIs are distributed in standard EventCore
+releases but remain outside the stable API contract while their clearly named
+feature flags retain the `experimental-` prefix. Enable `experimental-modeling`
+to use typed modeled builders and `experimental-model-check` in test targets to
+validate executable field provenance:
+
+```toml
+[dev-dependencies]
+eventcore = { version = "1.1", features = ["experimental-model-check"] }
+```
+
+See the [experimental model-checking manual chapter](docs/manual/05-advanced-topics/06-experimental-model-checking.md)
+and the executable bank-transfer example in
+`eventcore-examples/tests/experimental_modeling_test.rs`.
 
 ## Key Features
 
