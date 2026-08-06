@@ -1,6 +1,6 @@
 [package]
 name = "eventcore-types"
-version.workspace = true
+version = "1.1.0"
 edition.workspace = true
 description = "Shared vocabulary types and traits for EventCore event sourcing library"
 license.workspace = true

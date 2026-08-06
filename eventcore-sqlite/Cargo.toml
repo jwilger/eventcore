@@ -1,6 +1,6 @@
 [package]
 name = "eventcore-sqlite"
-version.workspace = true
+version = "1.1.0"
 edition.workspace = true
 description = "SQLite event store adapter for EventCore event sourcing library"
 license.workspace = true
@@ -24,7 +24,7 @@ encryption = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
 
 [dependencies]
 async-stream = "0.3.6"
-eventcore-types = { version = "1.1.0-alpha.1", path = "../eventcore-types" }
+eventcore-types = { version = "1.1.0", path = "../eventcore-types" }
 futures = "0.3.32"
 rusqlite = { version = "0.32", default-features = false }
 serde_json = "1.0"

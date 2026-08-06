@@ -1,6 +1,6 @@
 [package]
 name = "eventcore-fs"
-version.workspace = true
+version = "1.1.0"
 edition.workspace = true
 description = "File-based, git-mergeable event store adapter for EventCore"
 license.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-eventcore-types = { version = "1.1.0-alpha.1", path = "../eventcore-types" }
+eventcore-types = { version = "1.1.0", path = "../eventcore-types" }
 chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
