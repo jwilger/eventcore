@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [1.1.0-alpha.1](https://github.com/jwilger/eventcore/compare/eventcore-testing-v1.0.2...eventcore-testing-v1.1.0-alpha.1) - 2026-08-06
+
+### Features
+
+- *(model)* add experimental runtime-coupled checking
+
 ## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-testing-v1.0.0...eventcore-testing-v1.0.1) - 2026-06-15
 
 ### Documentation
