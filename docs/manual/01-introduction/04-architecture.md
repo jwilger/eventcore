@@ -2,6 +2,15 @@
 
 This chapter provides a high-level view of EventCore's architecture, showing how commands, events, and projections work together to create robust event-sourced systems.
 
+## Experimental Runtime-Coupled Modeling
+
+The opt-in experimental modeling lane sits beside this stable architecture;
+it does not replace it. Its typed builders and mappings feed the existing
+command executor and projection trait, while the test-only checker reads
+metadata emitted by those same runtime artifacts. See
+[Experimental Model Checking](../05-advanced-topics/06-experimental-model-checking.md)
+and [ADR-033](../../adr/ADR-033-experimental-runtime-coupled-model-checking.md).
+
 ## Core Architecture
 
 EventCore follows a clean, layered architecture:

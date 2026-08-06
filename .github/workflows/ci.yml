@@ -33,6 +33,9 @@ jobs:
               - '**/*.rs'
               - '**/Cargo.toml'
               - '**/Cargo.lock'
+              - 'docs/**'
+              - 'ARCHITECTURE.md'
+              - 'README.md'
               - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
 

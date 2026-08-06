@@ -4,7 +4,10 @@
 //! to construct and execute modeled commands, then add
 //! `experimental-model-check` in test targets to run the static checker.
 
-use std::marker::PhantomData;
+use std::{
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+};
 
 use eventcore_types::{
     CommandError, CommandLogic, CommandStreams, Event, NewEvents, Projector, StreamId,
@@ -162,7 +165,17 @@ impl<S: ModelState> Default for Modeled<S> {
 }
 
 /// Marker implemented by a modeled projection effect.
-pub trait ModelEffect {}
+pub trait ModelEffect: Send + Sized + 'static {}
+
+/// Purely applies an effect to a specific modeled read model.
+///
+/// This is separate from [`ModelEffect`] so `#[derive(ModelEffect)]` stays a
+/// useful marker derive. Effects that are persisted by
+/// [`InMemoryProjectionSink`] additionally implement this contract.
+pub trait ModelEffectApplication<R: ModelReadModel>: ModelEffect {
+    /// Applies the effect to the previous modeled read model.
+    fn apply_to(self, previous: Modeled<R>) -> Modeled<R>;
+}
 
 /// Marker implemented by a modeled read model.
 pub trait ModelReadModel {}
@@ -333,6 +346,59 @@ pub trait ProjectionSink<E: ModelEffect>: Send + 'static {
 
     /// Persists an effect at its source stream position.
     fn apply(&mut self, effect: E, position: StreamPosition) -> Result<(), Self::Error>;
+}
+
+/// A typed in-memory sink for exercising modeled projections without an
+/// imperative database adapter.
+///
+/// It is deliberately small and intended for tests, examples, and local
+/// validation. Production sinks remain ordinary [`ProjectionSink`] adapters.
+pub struct InMemoryProjectionSink<R: ModelReadModel> {
+    state: Arc<Mutex<Option<Modeled<R>>>>,
+}
+
+impl<R: ModelReadModel> InMemoryProjectionSink<R> {
+    /// Creates a sink from a modeled initial read model.
+    #[must_use]
+    pub fn new(initial: Modeled<R>) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(Some(initial))),
+        }
+    }
+
+    /// Returns a clone of the current modeled read model.
+    #[must_use]
+    pub fn state(&self) -> Modeled<R>
+    where
+        R: Clone,
+    {
+        self.state
+            .lock()
+            .expect("in-memory projection sink mutex poisoned")
+            .as_ref()
+            .expect("in-memory projection sink always retains a state")
+            .clone()
+    }
+}
+
+impl<R, E> ProjectionSink<E> for InMemoryProjectionSink<R>
+where
+    R: ModelReadModel + Send + 'static,
+    E: ModelEffectApplication<R>,
+{
+    type Error = std::convert::Infallible;
+
+    fn apply(&mut self, effect: E, _position: StreamPosition) -> Result<(), Self::Error> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("in-memory projection sink mutex poisoned");
+        let previous = state
+            .take()
+            .expect("in-memory projection sink always retains a state");
+        *state = Some(effect.apply_to(previous));
+        Ok(())
+    }
 }
 
 /// Error returned by a checked projection adapter.

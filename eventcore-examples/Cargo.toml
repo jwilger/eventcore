@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 
 [dev-dependencies]
-eventcore = { path = "../eventcore" }
+eventcore = { path = "../eventcore", features = ["experimental-model-check"] }
 eventcore-macros = { path = "../eventcore-macros" }
 eventcore-memory = { path = "../eventcore-memory" }
 eventcore-testing = { path = "../eventcore-testing" }
