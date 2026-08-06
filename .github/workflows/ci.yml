@@ -191,14 +191,23 @@ jobs:
           POSTGRES_HOST: localhost
           POSTGRES_PORT: "5432"
         run: |
+          set +e
           cargo mutants --workspace 2>&1 | tee mutation-output.txt
           MUTANTS_EXIT=${PIPESTATUS[0]}
-          if [ "$MUTANTS_EXIT" -ne 0 ]; then
+          set -e
+
+          if grep -q '^SURVIVED' mutation-output.txt; then
             echo "has_survivors=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_survivors=false" >> "$GITHUB_OUTPUT"
           fi
-          exit "$MUTANTS_EXIT"
+
+          if [ "$MUTANTS_EXIT" -ne 0 ]; then
+            echo "mutation_run_failed=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Workspace mutation baseline did not complete; see the uploaded report."
+          else
+            echo "mutation_run_failed=false" >> "$GITHUB_OUTPUT"
+          fi
         continue-on-error: true
 
       - name: Upload mutation report
@@ -209,6 +218,11 @@ jobs:
           path: |
             mutation-output.txt
             mutants.out/
+
+      - name: Report incomplete workspace mutation run
+        if: steps.mutants.outputs.mutation_run_failed == 'true'
+        run: |
+          echo "::warning::The advisory workspace mutation run did not complete; the strict modeled-checker mutation gate remains required."
 
       - name: Create issues for surviving mutants
         if: steps.mutants.outputs.has_survivors == 'true'
