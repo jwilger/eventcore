@@ -22,9 +22,9 @@ EventCore and its companion crates are published on crates.io.
 ```toml
 # Cargo.toml
 [dependencies]
-eventcore = "1.0"
+eventcore = "1.1"
 # The in-memory store used below is a separate crate:
-eventcore-memory = "1.0"
+eventcore-memory = "1.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -177,21 +177,23 @@ eventcore-examples/     # Integration test examples
 
 ## Feature Flags
 
-| Feature    | Default | Description                                               |
-| ---------- | ------- | --------------------------------------------------------- |
-| `macros`   | Yes     | Re-exports `#[derive(Command)]` from `eventcore-macros`   |
-| `postgres` | No      | Re-exports `PostgresEventStore` from `eventcore-postgres` |
-| `sqlite`   | No      | Re-exports `SqliteEventStore` from `eventcore-sqlite`     |
+| Feature                    | Default | Description                                                        |
+| -------------------------- | ------- | ------------------------------------------------------------------ |
+| `macros`                   | Yes     | Re-exports `#[derive(Command)]` from `eventcore-macros`            |
+| `postgres`                 | No      | Re-exports `PostgresEventStore` from `eventcore-postgres`          |
+| `sqlite`                   | No      | Re-exports `SqliteEventStore` from `eventcore-sqlite`              |
+| `experimental-modeling`    | No      | Adds the experimental runtime modeled lane                         |
+| `experimental-model-check` | No      | Adds test-time registration and information-completeness checking  |
 
 ```toml
 # Default (includes macros)
-eventcore = "1.0"
+eventcore = "1.1"
 
 # With PostgreSQL adapter
-eventcore = { version = "1.0", features = ["postgres"] }
+eventcore = { version = "1.1", features = ["postgres"] }
 
 # Without macros (rare - for minimal builds)
-eventcore = { version = "1.0", default-features = false }
+eventcore = { version = "1.1", default-features = false }
 ```
 
 ## Examples

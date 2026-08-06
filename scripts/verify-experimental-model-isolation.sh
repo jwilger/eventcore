@@ -19,15 +19,17 @@ if ! cargo tree -p eventcore --features experimental-model-check -e normal | gre
   exit 1
 fi
 
-# Check compiled artifacts as well as Cargo's resolved graph. A fresh target
-# directory prevents a checker-enabled artifact from satisfying a negative
-# control. `ECM001` is a checker-only diagnostic sentinel, so it is a stable
-# positive/negative control without requiring a separate test binary.
+# Check compiled artifacts as well as Cargo's resolved graph. Fresh target
+# directories prevent feature-enabled artifacts from satisfying negative
+# controls. The runtime marker is retained only when experimental-modeling is
+# compiled; `ECM001` is checker-only.
 isolation_target=$(mktemp -d)
 trap 'rm -rf "$isolation_target"' EXIT
 
-assert_checker_sentinel() {
-  local expected=$1
+assert_artifact_marker() {
+  local marker=$1
+  local expected=$2
+  local description=$3
   local artifact
   artifact=$(find "$isolation_target/release/deps" -name 'libeventcore-*.rlib' -print -quit)
 
@@ -36,25 +38,33 @@ assert_checker_sentinel() {
     exit 1
   fi
 
-  if grep --binary-files=text --quiet 'ECM001' "$artifact"; then
+  if grep --binary-files=text --quiet "$marker" "$artifact"; then
     actual=present
   else
     actual=absent
   fi
 
   if [ "$actual" != "$expected" ]; then
-    echo "checker sentinel is $actual; expected $expected" >&2
+    echo "$description marker is $actual; expected $expected" >&2
     exit 1
   fi
 }
 
+CARGO_TARGET_DIR="$isolation_target" cargo build -p eventcore --lib --release --no-default-features
+assert_artifact_marker EVENTCORE_EXPERIMENTAL_MODELING_RUNTIME absent "modeled runtime"
+assert_artifact_marker ECM001 absent checker
+
+rm -rf "$isolation_target"
+isolation_target=$(mktemp -d)
 CARGO_TARGET_DIR="$isolation_target" cargo build -p eventcore --lib --release --no-default-features --features experimental-modeling
-assert_checker_sentinel absent
+assert_artifact_marker EVENTCORE_EXPERIMENTAL_MODELING_RUNTIME present "modeled runtime"
+assert_artifact_marker ECM001 absent checker
 
 rm -rf "$isolation_target"
 isolation_target=$(mktemp -d)
 CARGO_TARGET_DIR="$isolation_target" cargo build -p eventcore --lib --release --no-default-features --features experimental-model-check
-assert_checker_sentinel present
+assert_artifact_marker EVENTCORE_EXPERIMENTAL_MODELING_RUNTIME present "modeled runtime"
+assert_artifact_marker ECM001 present checker
 
 # A consumer cannot reach the model module without opting in, while a
 # runtime-only consumer can. This checks the public feature boundary rather

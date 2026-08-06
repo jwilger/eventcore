@@ -4,6 +4,23 @@ This chapter provides a complete reference for all EventCore configuration optio
 
 EventCore deliberately keeps its configuration surface small. There is no global `EventCoreConfig`, no configuration-file loader, and no environment-variable parsing built into the library. Each backend has a small, explicit config struct, and execution/projection behavior is tuned through the `RetryPolicy` and `ProjectionConfig` builders. Wiring those values together — and reading them from files or the environment — is the responsibility of your application.
 
+## Cargo feature flags
+
+| Feature                    | Default | Effect                                                           |
+| -------------------------- | ------- | ---------------------------------------------------------------- |
+| `macros`                   | Yes     | Re-exports the stable `Command` derive                           |
+| `postgres`                 | No      | Re-exports the PostgreSQL adapter                                |
+| `sqlite`                   | No      | Re-exports the SQLite adapter                                    |
+| `experimental-modeling`    | No      | Enables runtime modeled builders, mappings, and wrappers         |
+| `experimental-model-check` | No      | Adds checker registration and graph analysis for test targets    |
+
+Features whose names retain the `experimental-` prefix are outside the stable
+compatibility guarantee even though they ship in ordinary semantic-versioned
+releases. Keep `experimental-model-check` in dev dependencies; deployed
+artifacts should not be built with that feature or with `--all-features`.
+See [Experimental Model Checking](../05-advanced-topics/06-experimental-model-checking.md)
+for setup and guarantee boundaries.
+
 ## Core Configuration
 
 ### EventStore Configuration

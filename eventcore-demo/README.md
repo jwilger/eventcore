@@ -16,6 +16,13 @@ It models a bank and shows the patterns a downstream consumer uses in practice:
   write models, via the `Projector` trait and `eventcore::run_projection()`.
 - A **PostgreSQL event store** for durable, ACID-backed persistence.
 
+This demo intentionally uses EventCore's stable command and projection APIs.
+The additive, feature-gated modeled version is kept side by side in
+[`eventcore-examples/tests/experimental_modeling_test.rs`](../eventcore-examples/tests/experimental_modeling_test.rs).
+That executable example follows input → command → event → read model → output,
+and runs the information-completeness checker over the same mappings used at
+runtime.
+
 ## What the demo does
 
 `cargo run -p eventcore-demo` executes a scripted scenario:

@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   merge_group:
@@ -304,7 +306,8 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [changes, test, format, clippy, mutation, security-audit]
+    needs:
+      [changes, test, format, clippy, experimental-model-isolation, mutation, security-audit]
     runs-on: ubuntu-latest
     steps:
       - name: Check job results
@@ -313,6 +316,7 @@ jobs:
           echo "test: ${{ needs.test.result }}"
           echo "format: ${{ needs.format.result }}"
           echo "clippy: ${{ needs.clippy.result }}"
+          echo "experimental-model-isolation: ${{ needs.experimental-model-isolation.result }}"
           echo "mutation: ${{ needs.mutation.result }}"
           echo "security-audit: ${{ needs.security-audit.result }}"
 
@@ -322,6 +326,7 @@ jobs:
             "${{ needs.test.result }}" \
             "${{ needs.format.result }}" \
             "${{ needs.clippy.result }}" \
+            "${{ needs.experimental-model-isolation.result }}" \
             "${{ needs.mutation.result }}" \
             "${{ needs.security-audit.result }}"
           do

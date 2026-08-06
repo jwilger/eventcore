@@ -18,6 +18,12 @@ use thiserror::Error;
 #[cfg(feature = "experimental-model-check")]
 use std::collections::{BTreeMap, BTreeSet};
 
+// Deliberate binary marker used by the feature-isolation acceptance script.
+// `#[used]` keeps the positive control observable without exporting another
+// public API item from this experimental module.
+#[used]
+static EXPERIMENTAL_MODELING_RUNTIME_SENTINEL: &[u8] = b"EVENTCORE_EXPERIMENTAL_MODELING_RUNTIME";
+
 /// A semantic value that identifies an EventCore stream.
 ///
 /// Domain newtypes derive this trait rather than exposing conversion methods for
@@ -522,6 +528,8 @@ pub enum CheckStatus {
     Verified,
     /// The model is complete only through an accepted explicit assumption.
     Assumed,
+    /// One or more modeled fields or registrations are incomplete.
+    Incomplete,
 }
 
 /// One deterministic checker diagnostic.
@@ -575,6 +583,8 @@ pub struct CheckReport {
 #[derive(Debug, Error)]
 #[error("event model is incomplete")]
 pub struct CheckError {
+    /// Verification status for a failed check.
+    pub status: CheckStatus,
     /// Errors sorted by code and subject.
     pub diagnostics: Vec<CheckDiagnostic>,
 }
@@ -614,6 +624,7 @@ fn check_references(
 
     if descriptors.is_empty() {
         return Err(CheckError {
+            status: CheckStatus::Incomplete,
             diagnostics: vec![diagnostic(
                 "ECM001",
                 "registry",
@@ -650,6 +661,21 @@ fn check_references(
             DescriptorKind::Assumption { target, .. } => {
                 assumptions.entry(target).or_default().push(descriptor);
             }
+        }
+    }
+
+    for (target, descriptors) in mappings.iter().chain(&assumptions) {
+        if fields.contains_key(target) {
+            continue;
+        }
+        for descriptor in descriptors {
+            errors.push(diagnostic_at(
+                "ECM005",
+                descriptor.stable_id(),
+                format!("registration target `{target}` is not a modeled field"),
+                "derive a modeled component for the target owner or correct the target path",
+                descriptor.location(),
+            ));
         }
     }
 
@@ -732,6 +758,7 @@ fn check_references(
         })
     } else {
         Err(CheckError {
+            status: CheckStatus::Incomplete,
             diagnostics: evaluation.errors,
         })
     }
@@ -1280,6 +1307,7 @@ mod tests {
     fn checker_reports_empty_registry_and_unused_boundaries() {
         let empty = check_descriptors(&[], CheckOptions::default())
             .expect_err("an empty explicit descriptor set is not a model");
+        assert_eq!(empty.status, CheckStatus::Incomplete);
         assert_eq!(empty.diagnostics[0].code, "ECM001");
 
         let descriptors = [
@@ -1303,6 +1331,35 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.code == "ECM103")
+        );
+    }
+
+    #[cfg(feature = "experimental-model-check")]
+    #[test]
+    fn checker_rejects_registrations_for_unknown_targets() {
+        let descriptors = [
+            Descriptor::field("input", "Input.value", true),
+            Descriptor::mapping(
+                "UnknownMappingTarget",
+                &["Input.value"],
+                "Missing.mapped",
+                &[false],
+            ),
+            Descriptor::assumption("unknown-sink", "Missing.assumed"),
+        ];
+
+        let error = check_descriptors(&descriptors, CheckOptions::default())
+            .expect_err("every mapping and assumption target must be registered");
+
+        assert_eq!(error.status, CheckStatus::Incomplete);
+        assert_eq!(
+            error
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "ECM005")
+                .map(|diagnostic| diagnostic.subject.as_str())
+                .collect::<Vec<_>>(),
+            vec!["UnknownMappingTarget", "unknown-sink"],
         );
     }
 

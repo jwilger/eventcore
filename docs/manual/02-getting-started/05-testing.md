@@ -2,7 +2,7 @@
 
 ## Experimental modeled-lane checks
 
-Applications trialing the alpha lane should enable
+Applications trialing the experimental lane should enable
 `experimental-model-check` only in dev dependencies and call
 `eventcore::model::check()` in an integration test. This checks provenance,
 not business formulas; retain normal command and projection behavior tests.
