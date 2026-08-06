@@ -60,3 +60,27 @@ fn modeled_events_reject_multi_field_tuple_variants() {
     let t = TestCases::new();
     t.compile_fail("tests/ui/modeled_event_multi_payload.rs");
 }
+
+#[test]
+fn modeled_semantic_streams_and_mappings_compile() {
+    let t = TestCases::new();
+    t.pass("tests/ui/modeled_semantic_streams_pass.rs");
+}
+
+#[test]
+fn modeled_mapping_rejects_swapped_semantic_roles() {
+    let t = TestCases::new();
+    t.compile_fail("tests/ui/modeled_swapped_semantic_roles.rs");
+}
+
+#[test]
+fn modeled_mapping_rejects_wrong_target_occurrence() {
+    let t = TestCases::new();
+    t.compile_fail("tests/ui/modeled_wrong_mapping_target.rs");
+}
+
+#[test]
+fn modeled_builder_rejects_missing_fields() {
+    let t = TestCases::new();
+    t.compile_fail("tests/ui/modeled_missing_builder_field.rs");
+}

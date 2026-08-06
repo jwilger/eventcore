@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/modeled_swapped_semantic_roles.rs:23:1
+   |
+23 | mapping! { WrongRole: Request.source => Transfer.target using clone; }
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^---------------^^^^^^^^^^^^^^^
+   | |                                       |
+   | |                                       arguments to this function are incorrect
+   | expected `Target`, found `Source`
+   |
+note: associated function defined here
+  --> tests/ui/modeled_swapped_semantic_roles.rs:17:10
+   |
+17 | #[derive(ModelCommand)]
+   |          ^^^^^^^^^^^^
+   = note: this error originates in the macro `mapping` which comes from the expansion of the derive macro `ModelCommand` (in Nightly builds, run with -Z macro-backtrace for more info)
