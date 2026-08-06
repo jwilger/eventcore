@@ -359,7 +359,12 @@ fn expand_model_component(
                     "EventCore: modeled enum variants must be unit variants or have one typed payload; use a named payload struct for multiple fields",
                 ));
             }
-            return Ok(quote! { impl #marker_trait for #ident {} });
+            let role = if matches!(kind, ModelComponentKind::Event) {
+                "event"
+            } else {
+                "effect"
+            };
+            return Ok(expand_modeled_enum(ident, marker_trait, data, role));
         }
 
         return Err(Error::new_spanned(
@@ -437,21 +442,17 @@ fn expand_model_component(
         marker_idents: &marker_idents,
         accepts_raw_values: &fields
             .iter()
-            .map(|field| {
-                matches!(kind, ModelComponentKind::Input) && has_model_marker(field, "origin")
-            })
+            .map(|field| matches!(kind, ModelComponentKind::Input) && has_model_origin(field))
             .collect::<Vec<_>>(),
         is_command: matches!(kind, ModelComponentKind::Command),
     });
 
     let state_initialization = if matches!(kind, ModelComponentKind::State) {
-        let invalid = fields
-            .iter()
-            .find(|field| !has_model_marker(field, "default"));
+        let invalid = fields.iter().find(|field| !is_state_root_recipe(field));
         if let Some(field) = invalid {
             return Err(Error::new_spanned(
                 field,
-                "EventCore: #[derive(ModelState)] requires #[model(default)] on every field in this alpha API",
+                "EventCore: #[derive(ModelState)] requires #[model(default)], #[model(absence)], or #[model(constant)] on every field",
             ));
         }
 
@@ -480,8 +481,8 @@ fn expand_model_component(
     let roots: Vec<_> = fields
         .iter()
         .map(|field| {
-            matches!(kind, ModelComponentKind::Input) && has_model_marker(field, "origin")
-                || (matches!(kind, ModelComponentKind::State) && has_model_marker(field, "default"))
+            matches!(kind, ModelComponentKind::Input) && has_model_origin(field)
+                || (matches!(kind, ModelComponentKind::State) && is_state_root_recipe(field))
         })
         .collect();
     let registration = quote! {
@@ -552,6 +553,98 @@ fn expand_model_component(
         #registration
         #(#assumption_registration)*
     })
+}
+
+#[cfg(feature = "experimental-modeling")]
+fn expand_modeled_enum(
+    ident: &syn::Ident,
+    marker_trait: TokenStream2,
+    data: &syn::DataEnum,
+    role: &'static str,
+) -> TokenStream2 {
+    let module_ident = format_ident!("__eventcore_model_{}", ident.to_string().to_lowercase());
+    let payload_variants: Vec<_> = data
+        .variants
+        .iter()
+        .filter_map(|variant| match &variant.fields {
+            Fields::Unnamed(fields) if fields.unnamed.len() == 1 => Some((
+                variant.ident.clone(),
+                fields.unnamed.first().expect("one payload").ty.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    let payload_markers: Vec<_> = payload_variants
+        .iter()
+        .map(|(variant, _)| format_ident!("{}Field", pascal_case(variant)))
+        .collect();
+    let payload_variants_idents: Vec<_> = payload_variants
+        .iter()
+        .map(|(variant, _)| variant)
+        .collect();
+    let payload_types: Vec<_> = payload_variants.iter().map(|(_, ty)| ty).collect();
+    let payload_value_fns: Vec<_> = payload_variants_idents
+        .iter()
+        .map(|variant| format_ident!("__eventcore_model_value_{variant}"))
+        .collect();
+    let payload_constructor_fns: Vec<_> = payload_variants_idents
+        .iter()
+        .map(|variant| format_ident!("model_variant_{}", variant.to_string().to_lowercase()))
+        .collect();
+    let unit_variants: Vec<_> = data
+        .variants
+        .iter()
+        .filter(|variant| matches!(variant.fields, Fields::Unit))
+        .map(|variant| variant.ident.clone())
+        .collect();
+    let unit_constructor_fns: Vec<_> = unit_variants
+        .iter()
+        .map(|variant| format_ident!("model_variant_{}", variant.to_string().to_lowercase()))
+        .collect();
+
+    quote! {
+        impl #marker_trait for #ident {}
+
+        #[doc(hidden)]
+        pub mod #module_ident {
+            use super::*;
+            #( pub struct #payload_markers; )*
+            #( impl ::eventcore::model::ModelField for #payload_markers {
+                type Value = #payload_types;
+            } )*
+        }
+
+        impl #ident {
+            #( #[doc(hidden)]
+            pub fn #payload_value_fns(
+                value: #payload_types,
+            ) -> ::eventcore::model::FieldValue<#module_ident::#payload_markers> {
+                ::eventcore::model::FieldValue::from_value(value)
+            }
+
+            #[must_use]
+            pub fn #payload_constructor_fns(
+                value: impl ::eventcore::model::IntoFieldValue<#module_ident::#payload_markers>,
+            ) -> ::eventcore::model::Modeled<Self> {
+                ::eventcore::model::Modeled::from_built(Self::#payload_variants_idents(
+                    value.into_field_value().into_inner(),
+                ))
+            } )*
+
+            #( #[must_use]
+            pub fn #unit_constructor_fns() -> ::eventcore::model::Modeled<Self> {
+                ::eventcore::model::Modeled::from_built(Self::#unit_variants)
+            } )*
+        }
+
+        #( ::eventcore::__eventcore_register_model_descriptor!(
+            field,
+            #role,
+            stringify!(#ident),
+            stringify!(#payload_variants_idents),
+            false,
+        ); )*
+    }
 }
 
 #[cfg(feature = "experimental-modeling")]
@@ -701,6 +794,36 @@ fn has_model_marker(field: &Field, expected: &str) -> bool {
                 .parse_args::<syn::Ident>()
                 .is_ok_and(|marker| marker == expected)
     })
+}
+
+#[cfg(feature = "experimental-modeling")]
+fn has_model_origin(field: &Field) -> bool {
+    has_model_marker(field, "origin")
+        || field.attrs.iter().any(|attribute| {
+            if !attribute.path().is_ident("model") {
+                return false;
+            }
+            let mut origin = false;
+            attribute
+                .parse_nested_meta(|meta| {
+                    if meta.path.is_ident("origin") {
+                        origin = true;
+                        if meta.input.peek(Token![=]) {
+                            let _ = meta.value()?.parse::<syn::Ident>()?;
+                        }
+                    }
+                    Ok(())
+                })
+                .is_ok()
+                && origin
+        })
+}
+
+#[cfg(feature = "experimental-modeling")]
+fn is_state_root_recipe(field: &Field) -> bool {
+    has_model_marker(field, "default")
+        || has_model_marker(field, "absence")
+        || has_model_marker(field, "constant")
 }
 
 #[cfg(feature = "experimental-modeling")]

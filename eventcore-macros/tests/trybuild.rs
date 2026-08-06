@@ -84,3 +84,9 @@ fn modeled_builder_rejects_missing_fields() {
     let t = TestCases::new();
     t.compile_fail("tests/ui/modeled_missing_builder_field.rs");
 }
+
+#[test]
+fn modeled_named_origins_and_state_root_recipes_compile() {
+    let t = TestCases::new();
+    t.pass("tests/ui/modeled_root_recipes_pass.rs");
+}

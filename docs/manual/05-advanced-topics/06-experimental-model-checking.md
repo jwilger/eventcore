@@ -15,8 +15,12 @@ eventcore = { version = "=1.1.0-alpha.1", features = ["experimental-model-check"
 ```
 
 `StreamIdentity` makes stream roles semantic newtypes. Mark external, actor,
-session, or generated input fields with `#[model(origin)]`; these are the only
-input fields that accept raw builder values and act as checker roots.
+session, or generated input fields with `#[model(origin)]` (or a descriptive
+role such as `#[model(origin = actor)]`); these are the only input fields that
+accept raw builder values and act as checker roots. State fields must declare
+one root recipe: `#[model(default)]`, `#[model(absence)]`, or
+`#[model(constant)]`. Option and collection types are otherwise atomic values,
+not implicit roots.
 `ModelInput`,
 `ModelCommand`, `ModelEvent`, `ModelState`, `ModelReadModel`, and
 `ModelOutput` generate typestate builders. A non-input builder accepts only a
