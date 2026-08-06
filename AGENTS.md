@@ -14,7 +14,7 @@
 ## Development Rules
 
 1. Enter `nix develop` for pinned toolchains; start Postgres via `docker-compose up -d` only when running postgres backend tests.
-2. Format every change with `cargo fmt --all` before attempting a commit or PR.
+2. Format every change with `cargo fmt --all` before attempting a commit.
 3. Run `cargo clippy --all-targets --all-features -- -D warnings` to satisfy the lint gate.
 4. Execute the full test suite with `cargo nextest run --workspace` (fallback: `cargo test --workspace`).
 5. Target a single test via `cargo nextest run --workspace -E 'test(module::case)'` or `cargo test module::case`.
@@ -29,77 +29,5 @@
 14. Integration tests must read like docs — Given/When/Then comments, only public APIs, no private hooks or mocks of internals.
 15. Duplication inside tests is acceptable when it mirrors how downstream users compose commands and stores.
 16. Prefer existing tracing/logging helpers over ad-hoc `println!` debugging noise.
-17. All work items are tracked in **GitHub Issues** at `github.com/jwilger/eventcore`; use the `gh` CLI or direct REST calls for automation.
-18. Keep pre-commit hooks green: rerun fmt/clippy/nextest locally until clean before committing.
-19. Use Conventional Commits for all git commit messages and PR titles (type/scope: summary) so history stays machine-readable.
-
-## Issue Tracking with GitHub Issues
-
-**IMPORTANT**: This project uses **GitHub Issues** for ALL issue tracking,
-hosted at `github.com/jwilger/eventcore`.
-
-### Labels
-
-**Priority labels:**
-
-- `P0-critical` - Security, data loss, broken builds
-- `P1-high` - Major features, important bugs
-- `P2-medium` - Default priority
-- `P3-low` - Polish, optimization
-- `P4-backlog` - Future ideas
-
-**Type labels:**
-
-- `bug` - Something broken
-- `enhancement` - New feature or request
-- `task` - Work item (refactoring, tests, tooling)
-- `epic` - Large feature with sub-issues
-- `chore` - Maintenance (audits, cleanup)
-- `research` - Investigation / spike
-- `documentation` - Docs improvements
-
-### Quick Reference
-
-The `gh` CLI is the recommended interface. It must be authenticated once with
-`gh auth login`. Direct calls to the GitHub REST API at
-`/repos/jwilger/eventcore/...` are equivalent when `gh` is unavailable.
-
-**Check for work:**
-
-```bash
-gh issue list --label "P1-high"        # High priority issues
-gh issue list --assignee @me           # Your assigned issues
-gh issue list --state open             # All open issues
-```
-
-**Create issues:**
-
-```bash
-gh issue create --title "Issue title" --label "enhancement" --label "P2-medium"
-```
-
-**Claim and update:**
-
-```bash
-gh issue edit 42 --add-assignee @me
-gh issue comment 42 --body "Starting work on this"
-```
-
-**Complete work:**
-
-```bash
-gh issue close 42
-gh issue comment 42 --body "Completed in #PR_NUMBER"
-```
-
-## Git Workflow
-
-This project uses standard feature branches with squash merges.
-
-### Branch Workflow
-
-1. Create a feature branch: `git checkout -b type/description`
-2. Make commits using Conventional Commits
-3. Push and create a PR: `git push -u origin <branch>` then `gh pr create`
-   (or open the PR from GitHub)
-4. PRs are squash-merged into `main`
+17. Keep pre-commit hooks green: rerun fmt/clippy/nextest locally until clean before committing.
+18. Use Conventional Commits for commit messages so history stays machine-readable.
