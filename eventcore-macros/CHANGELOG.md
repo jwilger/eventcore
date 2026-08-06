@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [1.1.1](https://github.com/jwilger/eventcore/compare/eventcore-macros-v1.1.0...eventcore-macros-v1.1.1) - 2026-08-06
+
+### Bug Fixes
+
+- *(model)* complete experimental checker acceptance
+
 ## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-macros-v1.0.0...eventcore-macros-v1.0.1) - 2026-06-15
 
 ### Documentation
