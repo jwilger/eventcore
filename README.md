@@ -36,15 +36,16 @@ SQLite backends are enabled via the `postgres` and `sqlite` features on the
 
 ## Experimental model checking
 
-`1.1.0-alpha.1` introduces an opt-in experiment for runtime-coupled Event
-Modeling checks. It is not part of the stable API or an official release
-direction. Enable `experimental-modeling` to use typed modeled builders and
-`experimental-model-check` in test targets to validate executable field
-provenance:
+EventCore 1.1 introduces an opt-in experiment for runtime-coupled Event
+Modeling checks. Experimental APIs are distributed in standard EventCore
+releases but remain outside the stable API contract while their clearly named
+feature flags retain the `experimental-` prefix. Enable `experimental-modeling`
+to use typed modeled builders and `experimental-model-check` in test targets to
+validate executable field provenance:
 
 ```toml
 [dev-dependencies]
-eventcore = { version = "=1.1.0-alpha.1", features = ["experimental-model-check"] }
+eventcore = { version = "1.1", features = ["experimental-model-check"] }
 ```
 
 See the [experimental model-checking manual chapter](docs/manual/05-advanced-topics/06-experimental-model-checking.md)

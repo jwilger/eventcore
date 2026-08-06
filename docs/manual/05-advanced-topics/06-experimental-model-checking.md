@@ -1,17 +1,17 @@
 # Chapter 5.6: Experimental Model Checking
 
-> This is a pre-release experiment. Enable it only in applications evaluating
-> the approach; the API may change before it becomes part of EventCore's stable
-> direction.
+> This API is experimental even though it ships in standard EventCore releases.
+> Enable it only in applications evaluating the approach; it may change while
+> its feature flags retain the `experimental-` prefix.
 
 Enable the runtime lane in normal code and the checker in test targets:
 
 ```toml
 [dependencies]
-eventcore = { version = "=1.1.0-alpha.1", features = ["experimental-modeling"] }
+eventcore = { version = "1.1", features = ["experimental-modeling"] }
 
 [dev-dependencies]
-eventcore = { version = "=1.1.0-alpha.1", features = ["experimental-model-check"] }
+eventcore = { version = "1.1", features = ["experimental-model-check"] }
 ```
 
 `StreamIdentity` makes stream roles semantic newtypes. Mark external, actor,

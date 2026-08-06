@@ -2,7 +2,10 @@
 
 ## Status
 
-Proposed
+Superseded in part by
+[ADR-034](ADR-034-stable-releases-for-experimental-features.md), which replaces
+the prerelease-only distribution policy. The model-checking design remains in
+effect.
 
 ## Context
 

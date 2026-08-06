@@ -1,6 +1,7 @@
 [workspace]
-# Update all workspace members together
-release_always = true
+# Publish only after a generated release-plz PR is merged. Ordinary pushes to
+# main may create or refresh that PR, but must never publish crates directly.
+release_always = false
 
 # Allow dirty working directory (for CI)
 allow_dirty = true
@@ -15,8 +16,8 @@ dependencies_update = false
 
 # Git configuration
 git_release_enable = true  # Create GitHub releases per crate
-git_release_type = "auto" # Mark semver prereleases as prereleases automatically
-git_release_latest = false # Alpha releases must never replace the stable latest release
+git_release_type = "prod" # EventCore publishes standard X.Y.Z releases
+git_release_latest = true # Mark each stable release as the latest release
 git_tag_enable = true      # Create git tags per crate
 git_tag_name = "{{ package }}-v{{ version }}"  # Per-crate tags: eventcore-v1.0.1, eventcore-types-v1.0.1
 

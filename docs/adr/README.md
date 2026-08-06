@@ -38,7 +38,8 @@ This directory contains Architecture Decision Records (ADRs) for this project.
 | 030 | Layered Crate Public API Design                         | Accepted   |
 | 031 | Black-Box Integration Testing via Projections           | Accepted   |
 | 032 | Integration Test Crate for End-to-End Testing           | Accepted   |
-| 033 | Experimental Runtime-Coupled Model Checking             | Proposed   |
+| 033 | Experimental Runtime-Coupled Model Checking             | Superseded in part |
+| 034 | Stable Releases for Experimental Features              | Accepted   |
 | 035 | Event Schema Evolution via Enum Variants                | Accepted   |
 | 036 | Continuous Polling via Projection Runner                | Superseded |
 | 037 | Projection Configuration via Free Function API          | Accepted   |
