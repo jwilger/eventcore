@@ -35,12 +35,17 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+#[cfg(feature = "experimental-modeling")]
+use quote::format_ident;
+use quote::quote;
 use syn::{
-    Data, DeriveInput, Error, Field, Fields, Meta, Path, Token, Type,
-    parse::{Parse, ParseStream},
-    parse_macro_input,
+    Data, DeriveInput, Error, Field, Fields, Meta, Path, Type, parse_macro_input,
     punctuated::Punctuated,
+};
+#[cfg(feature = "experimental-modeling")]
+use syn::{
+    Token,
+    parse::{Parse, ParseStream},
 };
 
 /// Entry point for `#[derive(Command)]`.
@@ -417,7 +422,12 @@ fn expand_model_component(
         field_types: &field_types,
         state_idents: &state_idents,
         marker_idents: &marker_idents,
-        accepts_raw_values: matches!(kind, ModelComponentKind::Input),
+        accepts_raw_values: &fields
+            .iter()
+            .map(|field| {
+                matches!(kind, ModelComponentKind::Input) && has_model_marker(field, "origin")
+            })
+            .collect::<Vec<_>>(),
         is_command: matches!(kind, ModelComponentKind::Command),
     });
 
@@ -457,7 +467,7 @@ fn expand_model_component(
     let roots: Vec<_> = fields
         .iter()
         .map(|field| {
-            matches!(kind, ModelComponentKind::Input)
+            matches!(kind, ModelComponentKind::Input) && has_model_marker(field, "origin")
                 || (matches!(kind, ModelComponentKind::State) && has_model_marker(field, "default"))
         })
         .collect();
@@ -528,10 +538,11 @@ struct ModelBuilderSpec<'a> {
     field_types: &'a [&'a Type],
     state_idents: &'a [syn::Ident],
     marker_idents: &'a [syn::Ident],
-    accepts_raw_values: bool,
+    accepts_raw_values: &'a [bool],
     is_command: bool,
 }
 
+#[cfg(feature = "experimental-modeling")]
 fn expand_model_builder(spec: ModelBuilderSpec<'_>) -> TokenStream2 {
     let ModelBuilderSpec {
         ident,
@@ -574,7 +585,7 @@ fn expand_model_builder(spec: ModelBuilderSpec<'_>) -> TokenStream2 {
         });
         let output_values = field_idents.iter().enumerate().map(|(other_index, other_field)| {
             if other_index == index {
-                if accepts_raw_values {
+                if accepts_raw_values[index] {
                     quote! { #other_field: ::eventcore::model::Set::new(::eventcore::model::FieldValue::from_value(value)) }
                 } else {
                     quote! { #other_field: ::eventcore::model::Set::new(value.into_field_value()) }
@@ -585,7 +596,7 @@ fn expand_model_builder(spec: ModelBuilderSpec<'_>) -> TokenStream2 {
         });
         let marker = &marker_idents[index];
         let field_type = field_types[index];
-        let argument = if accepts_raw_values {
+        let argument = if accepts_raw_values[index] {
             quote! { value: #field_type }
         } else {
             quote! { value: impl ::eventcore::model::IntoFieldValue<#module_ident::#marker> }
@@ -829,11 +840,11 @@ fn expand_mapping(definition: &MappingDefinition) -> syn::Result<TokenStream2> {
             quote! { concat!(stringify!(#owner), ".", stringify!(#field)) }
         })
         .collect();
-    let temporal_sources = definition
+    let temporal_sources: Vec<_> = definition
         .sources
         .iter()
-        .filter(|source| source.previous)
-        .count();
+        .map(|source| source.previous)
+        .collect();
     let source_idents: Vec<_> = (0..definition.sources.len())
         .map(|index| format_ident!("source_{index}"))
         .collect();
@@ -876,7 +887,7 @@ fn expand_mapping(definition: &MappingDefinition) -> syn::Result<TokenStream2> {
                     stringify!(#name),
                     &[#(#source_labels),*],
                     concat!(stringify!(#target_owner), ".", stringify!(#target_field)),
-                    #temporal_sources,
+                    &[#(#temporal_sources),*],
                 );
             });
         }
@@ -903,7 +914,7 @@ fn expand_mapping(definition: &MappingDefinition) -> syn::Result<TokenStream2> {
             stringify!(#name),
             &[#(#source_labels),*],
             concat!(stringify!(#target_owner), ".", stringify!(#target_field)),
-            #temporal_sources,
+            &[#(#temporal_sources),*],
         );
     })
 }

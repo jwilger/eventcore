@@ -428,6 +428,14 @@ where
     CheckedProjector { projection, sink }
 }
 
+impl<P, S> CheckedProjector<P, S> {
+    /// Consumes the adapter and returns its projection and sink.
+    #[must_use]
+    pub fn into_parts(self) -> (P, S) {
+        (self.projection, self.sink)
+    }
+}
+
 impl<P, S> Projector for CheckedProjector<P, S>
 where
     P: ModelProjection,
@@ -595,8 +603,8 @@ pub fn check_with(options: CheckOptions) -> Result<CheckReport, CheckError> {
 
     let mut memo = BTreeMap::new();
     for (field, descriptor) in &fields {
-        if let DescriptorKind::Field { root, role, .. } = descriptor.kind
-            && (root || role == "input")
+        if let DescriptorKind::Field { root, .. } = descriptor.kind
+            && root
         {
             let _ = memo.insert((*field).to_owned(), true);
             continue;
@@ -661,8 +669,8 @@ fn is_complete(
         return *result;
     }
     if let Some(descriptor) = fields.get(field)
-        && let DescriptorKind::Field { root, role, .. } = descriptor.kind
-        && (root || role == "input")
+        && let DescriptorKind::Field { root, .. } = descriptor.kind
+        && root
     {
         let _ = memo.insert(field.to_owned(), true);
         return true;
@@ -701,7 +709,7 @@ fn is_complete(
         else {
             continue;
         };
-        for source in sources {
+        for (source, temporal) in sources.iter().zip(temporal_sources.iter()) {
             if !fields.contains_key(source) {
                 errors.push(diagnostic(
                     "ECM004",
@@ -712,7 +720,7 @@ fn is_complete(
                 complete = false;
                 continue;
             }
-            if visiting.contains(*source) && temporal_sources == 0 {
+            if visiting.contains(*source) && !temporal {
                 errors.push(diagnostic(
                     "ECM006",
                     name,
@@ -720,6 +728,18 @@ fn is_complete(
                     "mark the carried state input as `previous(...)` and provide a default seed",
                 ));
                 complete = false;
+                continue;
+            }
+            if visiting.contains(*source) {
+                if !has_non_temporal_seed(source, fields, mappings) {
+                    errors.push(diagnostic(
+                        "ECM007",
+                        name,
+                        format!("temporal source `{source}` has no non-temporal seed"),
+                        "add a default, absence, origin, or non-temporal mapping for the carried field",
+                    ));
+                    complete = false;
+                }
                 continue;
             }
             if !is_complete(source, fields, mappings, memo, visiting, errors) {
@@ -730,6 +750,32 @@ fn is_complete(
     let _ = visiting.remove(field);
     let _ = memo.insert(field.to_owned(), complete);
     complete
+}
+
+#[cfg(feature = "experimental-model-check")]
+fn has_non_temporal_seed(
+    field: &str,
+    fields: &BTreeMap<&str, &Descriptor>,
+    mappings: &BTreeMap<&str, Vec<&Descriptor>>,
+) -> bool {
+    if let Some(descriptor) = fields.get(field)
+        && let DescriptorKind::Field { root, .. } = descriptor.kind
+        && root
+    {
+        return true;
+    }
+
+    mappings.get(field).is_some_and(|recipes| {
+        recipes.iter().any(|recipe| {
+            matches!(
+                recipe.kind,
+                DescriptorKind::Mapping {
+                    temporal_sources,
+                    ..
+                } if temporal_sources.iter().all(|temporal| !temporal)
+            )
+        })
+    })
 }
 
 #[cfg(feature = "experimental-model-check")]
@@ -769,7 +815,7 @@ pub enum DescriptorKind {
         name: &'static str,
         sources: &'static [&'static str],
         target: &'static str,
-        temporal_sources: usize,
+        temporal_sources: &'static [bool],
     },
 }
 
@@ -796,7 +842,7 @@ impl Descriptor {
         name: &'static str,
         sources: &'static [&'static str],
         target: &'static str,
-        temporal_sources: usize,
+        temporal_sources: &'static [bool],
     ) -> Self {
         Self {
             kind: DescriptorKind::Mapping {
@@ -823,6 +869,9 @@ inventory::collect!(Descriptor);
 mod tests {
     use super::*;
 
+    #[cfg(feature = "experimental-model-check")]
+    use std::collections::{BTreeMap, BTreeSet};
+
     #[derive(Debug)]
     struct InitialState;
 
@@ -837,5 +886,69 @@ mod tests {
         let state = Modeled::<InitialState>::default();
 
         assert!(matches!(state.into_inner(), InitialState));
+    }
+
+    #[cfg(feature = "experimental-model-check")]
+    #[test]
+    fn temporal_recurrence_requires_a_non_temporal_seed() {
+        static INPUT: Descriptor = Descriptor::field("input", "Input.amount", true);
+        static BALANCE: Descriptor = Descriptor::field("read_model", "History.balance", false);
+        static RECURRENCE: Descriptor = Descriptor::mapping(
+            "CreditBalance",
+            &["History.balance", "Input.amount"],
+            "History.balance",
+            &[true, false],
+        );
+
+        let fields = BTreeMap::from([("Input.amount", &INPUT), ("History.balance", &BALANCE)]);
+        let mappings = BTreeMap::from([("History.balance", vec![&RECURRENCE])]);
+        let mut memo = BTreeMap::new();
+        let mut visiting = BTreeSet::new();
+        let mut errors = Vec::new();
+
+        assert!(!is_complete(
+            "History.balance",
+            &fields,
+            &mappings,
+            &mut memo,
+            &mut visiting,
+            &mut errors,
+        ));
+        assert!(errors.iter().any(|error| error.code == "ECM007"));
+    }
+
+    #[cfg(feature = "experimental-model-check")]
+    #[test]
+    fn temporal_recurrence_accepts_a_non_temporal_seed() {
+        static INPUT: Descriptor = Descriptor::field("input", "Input.amount", true);
+        static BALANCE: Descriptor = Descriptor::field("read_model", "History.balance", false);
+        static RECURRENCE: Descriptor = Descriptor::mapping(
+            "CreditBalance",
+            &["History.balance", "Input.amount"],
+            "History.balance",
+            &[true, false],
+        );
+        static SEED: Descriptor = Descriptor::mapping(
+            "InitialBalance",
+            &["Input.amount"],
+            "History.balance",
+            &[false],
+        );
+
+        let fields = BTreeMap::from([("Input.amount", &INPUT), ("History.balance", &BALANCE)]);
+        let mappings = BTreeMap::from([("History.balance", vec![&RECURRENCE, &SEED])]);
+        let mut memo = BTreeMap::new();
+        let mut visiting = BTreeSet::new();
+        let mut errors = Vec::new();
+
+        assert!(is_complete(
+            "History.balance",
+            &fields,
+            &mappings,
+            &mut memo,
+            &mut visiting,
+            &mut errors,
+        ));
+        assert!(errors.is_empty());
     }
 }

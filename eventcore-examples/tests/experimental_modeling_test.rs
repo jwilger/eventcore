@@ -3,14 +3,17 @@
 //! The test is intentionally executable: the same mappings that are checked
 //! build a command, produce an event, and drive a projection sink.
 
-use std::convert::Infallible;
+use std::{
+    convert::Infallible,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use eventcore::{
     Event, ModelCommand, ModelEvent, ModelInput, ModelOutput, ModelReadModel, ModelState,
     Projector, RetryPolicy, StreamId, StreamIdentity, StreamPosition, execute, mapping,
     model::{
         InMemoryProjectionSink, ModelCommandLogic, ModelEffect, ModelEffectApplication,
-        ModelProjection, Modeled, ModeledEvents, ProjectionAction,
+        ModelProjection, ModelView, Modeled, ModeledEvents, ModeledIgnore, ProjectionAction,
         StreamIdentity as StreamIdentityTrait, checked_projection,
     },
 };
@@ -26,8 +29,21 @@ pub struct TransferTarget(StreamId);
 
 #[derive(ModelInput)]
 struct TransferRequest {
+    #[model(origin)]
     source: TransferSource,
+    #[model(origin)]
     target: TransferTarget,
+}
+
+#[derive(ModelInput)]
+struct Session {
+    #[model(origin)]
+    actor: String,
+}
+
+#[derive(ModelInput)]
+struct PaymentGatewayPayload {
+    #[model(origin)]
     amount: u64,
 }
 
@@ -38,16 +54,41 @@ struct Transfer {
     #[stream]
     target: TransferTarget,
     amount: u64,
+    actor: String,
 }
 
 mapping! { RequestSource: TransferRequest.source => Transfer.source using clone; }
 mapping! { RequestTarget: TransferRequest.target => Transfer.target using clone; }
-mapping! { RequestAmount: TransferRequest.amount => Transfer.amount using clone; }
+#[derive(Debug)]
+struct InvalidAmount;
+
+impl std::fmt::Display for InvalidAmount {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("amount must be positive")
+    }
+}
+
+impl std::error::Error for InvalidAmount {}
+
+static AMOUNT_MAPPING_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+fn validated_amount(amount: &u64) -> Result<u64, InvalidAmount> {
+    let _ = AMOUNT_MAPPING_CALLS.fetch_add(1, Ordering::Relaxed);
+    if *amount == 0 {
+        Err(InvalidAmount)
+    } else {
+        Ok(*amount)
+    }
+}
+
+mapping! { RequestAmount: PaymentGatewayPayload.amount => Transfer.amount using try validated_amount, error = InvalidAmount; }
+mapping! { SessionActor: Session.actor => Transfer.actor using clone; }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ModelEvent)]
 struct BankEvent {
     stream_id: StreamId,
     amount: u64,
+    actor: String,
 }
 
 impl Event for BankEvent {
@@ -64,6 +105,7 @@ fn source_stream(source: &TransferSource) -> StreamId {
 }
 mapping! { CommandSourceToEvent: Transfer.source => BankEvent.stream_id using source_stream; }
 mapping! { CommandAmountToEvent: Transfer.amount => BankEvent.amount using clone; }
+mapping! { CommandActorToEvent: Transfer.actor => BankEvent.actor using clone; }
 
 #[derive(ModelState)]
 struct TransferState {
@@ -88,12 +130,13 @@ impl ModelCommandLogic for Transfer {
         let event = BankEvent::model_builder()
             .stream_id(CommandSourceToEvent::apply(self))
             .amount(CommandAmountToEvent::apply(self))
+            .actor(CommandActorToEvent::apply(self))
             .build();
         Ok(ModeledEvents::one(event))
     }
 }
 
-#[derive(ModelReadModel)]
+#[derive(Clone, ModelReadModel)]
 struct AccountHistory {
     balance: u64,
 }
@@ -106,6 +149,19 @@ struct AccountView {
 }
 
 mapping! { BalanceToView: AccountHistory.balance => AccountView.balance using clone; }
+
+struct AccountHistoryView;
+
+impl ModelView for AccountHistoryView {
+    type ReadModel = AccountHistory;
+    type Output = AccountView;
+
+    fn render(&self, model: &Modeled<AccountHistory>) -> Modeled<AccountView> {
+        AccountView::model_builder()
+            .balance(BalanceToView::apply(model.as_ref()))
+            .build()
+    }
+}
 
 struct BalanceEffect {
     amount: u64,
@@ -138,6 +194,11 @@ impl ModelProjection for AccountProjector {
         event: Self::Event,
         _position: StreamPosition,
     ) -> Result<ProjectionAction<Self::Effect>, Self::Error> {
+        if event.amount == 0 {
+            return Ok(ProjectionAction::Ignore(ModeledIgnore::new(
+                "zero-value gateway event",
+            )));
+        }
         Ok(ProjectionAction::Apply(Modeled::from_built(
             BalanceEffect {
                 amount: event.amount,
@@ -158,13 +219,18 @@ async fn modeled_bank_transfer_is_checked_and_executes_through_eventcore() {
     let request = TransferRequest::model_builder()
         .source(TransferSource(stream("accounts::source")))
         .target(TransferTarget(stream("accounts::target")))
-        .amount(25)
         .build();
+    let session = Session::model_builder()
+        .actor("operator-42".to_owned())
+        .build();
+    let payload = PaymentGatewayPayload::model_builder().amount(25).build();
     let command = Transfer::model_builder()
         .source(RequestSource::apply(request.as_ref()))
         .target(RequestTarget::apply(request.as_ref()))
-        .amount(RequestAmount::apply(request.as_ref()))
+        .amount(RequestAmount::apply(payload.as_ref()).expect("positive gateway amount"))
+        .actor(SessionActor::apply(session.as_ref()))
         .build();
+    assert_eq!(AMOUNT_MAPPING_CALLS.load(Ordering::Relaxed), 1);
 
     let store = InMemoryEventStore::new();
     let response = execute(&store, command, RetryPolicy::new())
@@ -179,14 +245,26 @@ async fn modeled_bank_transfer_is_checked_and_executes_through_eventcore() {
             BankEvent {
                 stream_id: stream("accounts::source"),
                 amount: 25,
+                actor: "operator-42".to_owned(),
             },
             StreamPosition::new(Uuid::now_v7()),
             &mut (),
         )
         .expect("modeled projection applies its effect");
+    projector
+        .apply(
+            BankEvent {
+                stream_id: stream("accounts::source"),
+                amount: 0,
+                actor: "operator-42".to_owned(),
+            },
+            StreamPosition::new(Uuid::now_v7()),
+            &mut (),
+        )
+        .expect("modeled projection records an explicit ignore");
+    let (_projection, sink) = projector.into_parts();
+    assert_eq!(sink.state().as_ref().balance, 25);
 
-    let view = AccountView::model_builder()
-        .balance(BalanceToView::apply(&AccountHistory { balance: 25 }))
-        .build();
+    let view = AccountHistoryView.render(&Modeled::from_built(AccountHistory { balance: 25 }));
     assert_eq!(view.as_ref().balance, 25);
 }

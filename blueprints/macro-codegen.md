@@ -3,6 +3,13 @@ name: macro-codegen
 summary: Procedural macros generating CommandStreams implementations and business rule validation helpers.
 ---
 
+## Experimental modeled macro registration
+
+When `experimental-model-check` is enabled, modeled derives and `mapping!`
+emit `inventory::submit!` through an EventCore-owned hidden macro. Without
+that feature the same hook expands to nothing, so production modeling builds
+contain no checker registration metadata.
+
 # Macro Codegen
 
 Compile-time code generation that eliminates command boilerplate. The `#[derive(Command)]` macro generates `CommandStreams` implementations from struct field annotations, while `require!` provides ergonomic business rule validation.

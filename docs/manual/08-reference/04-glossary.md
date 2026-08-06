@@ -1,5 +1,16 @@
 # Chapter 7.4: Glossary
 
+## Experimental modeling terms
+
+- **Origin**: A field explicitly marked `#[model(origin)]`; it may receive a
+  raw input value and starts a checker provenance path.
+- **Occurrence**: A particular modeled field, identified by its owner and
+  field name rather than only its Rust value type.
+- **Mapping**: An executable `mapping!` transformation that produces one
+  target occurrence from one or more source occurrences.
+- **Temporal source**: A `previous(...)` mapping input. It is not a root and
+  requires an independent non-temporal seed.
+
 This glossary defines all terms and concepts used throughout EventCore documentation. Use this as a reference to understand EventCore terminology and concepts.
 
 ## Core Concepts

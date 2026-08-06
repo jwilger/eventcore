@@ -18,8 +18,11 @@ pub struct TransferTarget(StreamId);
 
 #[derive(ModelInput)]
 struct TransferRequest {
+    #[model(origin)]
     source: TransferSource,
+    #[model(origin)]
     target: TransferTarget,
+    #[model(origin)]
     amount: u64,
 }
 

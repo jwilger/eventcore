@@ -44,7 +44,7 @@ provenance:
 
 ```toml
 [dev-dependencies]
-eventcore = { version = "1.1.0-alpha.1", features = ["experimental-model-check"] }
+eventcore = { version = "=1.1.0-alpha.1", features = ["experimental-model-check"] }
 ```
 
 See the [experimental model-checking manual chapter](docs/manual/05-advanced-topics/06-experimental-model-checking.md)

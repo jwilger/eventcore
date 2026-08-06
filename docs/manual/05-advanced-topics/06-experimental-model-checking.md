@@ -8,13 +8,16 @@ Enable the runtime lane in normal code and the checker in test targets:
 
 ```toml
 [dependencies]
-eventcore = { version = "1.1.0-alpha.1", features = ["experimental-modeling"] }
+eventcore = { version = "=1.1.0-alpha.1", features = ["experimental-modeling"] }
 
 [dev-dependencies]
-eventcore = { version = "1.1.0-alpha.1", features = ["experimental-model-check"] }
+eventcore = { version = "=1.1.0-alpha.1", features = ["experimental-model-check"] }
 ```
 
-`StreamIdentity` makes stream roles semantic newtypes. `ModelInput`,
+`StreamIdentity` makes stream roles semantic newtypes. Mark external, actor,
+session, or generated input fields with `#[model(origin)]`; these are the only
+input fields that accept raw builder values and act as checker roots.
+`ModelInput`,
 `ModelCommand`, `ModelEvent`, `ModelState`, `ModelReadModel`, and
 `ModelOutput` generate typestate builders. A non-input builder accepts only a
 `FieldValue` for its exact occurrence, normally produced by `mapping!`.

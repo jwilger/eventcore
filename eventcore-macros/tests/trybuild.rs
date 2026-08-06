@@ -42,3 +42,9 @@ fn command_macro_multi_stream_should_compile() {
     let t = TestCases::new();
     t.pass("tests/ui/multi_stream_pass.rs");
 }
+
+#[test]
+fn modeled_input_requires_an_explicit_origin_for_raw_values() {
+    let t = TestCases::new();
+    t.compile_fail("tests/ui/modeled_input_without_origin.rs");
+}

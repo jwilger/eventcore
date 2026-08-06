@@ -3,6 +3,13 @@ name: projection-system
 summary: Poll-based projection runner with checkpoint resumption, leader election, and configurable retry.
 ---
 
+## Experimental modeled projections
+
+`checked_projection` adapts a pure `ModelProjection` and a `ProjectionSink`
+to the existing `Projector` trait. Projection effects are applied or explicitly
+ignored with a reason. `InMemoryProjectionSink` is the typed executable sink
+used by the alpha example; custom persistence sinks remain application-owned.
+
 # Projection System
 
 Builds read models by consuming the global event stream. Projections are poll-based, checkpoint-resumable, and coordinated via single-leader election to prevent duplicate processing.
