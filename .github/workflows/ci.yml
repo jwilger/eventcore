@@ -174,6 +174,16 @@ jobs:
         with:
           tool: cargo-nextest@0.9.115
 
+      - name: Verify modeled checker mutations
+        env:
+          POSTGRES_VERSION: 17
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+        run: >-
+          cargo mutants -p eventcore --file eventcore/src/model.rs
+          --re 'check_references|is_complete|has_non_temporal_seed'
+          --features experimental-model-check -- --lib model::tests
+
       - name: Run mutation testing
         id: mutants
         env:
