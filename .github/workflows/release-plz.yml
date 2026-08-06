@@ -45,10 +45,9 @@ permissions:
 jobs:
   release-plz:
     name: release-plz
-    uses: jwilger/gha-workflows/.github/workflows/rust-release-plz.yml@c22b18199d490650bbcb34fc68890178e394895a
+    uses: jwilger/gha-workflows/.github/workflows/rust-release-plz.yml@74bacbcfe7f5765fd7234a5b182e6920f5fc794a
     with:
       runs-on: ubuntu-latest
-      version-overrides: >-
-        ${{ inputs.release-version != '' && format('eventcore@{0} eventcore-examples@{0} eventcore-fs@{0} eventcore-macros@{0} eventcore-memory@{0} eventcore-postgres@{0} eventcore-sqlite@{0} eventcore-testing@{0} eventcore-types@{0}', inputs.release-version) || '' }}
+      workspace-version: ${{ inputs.release-version || '' }}
     secrets:
       op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}

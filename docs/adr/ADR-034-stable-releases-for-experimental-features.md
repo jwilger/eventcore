@@ -35,10 +35,10 @@ releases occur only after a `release-plz-*` release PR is merged. Stable GitHub
 releases are production releases and may be marked as latest.
 
 The release workflow exposes an optional exact workspace-version override for
-manual runs. It delegates the override to `release-plz set-version` before
-`release-plz release-pr`, preserving release-plz ownership of manifests,
-internal dependency updates, changelogs, and release-PR metadata. Leaving the
-input empty retains normal semantic-version inference.
+manual runs. It applies the override with `cargo set-version --workspace`
+before `release-plz release-pr`, preserving workspace version inheritance while
+release-plz retains ownership of changelogs and release-PR metadata. Leaving
+the input empty retains normal semantic-version inference.
 
 This decision supersedes ADR-033's prerelease-only distribution decision and
 clarifies ADR-025's two-phase publication policy. The already-published
