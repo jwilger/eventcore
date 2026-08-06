@@ -357,6 +357,14 @@ pub struct InMemoryProjectionSink<R: ModelReadModel> {
     state: Arc<Mutex<Option<Modeled<R>>>>,
 }
 
+impl<R: ModelReadModel> Clone for InMemoryProjectionSink<R> {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+        }
+    }
+}
+
 impl<R: ModelReadModel> InMemoryProjectionSink<R> {
     /// Creates a sink from a modeled initial read model.
     #[must_use]

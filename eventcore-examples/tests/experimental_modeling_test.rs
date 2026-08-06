@@ -10,12 +10,14 @@ use std::{
 
 use eventcore::{
     Event, ModelCommand, ModelEvent, ModelInput, ModelOutput, ModelReadModel, ModelState,
-    Projector, RetryPolicy, StreamId, StreamIdentity, StreamPosition, execute, mapping,
+    ProjectionConfig, Projector, RetryPolicy, StreamId, StreamIdentity, StreamPosition, execute,
+    mapping,
     model::{
         InMemoryProjectionSink, ModelCommandLogic, ModelEffect, ModelEffectApplication,
         ModelProjection, ModelView, Modeled, ModeledEvents, ModeledIgnore, ProjectionAction,
         StreamIdentity as StreamIdentityTrait, checked_projection,
     },
+    run_projection,
 };
 use eventcore_memory::InMemoryEventStore;
 use serde::{Deserialize, Serialize};
@@ -239,18 +241,20 @@ async fn modeled_bank_transfer_is_checked_and_executes_through_eventcore() {
     assert_eq!(response.attempts(), 1);
 
     let sink = InMemoryProjectionSink::new(Modeled::from_built(AccountHistory { balance: 0 }));
-    let mut projector = checked_projection(AccountProjector, sink);
-    projector
-        .apply(
-            BankEvent {
-                stream_id: stream("accounts::source"),
-                amount: 25,
-                actor: "operator-42".to_owned(),
-            },
-            StreamPosition::new(Uuid::now_v7()),
-            &mut (),
-        )
-        .expect("modeled projection applies its effect");
+    let observed_history = sink.clone();
+    run_projection(
+        checked_projection(AccountProjector, sink),
+        &store,
+        ProjectionConfig::default(),
+    )
+    .await
+    .expect("modeled projector runs through EventCore's projection runner");
+    assert_eq!(observed_history.state().as_ref().balance, 25);
+
+    let mut projector = checked_projection(
+        AccountProjector,
+        InMemoryProjectionSink::new(Modeled::from_built(AccountHistory { balance: 25 })),
+    );
     projector
         .apply(
             BankEvent {

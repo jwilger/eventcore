@@ -98,6 +98,11 @@ impl ModelCommandLogic for Transfer {
         &self,
         _state: Modeled<Self::State>,
     ) -> Result<ModeledEvents<Self::Event>, eventcore::CommandError> {
+        if eventcore::model::StreamIdentity::as_stream_id(&self.source)
+            == eventcore::model::StreamIdentity::as_stream_id(&self.target)
+        {
+            return Err("transfer source and target must differ".into());
+        }
         let _amount = self.amount;
         Ok(ModeledEvents::none("example does not emit events"))
     }
@@ -108,7 +113,7 @@ fn stream(value: &str) -> StreamId {
 }
 
 #[test]
-fn modeled_command_builder_accepts_semantic_stream_ids_and_deduplicates_equal_ids() {
+fn equal_semantic_stream_ids_deduplicate_and_return_the_domain_error() {
     let request = TransferRequest::model_builder()
         .source(TransferSource(stream("accounts::same")))
         .target(TransferTarget(stream("accounts::same")))
@@ -123,7 +128,11 @@ fn modeled_command_builder_accepts_semantic_stream_ids_and_deduplicates_equal_id
         .build();
 
     assert_eq!(command.stream_declarations().len(), 1);
-    assert!(CommandLogic::handle(&command, Default::default()).is_ok());
+    let error = match CommandLogic::handle(&command, Default::default()) {
+        Ok(_) => panic!("equal stream identities must reach domain validation"),
+        Err(error) => error,
+    };
+    assert_eq!(error.to_string(), "transfer source and target must differ");
 }
 
 #[cfg(feature = "experimental-model-check")]
