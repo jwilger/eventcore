@@ -10,9 +10,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-eventcore = { version = "1.0.2", path = "../eventcore" }
-eventcore-memory = { version = "1.0.2", path = "../eventcore-memory" }
-eventcore-types = { version = "1.0.2", path = "../eventcore-types" }
+eventcore = { version = "1.1.0-alpha.1", path = "../eventcore" }
+eventcore-memory = { version = "1.1.0-alpha.1", path = "../eventcore-memory" }
+eventcore-types = { version = "1.1.0-alpha.1", path = "../eventcore-types" }
 futures = "0.3.32"
 nutype = { version = "0.7.0", features = ["serde"] }
 rand = "0.10"

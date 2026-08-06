@@ -1,0 +1,10 @@
+error[E0599]: no method named `build` found for struct `RequestBuilder<eventcore::model::Set<FieldValue<AmountField>>>` in the current scope
+  --> tests/ui/modeled_missing_builder_field.rs:14:49
+   |
+ 5 | #[derive(ModelInput)]
+   |          ---------- method `build` not found for this struct
+...
+14 |     let _ = Request::model_builder().amount(42).build();
+   |                                                 ^^^^^ method not found in `RequestBuilder<eventcore::model::Set<FieldValue<AmountField>>>`
+   |
+   = note: the method was found for `RequestBuilder<eventcore::model::Set<FieldValue<AmountField>>, eventcore::model::Set<FieldValue<NoteField>>>`

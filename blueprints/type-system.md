@@ -3,6 +3,13 @@ name: type-system
 summary: Semantic domain types with nutype validation enforcing parse-don't-validate at construction boundaries.
 ---
 
+## Experimental modeled occurrences
+
+The feature-gated `eventcore::model` lane adds occurrence-specific
+`FieldValue<F>` wrappers. Semantic newtypes continue to express domain roles;
+the wrappers express which modeled field produced a value. Only fields marked
+`#[model(origin)]` accept raw values in a modeled input builder.
+
 # Type System
 
 Domain types that make illegal states unrepresentable. Every concept in the event sourcing model has a semantic named type with compile-time or construction-time validation via nutype.

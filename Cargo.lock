@@ -612,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "chrono",
  "eventcore-macros",
@@ -621,6 +621,7 @@ dependencies = [
  "eventcore-sqlite",
  "eventcore-types",
  "futures",
+ "inventory",
  "nutype",
  "proptest",
  "rand 0.10.1",
@@ -636,7 +637,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-bench"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "criterion",
  "eventcore",
@@ -655,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-demo"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "eventcore",
  "eventcore-memory",
@@ -669,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-examples"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "eventcore",
  "eventcore-macros",
@@ -685,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-fs"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "chrono",
  "eventcore-testing",
@@ -705,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-macros"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "eventcore",
  "eventcore-memory",
@@ -722,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-memory"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "eventcore-testing",
  "eventcore-types",
@@ -737,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-postgres"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "async-stream",
  "eventcore-testing",
@@ -757,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-sqlite"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "async-stream",
  "eventcore-testing",
@@ -774,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-stress"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "clap",
  "eventcore",
@@ -796,7 +797,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-testing"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "eventcore",
  "eventcore-memory",
@@ -812,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-types"
-version = "1.0.2"
+version = "1.1.0-alpha.1"
 dependencies = [
  "futures",
  "glob",
@@ -1304,6 +1305,15 @@ dependencies = [
  "hashbrown 0.17.0",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "inventory"
+version = "0.3.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f0c30c76f2f4ccee3fe55a2435f691ca00c0e4bd87abe4f4a851b1d4dac39b"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]

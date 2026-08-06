@@ -15,6 +15,8 @@ dependencies_update = false
 
 # Git configuration
 git_release_enable = true  # Create GitHub releases per crate
+git_release_type = "auto" # Mark semver prereleases as prereleases automatically
+git_release_latest = false # Alpha releases must never replace the stable latest release
 git_tag_enable = true      # Create git tags per crate
 git_tag_name = "{{ package }}-v{{ version }}"  # Per-crate tags: eventcore-v1.0.1, eventcore-types-v1.0.1
 

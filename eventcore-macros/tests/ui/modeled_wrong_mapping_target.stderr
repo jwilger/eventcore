@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/modeled_wrong_mapping_target.rs:17:1
+   |
+17 | mapping! { WrongTarget: Request.amount => Transfer.stream using clone; }
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^---------------^^^^^^^^^^^^^^^
+   | |                                         |
+   | |                                         arguments to this function are incorrect
+   | expected `StreamId`, found `u64`
+   |
+note: associated function defined here
+  --> tests/ui/modeled_wrong_mapping_target.rs:11:10
+   |
+11 | #[derive(ModelCommand)]
+   |          ^^^^^^^^^^^^
+   = note: this error originates in the macro `mapping` which comes from the expansion of the derive macro `ModelCommand` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,5 @@
+error: EventCore: modeled enum variants must be unit variants or have one typed payload; use a named payload struct for multiple fields
+ --> tests/ui/modeled_event_multi_payload.rs:7:13
+  |
+7 |     Transfer(u64, u64),
+  |             ^^^^^^^^^^

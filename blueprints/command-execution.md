@@ -3,6 +3,12 @@ name: command-execution
 summary: Command pattern with pure apply/handle, automatic retry, and dynamic stream discovery.
 ---
 
+## Experimental modeled commands
+
+`ModelCommand` builders return `ModeledCommand<C>`. The wrapper implements the
+existing `CommandLogic` contract and is passed directly to `execute`; the
+executor's read, retry, and atomic append behavior is unchanged.
+
 # Command Execution
 
 Orchestrates the business logic lifecycle: read state from event streams, validate preconditions, produce new events, and persist atomically with configurable retry on concurrency conflicts.

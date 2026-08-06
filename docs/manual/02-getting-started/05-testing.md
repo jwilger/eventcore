@@ -1,5 +1,13 @@
 # Chapter 2.5: Testing Your Application
 
+## Experimental modeled-lane checks
+
+Applications trialing the alpha lane should enable
+`experimental-model-check` only in dev dependencies and call
+`eventcore::model::check()` in an integration test. This checks provenance,
+not business formulas; retain normal command and projection behavior tests.
+See [Experimental Model Checking](../05-advanced-topics/06-experimental-model-checking.md).
+
 Testing event-sourced systems is actually easier than testing traditional CRUD applications. With EventCore, you can test commands, projections, and entire workflows using deterministic event streams.
 
 ## Testing Philosophy

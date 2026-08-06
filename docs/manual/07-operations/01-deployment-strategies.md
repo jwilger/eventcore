@@ -1,5 +1,12 @@
 # Chapter 6.1: Deployment Strategies
 
+## Experimental feature isolation
+
+Do not deploy binaries built with `--all-features` while evaluating modeled
+checking. Production applications use `experimental-modeling` only when they
+need the runtime wrappers; `experimental-model-check` is intended for test
+targets and links the checker registry.
+
 EventCore applications require careful deployment planning to ensure high availability, data consistency, and smooth rollouts. This chapter covers production-ready deployment patterns and strategies.
 
 ## Container-Based Deployment

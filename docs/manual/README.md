@@ -52,6 +52,7 @@ Advanced patterns and lower-level APIs.
 - [Chapter 5.3: Long-Running Processes](./05-advanced-topics/03-long-running-processes.md)
 - [Chapter 5.4: Distributed Systems](./05-advanced-topics/04-distributed-systems.md)
 - [Chapter 5.5: Performance Optimization](./05-advanced-topics/05-performance-optimization.md)
+- [Chapter 5.6: Experimental Model Checking](./05-advanced-topics/06-experimental-model-checking.md)
 
 ### [Part 6: Security](./06-security/README.md)
 
