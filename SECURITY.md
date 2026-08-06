@@ -205,8 +205,7 @@ Specific compliance documentation is in development.
 
 ## Contact
 
-For non-security questions, please use:
-
-- [GitHub Issues](https://github.com/jwilger/eventcore/issues) for bug reports and feature requests
+For non-security work, follow the Tiber-backed contribution process in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 For security issues, use only the private email reporting process described above.

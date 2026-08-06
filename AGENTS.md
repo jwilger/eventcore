@@ -11,6 +11,13 @@
 - **Architecture docs:** `docs/manual/01-introduction/04-architecture.md`
 - **ADRs:** `docs/adr/`
 
+## Workflow Authority
+
+- Treat `.development-system.toml` and the development-system plugin as the
+  authoritative workflow configuration; do not duplicate its delivery rules
+  here.
+- When `[features].tiber = true`, use Tiber as the sole project task tracker.
+
 ## Development Rules
 
 1. Enter `nix develop` for pinned toolchains; start Postgres via `docker-compose up -d` only when running postgres backend tests.

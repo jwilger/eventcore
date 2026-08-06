@@ -219,15 +219,16 @@ Keep hooks green before pushing.
 ### Best Practices
 
 1. **Small, focused PRs** - Each PR should be independently reviewable
-2. **One issue per PR** - Link the GitHub issue in the PR description
+2. **One task per PR** - Reference the Tiber task ID when applicable
 3. **Descriptive branch names** - e.g. `feat/add-user-model`
 4. **Submit early** - Create draft PRs to show intent
 
 ## Task Tracking
 
-This project uses **GitHub Issues** at
-[github.com/jwilger/eventcore](https://github.com/jwilger/eventcore/issues)
-for all task tracking. See AGENTS.md for label conventions and CLI commands.
+This project uses **Tiber** for task tracking. The repository's
+`.development-system.toml` is the authoritative workflow configuration; when
+its Tiber feature is enabled, maintainers use the development-system Tiber
+workflow as the sole project task tracker.
 
 ## Pull Request Process
 

@@ -93,21 +93,18 @@ Use `/core:develop` skill. Follow outside-in TDD:
 
 ## Work Tracking Across Sessions
 
-### GitHub Issues
+### Tiber
 
-All work items, feature requests, and bug reports are tracked as GitHub
-Issues at `github.com/jwilger/eventcore`. At the start of each
-development session, check open issues to understand current priorities.
-
-Use the `gh` CLI or direct calls to the GitHub REST API
-(`/repos/jwilger/eventcore/issues`) to read and manage issues.
+Treat `.development-system.toml` and the development-system plugin as the
+workflow authority. When `[features].tiber = true`, use Tiber as the sole
+project task tracker for all work items and priorities.
 
 ### Session Continuity
 
 At the start of each session:
 
 1. Read MEMORY.md for cross-session context about in-progress work
-2. Check GitHub Issues for current priorities and assignments
+2. Check Tiber for the active task and ordered backlog
 3. Scan blueprint statuses for partially completed work (if blueprints exist)
 4. Resume where the previous session left off
 
