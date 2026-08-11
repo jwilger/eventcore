@@ -27,11 +27,38 @@ mod fs_contract_suite {
             self.inner.read_stream(stream_id).await
         }
 
+        async fn read_stream_after<E: Event>(
+            &self,
+            stream_id: StreamId,
+            exclusive_version: eventcore_types::StreamVersion,
+        ) -> Result<EventStream<E>, EventStoreError> {
+            self.inner
+                .read_stream_after(stream_id, exclusive_version)
+                .await
+        }
+
         async fn append_events(
             &self,
             writes: StreamWrites,
         ) -> Result<EventStreamSlice, EventStoreError> {
             self.inner.append_events(writes).await
+        }
+
+        async fn load_command_state_snapshot(
+            &self,
+            snapshot_id: eventcore_types::CommandStateSnapshotId,
+        ) -> Result<Option<eventcore_types::CommandStateSnapshot>, EventStoreError> {
+            self.inner.load_command_state_snapshot(snapshot_id).await
+        }
+
+        async fn save_command_state_snapshot(
+            &self,
+            snapshot_id: eventcore_types::CommandStateSnapshotId,
+            snapshot: eventcore_types::CommandStateSnapshot,
+        ) -> Result<(), EventStoreError> {
+            self.inner
+                .save_command_state_snapshot(snapshot_id, snapshot)
+                .await
         }
     }
 

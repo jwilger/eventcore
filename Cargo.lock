@@ -848,6 +848,7 @@ dependencies = [
  "nutype",
  "rand 0.10.1",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "uuid",

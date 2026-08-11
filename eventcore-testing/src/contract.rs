@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use eventcore_types::{
-    BatchSize, CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore,
+    BatchSize, CheckpointStore, CommandStateReplayCheckpoint, CommandStateSnapshot,
+    CommandStateSnapshotId, Event, EventFilter, EventPage, EventReader, EventStore,
     EventStoreError, ProjectorCoordinator, StreamId, StreamPattern, StreamPosition, StreamPrefix,
     StreamVersion, StreamWrites, collect_events,
 };
@@ -78,6 +81,164 @@ fn contract_stream_id(
             format!("unable to construct stream id `{}`: {}", raw, error),
         )
     })
+}
+
+fn contract_snapshot_id(
+    scenario: &'static str,
+) -> Result<CommandStateSnapshotId, ContractTestFailure> {
+    let raw = format!("contract::snapshot::{scenario}::{}", Uuid::now_v7());
+    CommandStateSnapshotId::try_new(raw.clone()).map_err(|error| {
+        ContractTestFailure::assertion(
+            scenario,
+            format!("unable to construct snapshot id `{raw}`: {error}"),
+        )
+    })
+}
+
+fn contract_snapshot(
+    primary_stream: &StreamId,
+    secondary_stream: &StreamId,
+    primary_version: usize,
+    secondary_version: usize,
+    balance: u64,
+) -> CommandStateSnapshot {
+    let stream_versions = HashMap::from([
+        (primary_stream.clone(), StreamVersion::new(primary_version)),
+        (
+            secondary_stream.clone(),
+            StreamVersion::new(secondary_version),
+        ),
+    ]);
+    CommandStateSnapshot::new(
+        serde_json::json!({ "balance": balance }),
+        stream_versions.clone(),
+    )
+    .with_replay_checkpoints(vec![
+        CommandStateReplayCheckpoint {
+            stream_id: primary_stream.clone(),
+            state: serde_json::json!({ "balance": balance - 1 }),
+            stream_versions: HashMap::from([(
+                primary_stream.clone(),
+                StreamVersion::new(primary_version),
+            )]),
+        },
+        CommandStateReplayCheckpoint {
+            stream_id: secondary_stream.clone(),
+            state: serde_json::json!({ "balance": balance }),
+            stream_versions,
+        },
+    ])
+}
+
+pub async fn test_command_state_snapshot_load_missing<F, S>(make_store: F) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "command_state_snapshot_load_missing";
+
+    let snapshot = make_store()
+        .load_command_state_snapshot(contract_snapshot_id(SCENARIO)?)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "load_snapshot", error))?;
+    if snapshot.is_some() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "a missing snapshot unexpectedly returned a projection",
+        ));
+    }
+    Ok(())
+}
+
+pub async fn test_command_state_snapshot_round_trip_and_monotonic<F, S>(
+    make_store: F,
+) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "command_state_snapshot_round_trip_and_monotonic";
+
+    let store = make_store();
+    let snapshot_id = contract_snapshot_id(SCENARIO)?;
+    let primary_stream = contract_stream_id(SCENARIO, "primary")?;
+    let secondary_stream = contract_stream_id(SCENARIO, "secondary")?;
+    let newer = contract_snapshot(&primary_stream, &secondary_stream, 4, 9, 200);
+    let stale = contract_snapshot(&primary_stream, &secondary_stream, 3, 8, 100);
+
+    store
+        .save_command_state_snapshot(snapshot_id.clone(), newer.clone())
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "save_snapshot", error))?;
+    store
+        .save_command_state_snapshot(snapshot_id.clone(), stale)
+        .await
+        .map_err(|error| {
+            ContractTestFailure::store_error(SCENARIO, "save_stale_snapshot", error)
+        })?;
+    let loaded = store
+        .load_command_state_snapshot(snapshot_id)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "load_snapshot", error))?
+        .ok_or_else(|| ContractTestFailure::assertion(SCENARIO, "saved snapshot was missing"))?;
+
+    if loaded.state != newer.state
+        || loaded.stream_versions != newer.stream_versions
+        || loaded.replay_checkpoints.len() != newer.replay_checkpoints.len()
+        || loaded.replay_checkpoints[1].state != newer.replay_checkpoints[1].state
+    {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "snapshot round-trip lost projection data or allowed a stale vector to regress it",
+        ));
+    }
+    Ok(())
+}
+
+pub async fn test_read_stream_after_excludes_reconstructed_events<F, S>(
+    make_store: F,
+) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "read_stream_after_excludes_reconstructed_events";
+
+    let store = make_store();
+    let stream_id = contract_stream_id(SCENARIO, "history")?;
+    let mut writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &stream_id,
+        StreamVersion::new(0),
+    )?;
+    for _ in 0..3 {
+        writes = append_contract_event(SCENARIO, writes, &stream_id)?;
+    }
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+    let events = collect_events(
+        store
+            .read_stream_after::<ContractTestEvent>(stream_id, StreamVersion::new(2))
+            .await
+            .map_err(|error| {
+                ContractTestFailure::store_error(SCENARIO, "read_stream_after", error)
+            })?,
+    )
+    .await
+    .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream_after", error))?;
+    if events.len() != 1 {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected one event after version 2, observed {}",
+                events.len()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn builder_step(
@@ -533,12 +694,14 @@ macro_rules! backend_contract_tests {
                 test_basic_read_write, test_batch_limiting,
                 test_checkpoint_independent_subscriptions,
                 test_checkpoint_load_missing_returns_none, test_checkpoint_save_and_load,
-                test_checkpoint_update_overwrites, test_concurrent_version_conflicts,
-                test_conflict_preserves_atomicity, test_coordination_acquire_leadership,
-                test_coordination_independent_subscriptions,
+                test_checkpoint_update_overwrites, test_command_state_snapshot_load_missing,
+                test_command_state_snapshot_round_trip_and_monotonic,
+                test_concurrent_version_conflicts, test_conflict_preserves_atomicity,
+                test_coordination_acquire_leadership, test_coordination_independent_subscriptions,
                 test_coordination_leadership_released_on_guard_drop,
                 test_coordination_second_instance_blocked, test_event_ordering_across_streams,
                 test_missing_stream_reads, test_position_based_resumption,
+                test_read_stream_after_excludes_reconstructed_events,
                 test_read_stream_errors_on_type_mismatch, test_stream_isolation,
                 test_stream_pattern_char_class, test_stream_pattern_filtering,
                 test_stream_pattern_single_char, test_stream_prefix_filtering,
@@ -641,6 +804,27 @@ macro_rules! backend_contract_tests {
                 test_batch_limiting($make_store)
                     .await
                     .expect("event reader contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn command_state_snapshot_load_missing_contract() {
+                test_command_state_snapshot_load_missing($make_store)
+                    .await
+                    .expect("command state snapshot contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn command_state_snapshot_round_trip_and_monotonic_contract() {
+                test_command_state_snapshot_round_trip_and_monotonic($make_store)
+                    .await
+                    .expect("command state snapshot contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn read_stream_after_excludes_reconstructed_events_contract() {
+                test_read_stream_after_excludes_reconstructed_events($make_store)
+                    .await
+                    .expect("event store contract failed");
             }
 
             // CheckpointStore contract tests
