@@ -687,6 +687,7 @@ dependencies = [
  "eventcore-postgres",
  "eventcore-sqlite",
  "eventcore-types",
+ "futures",
  "nutype",
  "serde",
  "serde_json",

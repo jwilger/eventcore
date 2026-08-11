@@ -5,11 +5,12 @@
 
 mod fixtures;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use eventcore::{RetryPolicy, execute};
 use eventcore_memory::InMemoryEventStore;
 use fixtures::{
-    Deposit, DepositWithStateReconstruction, TransferMoney, new_stream_id, seed_stream, test_amount,
+    Deposit, DepositWithStateReconstruction, FixedHistoryStore, TransferMoney, new_stream_id,
+    test_amount,
 };
 use std::hint::black_box;
 
@@ -52,36 +53,34 @@ fn bench_single_stream_warm(c: &mut Criterion) {
     let mut group = c.benchmark_group("execute/single_stream/warm");
 
     // Warm stream: execute a DepositWithStateReconstruction (requires state
-    // reconstruction via apply fold) on a stream pre-populated with N events.
-    // The store is shared across iterations — each iteration adds one more event,
-    // so the stream grows slightly, but the relative cost is dominated by the
-    // N seed events.
+    // reconstruction via apply fold) against exactly N events. The fixed
+    // history fixture discards appends so every sample has the same input.
     for event_count in [10, 100, 1000] {
         group.throughput(Throughput::Elements(1));
-
-        let store = InMemoryEventStore::new();
-        let account_id = new_stream_id();
-        rt.block_on(seed_stream(&store, &account_id, event_count));
 
         group.bench_with_input(
             BenchmarkId::new("memory", event_count),
             &event_count,
-            |b, _n| {
-                let cmd = DepositWithStateReconstruction {
-                    account_id: account_id.clone(),
-                    amount: test_amount(1),
-                };
-                b.to_async(&rt).iter(|| {
-                    let cmd = cmd.clone();
-                    let store_ref = &store;
-                    async move {
+            |b, &event_count| {
+                b.to_async(&rt).iter_batched(
+                    || {
+                        let account_id = new_stream_id();
+                        let store = FixedHistoryStore::seeded(&account_id, event_count);
+                        let cmd = DepositWithStateReconstruction {
+                            account_id,
+                            amount: test_amount(1),
+                        };
+                        (store, cmd)
+                    },
+                    |(store, cmd)| async move {
                         let _response = black_box(
-                            execute(store_ref, cmd, RetryPolicy::new())
+                            execute(&store, cmd, RetryPolicy::new())
                                 .await
                                 .expect("execute should succeed"),
                         );
-                    }
-                });
+                    },
+                    BatchSize::PerIteration,
+                );
             },
         );
     }

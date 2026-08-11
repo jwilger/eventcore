@@ -1,17 +1,46 @@
-schema_version = 1
+schema_version = 3
 
 [delivery]
 mode = "direct-to-trunk"
 trunk_branch = "main"
 
 [features]
-worktrees = false
-tiber = true
 agentic_systems = false
 eval_case_reporting = false
+tiber = true
 
-[worktrees]
-root = ".worktrees"
+[scopes.build_output]
+category = "build_output"
+include = ["target/**"]
+
+[scopes.developer_environment]
+category = "developer_environment"
+include = [
+    ".cargo/**",
+    ".github/**",
+    "AGENTS.md",
+    "Cargo.lock",
+    "Cargo.toml",
+    "docker-compose.yml",
+    "flake.lock",
+    "flake.nix",
+    "release-plz.toml",
+    "rust-toolchain.toml",
+    "*/Cargo.toml",
+]
+
+[scopes.documentation]
+category = "documentation"
+include = ["*.md", "docs/**", "*/CHANGELOG.md", "*/README.md"]
+
+[scopes.source]
+category = "source"
+include = ["*/build.rs", "*/src/**"]
+exclude = ["**/*.test.rs"]
+
+[scopes.tests]
+category = "tests"
+include = ["*/benches/**", "*/src/**/*.test.rs", "*/tests/**"]
 
 [tiber]
 max_queued = 5

@@ -41,6 +41,7 @@ harness = false
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 dhat = "0.3.3"
+futures = "0.3.32"
 eventcore = { path = "../eventcore", features = ["sqlite", "postgres", "experimental-model-check"] }
 eventcore-macros = { path = "../eventcore-macros" }
 eventcore-memory = { path = "../eventcore-memory" }

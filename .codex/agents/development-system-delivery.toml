@@ -1,0 +1,10 @@
+# generated-by: development-system setup schema=3
+name = "development-system-delivery"
+description = "Development System delivery role; read-only because spawned-role privileged MCP isolation is unproved."
+sandbox_mode = "read-only"
+developer_instructions = "Inspect only through the configured read-only services for the delivery role. Project mutation is unavailable in this harness."
+
+[mcp_servers.workspace-reader]
+command = "/home/jwilger/.codex/plugins/cache/ai-plugins/development-system/3.3.0/components/development-discipline/dist/x86_64-unknown-linux-musl/development-discipline-mcp"
+args = ["--service", "workspace-reader"]
+enabled_tools = ["workspace-reader.status","workspace-reader.read","workspace-reader.list","workspace-reader.search","workspace-reader.repository"]

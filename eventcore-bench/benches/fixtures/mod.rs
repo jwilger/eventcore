@@ -6,6 +6,7 @@
 use eventcore::{
     Command, CommandError, CommandLogic, Event, NewEvents, RetryPolicy, StreamId, execute,
 };
+use eventcore_types::{EventStore, EventStoreError, EventStream, EventStreamSlice, StreamWrites};
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -231,6 +232,61 @@ pub fn new_stream_id() -> StreamId {
 
 pub fn test_amount(cents: u16) -> MoneyAmount {
     MoneyAmount::try_new(cents).expect("valid amount")
+}
+
+/// Immutable event-store fixture for measuring command state reconstruction.
+///
+/// Every read returns the original seeded history and successful appends are
+/// discarded. This keeps every measured command at the same reconstruction
+/// size; append performance is covered by the regular store-operation
+/// benchmarks.
+pub struct FixedHistoryStore {
+    events: Vec<BankAccountEvent>,
+}
+
+impl FixedHistoryStore {
+    pub fn seeded(account_id: &StreamId, event_count: usize) -> Self {
+        let amount = test_amount(100);
+        let events = (0..event_count)
+            .map(|_| BankAccountEvent::MoneyDeposited {
+                account_id: account_id.clone(),
+                amount,
+            })
+            .collect();
+
+        Self { events }
+    }
+}
+
+impl EventStore for FixedHistoryStore {
+    async fn read_stream<E: Event>(
+        &self,
+        _stream_id: StreamId,
+    ) -> Result<EventStream<E>, EventStoreError> {
+        let events =
+            self.events
+                .iter()
+                .map(|event| {
+                    let event = event as &dyn std::any::Any;
+                    event.downcast_ref::<E>().cloned().ok_or(
+                        EventStoreError::DeserializationFailed {
+                            stream_id: eventcore_types::StreamId::try_new("benchmark")
+                                .expect("valid stream id"),
+                            detail: "unexpected benchmark event type".to_string(),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+
+        Ok(EventStream::new(futures::stream::iter(events)))
+    }
+
+    async fn append_events(
+        &self,
+        _writes: StreamWrites,
+    ) -> Result<EventStreamSlice, EventStoreError> {
+        Ok(EventStreamSlice)
+    }
 }
 
 /// Seed a stream with N deposit events using execute().
