@@ -2,6 +2,7 @@ use super::*;
 use eventcore_types::collect_events;
 use eventcore_types::{BatchSize, EventFilter, EventPage};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 /// Test-specific domain event type for unit testing storage operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -414,4 +415,42 @@ async fn in_memory_event_store_implements_projector_coordinator() {
 
     // Then: It should succeed
     assert!(guard.is_ok(), "should acquire leadership");
+}
+
+#[tokio::test]
+async fn command_state_snapshot_save_does_not_replace_a_newer_projection() {
+    let store = InMemoryEventStore::new();
+    let snapshot_id = CommandStateSnapshotId::try_new("accounts::snapshot".to_string())
+        .expect("valid snapshot id");
+    let stream_id = StreamId::try_new("accounts::primary".to_string()).expect("valid stream id");
+
+    let newer = CommandStateSnapshot::new(
+        json!({ "balance": 200 }),
+        HashMap::from([(stream_id.clone(), StreamVersion::new(2))]),
+    );
+    let stale = CommandStateSnapshot::new(
+        json!({ "balance": 100 }),
+        HashMap::from([(stream_id.clone(), StreamVersion::new(1))]),
+    );
+
+    store
+        .save_command_state_snapshot(snapshot_id.clone(), newer)
+        .await
+        .expect("newer projection persists");
+    store
+        .save_command_state_snapshot(snapshot_id.clone(), stale)
+        .await
+        .expect("stale persistence request is handled");
+
+    let snapshot = store
+        .load_command_state_snapshot(snapshot_id)
+        .await
+        .expect("projection loads")
+        .expect("projection remains present");
+
+    assert_eq!(snapshot.state, json!({ "balance": 200 }));
+    assert_eq!(
+        snapshot.stream_versions.get(&stream_id),
+        Some(&StreamVersion::new(2))
+    );
 }

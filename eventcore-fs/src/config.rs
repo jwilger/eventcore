@@ -54,13 +54,15 @@ impl FsConfig {
 }
 
 /// Resolved paths under a store root. Only `events/` is committed to git;
-/// `tmp/`, `index/`, and `.eventcore/` (and the `.lock` file) are derived/local.
+/// `tmp/`, `index/`, and `.eventcore/` (including command-state snapshots),
+/// plus the `.lock` file, are derived/local.
 #[derive(Debug, Clone)]
 pub(crate) struct Roots {
     pub(crate) root: PathBuf,
     pub(crate) events: PathBuf,
     pub(crate) tmp: PathBuf,
     pub(crate) eventcore: PathBuf,
+    pub(crate) snapshots: PathBuf,
     pub(crate) index: PathBuf,
 }
 
@@ -71,12 +73,19 @@ impl Roots {
             events: root.join("events"),
             tmp: root.join("tmp"),
             eventcore: root.join(".eventcore"),
+            snapshots: root.join(".eventcore/snapshots"),
             index: root.join("index"),
         }
     }
 
     pub(crate) fn create_dirs(&self) -> Result<(), FsEventStoreError> {
-        for dir in [&self.events, &self.tmp, &self.eventcore, &self.index] {
+        for dir in [
+            &self.events,
+            &self.tmp,
+            &self.eventcore,
+            &self.snapshots,
+            &self.index,
+        ] {
             fs::create_dir_all(dir).map_err(|source| FsEventStoreError::InitFailed {
                 path: dir.clone(),
                 source,
@@ -99,6 +108,14 @@ impl Roots {
 
     pub(crate) fn ingestion_log_path(&self) -> PathBuf {
         self.index.join("ingestion.log")
+    }
+
+    pub(crate) fn snapshot_path(&self, filename: &str) -> PathBuf {
+        self.snapshots.join(format!("{filename}.json"))
+    }
+
+    pub(crate) fn snapshot_tmp_path(&self, filename: &str) -> PathBuf {
+        self.snapshots.join(format!("{filename}.json.tmp"))
     }
 
     pub(crate) fn event_path(&self, transaction_id: Uuid) -> PathBuf {

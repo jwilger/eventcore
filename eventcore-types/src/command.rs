@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::errors::CommandError;
+use crate::snapshot::CommandStateSnapshotId;
 use crate::store::StreamId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,6 +202,32 @@ pub trait CommandLogic: CommandStreams + Send + Sync {
     /// the command relies solely on static [`CommandStreams`] declarations.
     fn stream_resolver(&self) -> Option<&(dyn StreamResolver<Self::State> + Sync)> {
         None
+    }
+
+    /// Identifies an opt-in durable projection of this command's reconstructed
+    /// state. Commands that return `None` retain ordinary full replay.
+    fn command_state_snapshot_id(&self) -> Option<CommandStateSnapshotId> {
+        None
+    }
+
+    /// Serializes reconstructed state for a durable command-state projection.
+    fn serialize_command_state_snapshot(
+        &self,
+        _state: &Self::State,
+    ) -> Result<Value, CommandError> {
+        Err(CommandError::ValidationError(
+            "command declared a snapshot id without serializing its state".to_string(),
+        ))
+    }
+
+    /// Restores reconstructed state from a durable command-state projection.
+    fn deserialize_command_state_snapshot(
+        &self,
+        _state: Value,
+    ) -> Result<Self::State, CommandError> {
+        Err(CommandError::ValidationError(
+            "command declared a snapshot id without deserializing its state".to_string(),
+        ))
     }
 }
 

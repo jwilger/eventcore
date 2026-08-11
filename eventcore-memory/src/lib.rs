@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use eventcore_types::{
-    CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
-    EventStream, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
-    StreamVersion, StreamWriteEntry, StreamWrites,
+    CheckpointStore, CommandStateSnapshot, CommandStateSnapshotId, Event, EventFilter, EventPage,
+    EventReader, EventStore, EventStoreError, EventStream, EventStreamSlice, Operation,
+    ProjectorCoordinator, StreamId, StreamPosition, StreamVersion, StreamWriteEntry, StreamWrites,
 };
 use uuid::Uuid;
 
@@ -41,6 +41,8 @@ struct StoreData {
     global_log: Vec<GlobalLogEntry>,
     /// Checkpoint storage for projection progress tracking
     checkpoints: HashMap<String, StreamPosition>,
+    /// Durable-in-process command-state projections.
+    command_state_snapshots: HashMap<CommandStateSnapshotId, CommandStateSnapshot>,
     /// Coordination locks for projector leadership
     locks: Arc<RwLock<HashMap<String, ()>>>,
 }
@@ -80,6 +82,7 @@ impl InMemoryEventStore {
                 streams: HashMap::new(),
                 global_log: Vec::new(),
                 checkpoints: HashMap::new(),
+                command_state_snapshots: HashMap::new(),
                 locks: Arc::new(RwLock::new(HashMap::new())),
             }),
         }
@@ -115,6 +118,41 @@ impl EventStore for InMemoryEventStore {
                 None => Vec::new(),
                 Some((boxed_events, _version)) => boxed_events
                     .iter()
+                    .map(|boxed| match boxed.downcast_ref::<E>() {
+                        Some(event) => Ok(event.clone()),
+                        None => Err(EventStoreError::DeserializationFailed {
+                            stream_id: stream_id.clone(),
+                            detail: format!(
+                                "event could not be downcast to {}",
+                                std::any::type_name::<E>()
+                            ),
+                        }),
+                    })
+                    .collect(),
+            }
+        };
+
+        Ok(EventStream::new(futures::stream::iter(items)))
+    }
+
+    async fn read_stream_after<E: Event>(
+        &self,
+        stream_id: StreamId,
+        exclusive_version: StreamVersion,
+    ) -> Result<EventStream<E>, EventStoreError> {
+        let count: usize = exclusive_version.into();
+        let items: Vec<Result<E, EventStoreError>> = {
+            let data = self
+                .data
+                .lock()
+                .map_err(|_| EventStoreError::StoreFailure {
+                    operation: Operation::ReadStream,
+                })?;
+            match data.streams.get(&stream_id) {
+                None => Vec::new(),
+                Some((boxed_events, _version)) => boxed_events
+                    .iter()
+                    .skip(count)
                     .map(|boxed| match boxed.downcast_ref::<E>() {
                         Some(event) => Ok(event.clone()),
                         None => Err(EventStoreError::DeserializationFailed {
@@ -191,6 +229,39 @@ impl EventStore for InMemoryEventStore {
         }
 
         Ok(EventStreamSlice)
+    }
+
+    async fn load_command_state_snapshot(
+        &self,
+        snapshot_id: CommandStateSnapshotId,
+    ) -> Result<Option<CommandStateSnapshot>, EventStoreError> {
+        let data = self
+            .data
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure {
+                operation: Operation::ReadStream,
+            })?;
+        Ok(data.command_state_snapshots.get(&snapshot_id).cloned())
+    }
+
+    async fn save_command_state_snapshot(
+        &self,
+        snapshot_id: CommandStateSnapshotId,
+        snapshot: CommandStateSnapshot,
+    ) -> Result<(), EventStoreError> {
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|_| EventStoreError::StoreFailure {
+                operation: Operation::AppendEvents,
+            })?;
+        match data.command_state_snapshots.get(&snapshot_id) {
+            Some(current) if !snapshot.covers(current) => {}
+            _ => {
+                let _ = data.command_state_snapshots.insert(snapshot_id, snapshot);
+            }
+        }
+        Ok(())
     }
 }
 

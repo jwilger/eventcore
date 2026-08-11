@@ -23,9 +23,10 @@
 use std::time::Duration;
 
 use eventcore_types::{
-    CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
-    EventStream, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
-    StreamVersion, StreamWrites,
+    CheckpointStore, CommandStateReplayCheckpoint, CommandStateSnapshot, CommandStateSnapshotId,
+    Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, EventStream,
+    EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition, StreamVersion,
+    StreamWrites,
 };
 use futures::StreamExt;
 use nutype::nutype;
@@ -228,6 +229,58 @@ impl EventStore for PostgresEventStore {
         Ok(EventStream::new(stream))
     }
 
+    #[instrument(name = "postgres.read_stream_after", skip(self))]
+    async fn read_stream_after<E: Event>(
+        &self,
+        stream_id: StreamId,
+        exclusive_version: StreamVersion,
+    ) -> Result<EventStream<E>, EventStoreError> {
+        let pool = self.pool.clone();
+        let version: usize = exclusive_version.into();
+
+        let stream = async_stream::stream! {
+            let mut rows = query(
+                "SELECT event_data FROM eventcore_events \
+                 WHERE stream_id = $1 AND stream_version > $2 \
+                 ORDER BY stream_version ASC",
+            )
+            .bind(stream_id.as_ref())
+            .bind(version as i64)
+            .fetch(&pool);
+
+            while let Some(row) = rows.next().await {
+                let row = match row {
+                    Ok(row) => row,
+                    Err(error) => {
+                        yield Err(map_sqlx_error(error, Operation::ReadStream));
+                        break;
+                    }
+                };
+
+                let payload: Value = match row.try_get("event_data") {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        yield Err(map_sqlx_error(error, Operation::ReadStream));
+                        break;
+                    }
+                };
+
+                match serde_json::from_value::<E>(payload) {
+                    Ok(event) => yield Ok(event),
+                    Err(error) => {
+                        yield Err(EventStoreError::DeserializationFailed {
+                            stream_id: stream_id.clone(),
+                            detail: error.to_string(),
+                        });
+                        break;
+                    }
+                }
+            }
+        };
+
+        Ok(EventStream::new(stream))
+    }
+
     #[instrument(name = "postgres.append_events", skip(self, writes))]
     async fn append_events(
         &self,
@@ -306,6 +359,74 @@ impl EventStore for PostgresEventStore {
             .map_err(|error| map_sqlx_error(error, Operation::CommitTransaction))?;
 
         Ok(EventStreamSlice)
+    }
+
+    async fn load_command_state_snapshot(
+        &self,
+        snapshot_id: CommandStateSnapshotId,
+    ) -> Result<Option<CommandStateSnapshot>, EventStoreError> {
+        let row = query(
+            "SELECT state, stream_versions, replay_checkpoints \
+             FROM eventcore_command_state_snapshots \
+             WHERE snapshot_id = $1",
+        )
+        .bind(snapshot_id.as_ref())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
+
+        row.map(|row| {
+            let state: Json<Value> = row
+                .try_get("state")
+                .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
+            let stream_versions: Json<std::collections::HashMap<StreamId, StreamVersion>> = row
+                .try_get("stream_versions")
+                .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
+            let replay_checkpoints: Json<Vec<CommandStateReplayCheckpoint>> = row
+                .try_get("replay_checkpoints")
+                .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
+
+            Ok(CommandStateSnapshot::new(state.0, stream_versions.0)
+                .with_replay_checkpoints(replay_checkpoints.0))
+        })
+        .transpose()
+    }
+
+    async fn save_command_state_snapshot(
+        &self,
+        snapshot_id: CommandStateSnapshotId,
+        snapshot: CommandStateSnapshot,
+    ) -> Result<(), EventStoreError> {
+        // The conflict predicate is evaluated while PostgreSQL holds the
+        // conflicting row lock. This means concurrent refreshes can never let
+        // a stale vector replace one that includes more events.
+        let _ = query(
+            "INSERT INTO eventcore_command_state_snapshots \
+                 (snapshot_id, state, stream_versions, replay_checkpoints, updated_at) \
+             VALUES ($1, $2, $3, $4, NOW()) \
+             ON CONFLICT (snapshot_id) DO UPDATE \
+             SET state = EXCLUDED.state, \
+                 stream_versions = EXCLUDED.stream_versions, \
+                 replay_checkpoints = EXCLUDED.replay_checkpoints, \
+                 updated_at = NOW() \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 \
+                 FROM jsonb_each_text(eventcore_command_state_snapshots.stream_versions) \
+                     AS current(stream_id, stream_version) \
+                 WHERE NOT (EXCLUDED.stream_versions ? current.stream_id) \
+                    OR (EXCLUDED.stream_versions ->> current.stream_id)::BIGINT \
+                       < current.stream_version::BIGINT \
+             )",
+        )
+        .bind(snapshot_id.as_ref())
+        .bind(Json(snapshot.state))
+        .bind(Json(snapshot.stream_versions))
+        .bind(Json(snapshot.replay_checkpoints))
+        .execute(&self.pool)
+        .await
+        .map_err(|error| map_sqlx_error(error, Operation::AppendEvents))?;
+
+        Ok(())
     }
 }
 

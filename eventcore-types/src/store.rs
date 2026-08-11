@@ -1,5 +1,6 @@
 use crate::command::Event;
 use crate::validation::{is_valid_glob_pattern, no_glob_metacharacters};
+use crate::{CommandStateSnapshot, CommandStateSnapshotId};
 use futures::Stream;
 use futures::stream::StreamExt;
 use nutype::nutype;
@@ -154,7 +155,7 @@ impl Default for StreamWrites {
 ///
 /// The `eventcore-postgres` backend enforces immutability via database triggers
 /// that raise errors on any attempt to UPDATE or DELETE event records.
-pub trait EventStore {
+pub trait EventStore: Sync {
     /// Read all events from a stream.
     ///
     /// Loads the complete event history from a stream for state reconstruction.
@@ -181,6 +182,23 @@ pub trait EventStore {
         &self,
         stream_id: StreamId,
     ) -> impl Future<Output = Result<EventStream<E>, EventStoreError>> + Send;
+
+    /// Read events written after an already-reconstructed stream version.
+    ///
+    /// Backends may override this to seek directly to `exclusive_version`.
+    /// The default implementation preserves compatibility for existing stores
+    /// by skipping the prefix after opening a normal stream.
+    fn read_stream_after<E: Event>(
+        &self,
+        stream_id: StreamId,
+        exclusive_version: StreamVersion,
+    ) -> impl Future<Output = Result<EventStream<E>, EventStoreError>> + Send {
+        async move {
+            let stream = self.read_stream(stream_id).await?;
+            let count: usize = exclusive_version.into();
+            Ok(EventStream::new(stream.skip(count)))
+        }
+    }
 
     /// Atomically append events to multiple streams with optimistic concurrency control.
     ///
@@ -231,6 +249,30 @@ pub trait EventStore {
         &self,
         writes: StreamWrites,
     ) -> impl Future<Output = Result<EventStreamSlice, EventStoreError>> + Send;
+
+    /// Load a command-state projection.
+    ///
+    /// Stores that do not yet persist command-state projections return `None`,
+    /// preserving normal full reconstruction.
+    fn load_command_state_snapshot(
+        &self,
+        _snapshot_id: CommandStateSnapshotId,
+    ) -> impl Future<Output = Result<Option<CommandStateSnapshot>, EventStoreError>> + Send {
+        async { Ok(None) }
+    }
+
+    /// Persist a command-state projection.
+    ///
+    /// The default is a no-op so existing third-party `EventStore`
+    /// implementations continue to reconstruct state normally until they opt
+    /// into projection persistence.
+    fn save_command_state_snapshot(
+        &self,
+        _snapshot_id: CommandStateSnapshotId,
+        _snapshot: CommandStateSnapshot,
+    ) -> impl Future<Output = Result<(), EventStoreError>> + Send {
+        async { Ok(()) }
+    }
 }
 
 /// Stream identifier domain type.
@@ -367,7 +409,19 @@ impl StreamPattern {
 ///
 /// StreamVersion represents the version (event count) of an event stream.
 /// Versions start at 0 (empty stream) and increment with each event.
-#[nutype(derive(Clone, Copy, PartialEq, Debug, Display, Into))]
+#[nutype(derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Debug,
+    Display,
+    Into,
+    Serialize,
+    Deserialize
+))]
 pub struct StreamVersion(usize);
 
 impl StreamVersion {
@@ -550,11 +604,38 @@ impl<T: EventStore + Sync> EventStore for &T {
         (*self).read_stream(stream_id).await
     }
 
+    async fn read_stream_after<E: Event>(
+        &self,
+        stream_id: StreamId,
+        exclusive_version: StreamVersion,
+    ) -> Result<EventStream<E>, EventStoreError> {
+        (*self)
+            .read_stream_after(stream_id, exclusive_version)
+            .await
+    }
+
     async fn append_events(
         &self,
         writes: StreamWrites,
     ) -> Result<EventStreamSlice, EventStoreError> {
         (*self).append_events(writes).await
+    }
+
+    async fn load_command_state_snapshot(
+        &self,
+        snapshot_id: CommandStateSnapshotId,
+    ) -> Result<Option<CommandStateSnapshot>, EventStoreError> {
+        (*self).load_command_state_snapshot(snapshot_id).await
+    }
+
+    async fn save_command_state_snapshot(
+        &self,
+        snapshot_id: CommandStateSnapshotId,
+        snapshot: CommandStateSnapshot,
+    ) -> Result<(), EventStoreError> {
+        (*self)
+            .save_command_state_snapshot(snapshot_id, snapshot)
+            .await
     }
 }
 

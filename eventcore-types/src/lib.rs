@@ -22,6 +22,7 @@
 mod command;
 mod errors;
 mod projection;
+mod snapshot;
 mod store;
 mod validation;
 
@@ -35,6 +36,7 @@ pub use projection::{
     EventPage, EventReader, FailureContext, FailureStrategy, MaxConsecutiveFailures, MaxRetries,
     MaxRetryAttempts, Projector, ProjectorCoordinator, RetryCount, StreamPosition,
 };
+pub use snapshot::{CommandStateReplayCheckpoint, CommandStateSnapshot, CommandStateSnapshotId};
 pub use store::{
     EventStore, EventStoreError, EventStream, EventStreamSlice, Operation, StreamId, StreamPattern,
     StreamPrefix, StreamVersion, StreamWriteEntry, StreamWrites, collect_events,

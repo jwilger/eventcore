@@ -139,7 +139,7 @@
 //!   operations, including version conflicts and event deserialization
 //!   failures.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -159,7 +159,15 @@ pub use eventcore_types::{
 };
 
 // Internal imports for types used by this crate but not re-exported
-use eventcore_types::{EventStore, MaxRetries, StreamVersion, StreamWrites};
+use eventcore_types::{
+    CommandStateReplayCheckpoint, CommandStateSnapshot, CommandStateSnapshotId, EventStore,
+    EventStoreError, MaxRetries, StreamVersion, StreamWrites,
+};
+
+/// Number of reconstructed events at which an opt-in command-state projection
+/// is first persisted. The fixed-history benchmark measured approximately
+/// 14.6µs at 100 events and 116.5µs at 1,000 events.
+pub const COMMAND_STATE_SNAPSHOT_REFRESH_THRESHOLD: usize = 100;
 
 // Re-export projection public API
 pub use projection::{ProjectionConfig, ProjectionError, run_projection};
@@ -626,6 +634,18 @@ where
     C: CommandLogic,
     S: EventStore,
 {
+    if let Some(snapshot_id) = command.command_state_snapshot_id() {
+        let declarations = command.stream_declarations();
+        return execute_with_snapshot(
+            &store,
+            &command,
+            policy,
+            snapshot_id,
+            declarations.iter().cloned().collect(),
+        )
+        .await;
+    }
+
     use effects::{StoreEffect, StoreEffectResult};
     use execute_pipeline::{ExecutePipeline, PipelineOutcome, PipelineStep};
 
@@ -658,6 +678,346 @@ where
             }
         }
     }
+}
+
+/// Executes an opt-in command from a durable state projection.
+async fn execute_with_snapshot<C, S>(
+    store: &S,
+    command: &C,
+    policy: RetryPolicy,
+    snapshot_id: CommandStateSnapshotId,
+    stream_ids: Vec<StreamId>,
+) -> Result<ExecutionResponse, CommandError>
+where
+    C: CommandLogic,
+    S: EventStore,
+{
+    let mut attempt = 0;
+
+    loop {
+        let stored_snapshot = store
+            .load_command_state_snapshot(snapshot_id.clone())
+            .await
+            .map_err(CommandError::EventStoreError)?;
+
+        let (state, expected_versions, snapshot_to_persist) =
+            reconstruct_command_snapshot(store, command, &stream_ids, stored_snapshot).await?;
+
+        if let Some(snapshot) = snapshot_to_persist {
+            store
+                .save_command_state_snapshot(snapshot_id.clone(), snapshot)
+                .await
+                .map_err(CommandError::EventStoreError)?;
+        }
+
+        let events = command.handle(state)?;
+        let writes = build_stream_writes_from_events::<C>(Vec::from(events), expected_versions)?;
+
+        match store.append_events(writes).await {
+            Ok(_) => {
+                return Ok(ExecutionResponse::new(
+                    NonZeroU32::new(attempt + 1).expect("attempts are 1-based"),
+                ));
+            }
+            Err(EventStoreError::VersionConflict { .. }) if attempt < policy.max_retries.into() => {
+                let delay_ms = compute_retry_delay_ms(&policy.backoff_strategy, attempt);
+                let attempt_number = attempt + 1;
+                let attempt_number_domain = AttemptNumber::new(
+                    NonZeroU32::new(attempt_number).expect("attempt number is non-zero"),
+                );
+                if let Some(hook) = &policy.metrics_hook {
+                    hook.on_retry_attempt(&RetryContext {
+                        streams: stream_ids.clone(),
+                        attempt: attempt_number_domain,
+                        delay_ms,
+                    });
+                }
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms.into())).await;
+            }
+            Err(EventStoreError::VersionConflict { .. }) => {
+                return Err(CommandError::ConcurrencyError(policy.max_retries.into()));
+            }
+            Err(error) => return Err(CommandError::EventStoreError(error)),
+        }
+    }
+}
+
+/// Reconstructs command state and emits a replacement projection when
+/// a fresh replay reaches the threshold or an existing projection has a tail.
+///
+/// A checkpoint holds the state after a completed stream. If an earlier stream
+/// advances, all later streams are replayed in full, preserving the executor's
+/// BFS discovery and replay order rather than treating the state fold as
+/// commutative.
+async fn reconstruct_command_snapshot<C, S>(
+    store: &S,
+    command: &C,
+    stream_ids: &[StreamId],
+    stored_snapshot: Option<CommandStateSnapshot>,
+) -> Result<
+    (
+        C::State,
+        HashMap<StreamId, StreamVersion>,
+        Option<CommandStateSnapshot>,
+    ),
+    CommandError,
+>
+where
+    C: CommandLogic,
+    S: EventStore,
+{
+    if let Some(snapshot) = stored_snapshot
+        && snapshot_replay_order_is_valid(command, stream_ids, &snapshot)?
+    {
+        for (index, checkpoint) in snapshot.replay_checkpoints.iter().enumerate() {
+            let stream_id = &checkpoint.stream_id;
+            let base_version = checkpoint.stream_versions[stream_id];
+            let state = command.deserialize_command_state_snapshot(checkpoint.state.clone())?;
+            let (state, tail_count) =
+                apply_command_stream(store, command, state, stream_id.clone(), Some(base_version))
+                    .await?;
+
+            if tail_count == 0 {
+                continue;
+            }
+
+            let mut expected_versions = checkpoint.stream_versions.clone();
+            let _ = expected_versions.insert(
+                stream_id.clone(),
+                StreamVersion::new(base_version.into_inner() + tail_count),
+            );
+            let mut checkpoints = snapshot.replay_checkpoints[..index].to_vec();
+            checkpoints.push(CommandStateReplayCheckpoint {
+                stream_id: stream_id.clone(),
+                state: command.serialize_command_state_snapshot(&state)?,
+                stream_versions: expected_versions.clone(),
+            });
+
+            let ReplayProgress {
+                mut queue,
+                mut visited,
+                mut scheduled,
+                ..
+            } = discovery_before_checkpoint(
+                command,
+                stream_ids,
+                &snapshot.replay_checkpoints[..index],
+            )?;
+            let current = queue.pop_front().expect("validated checkpoint queue");
+            debug_assert_eq!(current, *stream_id);
+            let _ = visited.insert(stream_id.clone());
+            discover_related_streams(command, &state, &mut queue, &mut scheduled);
+
+            let ReplayProgress {
+                state,
+                expected_versions,
+                checkpoints,
+                ..
+            } = replay_remaining_streams(
+                store,
+                command,
+                ReplayProgress {
+                    state,
+                    queue,
+                    visited,
+                    scheduled,
+                    expected_versions,
+                    checkpoints,
+                },
+            )
+            .await?;
+
+            let replacement = CommandStateSnapshot::new(
+                command.serialize_command_state_snapshot(&state)?,
+                expected_versions.clone(),
+            )
+            .with_replay_checkpoints(checkpoints);
+            return Ok((state, expected_versions, Some(replacement)));
+        }
+
+        let state = command.deserialize_command_state_snapshot(snapshot.state)?;
+        return Ok((state, snapshot.stream_versions, None));
+    }
+
+    let ReplayProgress {
+        state,
+        expected_versions,
+        checkpoints,
+        ..
+    } = replay_remaining_streams(
+        store,
+        command,
+        discovery_before_checkpoint(command, stream_ids, &[])?,
+    )
+    .await?;
+
+    let replayed_events: usize = expected_versions
+        .values()
+        .map(|version| version.into_inner())
+        .sum();
+    let snapshot = if replayed_events >= COMMAND_STATE_SNAPSHOT_REFRESH_THRESHOLD {
+        Some(
+            CommandStateSnapshot::new(
+                command.serialize_command_state_snapshot(&state)?,
+                expected_versions.clone(),
+            )
+            .with_replay_checkpoints(checkpoints),
+        )
+    } else {
+        None
+    };
+    Ok((state, expected_versions, snapshot))
+}
+
+fn snapshot_replay_order_is_valid<C: CommandLogic>(
+    command: &C,
+    stream_ids: &[StreamId],
+    snapshot: &CommandStateSnapshot,
+) -> Result<bool, CommandError> {
+    if snapshot.stream_versions.len() != snapshot.replay_checkpoints.len() {
+        return Ok(false);
+    }
+    let ReplayProgress {
+        mut queue,
+        mut visited,
+        mut scheduled,
+        ..
+    } = discovery_before_checkpoint(command, stream_ids, &[])?;
+    for checkpoint in &snapshot.replay_checkpoints {
+        let Some(stream_id) = queue.pop_front() else {
+            return Ok(false);
+        };
+        if stream_id != checkpoint.stream_id
+            || !visited.insert(stream_id.clone())
+            || !checkpoint.stream_versions.contains_key(&stream_id)
+        {
+            return Ok(false);
+        }
+        let state = command.deserialize_command_state_snapshot(checkpoint.state.clone())?;
+        discover_related_streams(command, &state, &mut queue, &mut scheduled);
+    }
+    Ok(queue.is_empty()
+        && snapshot.stream_versions.iter().all(|(stream_id, version)| {
+            snapshot
+                .replay_checkpoints
+                .last()
+                .is_some_and(|last| last.stream_versions.get(stream_id) == Some(version))
+        }))
+}
+
+struct ReplayProgress<State> {
+    state: State,
+    queue: VecDeque<StreamId>,
+    visited: HashSet<StreamId>,
+    scheduled: HashSet<StreamId>,
+    expected_versions: HashMap<StreamId, StreamVersion>,
+    checkpoints: Vec<CommandStateReplayCheckpoint>,
+}
+
+fn discovery_before_checkpoint<C: CommandLogic>(
+    command: &C,
+    declared_stream_ids: &[StreamId],
+    checkpoints: &[CommandStateReplayCheckpoint],
+) -> Result<ReplayProgress<C::State>, CommandError> {
+    let mut queue = VecDeque::from(declared_stream_ids.to_vec());
+    let mut scheduled = declared_stream_ids.iter().cloned().collect::<HashSet<_>>();
+    let mut visited = HashSet::new();
+    let mut state = C::State::default();
+    for checkpoint in checkpoints {
+        let stream_id = queue.pop_front().expect("validated checkpoint prefix");
+        debug_assert_eq!(stream_id, checkpoint.stream_id);
+        let _ = visited.insert(stream_id);
+        state = command.deserialize_command_state_snapshot(checkpoint.state.clone())?;
+        discover_related_streams(command, &state, &mut queue, &mut scheduled);
+    }
+    Ok(ReplayProgress {
+        state,
+        queue,
+        visited,
+        scheduled,
+        expected_versions: HashMap::new(),
+        checkpoints: Vec::new(),
+    })
+}
+
+fn discover_related_streams<C: CommandLogic>(
+    command: &C,
+    state: &C::State,
+    queue: &mut VecDeque<StreamId>,
+    scheduled: &mut HashSet<StreamId>,
+) {
+    if let Some(resolver) = command.stream_resolver() {
+        for stream_id in resolver.discover_related_streams(state) {
+            if scheduled.insert(stream_id.clone()) {
+                queue.push_back(stream_id);
+            }
+        }
+    }
+}
+
+async fn replay_remaining_streams<C, S>(
+    store: &S,
+    command: &C,
+    mut replay: ReplayProgress<C::State>,
+) -> Result<ReplayProgress<C::State>, CommandError>
+where
+    C: CommandLogic,
+    S: EventStore,
+{
+    while let Some(stream_id) = replay.queue.pop_front() {
+        if !replay.visited.insert(stream_id.clone()) {
+            continue;
+        }
+        let (next_state, count) =
+            apply_command_stream(store, command, replay.state, stream_id.clone(), None).await?;
+        replay.state = next_state;
+        let _ = replay
+            .expected_versions
+            .insert(stream_id.clone(), StreamVersion::new(count));
+        replay.checkpoints.push(CommandStateReplayCheckpoint {
+            stream_id: stream_id.clone(),
+            state: command.serialize_command_state_snapshot(&replay.state)?,
+            stream_versions: replay.expected_versions.clone(),
+        });
+        discover_related_streams(
+            command,
+            &replay.state,
+            &mut replay.queue,
+            &mut replay.scheduled,
+        );
+    }
+    Ok(replay)
+}
+
+async fn apply_command_stream<C, S>(
+    store: &S,
+    command: &C,
+    mut state: C::State,
+    stream_id: StreamId,
+    after: Option<StreamVersion>,
+) -> Result<(C::State, usize), CommandError>
+where
+    C: CommandLogic,
+    S: EventStore,
+{
+    use futures::StreamExt;
+
+    let mut events = match after {
+        Some(version) => {
+            store
+                .read_stream_after::<C::Event>(stream_id, version)
+                .await
+        }
+        None => store.read_stream::<C::Event>(stream_id).await,
+    }
+    .map_err(CommandError::EventStoreError)?;
+    let mut count = 0;
+    while let Some(event) = events.next().await {
+        state = command.apply(state, &event.map_err(CommandError::EventStoreError)?);
+        count += 1;
+    }
+    Ok((state, count))
 }
 
 /// Open a stream and push its events into the pipeline one event at a time.

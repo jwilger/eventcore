@@ -23,9 +23,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eventcore_types::{
-    CheckpointStore, Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError,
-    EventStream, EventStreamSlice, Operation, ProjectorCoordinator, StreamId, StreamPosition,
-    StreamVersion, StreamWriteEntry, StreamWrites,
+    CheckpointStore, CommandStateSnapshot, CommandStateSnapshotId, Event, EventFilter, EventPage,
+    EventReader, EventStore, EventStoreError, EventStream, EventStreamSlice, Operation,
+    ProjectorCoordinator, StreamId, StreamPosition, StreamVersion, StreamWriteEntry, StreamWrites,
 };
 pub use rusqlite;
 use rusqlite::OptionalExtension;
@@ -297,7 +297,7 @@ impl SqliteEventStore {
         }
     }
 
-    /// Create the `eventcore_events` and `eventcore_subscription_versions`
+    /// Create EventCore's event, subscription, and command-state projection
     /// tables if they do not exist.
     pub async fn migrate(&self) -> Result<(), SqliteEventStoreError> {
         let conn = self.conn.clone();
@@ -321,6 +321,11 @@ impl SqliteEventStore {
                     subscription_name TEXT PRIMARY KEY,
                     last_position TEXT NOT NULL,
                     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                );
+                CREATE TABLE IF NOT EXISTS eventcore_command_state_snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    snapshot_data TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 );",
             )
             .map_err(SqliteEventStoreError::MigrationFailed)?;
@@ -329,36 +334,27 @@ impl SqliteEventStore {
         .await
         .map_err(map_join_error_migration)?
     }
-}
 
-impl EventStore for SqliteEventStore {
-    #[instrument(name = "sqlite.read_stream", skip(self))]
-    async fn read_stream<E: Event>(
+    async fn read_stream_from<E: Event>(
         &self,
         stream_id: StreamId,
+        exclusive_version: Option<StreamVersion>,
     ) -> Result<EventStream<E>, EventStoreError> {
-        info!(
-            stream = %stream_id,
-            "[sqlite.read_stream] reading events from sqlite"
-        );
-
-        // rusqlite is synchronous, so the actual row reads run on a blocking
-        // thread. To stream incrementally (rather than buffering every row in a
-        // Vec), that blocking task pushes each row's JSON over a bounded channel
-        // and the returned async stream consumes + deserializes one row at a
-        // time. Backpressure from the bounded channel keeps at most a few rows
-        // in flight. Deserialization into `E` happens on the async side so a
-        // per-row decode failure surfaces as an `Err` item (preserving the
-        // read_stream_errors_on_type_mismatch contract).
         let conn = self.conn.clone();
         let sid = stream_id.clone();
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<String, EventStoreError>>(64);
 
         let _read_task = tokio::task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-            let mut stmt = match conn.prepare(
-                "SELECT event_data FROM eventcore_events WHERE stream_id = ?1 ORDER BY stream_version ASC",
-            ) {
+            let sql = match exclusive_version {
+                Some(_) => {
+                    "SELECT event_data FROM eventcore_events WHERE stream_id = ?1 AND stream_version > ?2 ORDER BY stream_version ASC"
+                }
+                None => {
+                    "SELECT event_data FROM eventcore_events WHERE stream_id = ?1 ORDER BY stream_version ASC"
+                }
+            };
+            let mut stmt = match conn.prepare(sql) {
                 Ok(stmt) => stmt,
                 Err(e) => {
                     error!(error = %e, "[sqlite.read_stream] prepare failed");
@@ -369,7 +365,11 @@ impl EventStore for SqliteEventStore {
                 }
             };
 
-            let mut rows = match stmt.query(params![sid.as_ref()]) {
+            let rows = match exclusive_version {
+                Some(version) => stmt.query(params![sid.as_ref(), version.into_inner()]),
+                None => stmt.query(params![sid.as_ref()]),
+            };
+            let mut rows = match rows {
                 Ok(rows) => rows,
                 Err(e) => {
                     error!(error = %e, "[sqlite.read_stream] query failed");
@@ -385,7 +385,6 @@ impl EventStore for SqliteEventStore {
                     Ok(Some(row)) => match row.get::<_, String>(0) {
                         Ok(json) => {
                             if tx.blocking_send(Ok(json)).is_err() {
-                                // Receiver dropped (consumer stopped early).
                                 break;
                             }
                         }
@@ -431,6 +430,31 @@ impl EventStore for SqliteEventStore {
         };
 
         Ok(EventStream::new(stream))
+    }
+}
+
+impl EventStore for SqliteEventStore {
+    #[instrument(name = "sqlite.read_stream", skip(self))]
+    async fn read_stream<E: Event>(
+        &self,
+        stream_id: StreamId,
+    ) -> Result<EventStream<E>, EventStoreError> {
+        info!(
+            stream = %stream_id,
+            "[sqlite.read_stream] reading events from sqlite"
+        );
+
+        self.read_stream_from(stream_id, None).await
+    }
+
+    #[instrument(name = "sqlite.read_stream_after", skip(self))]
+    async fn read_stream_after<E: Event>(
+        &self,
+        stream_id: StreamId,
+        exclusive_version: StreamVersion,
+    ) -> Result<EventStream<E>, EventStoreError> {
+        self.read_stream_from(stream_id, Some(exclusive_version))
+            .await
     }
 
     #[instrument(name = "sqlite.append_events", skip(self, writes))]
@@ -561,6 +585,121 @@ impl EventStore for SqliteEventStore {
             })?;
 
             Ok(EventStreamSlice)
+        })
+        .await
+        .map_err(|e| map_join_error(e, Operation::AppendEvents))?
+    }
+
+    #[instrument(name = "sqlite.snapshot.load", skip(self))]
+    async fn load_command_state_snapshot(
+        &self,
+        snapshot_id: CommandStateSnapshotId,
+    ) -> Result<Option<CommandStateSnapshot>, EventStoreError> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let snapshot_data: Option<String> = conn
+                .query_row(
+                    "SELECT snapshot_data FROM eventcore_command_state_snapshots WHERE snapshot_id = ?1",
+                    params![snapshot_id.as_ref()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| {
+                    error!(error = %e, "[sqlite.snapshot.load] query failed");
+                    EventStoreError::StoreFailure {
+                        operation: Operation::ReadStream,
+                    }
+                })?;
+
+            snapshot_data
+                .map(|data| {
+                    serde_json::from_str(&data).map_err(|e| {
+                        error!(error = %e, "[sqlite.snapshot.load] snapshot deserialization failed");
+                        EventStoreError::StoreFailure {
+                            operation: Operation::ReadStream,
+                        }
+                    })
+                })
+                .transpose()
+        })
+        .await
+        .map_err(|e| map_join_error(e, Operation::ReadStream))?
+    }
+
+    #[instrument(name = "sqlite.snapshot.save", skip(self, snapshot))]
+    async fn save_command_state_snapshot(
+        &self,
+        snapshot_id: CommandStateSnapshotId,
+        snapshot: CommandStateSnapshot,
+    ) -> Result<(), EventStoreError> {
+        let serialized_snapshot = serde_json::to_string(&snapshot).map_err(|e| {
+            error!(error = %e, "[sqlite.snapshot.save] snapshot serialization failed");
+            EventStoreError::StoreFailure {
+                operation: Operation::AppendEvents,
+            }
+        })?;
+        let conn = self.conn.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let tx = conn.unchecked_transaction().map_err(|e| {
+                error!(error = %e, "[sqlite.snapshot.save] begin transaction failed");
+                EventStoreError::StoreFailure {
+                    operation: Operation::BeginTransaction,
+                }
+            })?;
+            let current_data: Option<String> = tx
+                .query_row(
+                    "SELECT snapshot_data FROM eventcore_command_state_snapshots WHERE snapshot_id = ?1",
+                    params![snapshot_id.as_ref()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| {
+                    error!(error = %e, "[sqlite.snapshot.save] existing snapshot query failed");
+                    EventStoreError::StoreFailure {
+                        operation: Operation::AppendEvents,
+                    }
+                })?;
+
+            let should_save = match current_data {
+                Some(data) => {
+                    let current: CommandStateSnapshot = serde_json::from_str(&data).map_err(|e| {
+                        error!(error = %e, "[sqlite.snapshot.save] existing snapshot deserialization failed");
+                        EventStoreError::StoreFailure {
+                            operation: Operation::AppendEvents,
+                        }
+                    })?;
+                    snapshot.covers(&current)
+                }
+                None => true,
+            };
+
+            if should_save {
+                let _ = tx
+                    .execute(
+                        "INSERT INTO eventcore_command_state_snapshots (snapshot_id, snapshot_data, updated_at)
+                         VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                         ON CONFLICT (snapshot_id) DO UPDATE SET
+                             snapshot_data = excluded.snapshot_data,
+                             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+                        params![snapshot_id.as_ref(), serialized_snapshot],
+                    )
+                    .map_err(|e| {
+                        error!(error = %e, "[sqlite.snapshot.save] upsert failed");
+                        EventStoreError::StoreFailure {
+                            operation: Operation::AppendEvents,
+                        }
+                    })?;
+            }
+
+            tx.commit().map_err(|e| {
+                error!(error = %e, "[sqlite.snapshot.save] commit failed");
+                EventStoreError::StoreFailure {
+                    operation: Operation::CommitTransaction,
+                }
+            })
         })
         .await
         .map_err(|e| map_join_error(e, Operation::AppendEvents))?

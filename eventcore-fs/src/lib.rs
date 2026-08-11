@@ -39,14 +39,17 @@ mod replica;
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use eventcore_types::{
-    Event, EventFilter, EventPage, EventReader, EventStore, EventStoreError, EventStream,
-    EventStreamSlice, Operation, StreamId, StreamPosition, StreamVersion, StreamWriteEntry,
-    StreamWrites,
+    CommandStateSnapshot, CommandStateSnapshotId, Event, EventFilter, EventPage, EventReader,
+    EventStore, EventStoreError, EventStream, EventStreamSlice, Operation, StreamId,
+    StreamPosition, StreamVersion, StreamWriteEntry, StreamWrites,
 };
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub use config::{FsConfig, FsyncPolicy};
@@ -110,9 +113,10 @@ impl FileEventStore {
 }
 
 /// Only `events/` is the committed source of truth; everything else is
-/// derived or machine-local (ADR-0046). Critically, `.eventcore/replica_id`
-/// must never be committed, or a `git clone` would duplicate a writer's
-/// identity (the copy trap, ADR-0044).
+/// derived or machine-local (ADR-0046). This includes command-state snapshots
+/// under `.eventcore/snapshots/`. Critically, `.eventcore/replica_id` must
+/// never be committed, or a `git clone` would duplicate a writer's identity
+/// (the copy trap, ADR-0044).
 const GITIGNORE: &str = "\
 # eventcore-fs: only events/ is the committed source of truth.
 /tmp/
@@ -167,6 +171,40 @@ impl EventStore for FileEventStore {
                 None => Vec::new(),
                 Some(stream) => stream
                     .iter()
+                    .map(|indexed| {
+                        serde_json::from_value::<E>(indexed.event_data.clone()).map_err(|error| {
+                            EventStoreError::DeserializationFailed {
+                                stream_id: stream_id.clone(),
+                                detail: error.to_string(),
+                            }
+                        })
+                    })
+                    .collect(),
+            }
+        };
+
+        Ok(EventStream::new(futures::stream::iter(items)))
+    }
+
+    async fn read_stream_after<E: Event>(
+        &self,
+        stream_id: StreamId,
+        exclusive_version: StreamVersion,
+    ) -> Result<EventStream<E>, EventStoreError> {
+        let items: Vec<Result<E, EventStoreError>> = {
+            let index = self
+                .shared
+                .index
+                .read()
+                .map_err(|_| EventStoreError::StoreFailure {
+                    operation: Operation::ReadStream,
+                })?;
+            let count: usize = exclusive_version.into();
+            match index.streams.get(stream_id.as_ref()) {
+                None => Vec::new(),
+                Some(stream) => stream
+                    .iter()
+                    .skip(count)
                     .map(|indexed| {
                         serde_json::from_value::<E>(indexed.event_data.clone()).map_err(|error| {
                             EventStoreError::DeserializationFailed {
@@ -303,6 +341,101 @@ impl EventStore for FileEventStore {
 
         Ok(EventStreamSlice)
     }
+
+    async fn load_command_state_snapshot(
+        &self,
+        snapshot_id: CommandStateSnapshotId,
+    ) -> Result<Option<CommandStateSnapshot>, EventStoreError> {
+        let path = self
+            .shared
+            .roots
+            .snapshot_path(&snapshot_filename(&snapshot_id));
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => {
+                return Err(EventStoreError::StoreFailure {
+                    operation: Operation::ReadStream,
+                });
+            }
+        };
+        serde_json::from_str(&contents)
+            .map(Some)
+            .map_err(|_| EventStoreError::StoreFailure {
+                operation: Operation::ReadStream,
+            })
+    }
+
+    async fn save_command_state_snapshot(
+        &self,
+        snapshot_id: CommandStateSnapshotId,
+        snapshot: CommandStateSnapshot,
+    ) -> Result<(), EventStoreError> {
+        let _append = self.shared.append_lock.lock().await;
+        let filename = snapshot_filename(&snapshot_id);
+        let path = self.shared.roots.snapshot_path(&filename);
+
+        match fs::read_to_string(&path) {
+            Ok(contents) => {
+                let stored: CommandStateSnapshot =
+                    serde_json::from_str(&contents).map_err(|_| EventStoreError::StoreFailure {
+                        operation: Operation::AppendEvents,
+                    })?;
+                if !snapshot.covers(&stored) {
+                    return Ok(());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Err(EventStoreError::StoreFailure {
+                    operation: Operation::AppendEvents,
+                });
+            }
+        }
+
+        let body = serde_json::to_vec(&snapshot).map_err(|_| EventStoreError::StoreFailure {
+            operation: Operation::AppendEvents,
+        })?;
+        let tmp_path = self.shared.roots.snapshot_tmp_path(&filename);
+        let snapshots_dir = self.shared.roots.snapshots.clone();
+        let fsync = self.shared.config.fsync;
+        tokio::task::spawn_blocking(move || {
+            write_snapshot_file(&tmp_path, &path, &snapshots_dir, &body, fsync)
+        })
+        .await
+        .map_err(|_| EventStoreError::StoreFailure {
+            operation: Operation::AppendEvents,
+        })?
+        .map_err(|_| EventStoreError::StoreFailure {
+            operation: Operation::AppendEvents,
+        })
+    }
+}
+
+fn snapshot_filename(snapshot_id: &CommandStateSnapshotId) -> String {
+    format!("{:x}", Sha256::digest(snapshot_id.as_ref().as_bytes()))
+}
+
+fn write_snapshot_file(
+    tmp_path: &Path,
+    final_path: &Path,
+    snapshots_dir: &Path,
+    body: &[u8],
+    fsync: FsyncPolicy,
+) -> std::io::Result<()> {
+    {
+        let mut file = File::create(tmp_path)?;
+        file.write_all(body)?;
+        if matches!(fsync, FsyncPolicy::Full) {
+            file.sync_all()?;
+        }
+    }
+    fs::rename(tmp_path, final_path)?;
+    if matches!(fsync, FsyncPolicy::Full) {
+        let dir = File::open(snapshots_dir)?;
+        dir.sync_all()?;
+    }
+    Ok(())
 }
 
 impl EventReader for FileEventStore {

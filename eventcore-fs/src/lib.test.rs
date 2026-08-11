@@ -1,6 +1,8 @@
 use super::*;
 use eventcore_types::collect_events;
+use eventcore_types::{CommandStateSnapshot, CommandStateSnapshotId};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -134,6 +136,83 @@ async fn reopen_rebuilds_index_from_events() {
     let events = collect_events(stream).await.expect("collect");
     let data: Vec<String> = events.iter().map(|event| event.data.clone()).collect();
     assert_eq!(data, vec!["alpha".to_string(), "beta".to_string()]);
+}
+
+#[tokio::test]
+async fn read_stream_after_reads_only_events_after_the_requested_version() {
+    let dir = TempDir::new().expect("temp dir");
+    let store = FileEventStore::open(dir.path()).expect("open");
+    let account = stream("account-incremental-read");
+    append_one(&store, &account, 0, "first").await;
+    append_one(&store, &account, 1, "second").await;
+
+    let events = collect_events(
+        store
+            .read_stream_after::<TestEvent>(account, StreamVersion::new(1))
+            .await
+            .expect("read after"),
+    )
+    .await
+    .expect("collect");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].data, "second");
+}
+
+#[tokio::test]
+async fn command_state_snapshots_are_durable_local_and_monotonic() {
+    let dir = TempDir::new().expect("temp dir");
+    let snapshot_id = CommandStateSnapshotId::try_new("account-state").expect("snapshot id");
+    let account = stream("account-snapshot");
+    let currency = stream("currency-snapshot");
+
+    let store = FileEventStore::open(dir.path()).expect("open");
+    let newer = CommandStateSnapshot::new(
+        serde_json::json!({ "balance": 2 }),
+        HashMap::from([
+            (account.clone(), StreamVersion::new(2)),
+            (currency.clone(), StreamVersion::new(5)),
+        ]),
+    );
+    store
+        .save_command_state_snapshot(snapshot_id.clone(), newer)
+        .await
+        .expect("save newer snapshot");
+    store
+        .save_command_state_snapshot(
+            snapshot_id.clone(),
+            CommandStateSnapshot::new(
+                serde_json::json!({ "balance": 1 }),
+                HashMap::from([(account.clone(), StreamVersion::new(1))]),
+            ),
+        )
+        .await
+        .expect("stale save is ignored");
+    drop(store);
+
+    let reopened = FileEventStore::open(dir.path()).expect("reopen");
+    let snapshot = reopened
+        .load_command_state_snapshot(snapshot_id)
+        .await
+        .expect("load snapshot")
+        .expect("snapshot exists");
+    assert_eq!(snapshot.state, serde_json::json!({ "balance": 2 }));
+    assert_eq!(
+        snapshot.stream_versions.get(&account),
+        Some(&StreamVersion::new(2))
+    );
+    assert_eq!(
+        snapshot.stream_versions.get(&currency),
+        Some(&StreamVersion::new(5))
+    );
+    assert!(
+        dir.path()
+            .join("events")
+            .read_dir()
+            .expect("events dir")
+            .next()
+            .is_none(),
+        "local snapshots must not create replicated event history"
+    );
 }
 
 #[tokio::test]
