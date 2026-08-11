@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "eventcore-macros",
@@ -677,7 +677,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-bench"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "criterion",
  "dhat",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-demo"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "eventcore",
  "eventcore-memory",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-examples"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "eventcore",
  "eventcore-macros",
@@ -728,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-fs"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "eventcore-testing",
@@ -748,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-macros"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "eventcore",
  "eventcore-memory",
@@ -765,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-memory"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "eventcore-testing",
  "eventcore-types",
@@ -780,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-postgres"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "async-stream",
  "eventcore-testing",
@@ -800,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-sqlite"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "async-stream",
  "eventcore-testing",
@@ -817,7 +817,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-stress"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "clap",
  "eventcore",
@@ -839,7 +839,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-testing"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "eventcore",
  "eventcore-memory",
@@ -856,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "eventcore-types"
-version = "1.1.1"
+version = "2.0.0"
 dependencies = [
  "futures",
  "glob",
