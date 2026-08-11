@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [1.1.2](https://github.com/jwilger/eventcore/compare/eventcore-v1.1.1...eventcore-v1.1.2) - 2026-08-11
+
+### Refactoring
+
+- *(testing)* stabilize reconstruction benchmarks
+
 ## [1.1.1](https://github.com/jwilger/eventcore/compare/eventcore-v1.1.0...eventcore-v1.1.1) - 2026-08-06
 
 ### Bug Fixes
