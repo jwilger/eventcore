@@ -352,8 +352,10 @@ event-level backup API to begin with.
 EventCore guarantees integrity at write time: `append_events` performs atomic,
 multi-stream writes under optimistic concurrency control, so a stream's
 versions are gap-free and monotonically increasing by construction
-(`StreamVersion`), and global ordering is captured by `StreamPosition` (a
-UUIDv7). Events are immutable once written. There is no application-level
+(`StreamVersion`), and projection progress is captured by `StreamPosition`.
+For filesystem stores after Git merges, that cursor is replica-local ingestion
+order rather than a shared global timestamp. Events are immutable once written.
+There is no application-level
 "event corruption monitor" API, and EventCore does not expose a way to mutate
 or re-checksum stored events.
 

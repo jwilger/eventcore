@@ -8,10 +8,11 @@
 //! merge mode (Layer 2).
 //!
 //! Layer 1 is a single-writer backend that satisfies the shared EventCore
-//! contract suite. `StreamVersion` and global order are computed at read time
-//! by linearizing a transaction DAG (ADR-0039); in single-writer mode the DAG
-//! is a linear chain, so the computed order is the append order and the
-//! computed versions are contiguous.
+//! contract suite. `StreamVersion` is computed at read time by linearizing a
+//! transaction DAG (ADR-0039); in single-writer mode the DAG is a linear chain,
+//! so versions are contiguous. Cross-stream projection cursors use the
+//! per-replica local-ingestion sequence described by ADR-0043, so they do not
+//! provide a portable global order after Git merges.
 //!
 //! ## Module map
 //!

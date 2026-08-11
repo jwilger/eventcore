@@ -586,8 +586,8 @@ chapters.
 
 EventCore runs projections through `run_projection(projector, &backend, config)`
 where `backend` implements `EventReader`, `CheckpointStore`, and
-`ProjectorCoordinator`. Checkpoints are stored as a `StreamPosition` (a
-UUIDv7-backed global position), persisted and loaded through the
+`ProjectorCoordinator`. Checkpoints are stored as a `StreamPosition` cursor,
+persisted and loaded through the
 `CheckpointStore` trait. There is no built-in "lag in wall-clock minutes"
 metric and no `ProjectionManager` type — lag monitoring is an application-level
 concern you build on top of the backend's `CheckpointStore`. The monitor below
@@ -659,11 +659,12 @@ pub enum ProjectionStatus {
 }
 ```
 
-Because `StreamPosition` is monotonic (UUIDv7), you can compare a projector's
-last checkpoint against the most recent event position your application has
-observed to estimate how far behind it is — but that "latest position" must come
-from your own bookkeeping, not from a store-wide query, which EventCore does not
-provide.
+Within one reader's delivery sequence, you can compare a projector's last
+checkpoint against the most recent event position your application has observed
+to estimate how far behind it is. For filesystem stores after Git merges, make
+that comparison on the same replica because cursors are replica-local. In every
+case, the "latest position" must come from your own bookkeeping; EventCore does
+not provide a store-wide query.
 
 **Projection rebuild when state is corrupted:**
 

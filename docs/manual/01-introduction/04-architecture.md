@@ -93,7 +93,8 @@ The event store provides durable, ordered storage of events:
 
 - Atomic multi-stream writes
 - Optimistic concurrency control
-- Global ordering via UUIDv7 event IDs
+- Resumable cross-stream projection cursors (UUIDv7 for SQL/memory adapters;
+  replica-local ingestion order for filesystem stores after Git merges)
 - Exactly-once semantics
 
 ### 4. Projections

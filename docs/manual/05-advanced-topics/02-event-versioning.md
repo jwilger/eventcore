@@ -407,7 +407,7 @@ The key constraints to respect:
 - **Do not rewrite events.** Schema evolution never mutates stored events;
   archival should not either.
 - **Preserve order and identity.** Any retention scheme must keep events in
-  stream-version order and keep their `StreamPosition` (a UUIDv7) stable so
+  stream-version order and preserve the store's projection-cursor semantics so
   projections can resume from a checkpoint.
 - **Coordinate with projections.** Removing or relocating historical events can
   invalidate read models that replay from the beginning. Rebuild affected

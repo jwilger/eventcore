@@ -2,8 +2,8 @@
 //!
 //! This module provides the core abstractions for event projection:
 //! - `Projector`: Trait for transforming events into read model updates
-//! - `EventReader`: Trait for reading events globally for projections
-//! - `StreamPosition`: Global position in the event stream
+//! - `EventReader`: Trait for reading events across streams for projections
+//! - `StreamPosition`: Cursor in an event-reader delivery sequence
 
 use crate::store::{StreamPattern, StreamPrefix};
 use nutype::nutype;
@@ -22,13 +22,13 @@ use uuid::Uuid;
 /// # Fields
 ///
 /// - `error`: Reference to the error that occurred
-/// - `position`: Global stream position where the failure occurred
+/// - `position`: Projection cursor where the failure occurred
 /// - `retry_count`: Number of times this event has been retried (0 on first failure)
 #[derive(Debug)]
 pub struct FailureContext<'a, E> {
     /// Reference to the error that occurred during event processing.
     pub error: &'a E,
-    /// Global stream position of the event that failed to process.
+    /// Projection cursor of the event that failed to process.
     pub position: StreamPosition,
     /// Number of retry attempts so far (0 on initial failure).
     pub retry_count: RetryCount,
@@ -87,14 +87,12 @@ pub enum FailureStrategy {
     Retry,
 }
 
-/// Global stream position representing a location in the ordered event log.
+/// Opaque cursor representing a location in an [`EventReader`] delivery sequence.
 ///
-/// StreamPosition uniquely identifies a position in the global event stream
-/// across all individual streams. Used by projectors to track progress and
-/// enable resumable event processing.
-///
-/// Positions are UUID7 values (timestamp-ordered UUIDs) assigned at event
-/// append time. They are monotonically increasing and globally sortable.
+/// Projectors store this value to resume reading from the same event-reader
+/// sequence. Its ordering is defined by the specific store or replica that
+/// produced it; it is not a distributed causality or universal commit-order
+/// guarantee across streams or replicas.
 #[nutype(derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display, Into))]
 pub struct StreamPosition(Uuid);
 
@@ -161,13 +159,14 @@ pub trait Projector: Send + 'static {
 
     /// Process a single event and update the read model.
     ///
-    /// This method is called for each event in stream order. Implementations
-    /// should update their read model state based on the event content.
+    /// This method is called for each event in the reader's delivery sequence.
+    /// Implementations should update their read model state based on the event
+    /// content.
     ///
     /// # Parameters
     ///
     /// - `event`: The domain event to process
-    /// - `position`: The global stream position of this event
+    /// - `position`: The projection cursor of this event
     /// - `ctx`: Mutable reference to shared context
     ///
     /// # Returns
@@ -617,10 +616,10 @@ impl EventFilter {
     }
 }
 
-/// Trait for reading events globally for projections.
+/// Trait for reading events across streams for projections.
 ///
-/// EventReader provides access to all events in global order, which is
-/// required for building read models that aggregate data across streams.
+/// EventReader provides an implementation-defined, resumable delivery sequence
+/// for building read models that aggregate events across streams.
 ///
 /// # Pagination and Filtering
 ///
@@ -638,8 +637,9 @@ pub trait EventReader {
 
     /// Read events matching filter criteria with pagination.
     ///
-    /// Returns a vector of tuples containing the event and its global position.
-    /// Events are ordered by their append time (oldest first).
+    /// Returns a vector of tuples containing the event and its projection cursor.
+    /// Events are ordered by this reader's delivery sequence. That sequence is
+    /// not necessarily a shared distributed commit order.
     ///
     /// # Type Parameters
     ///

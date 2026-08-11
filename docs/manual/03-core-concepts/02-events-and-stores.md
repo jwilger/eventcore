@@ -86,20 +86,34 @@ Events are stored and returned as your concrete event type. EventCore does
 
 ### Event Ordering
 
-EventCore assigns each appended event a global `StreamPosition`, which is a
-UUIDv7 (timestamp-ordered UUID). This gives you:
+`EventReader` returns each event with an opaque, ordered `StreamPosition`.
+Projectors checkpoint this position to resume in the same delivery sequence.
 
-- **Global uniqueness** — no coordination required across streams
-- **Time ordering** — positions are monotonically increasing and globally
-  sortable, so later events always have higher positions
-- **Resumable processing** — projectors track their progress by storing the
-  last `StreamPosition` they processed
+Within a stream, order is stronger: every adapter returns events in contiguous
+`StreamVersion` order. That order is stable, including across filesystem-store
+clones and Git merges (see [Stream Versioning](#stream-versioning) below).
 
-`StreamPosition` is an opaque, ordered value: you compare and sort positions,
-you do not construct them by hand. The store assigns them at append time and
-projectors receive them alongside each event. Within a single stream, the
-ordering is captured by `StreamVersion` (see [Stream
-Versioning](#stream-versioning) below).
+Across streams, `StreamPosition` is a projection cursor, not a distributed
+causality or commit-order guarantee. PostgreSQL, SQLite, and the in-memory
+store use UUIDv7 positions. The filesystem store uses a different rule after a
+Git merge; its cross-stream cursor is replica-local, described below.
+
+### Filesystem Store Ordering After Git Merges
+
+The filesystem store has two deliberately different orderings:
+
+- **Per-stream order** is canonical `StreamVersion` order and is the same in
+  every clone.
+- **Cross-stream projection order** is local-ingestion order: a clone assigns a
+  fresh, increasing `StreamPosition` when it first sees an event. A
+  merge-introduced event is therefore delivered after the events that clone had
+  already processed, even if another clone saw the events in a different order.
+
+This prevents a live projection from rewinding or silently skipping a
+merge-introduced event. It also means two clones can process the same eventual
+set of cross-stream events in different orders. Keep filesystem-store
+projections order-independent and idempotent, or designate one clone as the
+projection owner when ordering matters across streams.
 
 ### Event Metadata
 
@@ -522,8 +536,9 @@ into a single reconstructed state before calling `handle()`.
 
 For read models that need a cross-stream view, build a `Projector` and drive
 it with `run_projection`. The projection runner delivers events together with
-their global `StreamPosition`, in time order across streams, and checkpoints
-progress so it can resume. See
+the store's `StreamPosition` cursor and checkpoints progress so it can resume.
+For filesystem stores that participate in Git merges, this delivery order is
+replica-local rather than shared across clones. See
 [Projections](../02-getting-started/04-projections.md).
 
 ## Event Store Guarantees
@@ -573,14 +588,15 @@ backends commit the transaction before returning.
 
 ### 4. Ordering
 
-Events maintain both stream order and global order:
+Events maintain both stream order and a projection delivery cursor:
 
 - **Stream order** — within one stream, events are returned in
-  `StreamVersion` order (oldest to newest), exactly as appended.
-- **Global order** — across all streams, each event has a `StreamPosition`
-  (UUIDv7) assigned at append time. Positions are monotonically increasing
-  and globally sortable, so projectors can process events in time order and
-  resume from the last position they saw.
+  `StreamVersion` order (oldest to newest). This is stable across filesystem
+  store clones.
+- **Cross-stream cursor** — `EventReader` returns `StreamPosition` values in a
+  resumable sequence. PostgreSQL, SQLite, and memory use UUIDv7 positions; the
+  filesystem store uses replica-local ingestion order after Git merges. It is
+  not a universal distributed commit order.
 
 ## Performance Optimization
 
@@ -706,8 +722,8 @@ chaos tooling for verifying backend behavior.
 Events in EventCore are:
 
 - ✅ **Immutable records** of business facts
-- ✅ **Globally time-ordered** by a `StreamPosition` (UUIDv7) assigned at
-  append time
+- ✅ **Resumable across-stream projection reads** via `StreamPosition`; see
+  [Event Ordering](#event-ordering) for the filesystem merge-mode caveat
 - ✅ **Version-controlled** per stream via `StreamVersion` for optimistic
   concurrency
 - ✅ **Atomically written** across streams by `execute()` / `append_events`

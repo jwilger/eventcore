@@ -83,7 +83,10 @@ A monotonically increasing count of the events in a single stream. EventCore use
 
 ### StreamPosition
 
-A UUIDv7 value identifying an event's position in the global event order across the entire store. Projections track their progress using `StreamPosition`.
+An opaque, ordered cursor identifying an event in an `EventReader` delivery
+sequence. Projections track progress using `StreamPosition`. PostgreSQL,
+SQLite, and memory stores use UUIDv7 values; filesystem stores use a
+replica-local ingestion cursor after Git merges.
 
 ### ExecutionResponse
 
@@ -147,7 +150,9 @@ A concurrency control method that assumes conflicts are rare and checks for conf
 
 ### Position
 
-The global ordering position of an event across all streams in the event store.
+The `StreamPosition` cursor attached to an event returned by `EventReader`. It
+orders projection delivery for that store/replica, not distributed causality or
+a universal cross-clone commit order.
 
 ### Snapshot
 

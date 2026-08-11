@@ -372,8 +372,8 @@ To produce a compliance report, build a **read model** with `run_projection`
 that folds the relevant events into the shape an auditor needs — do not try to
 mutate or summarize events in place.
 
-EventCore identifies events by their global `StreamPosition` (a UUIDv7) and
-their owning `StreamId`. There is no separate `EventId` type. A projection that
+EventCore identifies events in a projection by their `StreamPosition` cursor
+and their owning `StreamId`. There is no separate `EventId` type. A projection that
 backs a compliance report typically captures these alongside your domain data.
 
 ```rust

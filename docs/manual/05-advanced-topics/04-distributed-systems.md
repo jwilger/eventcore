@@ -105,9 +105,9 @@ impl MessageBusPublisher {
 // Application-defined wire envelope. EventCore does not provide this type or
 // any of its field types except StreamId and StreamVersion. The `event_id`
 // here is an application-chosen identifier (e.g. a UUID your app generates),
-// not an EventCore type — EventCore exposes positions as `StreamPosition`
-// (a UUIDv7) on events it stores, but the cross-service identifier is yours
-// to design.
+// not an EventCore type — EventCore exposes projection cursors as
+// `StreamPosition` on events it reads, but the cross-service identifier is
+// yours to design.
 #[derive(Debug, Serialize, Deserialize)]
 struct DistributedEvent {
     event_id: Uuid,

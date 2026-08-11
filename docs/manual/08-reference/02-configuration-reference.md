@@ -6,13 +6,13 @@ EventCore deliberately keeps its configuration surface small. There is no global
 
 ## Cargo feature flags
 
-| Feature                    | Default | Effect                                                           |
-| -------------------------- | ------- | ---------------------------------------------------------------- |
-| `macros`                   | Yes     | Re-exports the stable `Command` derive                           |
-| `postgres`                 | No      | Re-exports the PostgreSQL adapter                                |
-| `sqlite`                   | No      | Re-exports the SQLite adapter                                    |
-| `experimental-modeling`    | No      | Enables runtime modeled builders, mappings, and wrappers         |
-| `experimental-model-check` | No      | Adds checker registration and graph analysis for test targets    |
+| Feature                    | Default | Effect                                                        |
+| -------------------------- | ------- | ------------------------------------------------------------- |
+| `macros`                   | Yes     | Re-exports the stable `Command` derive                        |
+| `postgres`                 | No      | Re-exports the PostgreSQL adapter                             |
+| `sqlite`                   | No      | Re-exports the SQLite adapter                                 |
+| `experimental-modeling`    | No      | Enables runtime modeled builders, mappings, and wrappers      |
+| `experimental-model-check` | No      | Adds checker registration and graph analysis for test targets |
 
 Features whose names retain the `experimental-` prefix are outside the stable
 compatibility guarantee even though they ship in ordinary semantic-versioned
@@ -392,8 +392,8 @@ There are no `EventToWrite`, `EventMetadata`, `ExpectedVersion`, `EventVersion`,
 A command's `handle()` returns `NewEvents`, and `execute()` appends them
 atomically with optimistic concurrency control. Internally the `EventStore`
 trait uses `append_events(StreamWrites)` and `read_stream(StreamId) ->
-EventStream`; versions are `StreamVersion` and positions are `StreamPosition`
-(UUIDv7). Consumers do not construct these directly — `execute()` and
+EventStream`; versions are `StreamVersion` and projection cursors are
+`StreamPosition`. Consumers do not construct these directly — `execute()` and
 `run_projection()` own that machinery.
 
 ## Errors

@@ -592,7 +592,7 @@ where
 ///
 /// Currently a unit struct confirming that the append operation committed
 /// successfully. Future versions may carry metadata such as the assigned
-/// stream versions or global positions of the written events.
+/// stream versions or projection cursors of the written events.
 pub struct EventStreamSlice;
 
 /// Blanket implementation allowing EventStore trait to work with references.
