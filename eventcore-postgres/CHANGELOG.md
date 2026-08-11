@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [2.0.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v1.1.1...eventcore-postgres-v2.0.0) - 2026-08-11
+
+### Documentation
+
+- *(snapshots)* explain durable command state
+
+### Features
+
+- *(snapshots)* persist command state projections
+
+### Refactoring
+
+- *(testing)* stabilize reconstruction benchmarks
+
 ## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-postgres-v1.0.0...eventcore-postgres-v1.0.1) - 2026-06-15
 
 ### Documentation
