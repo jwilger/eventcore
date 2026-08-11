@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [2.0.0](https://github.com/jwilger/eventcore/compare/eventcore-v1.1.1...eventcore-v2.0.0) - 2026-08-11
+
+### Features
+
+- *(snapshots)* persist command state projections
+
+### Refactoring
+
+- *(testing)* stabilize reconstruction benchmarks
+
 ## [1.1.1](https://github.com/jwilger/eventcore/compare/eventcore-v1.1.0...eventcore-v1.1.1) - 2026-08-06
 
 ### Bug Fixes
