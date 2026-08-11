@@ -486,11 +486,10 @@ struct OrderPlaced {
 
 ### Reading a Single Stream
 
-The `EventStore` trait exposes one read operation: `read_stream`, which takes
-a `StreamId` and returns a lazy `EventStream<E>` of that stream's events in
-version order (oldest to newest). There are no read-option flags — you read
-the whole stream and fold it. To materialize the history into a `Vec`, pass
-the stream to the `collect_events` helper:
+The `EventStore` trait exposes `read_stream`, which takes a `StreamId` and
+returns a lazy `EventStream<E>` of that stream's events in version order
+(oldest to newest). To materialize the history into a `Vec`, pass the stream
+to the `collect_events` helper:
 
 ```rust,ignore
 use eventcore::{collect_events, EventStream, StreamId};
@@ -502,6 +501,12 @@ let events: Vec<OrderEvent> = collect_events(stream).await?;
 
 Because `read_stream` yields events lazily, the executor folds them into
 command state one at a time — the memory win matters for large streams.
+
+`read_stream_after(stream_id, version)` is the corresponding incremental API.
+It excludes the first `version` events and is used by command-state snapshots
+to catch a saved state up with only its tail. The default implementation is
+correct for custom stores but skips an opened full stream; production adapters
+override it to seek directly.
 
 > **Most applications never call `read_stream` directly.** `execute()` reads
 > the declared streams, folds them through `apply()`, and reconstructs state
@@ -631,9 +636,12 @@ and write models are deliberately separate code paths.
 Build a `Projector`, drive it with `run_projection`, and store its output in
 whatever cache or read database suits your queries. The projection runner
 checkpoints its `StreamPosition`, so it resumes incrementally rather than
-re-reading history. Do **not** cache inside the write path: command state is
-reconstructed fresh on every `execute()` so that optimistic concurrency stays
-correct. See
+re-reading history. Do **not** add an ad-hoc cache inside the write path.
+Command state is normally reconstructed fresh, and the supported exception is
+an explicit durable command-state snapshot described in
+[State Reconstruction](./03-state-reconstruction.md#durable-command-state-snapshots).
+Snapshots retain stream versions and are caught up before command handling, so
+optimistic concurrency remains correct. See
 [Projections](../02-getting-started/04-projections.md).
 
 ## Testing with Events

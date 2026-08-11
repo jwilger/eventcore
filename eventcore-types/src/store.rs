@@ -185,7 +185,9 @@ pub trait EventStore: Sync {
 
     /// Read events written after an already-reconstructed stream version.
     ///
-    /// Backends may override this to seek directly to `exclusive_version`.
+    /// `exclusive_version` is a count of events already represented in state;
+    /// the returned stream therefore excludes that prefix. Backends may
+    /// override this to seek directly to `exclusive_version`.
     /// The default implementation preserves compatibility for existing stores
     /// by skipping the prefix after opening a normal stream.
     fn read_stream_after<E: Event>(
@@ -252,8 +254,10 @@ pub trait EventStore: Sync {
 
     /// Load a command-state projection.
     ///
-    /// Stores that do not yet persist command-state projections return `None`,
-    /// preserving normal full reconstruction.
+    /// A loaded snapshot contains serialized command state, a per-stream
+    /// version vector, and replay checkpoints used to preserve multi-stream
+    /// reconstruction order. Stores that do not persist command-state
+    /// projections return `None`, preserving normal full reconstruction.
     fn load_command_state_snapshot(
         &self,
         _snapshot_id: CommandStateSnapshotId,
@@ -263,9 +267,12 @@ pub trait EventStore: Sync {
 
     /// Persist a command-state projection.
     ///
-    /// The default is a no-op so existing third-party `EventStore`
-    /// implementations continue to reconstruct state normally until they opt
-    /// into projection persistence.
+    /// Implementations should only replace an existing projection when the new
+    /// version vector covers every stored stream version. This prevents a retry
+    /// that reconstructed older state from regressing a newer projection. The
+    /// default is a no-op so existing third-party `EventStore` implementations
+    /// continue to reconstruct state normally until they opt into projection
+    /// persistence.
     fn save_command_state_snapshot(
         &self,
         _snapshot_id: CommandStateSnapshotId,

@@ -151,7 +151,17 @@ The global ordering position of an event across all streams in the event store.
 
 ### Snapshot
 
-A saved state of an entity at a particular point in time, used to optimize event replay performance.
+A durable command-state read-model projection used to optimize event replay.
+It contains serialized command state, per-stream versions, and replay
+checkpoints; EventCore catches it up from subsequent events before invoking
+`handle()`. Events remain the source of truth. This is distinct from a backup
+or filesystem/database snapshot.
+
+### Command-State Snapshot ID
+
+A stable, command-defined key for one semantic command-state projection. It
+must include every command input that affects reconstruction and should include
+a schema version when serialized state changes incompatibly.
 
 ### Subscription
 

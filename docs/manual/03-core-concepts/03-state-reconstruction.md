@@ -149,6 +149,89 @@ fn apply(&self, mut state: Self::State, event: &Self::Event) -> Self::State {
 }
 ```
 
+### Durable Command-State Snapshots
+
+For histories whose replay cost dominates command execution, a command can opt
+into a durable snapshot of its reconstructed state. This is a **read-model
+projection for the command**, not a replacement for the event stream: events
+remain the source of truth and are still appended atomically.
+
+Opt in by returning a stable `CommandStateSnapshotId` and by defining how the
+state converts to and from JSON. The ID must identify the exact semantic
+reconstruction boundary. Include every input that affects stream selection or
+state meaning, plus a schema version when the serialized form is not backward
+compatible.
+
+```rust,ignore
+use eventcore::{
+    CommandError, CommandLogic, CommandStateSnapshotId, NewEvents,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Default, Serialize, Deserialize)]
+struct AccountState {
+    balance: i64,
+}
+
+impl CommandLogic for Withdraw {
+    type Event = AccountEvent;
+    type State = AccountState;
+
+    // apply() and handle() omitted
+
+    fn command_state_snapshot_id(&self) -> Option<CommandStateSnapshotId> {
+        Some(CommandStateSnapshotId::try_new(format!(
+            "withdraw/account-state/v1/{}", self.account_id
+        )).expect("account IDs form a valid snapshot ID"))
+    }
+
+    fn serialize_command_state_snapshot(
+        &self,
+        state: &Self::State,
+    ) -> Result<serde_json::Value, CommandError> {
+        serde_json::to_value(state)
+            .map_err(|error| CommandError::ValidationError(error.to_string()))
+    }
+
+    fn deserialize_command_state_snapshot(
+        &self,
+        value: serde_json::Value,
+    ) -> Result<Self::State, CommandError> {
+        serde_json::from_value(value)
+            .map_err(|error| CommandError::ValidationError(error.to_string()))
+    }
+}
+```
+
+The executor initially replays history as usual. At
+`COMMAND_STATE_SNAPSHOT_REFRESH_THRESHOLD` (currently 100 reconstructed
+events), it writes a snapshot. On a later execution it loads that state and
+uses recorded per-stream versions to catch up from later events. A single-stream
+command reads only its tail; if an earlier stream changes in a multi-stream
+command, EventCore may replay later streams in full to preserve the original
+reconstruction order. A refreshed snapshot is persisted **before** calling
+`handle()`. Events emitted by `handle()` are not part of that pre-handle
+snapshot; the next execution catches them up normally.
+
+For multi-stream and dynamically discovered commands, EventCore stores replay
+checkpoints. If an earlier stream has a tail, later streams are replayed in the
+same grouped discovery order as a full reconstruction, so `apply()` does not
+need to be commutative. Snapshot writes are monotonic: a stale retry cannot
+replace a snapshot that covers newer stream versions.
+
+The built-in stores persist snapshots as follows:
+
+- `eventcore-memory`: process-local memory, intended for tests.
+- `eventcore-fs`: local `.eventcore/snapshots/` files, excluded from replicated
+  event history.
+- `eventcore-sqlite` and `eventcore-postgres`: migration-managed snapshot
+  tables; run the adapter's normal `migrate()` before executing commands.
+
+An external `EventStore` may use the trait defaults, which return no snapshot
+and make saves no-ops. That remains correct but provides no replay reduction;
+implement `load_command_state_snapshot`,
+`save_command_state_snapshot`, and preferably `read_stream_after` to opt in.
+
 ### State Machine Pattern
 
 Track valid transitions:

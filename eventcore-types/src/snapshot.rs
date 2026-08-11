@@ -10,7 +10,8 @@ use crate::{StreamId, StreamVersion};
 ///
 /// Command authors choose this value to identify the state reconstructed for a
 /// particular consistency boundary. It must include every command-specific
-/// dimension that changes how the command folds state.
+/// dimension that changes how the command folds state, including a state-schema
+/// version when an older serialized form cannot be read.
 #[nutype(
     sanitize(trim),
     validate(not_empty, len_char_max = 255),
@@ -33,7 +34,9 @@ pub struct CommandStateSnapshotId(String);
 /// A durable command-state read-model projection.
 ///
 /// The serialized state is paired with the stream versions it represents so an
-/// executor can fold only events written after the projection was refreshed.
+/// executor can catch it up from later events. Replay checkpoints retain the
+/// grouped stream/discovery order needed when a tail in an earlier stream means
+/// later streams must be replayed in full.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandStateSnapshot {
     /// JSON representation of command state supplied by the command.

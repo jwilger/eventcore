@@ -17,7 +17,7 @@ The API documentation includes:
 
 ### Core Library
 
-- **[`eventcore`](../../api/eventcore/index.html)** - Core library with command execution, event stores, and projections. Common types are re-exported at the crate root (e.g. `eventcore::{CommandLogic, StreamId, NewEvents, execute}`).
+- **[`eventcore`](../../api/eventcore/index.html)** - Core library with command execution, event stores, and projections. Common types are re-exported at the crate root (e.g. `eventcore::{CommandLogic, StreamId, NewEvents, CommandStateSnapshotId, execute}`).
 
 ### Event Store Adapters
 

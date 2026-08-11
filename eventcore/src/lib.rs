@@ -153,20 +153,21 @@ pub mod model;
 
 // Re-export application-developer types from eventcore-types
 pub use eventcore_types::{
-    AttemptNumber, CommandError, CommandLogic, CommandStreams, DelayMilliseconds, Event,
-    EventStream, FailureContext, FailureStrategy, NewEvents, Projector, StreamDeclarations,
-    StreamId, StreamPosition, StreamResolver, collect_events,
+    AttemptNumber, CommandError, CommandLogic, CommandStateReplayCheckpoint, CommandStateSnapshot,
+    CommandStateSnapshotId, CommandStreams, DelayMilliseconds, Event, EventStream, FailureContext,
+    FailureStrategy, NewEvents, Projector, StreamDeclarations, StreamId, StreamPosition,
+    StreamResolver, collect_events,
 };
 
 // Internal imports for types used by this crate but not re-exported
-use eventcore_types::{
-    CommandStateReplayCheckpoint, CommandStateSnapshot, CommandStateSnapshotId, EventStore,
-    EventStoreError, MaxRetries, StreamVersion, StreamWrites,
-};
+use eventcore_types::{EventStore, EventStoreError, MaxRetries, StreamVersion, StreamWrites};
 
 /// Number of reconstructed events at which an opt-in command-state projection
-/// is first persisted. The fixed-history benchmark measured approximately
-/// 14.6µs at 100 events and 116.5µs at 1,000 events.
+/// is first persisted.
+///
+/// Commands opt in by implementing [`CommandLogic::command_state_snapshot_id`]
+/// and its serialization methods. The fixed-history benchmark measured
+/// approximately 14.6µs at 100 events and 116.5µs at 1,000 events.
 pub const COMMAND_STATE_SNAPSHOT_REFRESH_THRESHOLD: usize = 100;
 
 // Re-export projection public API

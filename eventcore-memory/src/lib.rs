@@ -1,7 +1,9 @@
 //! In-memory event store implementation for testing.
 //!
 //! This module provides the `InMemoryEventStore` - a lightweight, zero-dependency
-//! storage backend for EventCore integration tests and development.
+//! storage backend for EventCore integration tests and development. Command
+//! state snapshots are retained only for the lifetime of the store instance;
+//! use a durable adapter when snapshots must survive a process restart.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};

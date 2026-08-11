@@ -11,6 +11,8 @@
 //! - **Command traits**: `CommandLogic`, `CommandStreams`, `StreamResolver`, `Event`, `NewEvents`
 //! - **Command types**: `StreamDeclarations`, `StreamDeclarationsError`
 //! - **Store trait**: `EventStore`, with `EventStoreError` and `Operation`
+//! - **Command-state snapshots**: `CommandStateSnapshotId`,
+//!   `CommandStateSnapshot`, and `CommandStateReplayCheckpoint`
 //! - **Stream types**: `StreamId`, `StreamVersion`, `StreamWrites`, `StreamWriteEntry`,
 //!   `StreamPattern`, `StreamPrefix`
 //! - **Event streaming**: `EventStream`, `EventStreamSlice`, `collect_events`

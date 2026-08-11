@@ -158,8 +158,11 @@ pub trait CommandLogic: CommandStreams + Send + Sync {
     /// The state type accumulated from event history.
     ///
     /// This type represents the reconstructed state needed to validate
-    /// business rules and produce events. It's rebuilt from scratch for
-    /// each command execution by applying events via `apply()`.
+    /// business rules and produce events. Normally it is rebuilt by applying
+    /// events via [`Self::apply`]. Commands that opt into durable snapshots may
+    /// restore a previously serialized state and apply its tail; if an earlier
+    /// stream advances in a multi-stream reconstruction, later streams may be
+    /// replayed in full to preserve their original order.
     type State: Default + Send;
 
     /// Reconstruct state by applying a single event.
@@ -205,12 +208,27 @@ pub trait CommandLogic: CommandStreams + Send + Sync {
     }
 
     /// Identifies an opt-in durable projection of this command's reconstructed
-    /// state. Commands that return `None` retain ordinary full replay.
+    /// state.
+    ///
+    /// Return a stable ID for one semantic reconstruction boundary, including
+    /// any command input that can change the streams read or the meaning of
+    /// `State`. Include a projection/schema version when a state format change
+    /// is not backward compatible. Commands that return `None` retain ordinary
+    /// full replay.
+    ///
+    /// Returning `Some` also requires implementations of
+    /// [`Self::serialize_command_state_snapshot`] and
+    /// [`Self::deserialize_command_state_snapshot`].
     fn command_state_snapshot_id(&self) -> Option<CommandStateSnapshotId> {
         None
     }
 
     /// Serializes reconstructed state for a durable command-state projection.
+    ///
+    /// The value must round-trip through
+    /// [`Self::deserialize_command_state_snapshot`]. It is stored by the
+    /// active event store, so do not put secrets in it unless that backend's
+    /// storage policy protects them.
     fn serialize_command_state_snapshot(
         &self,
         _state: &Self::State,
@@ -221,6 +239,10 @@ pub trait CommandLogic: CommandStreams + Send + Sync {
     }
 
     /// Restores reconstructed state from a durable command-state projection.
+    ///
+    /// Return a validation error for an unsupported state schema rather than
+    /// silently constructing a different state. The executor will use the
+    /// restored state only with the stream-version vector stored beside it.
     fn deserialize_command_state_snapshot(
         &self,
         _state: Value,

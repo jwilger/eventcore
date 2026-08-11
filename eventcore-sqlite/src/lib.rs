@@ -13,7 +13,9 @@
 //! is written unencrypted.
 //!
 //! `SqliteEventStore` implements `EventStore`, `EventReader`, `CheckpointStore`,
-//! and projector coordination from `eventcore-types`.
+//! and projector coordination from `eventcore-types`. Its normal migration
+//! creates the durable command-state snapshot table used by snapshot-enabled
+//! commands.
 //!
 //! Construct a store using [`SqliteEventStore::from_connection`] with a
 //! `rusqlite::Connection`. Use `:memory:` for in-memory stores in tests.

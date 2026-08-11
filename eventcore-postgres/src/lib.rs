@@ -7,7 +7,9 @@
 //! follows the conventions described in ADR-0047.
 //!
 //! `PostgresEventStore` implements [`EventStore`], [`EventReader`], [`CheckpointStore`],
-//! and [`ProjectorCoordinator`] from `eventcore-types`.
+//! and [`ProjectorCoordinator`] from `eventcore-types`. Its normal migration
+//! creates the durable command-state snapshot table used by snapshot-enabled
+//! commands.
 //!
 //! # Getting Started
 //!

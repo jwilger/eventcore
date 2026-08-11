@@ -80,6 +80,10 @@ struct Shared {
 }
 
 /// A file-based [`EventStore`] / [`EventReader`].
+///
+/// Events live in the replicated `events/` directory. Command-state snapshots
+/// are machine-local derived data under `.eventcore/snapshots/`, so they are
+/// neither committed nor merged with event history.
 #[derive(Clone, Debug)]
 pub struct FileEventStore {
     shared: Arc<Shared>,
