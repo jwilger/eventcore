@@ -1,5 +1,15 @@
 schema_version = 3
 
+[commands.cargo-test]
+argv = ["nix", "develop", "-c", "cargo", "test", "--workspace"]
+capability = "tests"
+network = "denied"
+
+[commands.nextest]
+argv = ["nix", "develop", "-c", "cargo", "nextest", "run", "--workspace"]
+capability = "tests"
+network = "denied"
+
 [delivery]
 mode = "direct-to-trunk"
 trunk_branch = "main"

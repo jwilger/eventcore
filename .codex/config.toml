@@ -1,0 +1,12 @@
+
+# >>> development-system MCP servers >>>
+[mcp_servers.development-discipline]
+command = "/home/jwilger/.local/share/ai-plugins/development-system/5.2.5/linux-x86_64/development-discipline-mcp"
+args = ["--service", "plugin-advisory"]
+env_vars = ["SSH_AUTH_SOCK"]
+
+[mcp_servers.tiber]
+command = "/home/jwilger/.local/share/ai-plugins/development-system/5.2.5/linux-x86_64/tiber"
+args = ["mcp", "stdio"]
+env_vars = ["SSH_AUTH_SOCK"]
+# <<< development-system MCP servers <<<
