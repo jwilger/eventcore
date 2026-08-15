@@ -22,7 +22,7 @@
 //! # }
 //! ```
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use eventcore_types::{
     CheckpointStore, CommandStateReplayCheckpoint, CommandStateSnapshot, CommandStateSnapshotId,
@@ -315,6 +315,8 @@ impl EventStore for PostgresEventStore {
             .await
             .map_err(|error| map_sqlx_error(error, Operation::BeginTransaction))?;
 
+        validate_expected_versions(&mut tx, &expected_versions).await?;
+
         // Set expected versions in session config for trigger validation
         let _ = query("SELECT set_config('eventcore.expected_versions', $1, true)")
             .bind(expected_versions_json.to_string())
@@ -381,7 +383,7 @@ impl EventStore for PostgresEventStore {
             let state: Json<Value> = row
                 .try_get("state")
                 .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
-            let stream_versions: Json<std::collections::HashMap<StreamId, StreamVersion>> = row
+            let stream_versions: Json<HashMap<StreamId, StreamVersion>> = row
                 .try_get("stream_versions")
                 .map_err(|error| map_sqlx_error(error, Operation::ReadStream))?;
             let replay_checkpoints: Json<Vec<CommandStateReplayCheckpoint>> = row
@@ -466,6 +468,62 @@ impl CheckpointStore for PostgresEventStore {
 
         Ok(())
     }
+}
+
+/// Locks and validates every stream declared by an append before any event rows
+/// are inserted. This includes read-only command participants and empty streams.
+///
+/// Acquiring transaction-scoped advisory locks in stream-id order means concurrent
+/// appends serialize their checks for every participating stream without creating
+/// a lock-order deadlock. The locks are held until commit or rollback, so a stream
+/// cannot advance after its version has been validated and before this append
+/// commits. The existing trigger remains responsible for gap-free version
+/// assignment within each emitted stream.
+async fn validate_expected_versions(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    expected_versions: &HashMap<StreamId, StreamVersion>,
+) -> Result<(), EventStoreError> {
+    let mut expected_streams: Vec<_> = expected_versions.iter().collect();
+    expected_streams.sort_unstable_by(|(left, _), (right, _)| left.as_ref().cmp(right.as_ref()));
+
+    for (stream_id, _) in &expected_streams {
+        let _ = query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(stream_id.as_ref())
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| map_sqlx_error(error, Operation::AppendEvents))?;
+    }
+
+    for (stream_id, expected_version) in expected_streams {
+        let current_version: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(stream_version), 0) FROM eventcore_events WHERE stream_id = $1",
+        )
+        .bind(stream_id.as_ref())
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|error| map_sqlx_error(error, Operation::AppendEvents))?;
+        let current_version =
+            usize::try_from(current_version).map_err(|_| EventStoreError::StoreFailure {
+                operation: Operation::AppendEvents,
+            })?;
+        let actual = StreamVersion::new(current_version);
+
+        if actual != *expected_version {
+            warn!(
+                stream = %stream_id,
+                expected = expected_version.into_inner(),
+                actual = actual.into_inner(),
+                "[postgres.version_conflict] optimistic concurrency check failed"
+            );
+            return Err(EventStoreError::VersionConflict {
+                stream_id: stream_id.clone(),
+                expected: *expected_version,
+                actual,
+            });
+        }
+    }
+
+    Ok(())
 }
 
 impl EventReader for PostgresEventStore {

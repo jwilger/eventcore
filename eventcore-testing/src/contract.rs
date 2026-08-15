@@ -372,6 +372,134 @@ where
     }
 }
 
+pub async fn test_read_only_participant_conflict_preserves_atomicity<F, S>(
+    make_store: F,
+) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "read_only_participant_conflict_preserves_atomicity";
+
+    let store = make_store();
+    let participant_stream = contract_stream_id(SCENARIO, "participant")?;
+    let target_stream = contract_stream_id(SCENARIO, "target")?;
+
+    // Seed the participant to version one. The subsequent command will read it
+    // at version zero but emit an event only for the target stream.
+    let writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &participant_stream,
+        StreamVersion::new(0),
+    )?;
+    let writes = append_contract_event(SCENARIO, writes, &participant_stream)?;
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+
+    let writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &participant_stream,
+        StreamVersion::new(0),
+    )?;
+    let writes = register_contract_stream(SCENARIO, writes, &target_stream, StreamVersion::new(0))?;
+    let writes = append_contract_event(SCENARIO, writes, &target_stream)?;
+
+    match store.append_events(writes).await {
+        Err(EventStoreError::VersionConflict { .. }) => {}
+        Err(error) => {
+            return Err(ContractTestFailure::store_error(
+                SCENARIO,
+                "append_events",
+                error,
+            ));
+        }
+        Ok(_) => {
+            return Err(ContractTestFailure::assertion(
+                SCENARIO,
+                "expected stale read-only participant to reject the append",
+            ));
+        }
+    }
+
+    let target_events = store
+        .read_stream::<ContractTestEvent>(target_stream)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
+    let target_events = collect_events(target_events)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
+    if !target_events.is_empty() {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            "target stream received events despite a read-only participant conflict",
+        ));
+    }
+
+    Ok(())
+}
+
+pub async fn test_current_read_only_participant_allows_write<F, S>(
+    make_store: F,
+) -> ContractTestResult
+where
+    F: Fn() -> S + Send + Sync + Clone + 'static,
+    S: EventStore + Send + Sync + 'static,
+{
+    const SCENARIO: &str = "current_read_only_participant_allows_write";
+
+    let store = make_store();
+    let participant_stream = contract_stream_id(SCENARIO, "participant")?;
+    let target_stream = contract_stream_id(SCENARIO, "target")?;
+
+    let writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &participant_stream,
+        StreamVersion::new(0),
+    )?;
+    let writes = append_contract_event(SCENARIO, writes, &participant_stream)?;
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+
+    let writes = register_contract_stream(
+        SCENARIO,
+        StreamWrites::new(),
+        &participant_stream,
+        StreamVersion::new(1),
+    )?;
+    let writes = register_contract_stream(SCENARIO, writes, &target_stream, StreamVersion::new(0))?;
+    let writes = append_contract_event(SCENARIO, writes, &target_stream)?;
+    let _ = store
+        .append_events(writes)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "append_events", error))?;
+
+    let target_events = store
+        .read_stream::<ContractTestEvent>(target_stream)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
+    let target_events = collect_events(target_events)
+        .await
+        .map_err(|error| ContractTestFailure::store_error(SCENARIO, "read_stream", error))?;
+    if target_events.len() != 1 {
+        return Err(ContractTestFailure::assertion(
+            SCENARIO,
+            format!(
+                "expected target stream to contain one event, observed {}",
+                target_events.len()
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 pub async fn test_stream_isolation<F, S>(make_store: F) -> ContractTestResult
 where
     F: Fn() -> S + Send + Sync + Clone + 'static,
@@ -699,8 +827,11 @@ macro_rules! backend_contract_tests {
                 test_concurrent_version_conflicts, test_conflict_preserves_atomicity,
                 test_coordination_acquire_leadership, test_coordination_independent_subscriptions,
                 test_coordination_leadership_released_on_guard_drop,
-                test_coordination_second_instance_blocked, test_event_ordering_across_streams,
-                test_missing_stream_reads, test_position_based_resumption,
+                test_coordination_second_instance_blocked,
+                test_current_read_only_participant_allows_write,
+                test_event_ordering_across_streams, test_missing_stream_reads,
+                test_position_based_resumption,
+                test_read_only_participant_conflict_preserves_atomicity,
                 test_read_stream_after_excludes_reconstructed_events,
                 test_read_stream_errors_on_type_mismatch, test_stream_isolation,
                 test_stream_pattern_char_class, test_stream_pattern_filtering,
@@ -718,6 +849,20 @@ macro_rules! backend_contract_tests {
             #[tokio::test(flavor = "multi_thread")]
             async fn concurrent_version_conflicts_contract() {
                 test_concurrent_version_conflicts($make_store)
+                    .await
+                    .expect("event store contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn read_only_participant_conflict_preserves_atomicity_contract() {
+                test_read_only_participant_conflict_preserves_atomicity($make_store)
+                    .await
+                    .expect("event store contract failed");
+            }
+
+            #[tokio::test(flavor = "multi_thread")]
+            async fn current_read_only_participant_allows_write_contract() {
+                test_current_read_only_participant_allows_write($make_store)
                     .await
                     .expect("event store contract failed");
             }
