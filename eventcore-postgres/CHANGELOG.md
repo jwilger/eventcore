@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [2.0.1](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v2.0.0...eventcore-postgres-v2.0.1) - 2026-08-15
+
+### Bug Fixes
+
+- *(postgres)* validate read-only stream participants
+
 ## [2.0.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v1.1.1...eventcore-postgres-v2.0.0) - 2026-08-11
 
 ### Documentation
