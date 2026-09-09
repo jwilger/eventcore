@@ -151,3 +151,33 @@ nix develop -c cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 Passed: 43/43 `eventcore-testing` tests; clippy completed with warnings denied.
+
+## Final fixture review evidence
+
+The proxy backend now reads each complete PostgreSQL frame sequentially. It
+never places a partial-frame read in `tokio::select!`; only after an entire
+`CommandComplete(COMMIT)` frame is decoded does it boundedly wait for the
+frontend `COMMIT` signal, independently observe durable state, and close the
+transport without forwarding the acknowledgement.
+
+The backend-neutral fixture contract now requires a fresh normal-destination
+recovery invocation after the committed/lost-ACK result. It proves that durable
+progress suppresses application code and the non-idempotent effect, retains the
+exact identity/position binding, and does not replay the after-commit hook that
+was skipped because acknowledgement was unknown. The PostgreSQL fixture tears
+down the one-connection proxy and uses its direct store for that invocation.
+
+```text
+nix develop -c cargo nextest run -p eventcore-postgres --test transactional_projection_contract_test -E 'test(commit_acknowledgement_loss)'
+```
+
+Passed three consecutive times (1/1 each; 1.564 s, 1.560 s, and 1.886 s).
+
+```text
+nix develop -c cargo nextest run -p eventcore-postgres --test transactional_projection_contract_test
+nix develop -c cargo nextest run -p eventcore-testing
+nix develop -c cargo clippy --all-targets --all-features -- -D warnings
+```
+
+Passed: 12/12 transactional PostgreSQL tests, 43/43 testing-crate tests, and
+warnings-denied clippy.

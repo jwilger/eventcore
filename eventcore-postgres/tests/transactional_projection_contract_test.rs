@@ -337,42 +337,43 @@ async fn forward_postgres_backend(
     commit_receiver: &mut oneshot::Receiver<()>,
     observation: CommitObservation,
 ) -> Result<(), String> {
-    let mut commit_forwarded = false;
     loop {
-        tokio::select! {
-            result = &mut *commit_receiver, if !commit_forwarded => {
-                result.map_err(|_| "proxy frontend ended before forwarding COMMIT".to_string())?;
-                commit_forwarded = true;
-            }
-            message = read_postgres_message(&mut server) => {
-                let (tag, length, payload) = message?;
-                if tag == b'C' && payload == b"COMMIT\0" {
-                    if !commit_forwarded {
-                        timeout(RUN_TIMEOUT, &mut *commit_receiver)
-                            .await
-                            .map_err(|_| "proxy did not observe forwarded COMMIT before its completion".to_string())?
-                            .map_err(|_| "proxy frontend ended before forwarding COMMIT".to_string())?;
-                    }
-                    timeout(
-                        RUN_TIMEOUT,
-                        observe_committed_effect_and_progress(observation),
-                    )
-                    .await
-                    .map_err(|_| {
-                        "direct commit observer did not complete before its timeout".to_string()
-                    })??;
-                    return Ok(());
-                }
-                client.write_u8(tag).await
-                    .map_err(|error| format!("proxy could not forward backend tag: {error}"))?;
-                client.write_u32(length).await
-                    .map_err(|error| format!("proxy could not forward backend length: {error}"))?;
-                client.write_all(&payload).await
-                    .map_err(|error| format!("proxy could not forward backend payload: {error}"))?;
-                client.flush().await
-                    .map_err(|error| format!("proxy could not flush backend packet: {error}"))?;
-            }
+        // Do not place this read in `select!`: cancelling after a partial PostgreSQL frame
+        // would desynchronize the transport before the next frame is decoded.
+        let (tag, length, payload) = read_postgres_message(&mut server).await?;
+        if tag == b'C' && payload == b"COMMIT\0" {
+            timeout(RUN_TIMEOUT, &mut *commit_receiver)
+                .await
+                .map_err(|_| {
+                    "proxy did not observe forwarded COMMIT before its completion".to_string()
+                })?
+                .map_err(|_| "proxy frontend ended before forwarding COMMIT".to_string())?;
+            timeout(
+                RUN_TIMEOUT,
+                observe_committed_effect_and_progress(observation),
+            )
+            .await
+            .map_err(|_| {
+                "direct commit observer did not complete before its timeout".to_string()
+            })??;
+            return Ok(());
         }
+        client
+            .write_u8(tag)
+            .await
+            .map_err(|error| format!("proxy could not forward backend tag: {error}"))?;
+        client
+            .write_u32(length)
+            .await
+            .map_err(|error| format!("proxy could not forward backend length: {error}"))?;
+        client
+            .write_all(&payload)
+            .await
+            .map_err(|error| format!("proxy could not forward backend payload: {error}"))?;
+        client
+            .flush()
+            .await
+            .map_err(|error| format!("proxy could not flush backend packet: {error}"))?;
     }
 }
 
@@ -789,6 +790,15 @@ impl TransactionalProjectionFixture for PostgresAtomicFixture {
         .await?;
         self.commit_acknowledgement_proxy = Some(proxy);
         Ok(())
+    }
+
+    async fn recover_after_commit_acknowledgement_loss(
+        &mut self,
+    ) -> Result<ContractRunOutcome, Self::Error> {
+        if let Some(proxy) = self.commit_acknowledgement_proxy.take() {
+            proxy.shutdown().await;
+        }
+        self.run_batch().await
     }
 
     async fn inject_connection_loss(&mut self) -> Result<(), Self::Error> {

@@ -158,6 +158,11 @@ pub trait TransactionalProjectionFixture {
         &mut self,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
+    /// Starts a fresh normal-destination invocation after an indeterminate commit.
+    fn recover_after_commit_acknowledgement_loss(
+        &mut self,
+    ) -> impl Future<Output = Result<ProjectionRunOutcome, Self::Error>> + Send;
+
     /// Loses the active destination connection while a run is in progress.
     fn inject_connection_loss(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
@@ -527,23 +532,48 @@ where
         fixture.hook_log().await?.is_empty(),
         "after-commit must not run without acknowledgement"
     );
-    let effect_count = fixture.effect_count().await?;
-    let progress = fixture.progress().await?;
-    match effect_count {
-        0 => assert_eq!(
-            progress, None,
-            "an indeterminate rollback outcome must not expose progress",
-        ),
-        1 => assert_eq!(
-            progress,
-            Some(ProjectionProgressObservation {
-                source_id: fixture.source_id().clone(),
-                selection_id: fixture.selection_id().clone(),
-                position,
-            }),
-            "an indeterminate committed outcome must expose the matching atomic progress",
-        ),
-        _ => panic!("an indeterminate commit must not expose duplicate effects"),
-    }
+    assert_eq!(
+        fixture.effect_count().await?,
+        1,
+        "the committed/lost-ack fixture must expose exactly one non-idempotent effect",
+    );
+    let expected_progress = Some(ProjectionProgressObservation {
+        source_id: fixture.source_id().clone(),
+        selection_id: fixture.selection_id().clone(),
+        position,
+    });
+    assert_eq!(
+        fixture.progress().await?,
+        expected_progress,
+        "the committed/lost-ack fixture must expose matching durable progress",
+    );
+    assert_eq!(
+        fixture.recover_after_commit_acknowledgement_loss().await?,
+        ProjectionRunOutcome::CaughtUp {
+            processed: 0,
+            skipped: 0,
+            through: Some(position),
+        },
+        "a later normal invocation must recover by rereading durable progress",
+    );
+    assert_eq!(
+        fixture.effect_count().await?,
+        1,
+        "recovery must not duplicate the committed non-idempotent effect",
+    );
+    assert_eq!(
+        fixture.application_attempt_count().await?,
+        1,
+        "recovery must suppress application code for the already committed position",
+    );
+    assert_eq!(
+        fixture.progress().await?,
+        expected_progress,
+        "recovery must retain the exact committed progress binding",
+    );
+    assert!(
+        fixture.hook_log().await?.is_empty(),
+        "recovery must not replay the after-commit hook missed by the unknown acknowledgement"
+    );
     Ok(())
 }

@@ -86,6 +86,12 @@ impl TransactionalProjectionFixture for ContractFixture {
         Ok(())
     }
 
+    async fn recover_after_commit_acknowledgement_loss(
+        &mut self,
+    ) -> Result<ProjectionRunOutcome, Self::Error> {
+        self.run_batch().await
+    }
+
     async fn inject_connection_loss(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
