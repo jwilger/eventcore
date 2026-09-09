@@ -41,7 +41,13 @@ use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 pub mod projections;
-pub use projections::{PostgresProjectionSource, PostgresProjectionSourceError};
+pub use projections::{
+    AfterCommit, BoxedProjectionError, NoopAfterCommit, PostgresProjectionConfig,
+    PostgresProjectionMode, PostgresProjectionSource, PostgresProjectionSourceError,
+    PostgresProjectionStore, PostgresProjector, ProjectionConfigurationError,
+    ProjectionFailureContext, ProjectionFailureDecision, ProjectionProgress, ProjectionRetryPolicy,
+    ProjectionRunOutcome, TransactionalProjectionError, run_transactional_projection,
+};
 
 /// Errors that can occur when creating a [`PostgresEventStore`].
 #[derive(Debug, Error)]

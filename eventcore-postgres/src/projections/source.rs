@@ -87,6 +87,7 @@ impl PostgresProjectionSource {
             DELIVERY_SOURCE_MIGRATION,
         )
         .await
+        .map_err(PostgresProjectionSourceError::MigrationFailed)
     }
 }
 

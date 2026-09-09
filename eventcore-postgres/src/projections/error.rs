@@ -1,0 +1,94 @@
+use std::error::Error;
+
+use eventcore_types::{DeliveryPosition, ProjectorName};
+use thiserror::Error;
+
+use super::ProjectionConfigurationError;
+
+/// Type-erased failure source retained by the stable runner error boundary.
+pub type BoxedProjectionError = Box<dyn Error + Send + Sync>;
+
+/// Terminal failures from a transactional projection run.
+#[derive(Debug, Error)]
+pub enum TransactionalProjectionError {
+    /// Another process owns this projector's read-model leadership lock.
+    #[error("transactional projection leadership is busy")]
+    LeadershipBusy,
+    /// The leader session was lost and can no longer authorize writes.
+    #[error("transactional projection leadership was lost")]
+    LeadershipLost {
+        /// Underlying database error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+    /// The event source could not provide a page or high-water mark.
+    #[error("transactional projection source failed")]
+    Source {
+        /// Underlying source error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+    /// A selected persisted payload could not decode into the application's event contract.
+    #[error("transactional projection could not decode event at position {position:?}")]
+    Decode {
+        /// Position of the malformed selected envelope.
+        position: DeliveryPosition,
+        /// Underlying deserialization error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+    /// The projector chose the `Fatal` decision for an application error.
+    #[error("transactional projection application failed at position {position:?}")]
+    ApplicationFatal {
+        /// Failed position.
+        position: DeliveryPosition,
+        /// Underlying application error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+    /// Retry attempts were exhausted without committing the event effect.
+    #[error("transactional projection retries exhausted at position {position:?}")]
+    RetryExhausted {
+        /// Failed position.
+        position: DeliveryPosition,
+        /// Last application error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+    /// Progress could not be loaded, validated, or advanced in the transaction.
+    #[error("transactional projection progress operation failed")]
+    Progress {
+        /// Underlying database error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+    /// PostgreSQL did not acknowledge the commit, so durable state must be inspected on recovery.
+    #[error("transactional projection commit acknowledgement is indeterminate")]
+    CommitIndeterminate {
+        /// Underlying database error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+    /// Existing progress belongs to a different source or selection contract.
+    #[error("transactional projection progress identity does not match {projector}")]
+    IdentityMismatch {
+        /// Projector whose durable identity was incompatible.
+        projector: ProjectorName,
+    },
+    /// Configuration cannot safely start a projection.
+    #[error("transactional projection configuration is invalid")]
+    Configuration {
+        /// Invalid configuration detail.
+        #[source]
+        source: ProjectionConfigurationError,
+    },
+    /// A confirmed commit succeeded but its after-commit action failed.
+    #[error("transactional projection after-commit action failed at position {position:?}")]
+    AfterCommit {
+        /// Already committed position.
+        position: DeliveryPosition,
+        /// Underlying hook error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+}
