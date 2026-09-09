@@ -159,7 +159,7 @@ impl ProjectionLeader {
         position: DeliveryPosition,
     ) -> Result<(), TransactionalProjectionError> {
         let position = i64::try_from(position.get()).map_err(|error| {
-            TransactionalProjectionError::Progress {
+            TransactionalProjectionError::ProgressStore {
                 source: Box::new(error),
             }
         })?;
@@ -213,12 +213,12 @@ fn progress_from_row(
     let selection_id: String = row.try_get("selection_id").map_err(progress_error)?;
     let position: i64 = row.try_get("last_position").map_err(progress_error)?;
     let source_id = DeliverySourceId::try_new(source_id).map_err(|error| {
-        TransactionalProjectionError::Progress {
+        TransactionalProjectionError::ProgressStore {
             source: Box::new(error),
         }
     })?;
     let selection_id = ProjectionSelectionId::try_new(selection_id).map_err(|error| {
-        TransactionalProjectionError::Progress {
+        TransactionalProjectionError::ProgressStore {
             source: Box::new(error),
         }
     })?;
@@ -226,7 +226,7 @@ fn progress_from_row(
         .ok()
         .and_then(NonZeroU64::new)
         .map(DeliveryPosition::new)
-        .ok_or_else(|| TransactionalProjectionError::Progress {
+        .ok_or_else(|| TransactionalProjectionError::ProgressStore {
             source: Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "projection progress position must be positive",
@@ -241,7 +241,7 @@ fn progress_from_row(
 }
 
 fn progress_error(error: sqlx::Error) -> TransactionalProjectionError {
-    TransactionalProjectionError::Progress {
+    TransactionalProjectionError::ProgressStore {
         source: Box::new(error),
     }
 }

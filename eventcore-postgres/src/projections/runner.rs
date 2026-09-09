@@ -121,14 +121,26 @@ where
     S: ProjectionSource,
 {
     let position = envelope.position();
-    let mut transaction = leader.begin().await?;
-    let progress = ProjectionLeader::load_progress(&mut transaction, projector_name).await?;
+    let mut transaction = leader
+        .begin()
+        .await
+        .map_err(|error| progress_at_position(position, error))?;
+    let progress = ProjectionLeader::load_progress(&mut transaction, projector_name)
+        .await
+        .map_err(|error| progress_at_position(position, error))?;
     if let Some(progress) = progress {
-        if progress.source_id() != source.source_id()
-            || progress.selection_id() != config.selection().id()
-        {
-            return Err(TransactionalProjectionError::IdentityMismatch {
+        if progress.source_id() != source.source_id() {
+            return Err(TransactionalProjectionError::SourceIdentityMismatch {
                 projector: projector_name.clone(),
+                persisted: progress.source_id().clone(),
+                configured: source.source_id().clone(),
+            });
+        }
+        if progress.selection_id() != config.selection().id() {
+            return Err(TransactionalProjectionError::SelectionIdentityMismatch {
+                projector: projector_name.clone(),
+                persisted: progress.selection_id().clone(),
+                configured: config.selection().id().clone(),
             });
         }
         if position <= progress.position() {
@@ -156,9 +168,11 @@ where
         config.selection().id(),
         position,
     )
-    .await?;
+    .await
+    .map_err(|error| progress_at_position(position, error))?;
     transaction.commit().await.map_err(|source| {
         TransactionalProjectionError::CommitIndeterminate {
+            position,
             source: Box::new(source),
         }
     })?;
@@ -170,6 +184,18 @@ where
             source: Box::new(source),
         })?;
     Ok(true)
+}
+
+fn progress_at_position(
+    position: DeliveryPosition,
+    error: TransactionalProjectionError,
+) -> TransactionalProjectionError {
+    match error {
+        TransactionalProjectionError::ProgressStore { source } => {
+            TransactionalProjectionError::Progress { position, source }
+        }
+        error => error,
+    }
 }
 
 fn source_error(

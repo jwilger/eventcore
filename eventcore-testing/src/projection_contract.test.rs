@@ -6,9 +6,9 @@ use futures::FutureExt;
 use serde_json::Value;
 
 use super::{
-    ProjectionApplicationBehavior, ProjectionHookLogEntry, ProjectionProgressObservation,
-    ProjectionRunMode, ProjectionRunOutcome, TransactionalProjectionFixture,
-    transactional_projection_contract,
+    ProjectionApplicationBehavior, ProjectionAttemptObservation, ProjectionHookLogEntry,
+    ProjectionProgressObservation, ProjectionRunMode, ProjectionRunOutcome,
+    TransactionalProjectionFixture, transactional_projection_contract,
 };
 
 struct ContractFixture {
@@ -44,8 +44,11 @@ impl TransactionalProjectionFixture for ContractFixture {
         Ok(values.iter().map(|_| self.position).collect())
     }
 
-    async fn append_malformed_input(&mut self, _input: &str) -> Result<(), Self::Error> {
-        Ok(())
+    async fn append_malformed_input(
+        &mut self,
+        _input: &str,
+    ) -> Result<DeliveryPosition, Self::Error> {
+        Ok(self.position)
     }
 
     fn select_application_behavior(&mut self, _behavior: ProjectionApplicationBehavior) {}
@@ -62,6 +65,12 @@ impl TransactionalProjectionFixture for ContractFixture {
         })
     }
 
+    async fn run_batch_attempt(&mut self) -> Result<ProjectionAttemptObservation, Self::Error> {
+        Ok(ProjectionAttemptObservation::Completed(
+            self.run_batch().await?,
+        ))
+    }
+
     async fn run_continuous(&mut self) -> Result<ProjectionRunOutcome, Self::Error> {
         Ok(ProjectionRunOutcome::Cancelled {
             processed: 0,
@@ -73,12 +82,20 @@ impl TransactionalProjectionFixture for ContractFixture {
         Ok(())
     }
 
+    async fn inject_commit_acknowledgement_loss(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
     async fn inject_connection_loss(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
     async fn effect_count(&self) -> Result<u64, Self::Error> {
         Ok(self.effect_count)
+    }
+
+    async fn application_attempt_count(&self) -> Result<u64, Self::Error> {
+        Ok(self.runs)
     }
 
     async fn progress(&self) -> Result<Option<ProjectionProgressObservation>, Self::Error> {
@@ -112,6 +129,15 @@ impl TransactionalProjectionFixture for ContractFixture {
 
     fn selection_id(&self) -> &ProjectionSelectionId {
         &self.selection_id
+    }
+
+    async fn seed_progress_identity(
+        &mut self,
+        _source_id: DeliverySourceId,
+        _selection_id: ProjectionSelectionId,
+        _position: DeliveryPosition,
+    ) -> Result<(), Self::Error> {
+        Ok(())
     }
 }
 

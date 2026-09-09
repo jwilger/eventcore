@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use eventcore_types::{DeliveryPosition, ProjectorName};
+use eventcore_types::{DeliveryPosition, DeliverySourceId, ProjectionSelectionId, ProjectorName};
 use thiserror::Error;
 
 use super::ProjectionConfigurationError;
@@ -55,9 +55,18 @@ pub enum TransactionalProjectionError {
         #[source]
         source: BoxedProjectionError,
     },
-    /// Progress could not be loaded, validated, or advanced in the transaction.
-    #[error("transactional projection progress operation failed")]
+    /// Progress could not be loaded or advanced for the pending delivery position.
+    #[error("transactional projection progress operation failed at position {position:?}")]
     Progress {
+        /// Delivery position whose transaction remains pending.
+        position: DeliveryPosition,
+        /// Underlying database error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+    /// A progress storage operation without a pending delivery position failed.
+    #[error("transactional projection progress storage operation failed")]
+    ProgressStore {
         /// Underlying database error.
         #[source]
         source: BoxedProjectionError,
@@ -65,15 +74,31 @@ pub enum TransactionalProjectionError {
     /// PostgreSQL did not acknowledge the commit, so durable state must be inspected on recovery.
     #[error("transactional projection commit acknowledgement is indeterminate")]
     CommitIndeterminate {
+        /// Position whose transaction may or may not have committed.
+        position: DeliveryPosition,
         /// Underlying database error.
         #[source]
         source: BoxedProjectionError,
     },
-    /// Existing progress belongs to a different source or selection contract.
-    #[error("transactional projection progress identity does not match {projector}")]
-    IdentityMismatch {
+    /// Existing progress belongs to a different delivery source.
+    #[error("transactional projection source identity does not match {projector}")]
+    SourceIdentityMismatch {
         /// Projector whose durable identity was incompatible.
         projector: ProjectorName,
+        /// Source identity persisted with durable progress.
+        persisted: DeliverySourceId,
+        /// Source identity configured for this invocation.
+        configured: DeliverySourceId,
+    },
+    /// Existing progress belongs to a different projection selection.
+    #[error("transactional projection selection identity does not match {projector}")]
+    SelectionIdentityMismatch {
+        /// Projector whose durable identity was incompatible.
+        projector: ProjectorName,
+        /// Selection identity persisted with durable progress.
+        persisted: ProjectionSelectionId,
+        /// Selection identity configured for this invocation.
+        configured: ProjectionSelectionId,
     },
     /// Configuration cannot safely start a projection.
     #[error("transactional projection configuration is invalid")]
