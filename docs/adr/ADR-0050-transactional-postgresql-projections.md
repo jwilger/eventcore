@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Date
 
@@ -14,7 +14,7 @@ Project maintainers
 
 ## Supersession
 
-If accepted, this ADR supersedes the PostgreSQL transaction-ownership and
+This ADR supersedes the PostgreSQL transaction-ownership and
 runner-composition decisions in ADR-021, ADR-026, ADR-029, ADR-030, and
 ADR-037. Their decisions remain in force for the retained legacy projection
 API.

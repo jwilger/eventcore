@@ -54,8 +54,8 @@ This directory contains Architecture Decision Records (ADRs) for this project.
 | 046 | Git Integration Contract for the File Store             | Accepted           |
 | 047 | Glob Pattern Matching for Subscriptions                 | Accepted           |
 | 049 | Streaming Reads for EventStore::read_stream             | Accepted           |
-| 050 | Transactional PostgreSQL Projections                    | Proposed           |
-| 051 | Lossless Global Projection Delivery                     | Proposed           |
+| 050 | Transactional PostgreSQL Projections                    | Accepted           |
+| 051 | Lossless Global Projection Delivery                     | Accepted           |
 
 ## Creating an ADR
 

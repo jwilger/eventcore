@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Date
 
@@ -14,7 +14,7 @@ Project maintainers
 
 ## Supersession
 
-If accepted, this ADR supersedes the PostgreSQL cross-stream cursor and decode
+This ADR supersedes the PostgreSQL cross-stream cursor and decode
 behavior assumed by ADR-021, ADR-029, ADR-030, and ADR-037 for the transactional
 projection facility. Existing `EventReader` behavior remains available for the
 legacy API.
