@@ -10,7 +10,7 @@ mod store;
 
 pub use config::{
     PostgresProjectionConfig, PostgresProjectionMode, ProjectionConfigurationError,
-    ProjectionRetryPolicy,
+    ProjectionRetryPolicy, ProjectionRetrySleeper, TokioProjectionRetrySleeper,
 };
 pub use error::{BoxedProjectionError, TransactionalProjectionError};
 pub use projector::{

@@ -1,8 +1,9 @@
 //! Public contract tests for transactional PostgreSQL projections.
 
-use std::convert::Infallible;
+use std::collections::VecDeque;
 use std::env;
 use std::future::Future;
+use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, resume_unwind};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,17 +13,22 @@ use std::time::Duration;
 use eventcore_postgres::{
     AfterCommit, PostgresProjectionConfig, PostgresProjectionMode, PostgresProjectionSource,
     PostgresProjectionSourceError, PostgresProjectionStore, PostgresProjector,
-    ProjectionConfigurationError, ProjectionRetryPolicy, ProjectionRunOutcome,
+    ProjectionConfigurationError, ProjectionFailureContext, ProjectionFailureDecision,
+    ProjectionRetryPolicy, ProjectionRetrySleeper, ProjectionRunOutcome,
     TransactionalProjectionError, run_transactional_projection,
 };
 use eventcore_testing::{
-    ProjectionApplicationBehavior, ProjectionAttemptObservation, ProjectionFailureObservation,
-    ProjectionHookLogEntry, ProjectionProgressObservation,
+    AFTER_COMMIT_FAILURE_SENTINEL, ProjectionApplicationBehavior, ProjectionAttemptObservation,
+    ProjectionFailureObservation, ProjectionHookLogEntry, ProjectionProgressObservation,
     ProjectionRunOutcome as ContractRunOutcome, TransactionalProjectionFixture,
-    commit_acknowledgement_loss_contract, malformed_selected_input_contract,
+    after_commit_failure_contract, after_commit_ordering_and_rollback_contract,
+    commit_acknowledgement_loss_contract, explicit_skip_contract,
+    fatal_leaves_position_pending_contract, malformed_selected_input_contract,
     mutation_failure_rolls_back_contract, progress_failure_rolls_back_contract,
-    restart_resumes_from_committed_position_contract, selection_identity_mismatch_contract,
-    source_identity_mismatch_contract, transactional_projection_contract,
+    restart_resumes_from_committed_position_contract, retry_exhaustion_contract,
+    retry_reloads_progress_contract, selection_identity_mismatch_contract,
+    source_identity_mismatch_contract, stop_leaves_position_pending_contract,
+    transactional_projection_contract, transient_retry_success_contract,
 };
 use eventcore_types::{
     BatchSize, DeliveryPosition, DeliverySourceId, DeliveryUpperBound, Event, EventStore,
@@ -435,21 +441,61 @@ async fn observe_committed_effect_and_progress(
 
 struct IncrementProjector {
     name: ProjectorName,
-    behavior: ProjectionApplicationBehavior,
+    behaviors: VecDeque<ProjectionApplicationBehavior>,
+    last_failure_decision: ProjectionFailureDecision,
     apply_barrier: Option<Arc<Barrier>>,
     application_attempts: Arc<AtomicU64>,
+    application_attempt_transactions: Arc<Mutex<Vec<String>>>,
+    destination_pool: Pool<Postgres>,
+    source_id: DeliverySourceId,
+    selection_id: ProjectionSelectionId,
     hook_log: Arc<Mutex<Vec<ProjectionHookLogEntry>>>,
+    hook_attempts: Arc<AtomicU64>,
 }
 
 struct RecordingAfterCommit {
     position: DeliveryPosition,
+    projector_name: ProjectorName,
+    destination_pool: Pool<Postgres>,
     hook_log: Arc<Mutex<Vec<ProjectionHookLogEntry>>>,
+    hook_attempts: Arc<AtomicU64>,
+    should_fail: bool,
+}
+
+#[derive(Debug, Error)]
+enum FixtureAfterCommitError {
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
+    #[error("{0}")]
+    Sentinel(&'static str),
 }
 
 impl AfterCommit for RecordingAfterCommit {
-    type Error = Infallible;
+    type Error = FixtureAfterCommitError;
 
     async fn execute(self) -> Result<(), Self::Error> {
+        let _ = self.hook_attempts.fetch_add(1, Ordering::SeqCst);
+        let position = i64::try_from(self.position.get())
+            .expect("fixture position should fit PostgreSQL BIGINT");
+        let committed: bool = query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM projection_attempts WHERE position = $1) AND \
+             EXISTS(SELECT 1 FROM eventcore_projection_progress \
+             WHERE projector_name = $2 AND last_position = $1)",
+        )
+        .bind(position)
+        .bind(self.projector_name.as_ref())
+        .fetch_one(&self.destination_pool)
+        .await?;
+        if !committed {
+            return Err(FixtureAfterCommitError::Database(sqlx::Error::Protocol(
+                "after-commit action observed uncommitted effect or progress".to_owned(),
+            )));
+        }
+        if self.should_fail {
+            return Err(FixtureAfterCommitError::Sentinel(
+                AFTER_COMMIT_FAILURE_SENTINEL,
+            ));
+        }
         self.hook_log
             .lock()
             .expect("fixture hook log mutex should not be poisoned")
@@ -477,25 +523,104 @@ impl PostgresProjector for IncrementProjector {
         'c: 'a,
     {
         let _ = self.application_attempts.fetch_add(1, Ordering::SeqCst);
+        let transaction_token = query_scalar::<_, String>("SELECT txid_current()::text")
+            .fetch_one(&mut **transaction)
+            .await?;
+        self.application_attempt_transactions
+            .lock()
+            .expect("fixture transaction-token mutex should not be poisoned")
+            .push(transaction_token);
+        let behavior = self
+            .behaviors
+            .pop_front()
+            .unwrap_or(ProjectionApplicationBehavior::Apply);
         if let Some(barrier) = &self.apply_barrier {
             let _ = barrier.wait().await;
         }
-        if self.behavior == ProjectionApplicationBehavior::Fail {
+        if behavior == ProjectionApplicationBehavior::Fail {
             return Err(sqlx::Error::Protocol(
                 "fixture application mutation failure".to_owned(),
             ));
         }
+        let numeric_position =
+            i64::try_from(position.get()).expect("fixture position should fit PostgreSQL BIGINT");
+        let _ = query("INSERT INTO projection_attempts (position) VALUES ($1)")
+            .bind(numeric_position)
+            .execute(&mut **transaction)
+            .await?;
         let _ = query("UPDATE invoice_projection_effect SET total = total + 1")
             .execute(&mut **transaction)
             .await?;
-        if self.behavior == ProjectionApplicationBehavior::ApplyThenFail {
+        if behavior == ProjectionApplicationBehavior::RetryWithExternallyCommittedProgress {
+            let _ = query(
+                "INSERT INTO eventcore_projection_progress \
+                 (projector_name, source_id, selection_id, last_position) \
+                 VALUES ($1, $2, $3, $4) ON CONFLICT (projector_name) DO UPDATE \
+                 SET source_id = EXCLUDED.source_id, selection_id = EXCLUDED.selection_id, \
+                 last_position = EXCLUDED.last_position, updated_at = NOW()",
+            )
+            .bind(self.name.as_ref())
+            .bind(self.source_id.as_ref())
+            .bind(self.selection_id.as_ref())
+            .bind(numeric_position)
+            .execute(&self.destination_pool)
+            .await?;
+        }
+        self.last_failure_decision = match behavior {
+            ProjectionApplicationBehavior::Retry
+            | ProjectionApplicationBehavior::RetryThenApply
+            | ProjectionApplicationBehavior::RetryWithExternallyCommittedProgress => {
+                ProjectionFailureDecision::Retry
+            }
+            ProjectionApplicationBehavior::Skip => ProjectionFailureDecision::Skip,
+            ProjectionApplicationBehavior::Stop => ProjectionFailureDecision::Stop,
+            _ => ProjectionFailureDecision::Fatal,
+        };
+        if matches!(
+            behavior,
+            ProjectionApplicationBehavior::ApplyThenFail
+                | ProjectionApplicationBehavior::Retry
+                | ProjectionApplicationBehavior::RetryThenApply
+                | ProjectionApplicationBehavior::RetryWithExternallyCommittedProgress
+                | ProjectionApplicationBehavior::Skip
+                | ProjectionApplicationBehavior::Stop
+                | ProjectionApplicationBehavior::Fatal
+        ) {
             return Err(sqlx::Error::Protocol(
                 "fixture application mutation failed after applying its effect".to_owned(),
             ));
         }
         Ok(RecordingAfterCommit {
             position,
+            projector_name: self.name.clone(),
+            destination_pool: self.destination_pool.clone(),
             hook_log: self.hook_log.clone(),
+            hook_attempts: self.hook_attempts.clone(),
+            should_fail: behavior == ProjectionApplicationBehavior::AfterCommitFail,
+        })
+    }
+
+    fn on_error(
+        &mut self,
+        _failure: ProjectionFailureContext<'_, Self::Error>,
+    ) -> ProjectionFailureDecision {
+        self.last_failure_decision
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RecordingRetrySleeper {
+    requests: Arc<Mutex<Vec<Duration>>>,
+}
+
+impl ProjectionRetrySleeper for RecordingRetrySleeper {
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let requests = self.requests.clone();
+        Box::pin(async move {
+            requests
+                .lock()
+                .expect("fixture retry-sleep mutex should not be poisoned")
+                .push(duration);
         })
     }
 }
@@ -508,10 +633,14 @@ struct PostgresAtomicFixture {
     source_id: DeliverySourceId,
     selection: ProjectionSelection,
     projector_name: ProjectorName,
-    behavior: ProjectionApplicationBehavior,
+    behaviors: VecDeque<ProjectionApplicationBehavior>,
+    retry_policy: ProjectionRetryPolicy,
     apply_barrier: Option<Arc<Barrier>>,
     application_attempts: Arc<AtomicU64>,
+    application_attempt_transactions: Arc<Mutex<Vec<String>>>,
+    retry_sleep_requests: Arc<Mutex<Vec<Duration>>>,
     hook_log: Arc<Mutex<Vec<ProjectionHookLogEntry>>>,
+    hook_attempts: Arc<AtomicU64>,
     commit_acknowledgement_proxy: Option<CommitAcknowledgementProxy>,
 }
 
@@ -531,6 +660,9 @@ impl PostgresAtomicFixture {
         let _ = query("INSERT INTO invoice_projection_effect (total) VALUES (0)")
             .execute(database.pool())
             .await?;
+        let _ = query("CREATE TABLE projection_attempts (position BIGINT NOT NULL)")
+            .execute(database.pool())
+            .await?;
         let projector_name = ProjectorName::try_new(format!("invoice-effect-{}", database.schema))
             .expect("schema-derived fixture projector name should be valid");
         Ok(Self {
@@ -541,10 +673,20 @@ impl PostgresAtomicFixture {
             source_id,
             selection: selection(),
             projector_name,
-            behavior: ProjectionApplicationBehavior::Apply,
+            behaviors: VecDeque::from([ProjectionApplicationBehavior::Apply]),
+            retry_policy: ProjectionRetryPolicy::new(
+                0,
+                Duration::from_millis(100),
+                2.0,
+                Duration::from_secs(30),
+            )
+            .expect("default fixture retry policy should be valid"),
             apply_barrier: None,
             application_attempts: Arc::new(AtomicU64::new(0)),
+            application_attempt_transactions: Arc::new(Mutex::new(Vec::new())),
+            retry_sleep_requests: Arc::new(Mutex::new(Vec::new())),
             hook_log: Arc::new(Mutex::new(Vec::new())),
+            hook_attempts: Arc::new(AtomicU64::new(0)),
             commit_acknowledgement_proxy: None,
         })
     }
@@ -580,6 +722,9 @@ impl PostgresAtomicFixture {
         &self,
         config: PostgresProjectionConfig,
     ) -> Result<ProjectionRunOutcome, FixtureError> {
+        let config = config.with_retry_sleeper(RecordingRetrySleeper {
+            requests: self.retry_sleep_requests.clone(),
+        });
         let source = self.source.clone();
         let store = self
             .commit_acknowledgement_proxy
@@ -587,10 +732,16 @@ impl PostgresAtomicFixture {
             .map_or_else(|| self.store.clone(), |proxy| proxy.store.clone());
         let projector = IncrementProjector {
             name: self.projector_name.clone(),
-            behavior: self.behavior,
+            behaviors: self.behaviors.clone(),
+            last_failure_decision: ProjectionFailureDecision::Fatal,
             apply_barrier: self.apply_barrier.clone(),
             application_attempts: self.application_attempts.clone(),
+            application_attempt_transactions: self.application_attempt_transactions.clone(),
+            destination_pool: self.database.clone_pool(),
+            source_id: self.source_id.clone(),
+            selection_id: self.selection.id().clone(),
             hook_log: self.hook_log.clone(),
+            hook_attempts: self.hook_attempts.clone(),
         };
         match timeout(
             RUN_TIMEOUT,
@@ -608,7 +759,8 @@ impl PostgresAtomicFixture {
     async fn run_batch_attempt_with_timeout(
         &self,
     ) -> Result<ProjectionAttemptObservation, FixtureError> {
-        let mut config = PostgresProjectionConfig::new(self.selection.clone());
+        let mut config = PostgresProjectionConfig::new(self.selection.clone())
+            .with_retry_policy(self.retry_policy.clone());
         if self.commit_acknowledgement_proxy.is_some() {
             config = config.with_retry_policy(
                 ProjectionRetryPolicy::new(
@@ -624,23 +776,34 @@ impl PostgresAtomicFixture {
         if let Some(proxy) = &self.commit_acknowledgement_proxy {
             proxy.await_committed_observation().await?;
         }
+        let requested_behavior = self.behaviors.front().copied();
         match result {
             Ok(outcome) => Ok(ProjectionAttemptObservation::Completed(convert_outcome(
                 outcome,
             ))),
             Err(FixtureError::Runner(error)) => Ok(ProjectionAttemptObservation::Failed(
-                classify_runner_error(error),
+                classify_runner_error(error, requested_behavior),
             )),
             Err(error) => Err(error),
         }
     }
 }
 
-fn classify_runner_error(error: TransactionalProjectionError) -> ProjectionFailureObservation {
+fn classify_runner_error(
+    error: TransactionalProjectionError,
+    requested_behavior: Option<ProjectionApplicationBehavior>,
+) -> ProjectionFailureObservation {
     match error {
-        TransactionalProjectionError::ApplicationFatal { position, .. } => {
-            ProjectionFailureObservation::ApplicationFatal { position }
+        TransactionalProjectionError::Application { position, .. } => {
+            if requested_behavior == Some(ProjectionApplicationBehavior::Fatal) {
+                ProjectionFailureObservation::Application { position }
+            } else {
+                ProjectionFailureObservation::ApplicationFatal { position }
+            }
         }
+        TransactionalProjectionError::RetryExhausted {
+            position, attempts, ..
+        } => ProjectionFailureObservation::RetryExhausted { position, attempts },
         TransactionalProjectionError::Progress { position, .. } => {
             ProjectionFailureObservation::Progress { position }
         }
@@ -650,6 +813,13 @@ fn classify_runner_error(error: TransactionalProjectionError) -> ProjectionFailu
         TransactionalProjectionError::CommitIndeterminate { position, .. } => {
             ProjectionFailureObservation::CommitIndeterminate { position }
         }
+        TransactionalProjectionError::AfterCommitFailed {
+            committed_position,
+            source,
+        } => ProjectionFailureObservation::AfterCommitFailed {
+            committed_position,
+            source: source.to_string(),
+        },
         TransactionalProjectionError::SourceIdentityMismatch { .. } => {
             ProjectionFailureObservation::SourceIdentityMismatch
         }
@@ -730,13 +900,43 @@ impl TransactionalProjectionFixture for PostgresAtomicFixture {
     }
 
     fn select_application_behavior(&mut self, behavior: ProjectionApplicationBehavior) {
-        self.behavior = behavior;
+        self.behaviors = match behavior {
+            ProjectionApplicationBehavior::Retry => VecDeque::from([
+                ProjectionApplicationBehavior::Retry,
+                ProjectionApplicationBehavior::Retry,
+                ProjectionApplicationBehavior::Retry,
+            ]),
+            ProjectionApplicationBehavior::RetryThenApply => VecDeque::from([
+                ProjectionApplicationBehavior::RetryThenApply,
+                ProjectionApplicationBehavior::Apply,
+            ]),
+            behavior => VecDeque::from([behavior]),
+        };
+    }
+
+    fn select_application_script(&mut self, behaviors: &[ProjectionApplicationBehavior]) {
+        self.behaviors = behaviors.iter().copied().collect();
+    }
+
+    fn configure_retry_policy(
+        &mut self,
+        max_retries: u32,
+        initial_delay: Duration,
+        multiplier: f64,
+        maximum_delay: Duration,
+    ) {
+        self.retry_policy =
+            ProjectionRetryPolicy::new(max_retries, initial_delay, multiplier, maximum_delay)
+                .expect("contract retry policy should be valid");
     }
 
     async fn run_batch(&mut self) -> Result<ContractRunOutcome, Self::Error> {
         Ok(convert_outcome(
-            self.run_with_timeout(PostgresProjectionConfig::new(self.selection.clone()))
-                .await?,
+            self.run_with_timeout(
+                PostgresProjectionConfig::new(self.selection.clone())
+                    .with_retry_policy(self.retry_policy.clone()),
+            )
+            .await?,
         ))
     }
 
@@ -819,6 +1019,29 @@ impl TransactionalProjectionFixture for PostgresAtomicFixture {
         Ok(self.application_attempts.load(Ordering::SeqCst))
     }
 
+    async fn application_attempt_transaction_tokens(&self) -> Result<Vec<String>, Self::Error> {
+        Ok(self
+            .application_attempt_transactions
+            .lock()
+            .expect("fixture transaction-token mutex should not be poisoned")
+            .clone())
+    }
+
+    async fn retry_sleep_requests(&self) -> Result<Vec<Duration>, Self::Error> {
+        Ok(self
+            .retry_sleep_requests
+            .lock()
+            .expect("fixture retry-sleep mutex should not be poisoned")
+            .clone())
+    }
+
+    async fn transaction_attempt_row_count(&self) -> Result<u64, Self::Error> {
+        let count = query_scalar::<_, i64>("SELECT COUNT(*) FROM projection_attempts")
+            .fetch_one(self.database.pool())
+            .await?;
+        Ok(u64::try_from(count).expect("fixture attempt row count should be nonnegative"))
+    }
+
     async fn progress(&self) -> Result<Option<ProjectionProgressObservation>, Self::Error> {
         let progress = self.store.progress(&self.projector_name).await?;
         Ok(progress.map(|progress| ProjectionProgressObservation {
@@ -834,6 +1057,10 @@ impl TransactionalProjectionFixture for PostgresAtomicFixture {
             .lock()
             .expect("fixture hook log mutex should not be poisoned")
             .clone())
+    }
+
+    async fn hook_attempt_count(&self) -> Result<u64, Self::Error> {
+        Ok(self.hook_attempts.load(Ordering::SeqCst))
     }
 
     async fn start_leadership_attempt(&mut self) -> Result<(), Self::Error> {
@@ -986,6 +1213,69 @@ fn transactional_projection_config_validates_and_preserves_every_builder_value()
         ProjectionRetryPolicy::new(0, Duration::ZERO, 0.5, Duration::ZERO),
         Err(ProjectionConfigurationError::InvalidRetryMultiplier),
     );
+    assert_eq!(
+        ProjectionRetryPolicy::new(u32::MAX, Duration::ZERO, 1.0, Duration::ZERO),
+        Err(ProjectionConfigurationError::TooManyRetries),
+    );
+}
+
+// Break caught: recording at future construction, dropping the configured sleeper during config
+// cloning, or bypassing the public accessor would make awaited retry-delay observation untruthful.
+#[tokio::test]
+async fn retry_sleeper_builder_and_clone_route_requested_durations() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let config =
+        PostgresProjectionConfig::new(selection()).with_retry_sleeper(RecordingRetrySleeper {
+            requests: requests.clone(),
+        });
+    let cloned = config.clone();
+
+    drop(config.retry_sleeper().sleep(Duration::from_millis(11)));
+    assert!(
+        requests
+            .lock()
+            .expect("fixture retry-sleep mutex should not be poisoned")
+            .is_empty(),
+        "constructing and dropping an unpolled sleep future must not record a delay",
+    );
+    config
+        .retry_sleeper()
+        .sleep(Duration::from_millis(17))
+        .await;
+    cloned
+        .retry_sleeper()
+        .sleep(Duration::from_millis(29))
+        .await;
+
+    assert_eq!(
+        *requests
+            .lock()
+            .expect("fixture retry-sleep mutex should not be poisoned"),
+        vec![Duration::from_millis(17), Duration::from_millis(29)],
+    );
+    assert!(format!("{config:?}").contains("RecordingRetrySleeper"));
+}
+
+// Break caught: hardcoding the fixture sentinel in the adapter classifier would discard the
+// actual application hook source and make distinct operational failures indistinguishable.
+#[test]
+fn after_commit_error_classifier_forwards_distinct_sources() {
+    let position = DeliveryPosition::new(NonZeroU64::new(7).expect("positive test position"));
+    for source_message in ["hook source alpha", "hook source beta"] {
+        assert_eq!(
+            classify_runner_error(
+                TransactionalProjectionError::AfterCommitFailed {
+                    committed_position: position,
+                    source: Box::new(std::io::Error::other(source_message)),
+                },
+                Some(ProjectionApplicationBehavior::AfterCommitFail),
+            ),
+            ProjectionFailureObservation::AfterCommitFailed {
+                committed_position: position,
+                source: source_message.to_owned(),
+            },
+        );
+    }
 }
 
 // Break caught: changing the component ledger identity can make destination migration state
@@ -1132,6 +1422,67 @@ async fn selection_identity_mismatch_stops_before_application_code() {
 async fn commit_acknowledgement_loss_is_indeterminate_without_after_commit_or_retry() {
     assert_fixture_contract(|fixture| Box::pin(commit_acknowledgement_loss_contract(fixture)))
         .await;
+}
+
+// Break caught: an unbounded retry loop, an off-by-one retry count, or retaining a failed
+// transaction would exceed the configured attempts or expose its transaction-scoped rows.
+#[tokio::test]
+async fn retry_exhaustion_is_bounded_and_rolls_back_every_attempt() {
+    assert_fixture_contract(|fixture| Box::pin(retry_exhaustion_contract(fixture))).await;
+}
+
+// Break caught: retrying in the failed transaction, or ignoring the maximum-delay cap, would
+// retain both attempt rows or exceed the fixture's bound before the successful application.
+#[tokio::test]
+async fn transient_retry_uses_a_fresh_transaction_and_capped_delay() {
+    assert_fixture_contract(|fixture| Box::pin(transient_retry_success_contract(fixture))).await;
+}
+
+// Break caught: reapplying from an in-memory cursor without reloading durable progress would
+// duplicate application work after another invocation committed the pending position.
+#[tokio::test]
+async fn retry_reloads_progress_before_reapplying() {
+    assert_fixture_contract(|fixture| Box::pin(retry_reloads_progress_contract(fixture))).await;
+}
+
+// Break caught: committing the failed application transaction, or counting skip as processed,
+// would expose its mutation instead of advancing only progress in a fresh transaction.
+#[tokio::test]
+async fn skip_rolls_back_application_work_and_advances_only_progress() {
+    assert_fixture_contract(|fixture| Box::pin(explicit_skip_contract(fixture))).await;
+}
+
+// Break caught: advancing the stopped position or losing prior run counters would make a caller
+// unable to resume the exact pending event with truthful processed and skipped totals.
+#[tokio::test]
+async fn stop_leaves_exact_position_pending_with_prior_counts() {
+    assert_fixture_contract(|fixture| Box::pin(stop_leaves_position_pending_contract(fixture)))
+        .await;
+}
+
+// Break caught: treating fatal as retry, skip, or stop would lose its typed application failure
+// or advance durable progress for a transaction that must remain pending.
+#[tokio::test]
+async fn fatal_returns_application_failure_without_progress_or_hook() {
+    assert_fixture_contract(|fixture| Box::pin(fatal_leaves_position_pending_contract(fixture)))
+        .await;
+}
+
+// Break caught: invoking the hook before commit or on a rollback path would let it observe
+// missing durable state or run for an event whose application transaction failed.
+#[tokio::test]
+async fn after_commit_observes_committed_state_and_is_suppressed_on_rollback() {
+    assert_fixture_contract(|fixture| {
+        Box::pin(after_commit_ordering_and_rollback_contract(fixture))
+    })
+    .await;
+}
+
+// Break caught: reapplying an event or replaying a failed in-process hook after its transaction
+// committed would duplicate non-idempotent application or notification work.
+#[tokio::test]
+async fn after_commit_failure_reports_committed_position_without_replay() {
+    assert_fixture_contract(|fixture| Box::pin(after_commit_failure_contract(fixture))).await;
 }
 
 // Break caught: deriving fixture projector names from a constant lets independent schemas collide

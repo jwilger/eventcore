@@ -1,5 +1,6 @@
 use std::io;
 use std::num::NonZeroU64;
+use std::time::Duration;
 
 use eventcore_types::{DeliveryPosition, DeliverySourceId, ProjectionSelectionId};
 use futures::FutureExt;
@@ -53,6 +54,15 @@ impl TransactionalProjectionFixture for ContractFixture {
 
     fn select_application_behavior(&mut self, _behavior: ProjectionApplicationBehavior) {}
 
+    fn configure_retry_policy(
+        &mut self,
+        _max_retries: u32,
+        _initial_delay: Duration,
+        _multiplier: f64,
+        _maximum_delay: Duration,
+    ) {
+    }
+
     async fn run_batch(&mut self) -> Result<ProjectionRunOutcome, Self::Error> {
         self.runs += 1;
         if self.runs == 1 || self.duplicates_on_redelivery {
@@ -104,6 +114,18 @@ impl TransactionalProjectionFixture for ContractFixture {
         Ok(self.runs)
     }
 
+    async fn application_attempt_transaction_tokens(&self) -> Result<Vec<String>, Self::Error> {
+        Ok(Vec::new())
+    }
+
+    async fn retry_sleep_requests(&self) -> Result<Vec<Duration>, Self::Error> {
+        Ok(Vec::new())
+    }
+
+    async fn transaction_attempt_row_count(&self) -> Result<u64, Self::Error> {
+        Ok(0)
+    }
+
     async fn progress(&self) -> Result<Option<ProjectionProgressObservation>, Self::Error> {
         Ok(Some(ProjectionProgressObservation {
             source_id: self.source_id.clone(),
@@ -114,6 +136,10 @@ impl TransactionalProjectionFixture for ContractFixture {
 
     async fn hook_log(&self) -> Result<Vec<ProjectionHookLogEntry>, Self::Error> {
         Ok(Vec::new())
+    }
+
+    async fn hook_attempt_count(&self) -> Result<u64, Self::Error> {
+        Ok(0)
     }
 
     async fn start_leadership_attempt(&mut self) -> Result<(), Self::Error> {

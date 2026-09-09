@@ -46,7 +46,8 @@ pub use projections::{
     PostgresProjectionMode, PostgresProjectionSource, PostgresProjectionSourceError,
     PostgresProjectionStore, PostgresProjector, ProjectionConfigurationError,
     ProjectionFailureContext, ProjectionFailureDecision, ProjectionProgress, ProjectionRetryPolicy,
-    ProjectionRunOutcome, TransactionalProjectionError, run_transactional_projection,
+    ProjectionRetrySleeper, ProjectionRunOutcome, TokioProjectionRetrySleeper,
+    TransactionalProjectionError, run_transactional_projection,
 };
 
 /// Errors that can occur when creating a [`PostgresEventStore`].

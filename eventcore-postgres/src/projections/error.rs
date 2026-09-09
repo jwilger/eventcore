@@ -39,7 +39,7 @@ pub enum TransactionalProjectionError {
     },
     /// The projector chose the `Fatal` decision for an application error.
     #[error("transactional projection application failed at position {position:?}")]
-    ApplicationFatal {
+    Application {
         /// Failed position.
         position: DeliveryPosition,
         /// Underlying application error.
@@ -51,6 +51,8 @@ pub enum TransactionalProjectionError {
     RetryExhausted {
         /// Failed position.
         position: DeliveryPosition,
+        /// Total application invocations, including the initial attempt.
+        attempts: u32,
         /// Last application error.
         #[source]
         source: BoxedProjectionError,
@@ -108,10 +110,12 @@ pub enum TransactionalProjectionError {
         source: ProjectionConfigurationError,
     },
     /// A confirmed commit succeeded but its after-commit action failed.
-    #[error("transactional projection after-commit action failed at position {position:?}")]
-    AfterCommit {
+    #[error(
+        "transactional projection after-commit action failed at position {committed_position:?}"
+    )]
+    AfterCommitFailed {
         /// Already committed position.
-        position: DeliveryPosition,
+        committed_position: DeliveryPosition,
         /// Underlying hook error.
         #[source]
         source: BoxedProjectionError,

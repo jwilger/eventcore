@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::future::Future;
+use std::time::Duration;
 
 use eventcore_types::{DeliveryPosition, DeliverySourceId, ProjectionSelectionId};
 use serde_json::Value;
@@ -17,10 +18,18 @@ pub enum ProjectionApplicationBehavior {
     ApplyThenFail,
     /// Ask the runner to retry an application failure.
     Retry,
+    /// Fail the first application attempt with retry, then apply successfully.
+    RetryThenApply,
+    /// Request retry after another runner has durably advanced the same progress.
+    RetryWithExternallyCommittedProgress,
     /// Ask the runner to skip an application failure.
     Skip,
     /// Ask the runner to stop at an application failure.
     Stop,
+    /// Return an application failure that must be reported as fatal.
+    Fatal,
+    /// Commit the effect and progress, then fail the after-commit action.
+    AfterCommitFail,
 }
 
 /// Execution mode selected through a fixture's public behavior boundary.
@@ -73,6 +82,18 @@ pub enum ProjectionFailureObservation {
         /// Position left pending by the failed application mutation.
         position: DeliveryPosition,
     },
+    /// The application explicitly classified its failure as fatal.
+    Application {
+        /// Position left pending by the fatal application failure.
+        position: DeliveryPosition,
+    },
+    /// Retry attempts were exhausted at a known pending position.
+    RetryExhausted {
+        /// Position left pending after all attempts rolled back.
+        position: DeliveryPosition,
+        /// Exact number of application invocations, including the initial attempt.
+        attempts: u32,
+    },
     /// Progress persistence failed at a known pending delivery position.
     Progress {
         /// Position whose effect and progress transaction was rolled back.
@@ -96,6 +117,13 @@ pub enum ProjectionFailureObservation {
     },
     /// The backend exposed an indeterminate commit but omitted its pending position.
     CommitIndeterminateWithoutPosition,
+    /// A confirmed commit succeeded but its after-commit action failed.
+    AfterCommitFailed {
+        /// Position already committed before the action ran.
+        committed_position: DeliveryPosition,
+        /// Stable public evidence forwarded from the failed hook.
+        source: String,
+    },
     /// The backend exposed a generic identity mismatch without identifying the bad binding.
     UndifferentiatedIdentityMismatch,
     /// The backend returned a public failure outside this recovery contract.
@@ -135,6 +163,22 @@ pub trait TransactionalProjectionFixture {
     /// Selects the behavior used when the projection receives an event.
     fn select_application_behavior(&mut self, behavior: ProjectionApplicationBehavior);
 
+    /// Selects per-invocation application behavior in order.
+    fn select_application_script(&mut self, behaviors: &[ProjectionApplicationBehavior]) {
+        for &behavior in behaviors {
+            self.select_application_behavior(behavior);
+        }
+    }
+
+    /// Configures the bounded retry policy used by subsequent finite runs.
+    fn configure_retry_policy(
+        &mut self,
+        max_retries: u32,
+        initial_delay: Duration,
+        multiplier: f64,
+        maximum_delay: Duration,
+    );
+
     /// Runs one finite batch projection catch-up.
     fn run_batch(
         &mut self,
@@ -172,6 +216,21 @@ pub trait TransactionalProjectionFixture {
     /// Reads the number of in-memory applications attempted by the runner.
     fn application_attempt_count(&self) -> impl Future<Output = Result<u64, Self::Error>> + Send;
 
+    /// Reads opaque top-level transaction identities observed through each apply transaction.
+    fn application_attempt_transaction_tokens(
+        &self,
+    ) -> impl Future<Output = Result<Vec<String>, Self::Error>> + Send;
+
+    /// Reads retry durations requested through the fixture's injected sleeper.
+    fn retry_sleep_requests(
+        &self,
+    ) -> impl Future<Output = Result<Vec<Duration>, Self::Error>> + Send;
+
+    /// Reads durable attempt rows written through the runner-supplied transaction.
+    fn transaction_attempt_row_count(
+        &self,
+    ) -> impl Future<Output = Result<u64, Self::Error>> + Send;
+
     /// Reads public durable projection progress.
     fn progress(
         &self,
@@ -181,6 +240,9 @@ pub trait TransactionalProjectionFixture {
     fn hook_log(
         &self,
     ) -> impl Future<Output = Result<Vec<ProjectionHookLogEntry>, Self::Error>> + Send;
+
+    /// Reads the number of after-commit actions invoked, including failures.
+    fn hook_attempt_count(&self) -> impl Future<Output = Result<u64, Self::Error>> + Send;
 
     /// Starts a competing leadership attempt.
     fn start_leadership_attempt(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
@@ -235,6 +297,9 @@ pub enum ProjectionRunOutcome {
         skipped: u64,
     },
 }
+
+/// Stable source evidence emitted by the contract's deliberately failing hook.
+pub const AFTER_COMMIT_FAILURE_SENTINEL: &str = "fixture after-commit sentinel";
 
 /// Runs the reusable atomic effect-and-progress behavior contract.
 pub async fn transactional_projection_contract<F>(fixture: &mut F) -> Result<(), F::Error>
@@ -575,5 +640,285 @@ where
         fixture.hook_log().await?.is_empty(),
         "recovery must not replay the after-commit hook missed by the unknown acknowledgement"
     );
+    Ok(())
+}
+
+/// Verifies bounded retry exhaustion and rollback of every failed attempt transaction.
+pub async fn retry_exhaustion_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionFixture,
+{
+    let position = fixture
+        .append_values(&[Value::Object(Default::default())])
+        .await?[0];
+    fixture.select_application_behavior(ProjectionApplicationBehavior::Retry);
+    fixture.configure_retry_policy(2, Duration::from_secs(60 * 60), 3.0, Duration::ZERO);
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Failed(ProjectionFailureObservation::RetryExhausted {
+            position,
+            attempts: 3,
+        }),
+        "retry exhaustion must report the exact pending position and initial-plus-retry count",
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 3);
+    let transaction_tokens = fixture.application_attempt_transaction_tokens().await?;
+    assert_eq!(transaction_tokens.len(), 3);
+    assert!(
+        transaction_tokens
+            .iter()
+            .enumerate()
+            .all(|(index, token)| transaction_tokens[..index].iter().all(|seen| seen != token)),
+        "every failed retry must use a distinct top-level transaction",
+    );
+    assert_eq!(fixture.transaction_attempt_row_count().await?, 0);
+    assert_eq!(fixture.effect_count().await?, 0);
+    assert_eq!(fixture.progress().await?, None);
+    assert!(fixture.hook_log().await?.is_empty());
+    assert_eq!(fixture.hook_attempt_count().await?, 0);
+    Ok(())
+}
+
+/// Verifies a transient retry rolls back its failed transaction and commits only once.
+pub async fn transient_retry_success_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionFixture,
+{
+    let position = fixture
+        .append_values(&[Value::Object(Default::default())])
+        .await?[0];
+    fixture.select_application_behavior(ProjectionApplicationBehavior::RetryThenApply);
+    fixture.configure_retry_policy(
+        2,
+        Duration::from_secs(60 * 60),
+        2.0,
+        Duration::from_millis(50),
+    );
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Completed(ProjectionRunOutcome::CaughtUp {
+            processed: 1,
+            skipped: 0,
+            through: Some(position),
+        }),
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 2);
+    let transaction_tokens = fixture.application_attempt_transaction_tokens().await?;
+    assert_eq!(transaction_tokens.len(), 2);
+    assert_ne!(
+        transaction_tokens[0], transaction_tokens[1],
+        "a retry must begin a fresh top-level transaction, not a savepoint",
+    );
+    assert_eq!(
+        fixture.retry_sleep_requests().await?,
+        vec![Duration::from_millis(50)],
+        "retry must request the exact capped nonzero delay through the configured sleeper",
+    );
+    assert_eq!(
+        fixture.transaction_attempt_row_count().await?,
+        1,
+        "only the successful fresh transaction may retain its attempt row",
+    );
+    assert_eq!(fixture.effect_count().await?, 1);
+    assert_eq!(
+        fixture.progress().await?.map(|progress| progress.position),
+        Some(position),
+    );
+    assert_eq!(
+        fixture.hook_log().await?,
+        vec![ProjectionHookLogEntry::Committed(position)],
+    );
+    assert_eq!(fixture.hook_attempt_count().await?, 1);
+    Ok(())
+}
+
+/// Verifies a retry reloads durable progress before invoking application code again.
+pub async fn retry_reloads_progress_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionFixture,
+{
+    let position = fixture
+        .append_values(&[Value::Object(Default::default())])
+        .await?[0];
+    fixture.select_application_behavior(
+        ProjectionApplicationBehavior::RetryWithExternallyCommittedProgress,
+    );
+    fixture.configure_retry_policy(2, Duration::ZERO, 1.0, Duration::ZERO);
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Completed(ProjectionRunOutcome::CaughtUp {
+            processed: 0,
+            skipped: 0,
+            through: Some(position),
+        }),
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 1);
+    assert_eq!(fixture.transaction_attempt_row_count().await?, 0);
+    assert_eq!(fixture.effect_count().await?, 0);
+    assert_eq!(
+        fixture.progress().await?.map(|progress| progress.position),
+        Some(position),
+    );
+    assert_eq!(fixture.hook_attempt_count().await?, 0);
+    Ok(())
+}
+
+/// Verifies explicit skip rolls back failed application work before advancing only progress.
+pub async fn explicit_skip_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionFixture,
+{
+    let position = fixture
+        .append_values(&[Value::Object(Default::default())])
+        .await?[0];
+    fixture.select_application_behavior(ProjectionApplicationBehavior::Skip);
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Completed(ProjectionRunOutcome::CaughtUp {
+            processed: 0,
+            skipped: 1,
+            through: Some(position),
+        }),
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 1);
+    assert_eq!(fixture.transaction_attempt_row_count().await?, 0);
+    assert_eq!(fixture.effect_count().await?, 0);
+    assert_eq!(
+        fixture.progress().await?.map(|progress| progress.position),
+        Some(position),
+    );
+    assert!(fixture.hook_log().await?.is_empty());
+    assert_eq!(fixture.hook_attempt_count().await?, 0);
+    Ok(())
+}
+
+/// Verifies stop preserves prior counts while leaving its exact position pending.
+pub async fn stop_leaves_position_pending_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionFixture,
+{
+    let positions = fixture
+        .append_values(&[
+            Value::Object(Default::default()),
+            Value::Object(Default::default()),
+            Value::Object(Default::default()),
+        ])
+        .await?;
+    fixture.select_application_script(&[
+        ProjectionApplicationBehavior::Apply,
+        ProjectionApplicationBehavior::Skip,
+        ProjectionApplicationBehavior::Stop,
+    ]);
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Completed(ProjectionRunOutcome::Stopped {
+            position: positions[2],
+            processed: 1,
+            skipped: 1,
+        }),
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 3);
+    assert_eq!(fixture.transaction_attempt_row_count().await?, 1);
+    assert_eq!(fixture.effect_count().await?, 1);
+    assert_eq!(
+        fixture.progress().await?.map(|progress| progress.position),
+        Some(positions[1]),
+    );
+    assert_eq!(
+        fixture.hook_log().await?,
+        vec![ProjectionHookLogEntry::Committed(positions[0])],
+    );
+    assert_eq!(fixture.hook_attempt_count().await?, 1);
+    Ok(())
+}
+
+/// Verifies fatal application failure leaves its exact position pending without a hook.
+pub async fn fatal_leaves_position_pending_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionFixture,
+{
+    let position = fixture
+        .append_values(&[Value::Object(Default::default())])
+        .await?[0];
+    fixture.select_application_behavior(ProjectionApplicationBehavior::Fatal);
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Failed(ProjectionFailureObservation::Application {
+            position,
+        }),
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 1);
+    assert_eq!(fixture.transaction_attempt_row_count().await?, 0);
+    assert_eq!(fixture.effect_count().await?, 0);
+    assert_eq!(fixture.progress().await?, None);
+    assert!(fixture.hook_log().await?.is_empty());
+    assert_eq!(fixture.hook_attempt_count().await?, 0);
+    Ok(())
+}
+
+/// Verifies after-commit observes durable state and never runs for rolled-back work.
+pub async fn after_commit_ordering_and_rollback_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionFixture,
+{
+    let first = fixture
+        .append_values(&[Value::Object(Default::default())])
+        .await?[0];
+    fixture.select_application_behavior(ProjectionApplicationBehavior::Apply);
+    let _ = fixture.run_batch().await?;
+    assert_eq!(
+        fixture.hook_log().await?,
+        vec![ProjectionHookLogEntry::Committed(first)],
+        "the hook may log success only after observing committed effect and progress",
+    );
+
+    let _second = fixture
+        .append_values(&[Value::Object(Default::default())])
+        .await?[0];
+    fixture.select_application_behavior(ProjectionApplicationBehavior::ApplyThenFail);
+    let _ = fixture.run_batch_attempt().await?;
+    assert_eq!(fixture.hook_attempt_count().await?, 1);
+    assert_eq!(fixture.hook_log().await?.len(), 1);
+    Ok(())
+}
+
+/// Verifies hook failure reports committed progress and is never replayed on recovery.
+pub async fn after_commit_failure_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionFixture,
+{
+    let position = fixture
+        .append_values(&[Value::Object(Default::default())])
+        .await?[0];
+    fixture.select_application_behavior(ProjectionApplicationBehavior::AfterCommitFail);
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Failed(ProjectionFailureObservation::AfterCommitFailed {
+            committed_position: position,
+            source: AFTER_COMMIT_FAILURE_SENTINEL.to_owned(),
+        }),
+    );
+    assert_eq!(fixture.effect_count().await?, 1);
+    assert_eq!(
+        fixture.progress().await?.map(|progress| progress.position),
+        Some(position),
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 1);
+    assert_eq!(fixture.hook_attempt_count().await?, 1);
+    assert!(fixture.hook_log().await?.is_empty());
+
+    fixture.select_application_behavior(ProjectionApplicationBehavior::Apply);
+    assert_eq!(
+        fixture.run_batch().await?,
+        ProjectionRunOutcome::CaughtUp {
+            processed: 0,
+            skipped: 0,
+            through: Some(position),
+        },
+    );
+    assert_eq!(fixture.effect_count().await?, 1);
+    assert_eq!(fixture.application_attempt_count().await?, 1);
+    assert_eq!(fixture.hook_attempt_count().await?, 1);
+    assert!(fixture.hook_log().await?.is_empty());
     Ok(())
 }
