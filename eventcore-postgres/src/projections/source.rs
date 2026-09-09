@@ -5,7 +5,7 @@ use eventcore_types::{
     PersistedEventEnvelope, PersistedEventId, ProjectionSelection, ProjectionSource,
     ProjectionStreamFilter, StreamId, StreamVersion,
 };
-use serde_json::{Value, value::to_raw_value};
+use serde_json::value::RawValue;
 use sqlx::{Pool, Postgres, QueryBuilder, Row, postgres::PgPoolOptions, query_scalar};
 use thiserror::Error;
 use uuid::Uuid;
@@ -117,7 +117,8 @@ impl ProjectionSource for PostgresProjectionSource {
     ) -> Result<Vec<PersistedEventEnvelope>, Self::Error> {
         let mut query = QueryBuilder::<Postgres>::new(
             "SELECT delivery.delivery_position, events.event_id, events.stream_id, \
-             events.stream_version, events.event_type, events.event_data, events.metadata \
+             events.stream_version, events.event_type, events.event_data::TEXT AS event_data, \
+             events.metadata::TEXT AS metadata \
              FROM eventcore_projection_delivery AS delivery \
              INNER JOIN eventcore_events AS events ON events.event_id = delivery.event_id \
              WHERE TRUE",
@@ -138,9 +139,10 @@ impl ProjectionSource for PostgresProjectionSource {
             ProjectionStreamFilter::All => {}
             ProjectionStreamFilter::Prefix(prefix) => {
                 let _ = query
-                    .push(" AND events.stream_id LIKE ")
+                    .push(" AND LEFT(events.stream_id, char_length(")
                     .push_bind(prefix.as_ref().to_string())
-                    .push(" || '%'");
+                    .push(")) = ")
+                    .push_bind(prefix.as_ref().to_string());
             }
             ProjectionStreamFilter::Pattern(pattern) => {
                 let _ = query
@@ -195,10 +197,10 @@ fn envelope_from_row(
     let event_type: String = row
         .try_get("event_type")
         .map_err(PostgresProjectionSourceError::ReadFailed)?;
-    let payload: Value = row
+    let payload: String = row
         .try_get("event_data")
         .map_err(PostgresProjectionSourceError::ReadFailed)?;
-    let metadata: Value = row
+    let metadata: String = row
         .try_get("metadata")
         .map_err(PostgresProjectionSourceError::ReadFailed)?;
 
@@ -220,19 +222,18 @@ fn envelope_from_row(
             detail: error.to_string(),
         }
     })?;
-    let payload = to_raw_value(&payload).map_err(|error| {
+    let payload = RawValue::from_string(payload).map_err(|error| {
         PostgresProjectionSourceError::InvalidPersistedValue {
             field: "event_data",
             detail: error.to_string(),
         }
     })?;
-    let metadata = to_raw_value(&metadata).map_err(|error| {
+    let metadata = RawValue::from_string(metadata).map_err(|error| {
         PostgresProjectionSourceError::InvalidPersistedValue {
             field: "metadata",
             detail: error.to_string(),
         }
     })?;
-
     Ok(PersistedEventEnvelope::new(
         source_id,
         delivery_position(position)?,
@@ -282,7 +283,8 @@ fn glob_to_anchored_regex(glob: &str) -> String {
             '[' => {
                 let mut class = String::new();
                 let mut closed = false;
-                if matches!(chars.peek(), Some('!')) {
+                let negated = matches!(chars.peek(), Some('!'));
+                if negated {
                     let _ = chars.next();
                     class.push('^');
                 }
@@ -295,7 +297,15 @@ fn glob_to_anchored_regex(glob: &str) -> String {
                 }
                 if closed {
                     regex.push('[');
-                    regex.push_str(&class);
+                    for (index, class_character) in class.chars().enumerate() {
+                        if !negated && index == 0 && class_character == '^' {
+                            regex.push_str("\\^");
+                        } else if class_character == '\\' {
+                            regex.push_str("\\\\");
+                        } else {
+                            regex.push(class_character);
+                        }
+                    }
                     regex.push(']');
                 } else {
                     regex.push_str("\\[");

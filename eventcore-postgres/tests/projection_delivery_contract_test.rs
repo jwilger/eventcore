@@ -101,6 +101,28 @@ async fn insert_event<'e, E>(
     .expect("fixture event insert should succeed");
 }
 
+async fn insert_event_with_raw_json(
+    pool: &sqlx::Pool<Postgres>,
+    event_id: Uuid,
+    stream_id: &str,
+    event_type: &str,
+    payload: &str,
+    metadata: &str,
+) {
+    let _ = query(
+        "INSERT INTO eventcore_events (event_id, stream_id, event_type, event_data, metadata) \
+         VALUES ($1, $2, $3, CAST($4 AS JSONB), CAST($5 AS JSONB))",
+    )
+    .bind(event_id)
+    .bind(stream_id)
+    .bind(event_type)
+    .bind(payload)
+    .bind(metadata)
+    .execute(pool)
+    .await
+    .expect("fixture raw JSON event insert should succeed");
+}
+
 // Break caught: treating an empty source as having a synthetic checkpoint would make a first
 // batch look nonempty and could advance projection progress without a persisted event.
 #[tokio::test]
@@ -417,6 +439,123 @@ async fn prefix_pattern_and_event_type_filters_apply_before_page_limit() {
     pool.cleanup().await;
 }
 
+// Break caught: using an unescaped SQL LIKE predicate makes StreamPrefix metacharacters select
+// non-prefix streams, so unrelated events can consume a selected page before the literal match.
+#[tokio::test]
+async fn prefix_filter_treats_underscore_percent_and_backslash_as_literal_characters() {
+    let (pool, source) = migrated_source().await;
+    let underscore_wildcard_id = Uuid::now_v7();
+    let percent_wildcard_id = Uuid::now_v7();
+    let backslash_escape_id = Uuid::now_v7();
+    let literal_prefix_id = Uuid::now_v7();
+
+    insert_event(
+        pool.pool(),
+        underscore_wildcard_id,
+        "invoiceX%\\underscore-wildcard",
+        PROJECTED_EVENT_TYPE,
+        serde_json::json!({"match": "underscore wildcard only"}),
+    )
+    .await;
+    insert_event(
+        pool.pool(),
+        percent_wildcard_id,
+        "invoice_abc\\percent-wildcard",
+        PROJECTED_EVENT_TYPE,
+        serde_json::json!({"match": "percent wildcard only"}),
+    )
+    .await;
+    insert_event(
+        pool.pool(),
+        backslash_escape_id,
+        "invoice_%xbackslash-escape",
+        PROJECTED_EVENT_TYPE,
+        serde_json::json!({"match": "backslash escape only"}),
+    )
+    .await;
+    insert_event(
+        pool.pool(),
+        literal_prefix_id,
+        "invoice_%\\literal-prefix",
+        PROJECTED_EVENT_TYPE,
+        serde_json::json!({"match": "literal prefix"}),
+    )
+    .await;
+
+    let literal_selection = selection(
+        "literal-prefix-v1",
+        ProjectionStreamFilter::Prefix(
+            StreamPrefix::try_new("invoice_%\\").expect("fixture prefix should be valid"),
+        ),
+        &[PROJECTED_EVENT_TYPE],
+    );
+    let page = source
+        .read_envelopes(
+            &literal_selection,
+            None,
+            DeliveryUpperBound::Unbounded,
+            BatchSize::new(1),
+        )
+        .await
+        .expect("literal-prefix page should be readable");
+
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].event_id(), PersistedEventId::new(literal_prefix_id));
+
+    pool.cleanup().await;
+}
+
+// Break caught: translating a leading `^` in a glob character class directly into a PostgreSQL
+// regex class changes it from a literal glob member into regex negation and selects the wrong stream.
+#[tokio::test]
+async fn pattern_filter_preserves_literal_caret_character_class_semantics() {
+    let (pool, source) = migrated_source().await;
+    let regex_negation_only_id = Uuid::now_v7();
+    let literal_caret_id = Uuid::now_v7();
+    let pattern = StreamPattern::try_new("invoice::[^x]").expect("fixture pattern should be valid");
+
+    assert!(pattern.matches("invoice::^"));
+    assert!(!pattern.matches("invoice::a"));
+    assert!(pattern.matches("invoice::x"));
+
+    insert_event(
+        pool.pool(),
+        regex_negation_only_id,
+        "invoice::a",
+        PROJECTED_EVENT_TYPE,
+        serde_json::json!({"match": "regex negation only"}),
+    )
+    .await;
+    insert_event(
+        pool.pool(),
+        literal_caret_id,
+        "invoice::^",
+        PROJECTED_EVENT_TYPE,
+        serde_json::json!({"match": "literal caret"}),
+    )
+    .await;
+
+    let pattern_selection = selection(
+        "literal-caret-pattern-v1",
+        ProjectionStreamFilter::Pattern(pattern),
+        &[PROJECTED_EVENT_TYPE],
+    );
+    let page = source
+        .read_envelopes(
+            &pattern_selection,
+            None,
+            DeliveryUpperBound::Unbounded,
+            BatchSize::new(1),
+        )
+        .await
+        .expect("literal-caret pattern page should be readable");
+
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].event_id(), PersistedEventId::new(literal_caret_id));
+
+    pool.cleanup().await;
+}
+
 // Break caught: requiring a selected row at the global frontier would make a finite batch fail
 // to certify catch-up whenever its final persisted event is intentionally unselected.
 #[tokio::test]
@@ -535,6 +674,45 @@ async fn storage_valid_but_application_malformed_payload_remains_visible_as_raw_
         serde_json::from_str::<serde_json::Value>(page[0].payload().get())
             .expect("payload should remain structurally valid JSON"),
         serde_json::json!({"missing_expected_invoice_fields": true})
+    );
+
+    pool.cleanup().await;
+}
+
+// Break caught: decoding JSONB through serde_json::Value rounds values outside its default
+// integer representation before the source gives the selected envelope to application code.
+#[tokio::test]
+async fn source_preserves_precise_jsonb_numbers_in_payload_and_metadata() {
+    let (pool, source) = migrated_source().await;
+    let event_id = Uuid::now_v7();
+    insert_event_with_raw_json(
+        pool.pool(),
+        event_id,
+        "invoice::precise-json",
+        PROJECTED_EVENT_TYPE,
+        r#"{"payload_number": 18446744073709551617}"#,
+        r#"{"metadata_number": 18446744073709551617}"#,
+    )
+    .await;
+
+    let page = source
+        .read_envelopes(
+            &all_projected(),
+            None,
+            DeliveryUpperBound::Unbounded,
+            BatchSize::new(1),
+        )
+        .await
+        .expect("precise raw envelope should be readable");
+
+    assert_eq!(page[0].event_id(), PersistedEventId::new(event_id));
+    assert_eq!(
+        page[0].payload().get(),
+        r#"{"payload_number": 18446744073709551617}"#
+    );
+    assert_eq!(
+        page[0].metadata().get(),
+        r#"{"metadata_number": 18446744073709551617}"#
     );
 
     pool.cleanup().await;
@@ -662,6 +840,45 @@ async fn direct_legacy_client_writes_are_delivered_after_source_migration() {
     assert_eq!(page[0].event_id(), PersistedEventId::new(event_id));
 
     pool.cleanup().await;
+}
+
+// Break caught: a trigger function that resolves delivery tables through the legacy writer's
+// search path fails after source migration owns those tables in a different schema.
+#[tokio::test]
+async fn legacy_writer_with_a_different_search_path_is_delivered_after_source_migration() {
+    let database = projection_delivery::create_split_search_path_test_database().await;
+    PostgresEventStore::from_pool(database.legacy_pool().clone())
+        .migrate()
+        .await;
+    let source = PostgresProjectionSource::from_pool(database.source_pool(), source_id());
+    source
+        .migrate()
+        .await
+        .expect("source migration should install delivery tables in the source schema");
+    let event_id = Uuid::now_v7();
+
+    insert_event(
+        database.legacy_pool(),
+        event_id,
+        "invoice::legacy-search-path",
+        PROJECTED_EVENT_TYPE,
+        serde_json::json!({"writer": "legacy search path"}),
+    )
+    .await;
+
+    let page = source
+        .read_envelopes(
+            &all_projected(),
+            None,
+            DeliveryUpperBound::Unbounded,
+            BatchSize::new(1),
+        )
+        .await
+        .expect("legacy writer event should be delivered through the source search path");
+
+    assert_eq!(page[0].event_id(), PersistedEventId::new(event_id));
+
+    database.cleanup().await;
 }
 
 // Break caught: recording the source migration in SQLx's shared ledger would make a 2.0.1 event

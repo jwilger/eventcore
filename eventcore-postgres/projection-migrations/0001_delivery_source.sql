@@ -84,6 +84,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+ALTER FUNCTION eventcore_projection_assign_delivery_positions() SET search_path FROM CURRENT;
+
 DROP TRIGGER IF EXISTS eventcore_projection_delivery_trigger ON eventcore_events;
 
 CREATE TRIGGER eventcore_projection_delivery_trigger
