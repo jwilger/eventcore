@@ -40,6 +40,9 @@ use thiserror::Error;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
+pub mod projections;
+pub use projections::{PostgresProjectionSource, PostgresProjectionSourceError};
+
 /// Errors that can occur when creating a [`PostgresEventStore`].
 #[derive(Debug, Error)]
 pub enum PostgresEventStoreError {
