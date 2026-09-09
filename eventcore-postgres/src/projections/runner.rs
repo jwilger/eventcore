@@ -6,8 +6,8 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use super::{
-    AfterCommit, PostgresProjectionConfig, PostgresProjectionStore, PostgresProjector,
-    ProjectionFailureContext, ProjectionFailureDecision, ProjectionLeader,
+    AfterCommit, PostgresProjectionConfig, PostgresProjectionMode, PostgresProjectionStore,
+    PostgresProjector, ProjectionFailureContext, ProjectionFailureDecision, ProjectionLeader,
     TransactionalProjectionError,
 };
 
@@ -16,6 +16,11 @@ enum EnvelopeResult {
     Skipped,
     Suppressed,
     Stopped,
+}
+
+enum DrainCycleOutcome {
+    CaughtUp(Option<DeliveryPosition>),
+    Stopped(DeliveryPosition),
 }
 
 /// Observable result of a transactional projection run.
@@ -64,70 +69,152 @@ where
     S: ProjectionSource,
 {
     async move {
-        let through = source.high_watermark().await.map_err(source_error)?;
-        let Some(through) = through else {
-            return Ok(ProjectionRunOutcome::CaughtUp {
-                processed: 0,
-                skipped: 0,
-                through: None,
-            });
-        };
-
         let projector_name = projector.name().clone();
         let mut leader = store.acquire_leader(&projector_name).await?;
-        let mut after = None;
+        let mut after = load_validated_progress(
+            &mut leader,
+            &projector_name,
+            source.source_id(),
+            config.selection().id(),
+        )
+        .await?;
         let mut processed = 0;
         let mut skipped = 0;
 
         loop {
-            let envelopes = source
-                .read_envelopes(
-                    config.selection(),
-                    after,
-                    DeliveryUpperBound::Inclusive(through),
-                    config.batch_size(),
-                )
-                .await
-                .map_err(source_error)?;
-            if envelopes.is_empty() {
-                break;
-            }
+            let cycle = drain_cycle(
+                &mut projector,
+                &mut leader,
+                &projector_name,
+                source,
+                &config,
+                &mut after,
+                &mut processed,
+                &mut skipped,
+            )
+            .await?;
+            let through = match cycle {
+                DrainCycleOutcome::CaughtUp(through) => through,
+                DrainCycleOutcome::Stopped(position) => {
+                    leader.release().await?;
+                    return Ok(ProjectionRunOutcome::Stopped {
+                        position,
+                        processed,
+                        skipped,
+                    });
+                }
+            };
 
-            for envelope in envelopes {
-                let position = envelope.position();
-                after = Some(position);
-                match process_envelope(
-                    &mut projector,
-                    &mut leader,
-                    &projector_name,
-                    source,
-                    &config,
-                    envelope,
-                )
-                .await?
-                {
-                    EnvelopeResult::Processed => processed += 1,
-                    EnvelopeResult::Skipped => skipped += 1,
-                    EnvelopeResult::Suppressed => {}
-                    EnvelopeResult::Stopped => {
-                        leader.release().await?;
-                        return Ok(ProjectionRunOutcome::Stopped {
-                            position,
-                            processed,
-                            skipped,
-                        });
+            match config.mode() {
+                PostgresProjectionMode::Batch => {
+                    leader.release().await?;
+                    return Ok(ProjectionRunOutcome::CaughtUp {
+                        processed,
+                        skipped,
+                        through,
+                    });
+                }
+                PostgresProjectionMode::Continuous(cancellation) => {
+                    tokio::select! {
+                        () = config
+                            .poll_sleeper()
+                            .sleep(config.continuous_poll_interval()) => {}
+                        () = cancellation.cancelled() => {
+                            leader.release().await?;
+                            return Ok(ProjectionRunOutcome::Cancelled { processed, skipped });
+                        }
                     }
                 }
             }
         }
-
-        leader.release().await?;
-        Ok(ProjectionRunOutcome::CaughtUp {
-            processed,
-            skipped,
-            through: Some(through),
-        })
     }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the drain cycle makes runner ownership and cumulative state explicit"
+)]
+async fn drain_cycle<P, S>(
+    projector: &mut P,
+    leader: &mut ProjectionLeader,
+    projector_name: &eventcore_types::ProjectorName,
+    source: &S,
+    config: &PostgresProjectionConfig,
+    after: &mut Option<DeliveryPosition>,
+    processed: &mut u64,
+    skipped: &mut u64,
+) -> Result<DrainCycleOutcome, TransactionalProjectionError>
+where
+    P: PostgresProjector,
+    S: ProjectionSource,
+{
+    let through = source.high_watermark().await.map_err(source_error)?;
+    let Some(through) = through else {
+        return Ok(DrainCycleOutcome::CaughtUp(None));
+    };
+
+    loop {
+        let envelopes = source
+            .read_envelopes(
+                config.selection(),
+                *after,
+                DeliveryUpperBound::Inclusive(through),
+                config.batch_size(),
+            )
+            .await
+            .map_err(source_error)?;
+        if envelopes.is_empty() {
+            return Ok(DrainCycleOutcome::CaughtUp(Some(through)));
+        }
+
+        for envelope in envelopes {
+            let position = envelope.position();
+            *after = Some(position);
+            match process_envelope(projector, leader, projector_name, source, config, envelope)
+                .await?
+            {
+                EnvelopeResult::Processed => *processed += 1,
+                EnvelopeResult::Skipped => *skipped += 1,
+                EnvelopeResult::Suppressed => {}
+                EnvelopeResult::Stopped => return Ok(DrainCycleOutcome::Stopped(position)),
+            }
+        }
+    }
+}
+
+async fn load_validated_progress(
+    leader: &mut ProjectionLeader,
+    projector_name: &eventcore_types::ProjectorName,
+    source_id: &eventcore_types::DeliverySourceId,
+    selection_id: &eventcore_types::ProjectionSelectionId,
+) -> Result<Option<DeliveryPosition>, TransactionalProjectionError> {
+    let mut transaction = leader.begin().await?;
+    let progress = match ProjectionLeader::load_progress(&mut transaction, projector_name).await {
+        Ok(progress) => progress,
+        Err(error) => return Err(rollback_preserving_error(transaction, error).await),
+    };
+    let validation = progress.as_ref().map_or(Ok(()), |progress| {
+        if progress.source_id() != source_id {
+            return Err(TransactionalProjectionError::SourceIdentityMismatch {
+                projector: projector_name.clone(),
+                persisted: progress.source_id().clone(),
+                configured: source_id.clone(),
+            });
+        }
+        if progress.selection_id() != selection_id {
+            return Err(TransactionalProjectionError::SelectionIdentityMismatch {
+                projector: projector_name.clone(),
+                persisted: progress.selection_id().clone(),
+                configured: selection_id.clone(),
+            });
+        }
+        Ok(())
+    });
+    if let Err(error) = validation {
+        return Err(rollback_preserving_error(transaction, error).await);
+    }
+    transaction.rollback().await.map_err(leadership_lost)?;
+    Ok(progress.map(|progress| progress.position()))
 }
 
 async fn process_envelope<P, S>(
@@ -147,21 +234,32 @@ where
         .begin()
         .await
         .map_err(|error| progress_at_position(position, error))?;
-    if !position_is_pending(&mut transaction, projector_name, source, config, position).await? {
+    let pending =
+        match position_is_pending(&mut transaction, projector_name, source, config, position).await
+        {
+            Ok(pending) => pending,
+            Err(error) => return Err(rollback_preserving_error(transaction, error).await),
+        };
+    if !pending {
+        transaction.rollback().await.map_err(leadership_lost)?;
         return Ok(EnvelopeResult::Suppressed);
     }
-    let event = serde_json::from_str(envelope.payload().get()).map_err(|source| {
-        TransactionalProjectionError::Decode {
-            position,
-            source: Box::new(source),
+    let event = match serde_json::from_str(envelope.payload().get()) {
+        Ok(event) => event,
+        Err(source) => {
+            let error = TransactionalProjectionError::Decode {
+                position,
+                source: Box::new(source),
+            };
+            return Err(rollback_preserving_error(transaction, error).await);
         }
-    })?;
+    };
     let mut attempt = 1_u32;
 
     loop {
         match projector.apply(&event, position, &mut transaction).await {
             Ok(after_commit) => {
-                ProjectionLeader::advance_progress(
+                if let Err(error) = ProjectionLeader::advance_progress(
                     &mut transaction,
                     projector_name,
                     source.source_id(),
@@ -169,7 +267,10 @@ where
                     position,
                 )
                 .await
-                .map_err(|error| progress_at_position(position, error))?;
+                .map_err(|error| progress_at_position(position, error))
+                {
+                    return Err(rollback_preserving_error(transaction, error).await);
+                }
                 transaction.commit().await.map_err(|source| {
                     TransactionalProjectionError::CommitIndeterminate {
                         position,
@@ -192,12 +293,7 @@ where
                         NonZeroU32::new(attempt).expect("application attempt starts at one"),
                     ),
                 ));
-                transaction.rollback().await.map_err(|source| {
-                    TransactionalProjectionError::Progress {
-                        position,
-                        source: Box::new(source),
-                    }
-                })?;
+                transaction.rollback().await.map_err(leadership_lost)?;
 
                 match decision {
                     ProjectionFailureDecision::Retry => {
@@ -219,15 +315,22 @@ where
                             .begin()
                             .await
                             .map_err(|error| progress_at_position(position, error))?;
-                        if !position_is_pending(
+                        let pending = match position_is_pending(
                             &mut transaction,
                             projector_name,
                             source,
                             config,
                             position,
                         )
-                        .await?
+                        .await
                         {
+                            Ok(pending) => pending,
+                            Err(error) => {
+                                return Err(rollback_preserving_error(transaction, error).await);
+                            }
+                        };
+                        if !pending {
+                            transaction.rollback().await.map_err(leadership_lost)?;
                             return Ok(EnvelopeResult::Suppressed);
                         }
                     }
@@ -262,10 +365,17 @@ where
         .begin()
         .await
         .map_err(|error| progress_at_position(position, error))?;
-    if !position_is_pending(&mut transaction, projector_name, source, config, position).await? {
+    let pending =
+        match position_is_pending(&mut transaction, projector_name, source, config, position).await
+        {
+            Ok(pending) => pending,
+            Err(error) => return Err(rollback_preserving_error(transaction, error).await),
+        };
+    if !pending {
+        transaction.rollback().await.map_err(leadership_lost)?;
         return Ok(EnvelopeResult::Suppressed);
     }
-    ProjectionLeader::advance_progress(
+    if let Err(error) = ProjectionLeader::advance_progress(
         &mut transaction,
         projector_name,
         source.source_id(),
@@ -273,7 +383,10 @@ where
         position,
     )
     .await
-    .map_err(|error| progress_at_position(position, error))?;
+    .map_err(|error| progress_at_position(position, error))
+    {
+        return Err(rollback_preserving_error(transaction, error).await);
+    }
     transaction.commit().await.map_err(|source| {
         TransactionalProjectionError::CommitIndeterminate {
             position,
@@ -281,6 +394,22 @@ where
         }
     })?;
     Ok(EnvelopeResult::Skipped)
+}
+
+async fn rollback_preserving_error(
+    transaction: sqlx::Transaction<'_, sqlx::Postgres>,
+    error: TransactionalProjectionError,
+) -> TransactionalProjectionError {
+    match transaction.rollback().await {
+        Ok(()) => error,
+        Err(source) => leadership_lost(source),
+    }
+}
+
+fn leadership_lost(source: sqlx::Error) -> TransactionalProjectionError {
+    TransactionalProjectionError::LeadershipLost {
+        source: Box::new(source),
+    }
 }
 
 async fn position_is_pending<S>(

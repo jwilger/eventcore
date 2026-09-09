@@ -4,7 +4,7 @@ use std::error::Error;
 use std::future::Future;
 use std::time::Duration;
 
-use eventcore_types::{DeliveryPosition, DeliverySourceId, ProjectionSelectionId};
+use eventcore_types::{BatchSize, DeliveryPosition, DeliverySourceId, ProjectionSelectionId};
 use serde_json::Value;
 
 /// Application behavior selected by a transactional projection fixture.
@@ -77,6 +77,10 @@ pub struct ProjectionProgressObservation {
 /// particular backend error type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionFailureObservation {
+    /// Another invocation currently owns the projector's leadership grant.
+    LeadershipBusy,
+    /// The session authorizing all destination writes was lost.
+    LeadershipLost,
     /// Application code rejected the selected event before its effect committed.
     ApplicationFatal {
         /// Position left pending by the failed application mutation.
@@ -266,6 +270,111 @@ pub trait TransactionalProjectionFixture {
         selection_id: ProjectionSelectionId,
         position: DeliveryPosition,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+}
+
+/// Observable result of overlapping attempts to own one projector's leadership grant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionLeadershipObservation {
+    /// Public failure returned by the competing invocation while the first invocation is active.
+    pub competing_failure: ProjectionFailureObservation,
+    /// Completed result of the original leader after the fixture releases its application gate.
+    pub leader_outcome: ProjectionRunOutcome,
+}
+
+/// Durable facts observed after terminating the exact PostgreSQL session owning leadership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionLeadershipLossObservation {
+    /// Public terminal failure returned by the stale runner.
+    pub failure: ProjectionFailureObservation,
+    /// Read-model count observed independently after the stale runner exits.
+    pub effect_count: u64,
+    /// Durable progress observed independently after the stale runner exits.
+    pub progress: Option<ProjectionProgressObservation>,
+}
+
+/// Results around an event appended after a finite run captured its frontier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionFixedHighWaterObservation {
+    /// Event that existed when the run captured its finite frontier.
+    pub initial_position: DeliveryPosition,
+    /// Event appended while the first event was gated inside application code.
+    pub appended_position: DeliveryPosition,
+    /// First finite run result.
+    pub first_outcome: ProjectionRunOutcome,
+    /// Durable progress immediately after the first run.
+    pub progress_after_first: Option<ProjectionProgressObservation>,
+    /// Second finite run result.
+    pub second_outcome: ProjectionRunOutcome,
+}
+
+/// Backend-neutral controls for finite execution and fencing behavior.
+pub trait TransactionalProjectionExecutionFixture: TransactionalProjectionFixture {
+    /// Changes the page size used by later finite runs.
+    fn configure_batch_size(&mut self, batch_size: BatchSize);
+
+    /// Appends an event outside the configured selection and returns its global position.
+    fn append_unselected(
+        &mut self,
+    ) -> impl Future<Output = Result<DeliveryPosition, Self::Error>> + Send;
+
+    /// Coordinates two overlapping invocations for the same projector identity.
+    fn observe_overlapping_leadership(
+        &mut self,
+    ) -> impl Future<Output = Result<ProjectionLeadershipObservation, Self::Error>> + Send;
+
+    /// Terminates the exact active leader session while application work is gated.
+    fn observe_leadership_loss(
+        &mut self,
+    ) -> impl Future<Output = Result<ProjectionLeadershipLossObservation, Self::Error>> + Send;
+
+    /// Appends after the first run has captured its frontier and before it can commit its event.
+    fn observe_fixed_high_watermark(
+        &mut self,
+    ) -> impl Future<Output = Result<ProjectionFixedHighWaterObservation, Self::Error>> + Send;
+}
+
+/// Continuous-mode facts observed through public runner and destination boundaries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionContinuousObservation {
+    /// Normal continuous-run completion result.
+    pub outcome: ProjectionRunOutcome,
+    /// Last position present before a multi-page continuous run starts.
+    pub initial_through: Option<DeliveryPosition>,
+    /// Positions appended only after the runner first became caught up.
+    pub appended_positions: Vec<DeliveryPosition>,
+    /// Independently observed read-model count.
+    pub effect_count: u64,
+    /// Independently observed durable progress.
+    pub progress: Option<ProjectionProgressObservation>,
+    /// Idle durations actually awaited by the runner.
+    pub poll_sleep_requests: Vec<Duration>,
+    /// Durable state observed at each awaited idle boundary.
+    pub idle_boundaries: Vec<ProjectionIdleBoundaryObservation>,
+}
+
+/// Durable state observed when a continuous runner begins awaiting its poll delay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionIdleBoundaryObservation {
+    /// Independently observed read-model count at the idle boundary.
+    pub effect_count: u64,
+    /// Independently observed durable progress at the idle boundary.
+    pub progress: Option<ProjectionProgressObservation>,
+}
+
+/// Backend-neutral controls for continuous polling and cancellation behavior.
+pub trait TransactionalProjectionContinuousFixture {
+    /// Fixture setup or projection-run error.
+    type Error: Error + Send + Sync + 'static;
+
+    /// Catches up, appends after the first idle wait begins, delivers it, then cancels.
+    fn observe_delivery_after_initial_catch_up(
+        &mut self,
+    ) -> impl Future<Output = Result<ProjectionContinuousObservation, Self::Error>> + Send;
+
+    /// Reaches an empty frontier, proves one pending positive idle wait, then cancels it.
+    fn observe_idle_cancellation(
+        &mut self,
+    ) -> impl Future<Output = Result<ProjectionContinuousObservation, Self::Error>> + Send;
 }
 
 /// Backend-neutral outcome shape asserted by transactional projection contracts.
@@ -1037,5 +1146,362 @@ where
     assert_eq!(fixture.application_attempt_count().await?, 1);
     assert_eq!(fixture.hook_attempt_count().await?, 1);
     assert!(fixture.hook_log().await?.is_empty());
+    Ok(())
+}
+
+/// Verifies that one finite run drains every selected page through its captured frontier.
+pub async fn multi_page_batch_drain_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionExecutionFixture,
+{
+    fixture.configure_batch_size(BatchSize::new(2));
+    let positions = fixture
+        .append_values(&[
+            Value::Object(Default::default()),
+            Value::Object(Default::default()),
+            Value::Object(Default::default()),
+            Value::Object(Default::default()),
+            Value::Object(Default::default()),
+        ])
+        .await?;
+    let through = positions[4];
+    assert_eq!(
+        fixture.run_batch().await?,
+        ProjectionRunOutcome::CaughtUp {
+            processed: 5,
+            skipped: 0,
+            through: Some(through),
+        },
+        "a finite run must drain all selected pages, not stop after the configured page size",
+    );
+    assert_eq!(fixture.effect_count().await?, 5);
+    assert_eq!(
+        fixture.progress().await?.map(|progress| progress.position),
+        Some(through),
+    );
+    Ok(())
+}
+
+/// Verifies finite completion for a source with no committed events.
+pub async fn initially_empty_batch_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionExecutionFixture,
+{
+    assert_eq!(
+        fixture.run_batch().await?,
+        ProjectionRunOutcome::CaughtUp {
+            processed: 0,
+            skipped: 0,
+            through: None,
+        },
+    );
+    assert_eq!(fixture.effect_count().await?, 0);
+    assert_eq!(fixture.progress().await?, None);
+    Ok(())
+}
+
+/// Verifies finite completion when the global frontier has no selected event.
+pub async fn no_match_batch_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionExecutionFixture,
+{
+    let through = fixture.append_unselected().await?;
+    assert_eq!(
+        fixture.run_batch().await?,
+        ProjectionRunOutcome::CaughtUp {
+            processed: 0,
+            skipped: 0,
+            through: Some(through),
+        },
+    );
+    assert_eq!(fixture.effect_count().await?, 0);
+    assert_eq!(fixture.progress().await?, None);
+    Ok(())
+}
+
+/// Verifies that a trailing unselected global event still bounds finite completion.
+pub async fn trailing_unselected_frontier_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionExecutionFixture,
+{
+    let selected_position = fixture
+        .append_values(&[Value::Object(Default::default())])
+        .await?[0];
+    let through = fixture.append_unselected().await?;
+    assert!(
+        through > selected_position,
+        "the unselected event must trail the selected event in the global sequence",
+    );
+    assert_eq!(
+        fixture.run_batch().await?,
+        ProjectionRunOutcome::CaughtUp {
+            processed: 1,
+            skipped: 0,
+            through: Some(through),
+        },
+        "an empty bounded page must certify catch-up beyond trailing unselected events",
+    );
+    assert_eq!(fixture.effect_count().await?, 1);
+    assert_eq!(
+        fixture.progress().await?.map(|progress| progress.position),
+        Some(selected_position),
+        "durable progress must remain at the last selected event, below the global frontier",
+    );
+    Ok(())
+}
+
+/// Verifies that a saved cursor is validated even when the source is initially empty.
+pub async fn empty_source_identity_validation_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionExecutionFixture,
+{
+    fixture
+        .seed_progress_identity(
+            DeliverySourceId::try_new("incompatible-empty-source")
+                .expect("contract source identity should be valid"),
+            ProjectionSelectionId::try_new("incompatible-empty-selection")
+                .expect("contract selection identity should be valid"),
+            DeliveryPosition::new(
+                std::num::NonZeroU64::new(1).expect("contract position should be positive"),
+            ),
+        )
+        .await?;
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Failed(ProjectionFailureObservation::SourceIdentityMismatch),
+        "source identity must be checked first even when no source frontier exists",
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 0);
+    assert_eq!(fixture.effect_count().await?, 0);
+    Ok(())
+}
+
+/// Verifies selection-only identity validation when the source is initially empty.
+pub async fn empty_source_selection_identity_validation_contract<F>(
+    fixture: &mut F,
+) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionExecutionFixture,
+{
+    fixture
+        .seed_progress_identity(
+            fixture.source_id().clone(),
+            ProjectionSelectionId::try_new("incompatible-empty-selection-only")
+                .expect("contract selection identity should be valid"),
+            DeliveryPosition::new(
+                std::num::NonZeroU64::new(1).expect("contract position should be positive"),
+            ),
+        )
+        .await?;
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Failed(
+            ProjectionFailureObservation::SelectionIdentityMismatch,
+        ),
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 0);
+    assert_eq!(fixture.effect_count().await?, 0);
+    Ok(())
+}
+
+/// Verifies identity validation on an empty selected page and deterministic mismatch precedence.
+pub async fn no_match_identity_validation_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionExecutionFixture,
+{
+    let position = fixture.append_unselected().await?;
+    fixture
+        .seed_progress_identity(
+            DeliverySourceId::try_new("incompatible-no-match-source")
+                .expect("contract source identity should be valid"),
+            ProjectionSelectionId::try_new("incompatible-no-match-selection")
+                .expect("contract selection identity should be valid"),
+            position,
+        )
+        .await?;
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Failed(ProjectionFailureObservation::SourceIdentityMismatch),
+        "source mismatch must win before selection mismatch on an empty selected page",
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 0);
+    assert_eq!(fixture.effect_count().await?, 0);
+    Ok(())
+}
+
+/// Verifies selection-only identity validation when the bounded selected page is empty.
+pub async fn no_match_selection_identity_validation_contract<F>(
+    fixture: &mut F,
+) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionExecutionFixture,
+{
+    let position = fixture.append_unselected().await?;
+    fixture
+        .seed_progress_identity(
+            fixture.source_id().clone(),
+            ProjectionSelectionId::try_new("incompatible-no-match-selection-only")
+                .expect("contract selection identity should be valid"),
+            position,
+        )
+        .await?;
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Failed(
+            ProjectionFailureObservation::SelectionIdentityMismatch,
+        ),
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 0);
+    assert_eq!(fixture.effect_count().await?, 0);
+    Ok(())
+}
+
+/// Verifies exclusion of a second writer while a leader is active.
+pub async fn overlapping_leadership_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionExecutionFixture,
+{
+    let observation = fixture.observe_overlapping_leadership().await?;
+    assert_eq!(
+        observation.competing_failure,
+        ProjectionFailureObservation::LeadershipBusy,
+    );
+    assert!(matches!(
+        observation.leader_outcome,
+        ProjectionRunOutcome::CaughtUp { processed: 1, .. }
+    ));
+    Ok(())
+}
+
+/// Verifies session fencing after exact leader-backend termination.
+pub async fn leadership_loss_fencing_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionExecutionFixture,
+{
+    let observation = fixture.observe_leadership_loss().await?;
+    assert_eq!(
+        observation.failure,
+        ProjectionFailureObservation::LeadershipLost,
+    );
+    assert_eq!(observation.effect_count, 0, "stale effect must not commit");
+    assert_eq!(observation.progress, None, "stale progress must not commit");
+    Ok(())
+}
+
+/// Verifies that one finite run uses exactly the frontier captured before concurrent append.
+pub async fn fixed_high_watermark_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionExecutionFixture,
+{
+    let observation = fixture.observe_fixed_high_watermark().await?;
+    assert_eq!(
+        observation.first_outcome,
+        ProjectionRunOutcome::CaughtUp {
+            processed: 1,
+            skipped: 0,
+            through: Some(observation.initial_position),
+        },
+    );
+    assert_eq!(
+        observation
+            .progress_after_first
+            .map(|progress| progress.position),
+        Some(observation.initial_position),
+        "the append beyond the captured frontier must remain pending after the first run",
+    );
+    assert_eq!(
+        observation.second_outcome,
+        ProjectionRunOutcome::CaughtUp {
+            processed: 1,
+            skipped: 0,
+            through: Some(observation.appended_position),
+        },
+    );
+    Ok(())
+}
+
+/// Verifies post-catch-up delivery and normal continuous cancellation.
+pub async fn continuous_delivery_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionContinuousFixture,
+{
+    let observation = fixture.observe_delivery_after_initial_catch_up().await?;
+    assert_eq!(
+        observation.outcome,
+        ProjectionRunOutcome::Cancelled {
+            processed: 8,
+            skipped: 0,
+        },
+        "cancellation is a normal outcome after delivering the post-catch-up event",
+    );
+    let initial_through = observation
+        .initial_through
+        .expect("continuous multi-page scenario must start with selected events");
+    let appended_through = *observation
+        .appended_positions
+        .last()
+        .expect("continuous scenario must append events after initial catch-up");
+    assert_eq!(observation.appended_positions.len(), 3);
+    assert_eq!(observation.effect_count, 8);
+    assert_eq!(
+        observation.progress.map(|progress| progress.position),
+        Some(appended_through),
+    );
+    assert_eq!(
+        observation.poll_sleep_requests,
+        vec![Duration::from_millis(17), Duration::from_millis(17)],
+        "continuous mode must await the configured delay exactly at both idle boundaries",
+    );
+    assert_eq!(observation.idle_boundaries.len(), 2);
+    assert_eq!(observation.idle_boundaries[0].effect_count, 5);
+    assert_eq!(
+        observation.idle_boundaries[0]
+            .progress
+            .as_ref()
+            .map(|progress| progress.position),
+        Some(initial_through),
+        "the first sleep must not begin between non-empty initial pages",
+    );
+    assert_eq!(observation.idle_boundaries[1].effect_count, 8);
+    assert_eq!(
+        observation.idle_boundaries[1]
+            .progress
+            .as_ref()
+            .map(|progress| progress.position),
+        Some(appended_through),
+        "the second sleep must not begin between non-empty appended pages",
+    );
+    Ok(())
+}
+
+/// Verifies a single pending idle wait and responsive cancellation without a busy loop.
+pub async fn continuous_idle_cancellation_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionContinuousFixture,
+{
+    let observation = fixture.observe_idle_cancellation().await?;
+    assert_eq!(
+        observation.outcome,
+        ProjectionRunOutcome::Cancelled {
+            processed: 0,
+            skipped: 0,
+        },
+    );
+    assert_eq!(observation.effect_count, 0);
+    assert_eq!(observation.progress, None);
+    assert_eq!(observation.initial_through, None);
+    assert!(observation.appended_positions.is_empty());
+    assert_eq!(
+        observation.poll_sleep_requests,
+        vec![Duration::from_millis(17)],
+        "an idle runner must await exactly one configured poll delay instead of spinning",
+    );
+    assert_eq!(
+        observation.idle_boundaries,
+        vec![ProjectionIdleBoundaryObservation {
+            effect_count: 0,
+            progress: None,
+        }],
+    );
     Ok(())
 }

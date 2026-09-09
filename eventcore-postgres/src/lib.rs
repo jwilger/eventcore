@@ -45,9 +45,10 @@ pub use projections::{
     AfterCommit, BoxedProjectionError, NoopAfterCommit, PostgresProjectionConfig,
     PostgresProjectionMode, PostgresProjectionSource, PostgresProjectionSourceError,
     PostgresProjectionStore, PostgresProjector, ProjectionConfigurationError,
-    ProjectionFailureContext, ProjectionFailureDecision, ProjectionProgress, ProjectionRetryPolicy,
-    ProjectionRetrySleeper, ProjectionRunOutcome, TokioProjectionRetrySleeper,
-    TransactionalProjectionError, run_transactional_projection,
+    ProjectionFailureContext, ProjectionFailureDecision, ProjectionPollSleeper, ProjectionProgress,
+    ProjectionRetryPolicy, ProjectionRetrySleeper, ProjectionRunOutcome,
+    TokioProjectionPollSleeper, TokioProjectionRetrySleeper, TransactionalProjectionError,
+    run_transactional_projection,
 };
 
 /// Errors that can occur when creating a [`PostgresEventStore`].

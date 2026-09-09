@@ -17,11 +17,27 @@ pub trait ProjectionRetrySleeper: std::fmt::Debug + Send + Sync {
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
 
+/// Asynchronous delay used while a continuous projection is caught up.
+pub trait ProjectionPollSleeper: std::fmt::Debug + Send + Sync {
+    /// Returns a future that completes after the requested idle polling delay.
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
+
 /// Default retry sleeper backed by [`tokio::time::sleep`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TokioProjectionRetrySleeper;
 
 impl ProjectionRetrySleeper for TokioProjectionRetrySleeper {
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(tokio::time::sleep(duration))
+    }
+}
+
+/// Default continuous polling sleeper backed by [`tokio::time::sleep`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TokioProjectionPollSleeper;
+
+impl ProjectionPollSleeper for TokioProjectionPollSleeper {
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(tokio::time::sleep(duration))
     }
@@ -111,6 +127,7 @@ pub struct PostgresProjectionConfig {
     mode: PostgresProjectionMode,
     retry_policy: ProjectionRetryPolicy,
     retry_sleeper: Arc<dyn ProjectionRetrySleeper>,
+    poll_sleeper: Arc<dyn ProjectionPollSleeper>,
     continuous_poll_interval: Duration,
 }
 
@@ -128,6 +145,7 @@ impl PostgresProjectionConfig {
                 maximum_delay: Duration::from_secs(30),
             },
             retry_sleeper: Arc::new(TokioProjectionRetrySleeper),
+            poll_sleeper: Arc::new(TokioProjectionPollSleeper),
             continuous_poll_interval: Duration::from_secs(1),
         }
     }
@@ -156,6 +174,12 @@ impl PostgresProjectionConfig {
         retry_sleeper: impl ProjectionRetrySleeper + 'static,
     ) -> Self {
         self.retry_sleeper = Arc::new(retry_sleeper);
+        self
+    }
+
+    /// Replaces the asynchronous delay implementation used between empty continuous polls.
+    pub fn with_poll_sleeper(mut self, poll_sleeper: impl ProjectionPollSleeper + 'static) -> Self {
+        self.poll_sleeper = Arc::new(poll_sleeper);
         self
     }
 
@@ -195,6 +219,11 @@ impl PostgresProjectionConfig {
     /// Returns the configured retry delay implementation.
     pub fn retry_sleeper(&self) -> &(dyn ProjectionRetrySleeper + 'static) {
         self.retry_sleeper.as_ref()
+    }
+
+    /// Returns the configured continuous idle delay implementation.
+    pub fn poll_sleeper(&self) -> &(dyn ProjectionPollSleeper + 'static) {
+        self.poll_sleeper.as_ref()
     }
 
     /// Returns the interval between empty continuous polls.

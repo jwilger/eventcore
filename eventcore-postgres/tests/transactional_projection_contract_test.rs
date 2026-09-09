@@ -14,22 +14,30 @@ use eventcore_postgres::{
     AfterCommit, PostgresProjectionConfig, PostgresProjectionMode, PostgresProjectionSource,
     PostgresProjectionSourceError, PostgresProjectionStore, PostgresProjector,
     ProjectionConfigurationError, ProjectionFailureContext, ProjectionFailureDecision,
-    ProjectionRetryPolicy, ProjectionRetrySleeper, ProjectionRunOutcome,
+    ProjectionPollSleeper, ProjectionRetryPolicy, ProjectionRetrySleeper, ProjectionRunOutcome,
     TransactionalProjectionError, run_transactional_projection,
 };
 use eventcore_testing::{
     AFTER_COMMIT_FAILURE_SENTINEL, ProjectionApplicationBehavior, ProjectionAttemptObservation,
-    ProjectionFailureObservation, ProjectionHookLogEntry, ProjectionProgressObservation,
-    ProjectionRunOutcome as ContractRunOutcome, TransactionalProjectionFixture,
+    ProjectionFailureObservation, ProjectionFixedHighWaterObservation, ProjectionHookLogEntry,
+    ProjectionLeadershipLossObservation, ProjectionLeadershipObservation,
+    ProjectionProgressObservation, ProjectionRunOutcome as ContractRunOutcome,
+    TransactionalProjectionExecutionFixture, TransactionalProjectionFixture,
     after_commit_failure_contract, after_commit_ordering_and_rollback_contract,
-    commit_acknowledgement_loss_contract, explicit_skip_contract,
+    commit_acknowledgement_loss_contract, empty_source_identity_validation_contract,
+    empty_source_selection_identity_validation_contract, explicit_skip_contract,
     exponential_retry_backoff_contract, fatal_leaves_position_pending_contract,
-    finite_overflow_retry_backoff_contract, malformed_selected_input_contract,
-    mutation_failure_rolls_back_contract, progress_failure_rolls_back_contract,
+    finite_overflow_retry_backoff_contract, fixed_high_watermark_contract,
+    initially_empty_batch_contract, leadership_loss_fencing_contract,
+    malformed_selected_input_contract, multi_page_batch_drain_contract,
+    mutation_failure_rolls_back_contract, no_match_batch_contract,
+    no_match_identity_validation_contract, no_match_selection_identity_validation_contract,
+    overlapping_leadership_contract, progress_failure_rolls_back_contract,
     restart_resumes_from_committed_position_contract, retry_exhaustion_contract,
     retry_reloads_progress_contract, selection_identity_mismatch_contract,
     source_identity_mismatch_contract, stop_leaves_position_pending_contract,
-    transactional_projection_contract, transient_retry_success_contract,
+    trailing_unselected_frontier_contract, transactional_projection_contract,
+    transient_retry_success_contract,
 };
 use eventcore_types::{
     BatchSize, DeliveryPosition, DeliverySourceId, DeliveryUpperBound, Event, EventStore,
@@ -158,6 +166,8 @@ enum FixtureError {
     TimedOut,
     #[error("commit acknowledgement proxy failed: {0}")]
     CommitAcknowledgementProxy(String),
+    #[error("fixture task failed")]
+    Task(#[from] tokio::task::JoinError),
 }
 
 struct CommitObservation {
@@ -444,7 +454,7 @@ struct IncrementProjector {
     name: ProjectorName,
     behaviors: VecDeque<ProjectionApplicationBehavior>,
     last_failure_decision: ProjectionFailureDecision,
-    apply_barrier: Option<Arc<Barrier>>,
+    apply_gate: Option<ApplyGate>,
     application_attempts: Arc<AtomicU64>,
     application_attempt_transactions: Arc<Mutex<Vec<String>>>,
     destination_pool: Pool<Postgres>,
@@ -452,6 +462,13 @@ struct IncrementProjector {
     selection_id: ProjectionSelectionId,
     hook_log: Arc<Mutex<Vec<ProjectionHookLogEntry>>>,
     hook_attempts: Arc<AtomicU64>,
+    leader_pid_sender: Option<oneshot::Sender<i32>>,
+}
+
+#[derive(Clone)]
+struct ApplyGate {
+    entered: Arc<Barrier>,
+    release: Option<Arc<Barrier>>,
 }
 
 struct RecordingAfterCommit {
@@ -524,6 +541,12 @@ impl PostgresProjector for IncrementProjector {
         'c: 'a,
     {
         let _ = self.application_attempts.fetch_add(1, Ordering::SeqCst);
+        if let Some(sender) = self.leader_pid_sender.take() {
+            let pid = query_scalar::<_, i32>("SELECT pg_backend_pid()")
+                .fetch_one(&mut **transaction)
+                .await?;
+            let _ = sender.send(pid);
+        }
         let transaction_token = query_scalar::<_, String>("SELECT txid_current()::text")
             .fetch_one(&mut **transaction)
             .await?;
@@ -535,8 +558,11 @@ impl PostgresProjector for IncrementProjector {
             .behaviors
             .pop_front()
             .unwrap_or(ProjectionApplicationBehavior::Apply);
-        if let Some(barrier) = &self.apply_barrier {
-            let _ = barrier.wait().await;
+        if let Some(gate) = &self.apply_gate {
+            let _ = gate.entered.wait().await;
+            if let Some(release) = &gate.release {
+                let _ = release.wait().await;
+            }
         }
         if behavior == ProjectionApplicationBehavior::Fail {
             return Err(sqlx::Error::Protocol(
@@ -614,6 +640,23 @@ struct RecordingRetrySleeper {
     requests: Arc<Mutex<Vec<Duration>>>,
 }
 
+#[derive(Debug, Clone)]
+struct RecordingPollSleeper {
+    requests: Arc<Mutex<Vec<Duration>>>,
+}
+
+impl ProjectionPollSleeper for RecordingPollSleeper {
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let requests = self.requests.clone();
+        Box::pin(async move {
+            requests
+                .lock()
+                .expect("fixture poll-sleep mutex should not be poisoned")
+                .push(duration);
+        })
+    }
+}
+
 impl ProjectionRetrySleeper for RecordingRetrySleeper {
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         let requests = self.requests.clone();
@@ -636,7 +679,8 @@ struct PostgresAtomicFixture {
     projector_name: ProjectorName,
     behaviors: VecDeque<ProjectionApplicationBehavior>,
     retry_policy: ProjectionRetryPolicy,
-    apply_barrier: Option<Arc<Barrier>>,
+    batch_size: BatchSize,
+    apply_gate: Option<ApplyGate>,
     application_attempts: Arc<AtomicU64>,
     application_attempt_transactions: Arc<Mutex<Vec<String>>>,
     retry_sleep_requests: Arc<Mutex<Vec<Duration>>>,
@@ -682,7 +726,8 @@ impl PostgresAtomicFixture {
                 Duration::from_secs(30),
             )
             .expect("default fixture retry policy should be valid"),
-            apply_barrier: None,
+            batch_size: BatchSize::new(100),
+            apply_gate: None,
             application_attempts: Arc::new(AtomicU64::new(0)),
             application_attempt_transactions: Arc::new(Mutex::new(Vec::new())),
             retry_sleep_requests: Arc::new(Mutex::new(Vec::new())),
@@ -712,11 +757,35 @@ impl PostgresAtomicFixture {
     }
 
     fn with_apply_barrier(&mut self, barrier: Arc<Barrier>) {
-        self.apply_barrier = Some(barrier);
+        self.apply_gate = Some(ApplyGate {
+            entered: barrier,
+            release: None,
+        });
     }
 
     fn clear_apply_barrier(&mut self) {
-        self.apply_barrier = None;
+        self.apply_gate = None;
+    }
+
+    fn projector(
+        &self,
+        apply_gate: Option<ApplyGate>,
+        leader_pid_sender: Option<oneshot::Sender<i32>>,
+    ) -> IncrementProjector {
+        IncrementProjector {
+            name: self.projector_name.clone(),
+            behaviors: self.behaviors.clone(),
+            last_failure_decision: ProjectionFailureDecision::Fatal,
+            apply_gate,
+            application_attempts: self.application_attempts.clone(),
+            application_attempt_transactions: self.application_attempt_transactions.clone(),
+            destination_pool: self.database.clone_pool(),
+            source_id: self.source_id.clone(),
+            selection_id: self.selection.id().clone(),
+            hook_log: self.hook_log.clone(),
+            hook_attempts: self.hook_attempts.clone(),
+            leader_pid_sender,
+        }
     }
 
     async fn run_with_timeout(
@@ -731,19 +800,7 @@ impl PostgresAtomicFixture {
             .commit_acknowledgement_proxy
             .as_ref()
             .map_or_else(|| self.store.clone(), |proxy| proxy.store.clone());
-        let projector = IncrementProjector {
-            name: self.projector_name.clone(),
-            behaviors: self.behaviors.clone(),
-            last_failure_decision: ProjectionFailureDecision::Fatal,
-            apply_barrier: self.apply_barrier.clone(),
-            application_attempts: self.application_attempts.clone(),
-            application_attempt_transactions: self.application_attempt_transactions.clone(),
-            destination_pool: self.database.clone_pool(),
-            source_id: self.source_id.clone(),
-            selection_id: self.selection.id().clone(),
-            hook_log: self.hook_log.clone(),
-            hook_attempts: self.hook_attempts.clone(),
-        };
+        let projector = self.projector(self.apply_gate.clone(), None);
         match timeout(
             RUN_TIMEOUT,
             run_transactional_projection(projector, &source, &store, config),
@@ -761,6 +818,7 @@ impl PostgresAtomicFixture {
         &self,
     ) -> Result<ProjectionAttemptObservation, FixtureError> {
         let mut config = PostgresProjectionConfig::new(self.selection.clone())
+            .with_batch_size(self.batch_size)
             .with_retry_policy(self.retry_policy.clone());
         if self.commit_acknowledgement_proxy.is_some() {
             config = config.with_retry_policy(
@@ -826,6 +884,12 @@ fn classify_runner_error(
         }
         TransactionalProjectionError::SelectionIdentityMismatch { .. } => {
             ProjectionFailureObservation::SelectionIdentityMismatch
+        }
+        TransactionalProjectionError::LeadershipBusy => {
+            ProjectionFailureObservation::LeadershipBusy
+        }
+        TransactionalProjectionError::LeadershipLost { .. } => {
+            ProjectionFailureObservation::LeadershipLost
         }
         _ => ProjectionFailureObservation::Other,
     }
@@ -935,6 +999,7 @@ impl TransactionalProjectionFixture for PostgresAtomicFixture {
         Ok(convert_outcome(
             self.run_with_timeout(
                 PostgresProjectionConfig::new(self.selection.clone())
+                    .with_batch_size(self.batch_size)
                     .with_retry_policy(self.retry_policy.clone()),
             )
             .await?,
@@ -1108,6 +1173,206 @@ impl TransactionalProjectionFixture for PostgresAtomicFixture {
     }
 }
 
+impl TransactionalProjectionExecutionFixture for PostgresAtomicFixture {
+    fn configure_batch_size(&mut self, batch_size: BatchSize) {
+        self.batch_size = batch_size;
+    }
+
+    async fn append_unselected(&mut self) -> Result<DeliveryPosition, Self::Error> {
+        let stream_id = StreamId::try_new(format!("invoice::unselected::{}", Uuid::now_v7()))
+            .expect("fixture stream ID should be valid");
+        let writes = StreamWrites::new()
+            .register_stream(stream_id.clone(), StreamVersion::new(0))?
+            .append(UnselectedEvent { stream_id })?;
+        let _ = self.event_store.append_events(writes).await?;
+        self.source.high_watermark().await?.ok_or_else(|| {
+            FixtureError::Sql(sqlx::Error::Protocol(
+                "unselected append did not advance the global frontier".to_owned(),
+            ))
+        })
+    }
+
+    async fn observe_overlapping_leadership(
+        &mut self,
+    ) -> Result<ProjectionLeadershipObservation, Self::Error> {
+        let _ = self.append_values(&[serde_json::json!({})]).await?;
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let source = self.source.clone();
+        let store = self.store.clone();
+        let projector = self.projector(
+            Some(ApplyGate {
+                entered: entered.clone(),
+                release: Some(release.clone()),
+            }),
+            None,
+        );
+        let config = PostgresProjectionConfig::new(self.selection.clone());
+        let mut leader_task = tokio::spawn(async move {
+            run_transactional_projection(projector, &source, &store, config).await
+        });
+
+        if timeout(RUN_TIMEOUT, entered.wait()).await.is_err() {
+            abort_and_join(&mut leader_task).await;
+            return Err(FixtureError::TimedOut);
+        }
+        let competing = timeout(
+            RUN_TIMEOUT,
+            run_transactional_projection(
+                self.projector(None, None),
+                &self.source,
+                &self.store,
+                PostgresProjectionConfig::new(self.selection.clone()),
+            ),
+        )
+        .await;
+        if timeout(RUN_TIMEOUT, release.wait()).await.is_err() {
+            abort_and_join(&mut leader_task).await;
+            return Err(FixtureError::TimedOut);
+        }
+        let leader_result = join_with_timeout(&mut leader_task).await?;
+        let competing_failure = match competing {
+            Ok(Err(error)) => classify_runner_error(error, None),
+            Ok(Ok(_)) => ProjectionFailureObservation::Other,
+            Err(_) => return Err(FixtureError::TimedOut),
+        };
+
+        Ok(ProjectionLeadershipObservation {
+            competing_failure,
+            leader_outcome: convert_outcome(leader_result?),
+        })
+    }
+
+    async fn observe_leadership_loss(
+        &mut self,
+    ) -> Result<ProjectionLeadershipLossObservation, Self::Error> {
+        let _ = self.append_values(&[serde_json::json!({})]).await?;
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let (pid_sender, pid_receiver) = oneshot::channel();
+        let source = self.source.clone();
+        let store = self.store.clone();
+        let projector = self.projector(
+            Some(ApplyGate {
+                entered: entered.clone(),
+                release: Some(release.clone()),
+            }),
+            Some(pid_sender),
+        );
+        let config = PostgresProjectionConfig::new(self.selection.clone());
+        let mut leader_task = tokio::spawn(async move {
+            run_transactional_projection(projector, &source, &store, config).await
+        });
+
+        let pid = match timeout(RUN_TIMEOUT, pid_receiver).await {
+            Ok(Ok(pid)) => pid,
+            Ok(Err(_)) | Err(_) => {
+                abort_and_join(&mut leader_task).await;
+                return Err(FixtureError::TimedOut);
+            }
+        };
+        if timeout(RUN_TIMEOUT, entered.wait()).await.is_err() {
+            abort_and_join(&mut leader_task).await;
+            return Err(FixtureError::TimedOut);
+        }
+        let terminated: bool = match query_scalar("SELECT pg_terminate_backend($1)")
+            .bind(pid)
+            .fetch_one(self.database.pool())
+            .await
+        {
+            Ok(terminated) => terminated,
+            Err(error) => {
+                abort_and_join(&mut leader_task).await;
+                return Err(error.into());
+            }
+        };
+        if !terminated {
+            abort_and_join(&mut leader_task).await;
+            return Err(FixtureError::Sql(sqlx::Error::Protocol(
+                "fixture did not terminate the exact signalled leader PID".to_owned(),
+            )));
+        }
+        if timeout(RUN_TIMEOUT, release.wait()).await.is_err() {
+            abort_and_join(&mut leader_task).await;
+            return Err(FixtureError::TimedOut);
+        }
+        let result = join_with_timeout(&mut leader_task).await?;
+        let failure = match result {
+            Err(error) => classify_runner_error(error, None),
+            Ok(_) => ProjectionFailureObservation::Other,
+        };
+
+        Ok(ProjectionLeadershipLossObservation {
+            failure,
+            effect_count: self.effect_count().await?,
+            progress: self.progress().await?,
+        })
+    }
+
+    async fn observe_fixed_high_watermark(
+        &mut self,
+    ) -> Result<ProjectionFixedHighWaterObservation, Self::Error> {
+        let initial_position = self.append_values(&[serde_json::json!({})]).await?[0];
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let source = self.source.clone();
+        let store = self.store.clone();
+        let projector = self.projector(
+            Some(ApplyGate {
+                entered: entered.clone(),
+                release: Some(release.clone()),
+            }),
+            None,
+        );
+        let config = PostgresProjectionConfig::new(self.selection.clone());
+        let mut first_task = tokio::spawn(async move {
+            run_transactional_projection(projector, &source, &store, config).await
+        });
+
+        if timeout(RUN_TIMEOUT, entered.wait()).await.is_err() {
+            abort_and_join(&mut first_task).await;
+            return Err(FixtureError::TimedOut);
+        }
+        let appended_position = match self.append_values(&[serde_json::json!({})]).await {
+            Ok(positions) => positions[0],
+            Err(error) => {
+                abort_and_join(&mut first_task).await;
+                return Err(error);
+            }
+        };
+        if timeout(RUN_TIMEOUT, release.wait()).await.is_err() {
+            abort_and_join(&mut first_task).await;
+            return Err(FixtureError::TimedOut);
+        }
+        let first_outcome = join_with_timeout(&mut first_task).await??;
+        let progress_after_first = self.progress().await?;
+        let second_outcome = self.run_batch().await?;
+
+        Ok(ProjectionFixedHighWaterObservation {
+            initial_position,
+            appended_position,
+            first_outcome: convert_outcome(first_outcome),
+            progress_after_first,
+            second_outcome,
+        })
+    }
+}
+
+async fn join_with_timeout<T>(task: &mut JoinHandle<T>) -> Result<T, FixtureError> {
+    match timeout(RUN_TIMEOUT, &mut *task).await {
+        Ok(result) => Ok(result?),
+        Err(_) => {
+            abort_and_join(task).await;
+            Err(FixtureError::TimedOut)
+        }
+    }
+}
+
+async fn abort_and_join<T>(task: &mut JoinHandle<T>) {
+    task.abort();
+    let _ = timeout(RUN_TIMEOUT, &mut *task).await;
+}
+
 fn convert_outcome(outcome: ProjectionRunOutcome) -> ContractRunOutcome {
     match outcome {
         ProjectionRunOutcome::CaughtUp {
@@ -1255,6 +1520,37 @@ async fn retry_sleeper_builder_and_clone_route_requested_durations() {
         vec![Duration::from_millis(17), Duration::from_millis(29)],
     );
     assert!(format!("{config:?}").contains("RecordingRetrySleeper"));
+}
+
+// Break caught: bypassing or losing the configured poll sleeper would make continuous-mode idle
+// waits unobservable and prevent deterministic no-busy-loop contract tests.
+#[tokio::test]
+async fn poll_sleeper_builder_and_clone_route_requested_durations() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let config =
+        PostgresProjectionConfig::new(selection()).with_poll_sleeper(RecordingPollSleeper {
+            requests: requests.clone(),
+        });
+    let cloned = config.clone();
+
+    drop(config.poll_sleeper().sleep(Duration::from_millis(11)));
+    assert!(
+        requests
+            .lock()
+            .expect("fixture poll-sleep mutex should not be poisoned")
+            .is_empty(),
+        "constructing and dropping an unpolled sleep future must not record a wait",
+    );
+    config.poll_sleeper().sleep(Duration::from_millis(17)).await;
+    cloned.poll_sleeper().sleep(Duration::from_millis(29)).await;
+
+    assert_eq!(
+        *requests
+            .lock()
+            .expect("fixture poll-sleep mutex should not be poisoned"),
+        vec![Duration::from_millis(17), Duration::from_millis(29)],
+    );
+    assert!(format!("{config:?}").contains("RecordingPollSleeper"));
 }
 
 // Break caught: hardcoding the fixture sentinel in the adapter classifier would discard the
@@ -1554,4 +1850,90 @@ async fn independent_schema_fixtures_acquire_distinct_leadership_and_retain_thei
     let (left_cleanup, right_cleanup) = tokio::join!(left.cleanup(), right.cleanup());
     left_cleanup.expect("left fixture cleanup should succeed");
     right_cleanup.expect("right fixture cleanup should succeed");
+}
+
+// Break caught: stopping after one non-empty page would strand selected events behind the page
+// boundary while falsely reporting the captured frontier as caught up.
+#[tokio::test]
+async fn batch_drains_more_than_one_page() {
+    assert_fixture_contract(|fixture| Box::pin(multi_page_batch_drain_contract(fixture))).await;
+}
+
+// Break caught: treating a missing source frontier as an error or manufacturing progress would
+// prevent a newly deployed projection from completing cleanly before its first event.
+#[tokio::test]
+async fn batch_catches_up_when_source_is_initially_empty() {
+    assert_fixture_contract(|fixture| Box::pin(initially_empty_batch_contract(fixture))).await;
+}
+
+// Break caught: requiring a selected event to certify completion would hang when the global
+// source contains events but none satisfy the projection selection.
+#[tokio::test]
+async fn batch_catches_up_when_selection_matches_nothing() {
+    assert_fixture_contract(|fixture| Box::pin(no_match_batch_contract(fixture))).await;
+}
+
+// Break caught: requiring durable progress to equal the global frontier would keep polling when
+// a selected event is followed by an unselected event in the captured finite range.
+#[tokio::test]
+async fn batch_catches_up_through_a_trailing_unselected_frontier() {
+    assert_fixture_contract(|fixture| Box::pin(trailing_unselected_frontier_contract(fixture)))
+        .await;
+}
+
+// Break caught: returning early on an empty source before loading durable progress silently
+// reuses a cursor bound to a different source and selection.
+#[tokio::test]
+async fn initially_empty_batch_validates_saved_identity_with_source_precedence() {
+    assert_fixture_contract(|fixture| Box::pin(empty_source_identity_validation_contract(fixture)))
+        .await;
+}
+
+// Break caught: returning early on an empty source before validating selection identity silently
+// accepts a changed projection definition when its source identity is unchanged.
+#[tokio::test]
+async fn initially_empty_batch_validates_selection_only_mismatch() {
+    assert_fixture_contract(|fixture| {
+        Box::pin(empty_source_selection_identity_validation_contract(fixture))
+    })
+    .await;
+}
+
+// Break caught: validating identity only while applying an envelope silently accepts incompatible
+// saved progress whenever a non-empty global frontier yields an empty selected page.
+#[tokio::test]
+async fn no_match_batch_validates_saved_identity_with_source_precedence() {
+    assert_fixture_contract(|fixture| Box::pin(no_match_identity_validation_contract(fixture)))
+        .await;
+}
+
+// Break caught: validating selection identity only while applying an event accepts a changed
+// selection whenever the captured global range contains no selected envelope.
+#[tokio::test]
+async fn no_match_batch_validates_selection_only_mismatch() {
+    assert_fixture_contract(|fixture| {
+        Box::pin(no_match_selection_identity_validation_contract(fixture))
+    })
+    .await;
+}
+
+// Break caught: releasing leadership before the event transaction finishes permits two writers
+// to race the same non-idempotent read model for one projector identity.
+#[tokio::test]
+async fn leadership_rejects_overlapping_second_writer_while_leader_is_active() {
+    assert_fixture_contract(|fixture| Box::pin(overlapping_leadership_contract(fixture))).await;
+}
+
+// Break caught: classifying a terminated leader connection as recoverable progress failure, or
+// writing through another pooled connection, lets a stale runner mutate effect or progress.
+#[tokio::test]
+async fn leadership_loss_of_exact_backend_fences_all_stale_writes() {
+    assert_fixture_contract(|fixture| Box::pin(leadership_loss_fencing_contract(fixture))).await;
+}
+
+// Break caught: refreshing the finite frontier between pages would consume events appended after
+// the run began and could prevent batch mode from ever terminating under sustained writes.
+#[tokio::test]
+async fn batch_captures_high_watermark_once_despite_concurrent_append() {
+    assert_fixture_contract(|fixture| Box::pin(fixed_high_watermark_contract(fixture))).await;
 }
