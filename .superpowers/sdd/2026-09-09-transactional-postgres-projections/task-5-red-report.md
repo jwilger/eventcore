@@ -225,3 +225,45 @@ All passed; the workspace run completed 384/384 tests.
 The RED-only legacy after-commit observation was removed. The provenance regression now constructs
 two public `AfterCommitFailed` values and proves the PostgreSQL adapter forwards each distinct
 actual source string.
+
+## Final review follow-up: exponential backoff coverage
+
+The shared backend-neutral contract now drives two additional public-runner scenarios through the
+PostgreSQL recording sleeper:
+
+- Three `Retry` decisions followed by `Apply`, with initial 10 ms, multiplier 2.0, and maximum
+  25 ms, must request exactly `[10 ms, 20 ms, 25 ms]`. Four pairwise-distinct top-level transaction
+  tokens, one committed attempt row/effect/progress, and one hook prove normal retry semantics.
+  This rejects flattening every retry to `initial.min(maximum)`.
+- The same script with finite `f64::MAX` multiplier must request exactly
+  `[10 ms, 25 ms, 25 ms]`, complete without panic or hang, and retain the same transaction/effect
+  invariants. This proves finite multiplication or `powf` overflow saturates at the configured
+  maximum while infinity itself remains invalid configuration.
+
+No production code changed for this follow-up; both tests pass against the Task 5 implementation.
+
+```text
+nix develop -c cargo nextest run -p eventcore-postgres \
+  --test transactional_projection_contract_test -E 'test(/retry_backoff/)'
+```
+
+Passed: 2/2.
+
+```text
+nix develop -c cargo nextest run -p eventcore-postgres \
+  --test transactional_projection_contract_test \
+  -E 'test(/(retry|skip|stop|fatal|after_commit)/)'
+```
+
+Passed: 15/15.
+
+```text
+nix develop -c cargo nextest run -p eventcore-postgres \
+  --test transactional_projection_contract_test
+nix develop -c cargo nextest run -p eventcore-testing
+nix develop -c cargo check -p eventcore-testing -p eventcore-postgres --tests
+nix develop -c cargo clippy --all-targets --all-features -- -D warnings
+```
+
+Passed: 24/24 transactional tests, 43/43 `eventcore-testing` tests, compile check, and warnings-denied
+clippy.

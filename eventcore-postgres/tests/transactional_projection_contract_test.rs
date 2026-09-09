@@ -23,7 +23,8 @@ use eventcore_testing::{
     ProjectionRunOutcome as ContractRunOutcome, TransactionalProjectionFixture,
     after_commit_failure_contract, after_commit_ordering_and_rollback_contract,
     commit_acknowledgement_loss_contract, explicit_skip_contract,
-    fatal_leaves_position_pending_contract, malformed_selected_input_contract,
+    exponential_retry_backoff_contract, fatal_leaves_position_pending_contract,
+    finite_overflow_retry_backoff_contract, malformed_selected_input_contract,
     mutation_failure_rolls_back_contract, progress_failure_rolls_back_contract,
     restart_resumes_from_committed_position_contract, retry_exhaustion_contract,
     retry_reloads_progress_contract, selection_identity_mismatch_contract,
@@ -1436,6 +1437,21 @@ async fn retry_exhaustion_is_bounded_and_rolls_back_every_attempt() {
 #[tokio::test]
 async fn transient_retry_uses_a_fresh_transaction_and_capped_delay() {
     assert_fixture_contract(|fixture| Box::pin(transient_retry_success_contract(fixture))).await;
+}
+
+// Break caught: returning `initial.min(maximum)` for every retry would flatten exponential
+// backoff instead of requesting 10 ms, 20 ms, then the capped 25 ms.
+#[tokio::test]
+async fn retry_backoff_grows_exponentially_then_caps_at_the_maximum() {
+    assert_fixture_contract(|fixture| Box::pin(exponential_retry_backoff_contract(fixture))).await;
+}
+
+// Break caught: multiplying a finite policy into infinity without saturating can panic, hang, or
+// pass a non-representable duration instead of capping later retries at 25 ms.
+#[tokio::test]
+async fn retry_backoff_saturates_finite_multiplier_overflow_without_panicking() {
+    assert_fixture_contract(|fixture| Box::pin(finite_overflow_retry_backoff_contract(fixture)))
+        .await;
 }
 
 // Break caught: reapplying from an in-memory cursor without reloading durable progress would

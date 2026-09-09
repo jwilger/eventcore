@@ -732,6 +732,123 @@ where
     Ok(())
 }
 
+/// Verifies exponential retry delays grow from the initial delay and cap at the maximum.
+pub async fn exponential_retry_backoff_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionFixture,
+{
+    let position = fixture
+        .append_values(&[Value::Object(Default::default())])
+        .await?[0];
+    fixture.select_application_script(&[
+        ProjectionApplicationBehavior::Retry,
+        ProjectionApplicationBehavior::Retry,
+        ProjectionApplicationBehavior::Retry,
+        ProjectionApplicationBehavior::Apply,
+    ]);
+    fixture.configure_retry_policy(3, Duration::from_millis(10), 2.0, Duration::from_millis(25));
+
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Completed(ProjectionRunOutcome::CaughtUp {
+            processed: 1,
+            skipped: 0,
+            through: Some(position),
+        }),
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 4);
+    assert_eq!(
+        fixture.retry_sleep_requests().await?,
+        vec![
+            Duration::from_millis(10),
+            Duration::from_millis(20),
+            Duration::from_millis(25),
+        ],
+    );
+    let transaction_tokens = fixture.application_attempt_transaction_tokens().await?;
+    assert_eq!(transaction_tokens.len(), 4);
+    assert!(
+        transaction_tokens
+            .iter()
+            .enumerate()
+            .all(|(index, token)| transaction_tokens[..index].iter().all(|seen| seen != token)),
+        "every retry and successful application must use a distinct top-level transaction",
+    );
+    assert_eq!(fixture.transaction_attempt_row_count().await?, 1);
+    assert_eq!(fixture.effect_count().await?, 1);
+    assert_eq!(
+        fixture.progress().await?,
+        Some(ProjectionProgressObservation {
+            source_id: fixture.source_id().clone(),
+            selection_id: fixture.selection_id().clone(),
+            position,
+        }),
+    );
+    assert_eq!(
+        fixture.hook_log().await?,
+        vec![ProjectionHookLogEntry::Committed(position)],
+    );
+    assert_eq!(fixture.hook_attempt_count().await?, 1);
+    Ok(())
+}
+
+/// Verifies finite multiplier overflow saturates every affected retry at the maximum delay.
+pub async fn finite_overflow_retry_backoff_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionFixture,
+{
+    let position = fixture
+        .append_values(&[Value::Object(Default::default())])
+        .await?[0];
+    fixture.select_application_script(&[
+        ProjectionApplicationBehavior::Retry,
+        ProjectionApplicationBehavior::Retry,
+        ProjectionApplicationBehavior::Retry,
+        ProjectionApplicationBehavior::Apply,
+    ]);
+    fixture.configure_retry_policy(
+        3,
+        Duration::from_millis(10),
+        f64::MAX,
+        Duration::from_millis(25),
+    );
+
+    assert_eq!(
+        fixture.run_batch_attempt().await?,
+        ProjectionAttemptObservation::Completed(ProjectionRunOutcome::CaughtUp {
+            processed: 1,
+            skipped: 0,
+            through: Some(position),
+        }),
+    );
+    assert_eq!(fixture.application_attempt_count().await?, 4);
+    assert_eq!(
+        fixture.retry_sleep_requests().await?,
+        vec![
+            Duration::from_millis(10),
+            Duration::from_millis(25),
+            Duration::from_millis(25),
+        ],
+        "finite exponential overflow must saturate at the configured maximum",
+    );
+    let transaction_tokens = fixture.application_attempt_transaction_tokens().await?;
+    assert_eq!(transaction_tokens.len(), 4);
+    assert!(
+        transaction_tokens
+            .iter()
+            .enumerate()
+            .all(|(index, token)| transaction_tokens[..index].iter().all(|seen| seen != token)),
+    );
+    assert_eq!(fixture.transaction_attempt_row_count().await?, 1);
+    assert_eq!(fixture.effect_count().await?, 1);
+    assert_eq!(
+        fixture.progress().await?.map(|progress| progress.position),
+        Some(position),
+    );
+    assert_eq!(fixture.hook_attempt_count().await?, 1);
+    Ok(())
+}
+
 /// Verifies a retry reloads durable progress before invoking application code again.
 pub async fn retry_reloads_progress_contract<F>(fixture: &mut F) -> Result<(), F::Error>
 where
