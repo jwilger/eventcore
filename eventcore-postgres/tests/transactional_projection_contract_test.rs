@@ -2,6 +2,7 @@
 
 use std::env;
 use std::panic::{AssertUnwindSafe, resume_unwind};
+use std::sync::Arc;
 use std::time::Duration;
 
 use eventcore_postgres::{
@@ -24,6 +25,7 @@ use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres, Transaction, postgres::PgPoolOptions, query, query_scalar};
 use thiserror::Error;
+use tokio::sync::Barrier;
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -139,6 +141,7 @@ enum FixtureError {
 struct IncrementProjector {
     name: ProjectorName,
     behavior: ProjectionApplicationBehavior,
+    apply_barrier: Option<Arc<Barrier>>,
 }
 
 impl PostgresProjector for IncrementProjector {
@@ -160,6 +163,9 @@ impl PostgresProjector for IncrementProjector {
         'c: 'a,
     {
         let _ = self.behavior;
+        if let Some(barrier) = &self.apply_barrier {
+            let _ = barrier.wait().await;
+        }
         let _ = query("UPDATE invoice_projection_effect SET total = total + 1")
             .execute(&mut **transaction)
             .await?;
@@ -176,6 +182,7 @@ struct PostgresAtomicFixture {
     selection: ProjectionSelection,
     projector_name: ProjectorName,
     behavior: ProjectionApplicationBehavior,
+    apply_barrier: Option<Arc<Barrier>>,
 }
 
 impl PostgresAtomicFixture {
@@ -194,6 +201,8 @@ impl PostgresAtomicFixture {
         let _ = query("INSERT INTO invoice_projection_effect (total) VALUES (0)")
             .execute(database.pool())
             .await?;
+        let projector_name = ProjectorName::try_new(format!("invoice-effect-{}", database.schema))
+            .expect("schema-derived fixture projector name should be valid");
         Ok(Self {
             database,
             event_store,
@@ -201,15 +210,23 @@ impl PostgresAtomicFixture {
             store,
             source_id,
             selection: selection(),
-            projector_name: ProjectorName::try_new("invoice-effect")
-                .expect("fixture projector name should be valid"),
+            projector_name,
             behavior: ProjectionApplicationBehavior::Apply,
+            apply_barrier: None,
         })
     }
 
     async fn cleanup(self) -> Result<(), FixtureError> {
         self.database.cleanup().await?;
         Ok(())
+    }
+
+    fn with_apply_barrier(&mut self, barrier: Arc<Barrier>) {
+        self.apply_barrier = Some(barrier);
+    }
+
+    fn clear_apply_barrier(&mut self) {
+        self.apply_barrier = None;
     }
 
     async fn run_with_timeout(
@@ -221,6 +238,7 @@ impl PostgresAtomicFixture {
         let projector = IncrementProjector {
             name: self.projector_name.clone(),
             behavior: self.behavior,
+            apply_barrier: self.apply_barrier.clone(),
         };
         match timeout(
             RUN_TIMEOUT,
@@ -570,4 +588,59 @@ async fn effect_and_progress_commit_atomically() {
         Ok(Err(error)) => panic!("atomicity contract setup must not fail: {error}"),
         Err(payload) => resume_unwind(payload),
     }
+}
+
+// Break caught: deriving fixture projector names from a constant lets independent schemas collide
+// on PostgreSQL's database-wide advisory-lock namespace under parallel nextest execution.
+#[tokio::test]
+async fn independent_schema_fixtures_acquire_distinct_leadership_and_retain_their_identity() {
+    let (left, right) = tokio::join!(PostgresAtomicFixture::new(), PostgresAtomicFixture::new());
+    let mut left = left.expect("left fixture should initialize");
+    let mut right = right.expect("right fixture should initialize");
+    let left_name = left.projector_name.clone();
+    let right_name = right.projector_name.clone();
+    assert_ne!(
+        left_name, right_name,
+        "fixture identities must be schema-specific"
+    );
+
+    let _ = left
+        .append_values(&[serde_json::json!({})])
+        .await
+        .expect("left fixture event should append");
+    let _ = right
+        .append_values(&[serde_json::json!({})])
+        .await
+        .expect("right fixture event should append");
+    let barrier = Arc::new(Barrier::new(2));
+    left.with_apply_barrier(barrier.clone());
+    right.with_apply_barrier(barrier);
+
+    let (left_run, right_run) = tokio::join!(left.run_batch(), right.run_batch());
+    assert!(matches!(
+        left_run.expect("left runner should acquire leadership"),
+        ContractRunOutcome::CaughtUp { processed: 1, .. }
+    ),);
+    assert!(matches!(
+        right_run.expect("right runner should acquire leadership"),
+        ContractRunOutcome::CaughtUp { processed: 1, .. }
+    ),);
+
+    left.clear_apply_barrier();
+    assert!(matches!(
+        left.run_batch().await.expect("repeat run should succeed"),
+        ContractRunOutcome::CaughtUp { processed: 0, .. }
+    ),);
+    assert_eq!(
+        left.projector_name, left_name,
+        "fixture identity must persist across runs"
+    );
+    assert_eq!(
+        right.projector_name, right_name,
+        "fixture identity must persist across runs"
+    );
+
+    let (left_cleanup, right_cleanup) = tokio::join!(left.cleanup(), right.cleanup());
+    left_cleanup.expect("left fixture cleanup should succeed");
+    right_cleanup.expect("right fixture cleanup should succeed");
 }

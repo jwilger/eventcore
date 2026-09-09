@@ -38,6 +38,13 @@ Its PostgreSQL fixture appends valid `InvoiceIssued` data through public
 deserializes the source payload into the projector event before running. Raw SQL is limited to the
 application-owned read model and deterministic fixture faults.
 
+Each schema-isolated PostgreSQL fixture derives and retains its projector name from its unique
+schema (`invoice-effect-<schema>`). This prevents a database-wide advisory lock collision between
+parallel nextest fixtures while preserving one fixture's progress identity across repeated runs.
+The concurrent regression synchronizes both projectors at `apply` with a barrier, proving two
+independent fixtures acquire leadership and process one event each concurrently; a constant name
+would make one runner return `LeadershipBusy` while the other waits at the barrier.
+
 ## Dependency and configuration evidence
 
 Context7 verified tokio-util 0.7 cancellation behavior. Executed exactly:
@@ -57,7 +64,7 @@ component ledger row `projection-destination`, version `2`.
 ## Verification
 
 - `nix develop -c cargo fmt --all` — passed.
-- `nix develop -c cargo nextest run -p eventcore-postgres --test transactional_projection_contract_test` — 4 passed.
+- `nix develop -c cargo nextest run -p eventcore-postgres --test transactional_projection_contract_test` — 5 passed.
 - `nix develop -c cargo check -p eventcore-postgres --all-targets` — passed.
 - `nix develop -c cargo check -p eventcore --all-features` — passed.
 - `git diff --check` — passed.
