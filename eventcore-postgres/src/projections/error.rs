@@ -128,7 +128,10 @@ pub enum ProjectionResetError {
     /// Another invocation owns this projector's leadership grant.
     #[error("transactional projection reset leadership is busy")]
     Busy,
-    /// The leader session was lost before reset completed.
+    /// The leader session was lost while starting, rolling back, or releasing the reset.
+    ///
+    /// A release failure can occur after the reset commit was acknowledged. Callers must not
+    /// infer from this variant that the reset was rolled back or did not commit.
     #[error("transactional projection reset leadership was lost")]
     LeadershipLost {
         /// Underlying database error.
