@@ -6,7 +6,7 @@ mod projection_delivery;
 
 use std::collections::HashSet;
 use std::num::NonZeroU64;
-use std::panic::{AssertUnwindSafe, resume_unwind};
+use std::panic::resume_unwind;
 use std::time::Duration;
 
 use eventcore_postgres::{PostgresEventStore, PostgresProjectionSource};
@@ -15,7 +15,6 @@ use eventcore_types::{
     PersistedEventId, ProjectionSelection, ProjectionSelectionId, ProjectionSource,
     ProjectionStreamFilter, StreamId, StreamPattern, StreamPrefix, StreamVersion,
 };
-use futures::FutureExt;
 use sqlx::{Executor, Postgres, query, query_scalar};
 use tokio::sync::oneshot;
 use tokio::time::{sleep, timeout};
@@ -60,26 +59,23 @@ fn delivery_position(value: u64) -> DeliveryPosition {
     DeliveryPosition::new(NonZeroU64::new(value).expect("fixture position should be positive"))
 }
 
-async fn event_store_pool() -> projection_delivery::IsolatedTestDatabase {
+async fn migrate_event_store(pool: &projection_delivery::IsolatedTestDatabase) {
     let _ = common::create_test_store;
-    let pool = projection_delivery::create_isolated_test_pool().await;
     PostgresEventStore::from_pool(pool.clone_pool())
         .migrate()
         .await;
-    pool
 }
 
-async fn migrated_source() -> (
-    projection_delivery::IsolatedTestDatabase,
-    PostgresProjectionSource,
-) {
-    let pool = event_store_pool().await;
+async fn migrated_source(
+    pool: &projection_delivery::IsolatedTestDatabase,
+) -> PostgresProjectionSource {
+    migrate_event_store(pool).await;
     let source = PostgresProjectionSource::from_pool(pool.clone_pool(), source_id());
     source
         .migrate()
         .await
         .expect("projection source migration should succeed");
-    (pool, source)
+    source
 }
 
 async fn insert_event<'e, E>(
@@ -127,22 +123,37 @@ async fn insert_event_with_raw_json(
     .expect("fixture raw JSON event insert should succeed");
 }
 
-async fn bounded_cleanup(
-    pool: &projection_delivery::IsolatedTestDatabase,
-) -> Result<(), &'static str> {
-    match timeout(
-        DATABASE_OPERATION_TIMEOUT,
-        AssertUnwindSafe(pool.cleanup()).catch_unwind(),
-    )
-    .await
-    {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) => Err("cleanup panicked"),
-        Err(_) => Err("cleanup timed out"),
+type DeliveryFixtureFuture<'a> = common::fixture_lifecycle::FixtureFuture<'a, Result<(), String>>;
+
+struct AbortOnDrop<T> {
+    task: Option<tokio::task::JoinHandle<T>>,
+}
+
+impl<T> AbortOnDrop<T> {
+    fn new(task: tokio::task::JoinHandle<T>) -> Self {
+        Self { task: Some(task) }
+    }
+
+    fn task_mut(&mut self) -> &mut tokio::task::JoinHandle<T> {
+        self.task.as_mut().expect("owned task should be present")
+    }
+
+    async fn abort_and_join(&mut self) {
+        let Some(task) = self.task.take() else {
+            return;
+        };
+        task.abort();
+        let _ = timeout(Duration::from_secs(2), task).await;
     }
 }
 
-type DeliveryFixtureFuture<'a> = common::fixture_lifecycle::FixtureFuture<'a, Result<(), String>>;
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
 
 fn initialize_delivery_database(
     database: &mut projection_delivery::IsolatedTestDatabase,
@@ -285,49 +296,14 @@ async fn failed_delivery_initialization_leaves_no_owned_schema() {
 // projector an event that no longer identifies the exact source record it must apply.
 #[tokio::test]
 async fn delivered_envelopes_preserve_every_public_persisted_field() {
-    let pool = timeout(
-        DATABASE_OPERATION_TIMEOUT,
-        projection_delivery::create_isolated_test_pool(),
-    )
-    .await
-    .expect("isolated database allocation should remain bounded");
-    let source = PostgresProjectionSource::from_pool(pool.clone_pool(), source_id());
-
-    // Given a migrated source and two persisted events in the same stream.
-    let setup = timeout(
-        DATABASE_OPERATION_TIMEOUT,
-        AssertUnwindSafe(async {
-            PostgresEventStore::from_pool(pool.clone_pool())
-                .migrate()
-                .await;
-            source
-                .migrate()
-                .await
-                .expect("projection source migration should succeed");
-        })
-        .catch_unwind(),
-    )
-    .await;
-    match setup {
-        Ok(Ok(())) => {}
-        Ok(Err(payload)) => {
-            let cleanup = bounded_cleanup(&pool).await;
-            eprintln!("cleanup after setup panic: {cleanup:?}");
-            resume_unwind(payload);
-        }
-        Err(_) => {
-            let cleanup = bounded_cleanup(&pool).await;
-            panic!("envelope contract setup timed out; cleanup: {cleanup:?}");
-        }
-    }
-
-    let first_event_id =
-        Uuid::parse_str("00000000-0000-7000-8000-000000000021").expect("fixture UUID should parse");
-    let second_event_id =
-        Uuid::parse_str("00000000-0000-7000-8000-000000000022").expect("fixture UUID should parse");
-    let operation = timeout(
-        DATABASE_OPERATION_TIMEOUT,
-        AssertUnwindSafe(async {
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            // Given a migrated source and two persisted events in the same stream.
+            let first_event_id = Uuid::parse_str("00000000-0000-7000-8000-000000000021")
+                .expect("fixture UUID should parse");
+            let second_event_id = Uuid::parse_str("00000000-0000-7000-8000-000000000022")
+                .expect("fixture UUID should parse");
             insert_event_with_raw_json(
                 pool.pool(),
                 first_event_id,
@@ -399,49 +375,44 @@ async fn delivered_envelopes_preserve_every_public_persisted_field() {
             );
             assert_eq!(page[1].payload().get(), r#"{"amount_cents": 9900}"#);
             assert_eq!(page[1].metadata().get(), r#"{"trace_id": "trace-22"}"#);
+            Ok(())
         })
-        .catch_unwind(),
-    )
+    })
     .await;
-
-    let cleanup = bounded_cleanup(&pool).await;
-    match operation {
-        Ok(Ok(())) => cleanup.expect("test schema cleanup should succeed"),
-        Ok(Err(payload)) => {
-            eprintln!("cleanup after envelope contract panic: {cleanup:?}");
-            resume_unwind(payload);
-        }
-        Err(_) => panic!("envelope contract body timed out; cleanup: {cleanup:?}"),
-    }
 }
 
 // Break caught: treating an empty source as having a synthetic checkpoint would make a first
 // batch look nonempty and could advance projection progress without a persisted event.
 #[tokio::test]
 async fn empty_source_has_no_watermark_and_returns_an_empty_page() {
-    let (pool, source) = migrated_source().await;
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
 
-    assert_eq!(
-        source
-            .high_watermark()
-            .await
-            .expect("empty source watermark should be readable"),
-        None
-    );
-    assert!(
-        source
-            .read_envelopes(
-                &all_projected(),
-                None,
-                DeliveryUpperBound::Unbounded,
-                BatchSize::new(4),
-            )
-            .await
-            .expect("empty source page should be readable")
-            .is_empty()
-    );
+            assert_eq!(
+                source
+                    .high_watermark()
+                    .await
+                    .expect("empty source watermark should be readable"),
+                None
+            );
+            assert!(
+                source
+                    .read_envelopes(
+                        &all_projected(),
+                        None,
+                        DeliveryUpperBound::Unbounded,
+                        BatchSize::new(4),
+                    )
+                    .await
+                    .expect("empty source page should be readable")
+                    .is_empty()
+            );
 
-    pool.cleanup().await;
+            Ok(())
+        })
+    })
+    .await;
 }
 
 // Break caught: using a sequence/`nextval` or committing a frontier advance outside the append
@@ -449,76 +420,82 @@ async fn empty_source_has_no_watermark_and_returns_an_empty_page() {
 // position one for the next committed event.
 #[tokio::test]
 async fn rolled_back_frontier_allocation_is_invisible_and_the_position_is_reused() {
-    let (pool, source) = migrated_source().await;
-    let mut transaction_a = pool.begin().await.expect("transaction A should begin");
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            let mut transaction_a = pool.begin().await.expect("transaction A should begin");
 
-    insert_event(
-        &mut *transaction_a,
-        Uuid::parse_str("00000000-0000-7000-8000-000000000010").expect("fixture UUID should parse"),
-        "invoice::rollback::a",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"transaction": "a"}),
-    )
-    .await;
-
-    assert_eq!(
-        source
-            .high_watermark()
-            .await
-            .expect("separate connection should read the committed watermark"),
-        None
-    );
-    assert!(
-        source
-            .read_envelopes(
-                &all_projected(),
-                None,
-                DeliveryUpperBound::Unbounded,
-                BatchSize::new(2),
+            insert_event(
+                &mut *transaction_a,
+                Uuid::parse_str("00000000-0000-7000-8000-000000000010")
+                    .expect("fixture UUID should parse"),
+                "invoice::rollback::a",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"transaction": "a"}),
             )
-            .await
-            .expect("separate connection should not observe transaction A's envelope")
-            .is_empty()
-    );
+            .await;
 
-    transaction_a
-        .rollback()
-        .await
-        .expect("transaction A should roll back its frontier allocation");
-    let committed_event_id =
-        Uuid::parse_str("00000000-0000-7000-8000-000000000011").expect("fixture UUID should parse");
-    insert_event(
-        pool.pool(),
-        committed_event_id,
-        "invoice::rollback::b",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"transaction": "b"}),
-    )
+            assert_eq!(
+                source
+                    .high_watermark()
+                    .await
+                    .expect("separate connection should read the committed watermark"),
+                None
+            );
+            assert!(
+                source
+                    .read_envelopes(
+                        &all_projected(),
+                        None,
+                        DeliveryUpperBound::Unbounded,
+                        BatchSize::new(2),
+                    )
+                    .await
+                    .expect("separate connection should not observe transaction A's envelope")
+                    .is_empty()
+            );
+
+            transaction_a
+                .rollback()
+                .await
+                .expect("transaction A should roll back its frontier allocation");
+            let committed_event_id = Uuid::parse_str("00000000-0000-7000-8000-000000000011")
+                .expect("fixture UUID should parse");
+            insert_event(
+                pool.pool(),
+                committed_event_id,
+                "invoice::rollback::b",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"transaction": "b"}),
+            )
+            .await;
+
+            let page = source
+                .read_envelopes(
+                    &all_projected(),
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(2),
+                )
+                .await
+                .expect("committed replacement event should be readable");
+            assert_eq!(
+                page[0].event_id(),
+                PersistedEventId::new(committed_event_id)
+            );
+            assert_eq!(page[0].position(), delivery_position(1));
+            assert_eq!(
+                source
+                    .high_watermark()
+                    .await
+                    .expect("committed watermark should be readable"),
+                Some(delivery_position(1))
+            );
+
+            Ok(())
+        })
+    })
     .await;
-
-    let page = source
-        .read_envelopes(
-            &all_projected(),
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(2),
-        )
-        .await
-        .expect("committed replacement event should be readable");
-    assert_eq!(
-        page[0].event_id(),
-        PersistedEventId::new(committed_event_id)
-    );
-    assert_eq!(page[0].position(), delivery_position(1));
-    assert_eq!(
-        source
-            .high_watermark()
-            .await
-            .expect("committed watermark should be readable"),
-        Some(delivery_position(1))
-    );
-
-    pool.cleanup().await;
 }
 
 // Break caught: making either cursor boundary inclusive or ignoring the explicit position-two
@@ -526,488 +503,536 @@ async fn rolled_back_frontier_allocation_is_invisible_and_the_position_is_reused
 // finite batch frontier.
 #[tokio::test]
 async fn pages_are_strictly_after_the_cursor_and_inclusively_bounded_through_the_frontier() {
-    let (pool, source) = migrated_source().await;
-    let first_id = Uuid::now_v7();
-    let second_id = Uuid::now_v7();
-    let third_id = Uuid::now_v7();
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            let first_id = Uuid::now_v7();
+            let second_id = Uuid::now_v7();
+            let third_id = Uuid::now_v7();
 
-    insert_event(
-        pool.pool(),
-        first_id,
-        "invoice::bounded::one",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"number": 1}),
-    )
+            insert_event(
+                pool.pool(),
+                first_id,
+                "invoice::bounded::one",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"number": 1}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                second_id,
+                "invoice::bounded::two",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"number": 2}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                third_id,
+                "invoice::bounded::three",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"number": 3}),
+            )
+            .await;
+
+            let first_page = source
+                .read_envelopes(
+                    &all_projected(),
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(1),
+                )
+                .await
+                .expect("first page should be readable");
+            let second_page = source
+                .read_envelopes(
+                    &all_projected(),
+                    Some(first_page[0].position()),
+                    DeliveryUpperBound::Inclusive(delivery_position(2)),
+                    BatchSize::new(4),
+                )
+                .await
+                .expect("bounded second page should be readable");
+
+            assert_eq!(first_page[0].position(), delivery_position(1));
+            assert_eq!(first_page[0].event_id(), PersistedEventId::new(first_id));
+            assert_eq!(second_page.len(), 1);
+            assert_eq!(second_page[0].position(), delivery_position(2));
+            assert_eq!(second_page[0].event_id(), PersistedEventId::new(second_id));
+            assert_ne!(second_page[0].event_id(), PersistedEventId::new(third_id));
+
+            Ok(())
+        })
+    })
     .await;
-    insert_event(
-        pool.pool(),
-        second_id,
-        "invoice::bounded::two",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"number": 2}),
-    )
-    .await;
-    insert_event(
-        pool.pool(),
-        third_id,
-        "invoice::bounded::three",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"number": 3}),
-    )
-    .await;
-
-    let first_page = source
-        .read_envelopes(
-            &all_projected(),
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(1),
-        )
-        .await
-        .expect("first page should be readable");
-    let second_page = source
-        .read_envelopes(
-            &all_projected(),
-            Some(first_page[0].position()),
-            DeliveryUpperBound::Inclusive(delivery_position(2)),
-            BatchSize::new(4),
-        )
-        .await
-        .expect("bounded second page should be readable");
-
-    assert_eq!(first_page[0].position(), delivery_position(1));
-    assert_eq!(first_page[0].event_id(), PersistedEventId::new(first_id));
-    assert_eq!(second_page.len(), 1);
-    assert_eq!(second_page[0].position(), delivery_position(2));
-    assert_eq!(second_page[0].event_id(), PersistedEventId::new(second_id));
-    assert_ne!(second_page[0].event_id(), PersistedEventId::new(third_id));
-
-    pool.cleanup().await;
 }
 
 // Break caught: returning only one batch even after callers resume would strand later selected
 // events forever behind a valid checkpoint.
 #[tokio::test]
 async fn selected_events_larger_than_one_batch_are_completely_drainable() {
-    let (pool, source) = migrated_source().await;
-    let event_ids = [Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()];
-    for (index, event_id) in event_ids.iter().enumerate() {
-        insert_event(
-            pool.pool(),
-            *event_id,
-            &format!("invoice::drain::{index}"),
-            PROJECTED_EVENT_TYPE,
-            serde_json::json!({"number": index}),
-        )
-        .await;
-    }
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            let event_ids = [Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()];
+            for (index, event_id) in event_ids.iter().enumerate() {
+                insert_event(
+                    pool.pool(),
+                    *event_id,
+                    &format!("invoice::drain::{index}"),
+                    PROJECTED_EVENT_TYPE,
+                    serde_json::json!({"number": index}),
+                )
+                .await;
+            }
 
-    let first_page = source
-        .read_envelopes(
-            &all_projected(),
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(2),
-        )
-        .await
-        .expect("first drain page should be readable");
-    let second_page = source
-        .read_envelopes(
-            &all_projected(),
-            Some(first_page[1].position()),
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(2),
-        )
-        .await
-        .expect("second drain page should be readable");
+            let first_page = source
+                .read_envelopes(
+                    &all_projected(),
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(2),
+                )
+                .await
+                .expect("first drain page should be readable");
+            let second_page = source
+                .read_envelopes(
+                    &all_projected(),
+                    Some(first_page[1].position()),
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(2),
+                )
+                .await
+                .expect("second drain page should be readable");
 
-    assert_eq!(
-        first_page
-            .iter()
-            .map(|envelope| envelope.event_id())
-            .collect::<Vec<_>>(),
-        vec![
-            PersistedEventId::new(event_ids[0]),
-            PersistedEventId::new(event_ids[1]),
-        ]
-    );
-    assert_eq!(
-        second_page
-            .iter()
-            .map(|envelope| envelope.event_id())
-            .collect::<Vec<_>>(),
-        vec![PersistedEventId::new(event_ids[2])]
-    );
+            assert_eq!(
+                first_page
+                    .iter()
+                    .map(|envelope| envelope.event_id())
+                    .collect::<Vec<_>>(),
+                vec![
+                    PersistedEventId::new(event_ids[0]),
+                    PersistedEventId::new(event_ids[1]),
+                ]
+            );
+            assert_eq!(
+                second_page
+                    .iter()
+                    .map(|envelope| envelope.event_id())
+                    .collect::<Vec<_>>(),
+                vec![PersistedEventId::new(event_ids[2])]
+            );
 
-    pool.cleanup().await;
+            Ok(())
+        })
+    })
+    .await;
 }
 
 // Break caught: applying stream or event-type predicates after LIMIT would let unselected rows
 // consume a page slot and delay a selected event despite available batch capacity.
 #[tokio::test]
 async fn prefix_pattern_and_event_type_filters_apply_before_page_limit() {
-    let (pool, source) = migrated_source().await;
-    let ignored_type_id = Uuid::now_v7();
-    let matching_prefix_id = Uuid::now_v7();
-    let matching_pattern_id = Uuid::now_v7();
-    let wrong_stream_id = Uuid::now_v7();
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            let ignored_type_id = Uuid::now_v7();
+            let matching_prefix_id = Uuid::now_v7();
+            let matching_pattern_id = Uuid::now_v7();
+            let wrong_stream_id = Uuid::now_v7();
 
-    insert_event(
-        pool.pool(),
-        ignored_type_id,
-        "orders::north::ignored",
-        UNSELECTED_EVENT_TYPE,
-        serde_json::json!({"ignored": "type"}),
-    )
+            insert_event(
+                pool.pool(),
+                ignored_type_id,
+                "orders::north::ignored",
+                UNSELECTED_EVENT_TYPE,
+                serde_json::json!({"ignored": "type"}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                matching_prefix_id,
+                "orders::north::one",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"selected": "prefix"}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                matching_pattern_id,
+                "orders::south::two",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"selected": "pattern"}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                wrong_stream_id,
+                "payments::north::three",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"ignored": "stream"}),
+            )
+            .await;
+
+            let prefix_selection = selection(
+                "orders-prefix-v1",
+                ProjectionStreamFilter::Prefix(
+                    StreamPrefix::try_new("orders::north::")
+                        .expect("fixture prefix should be valid"),
+                ),
+                &[PROJECTED_EVENT_TYPE],
+            );
+            let pattern_selection = selection(
+                "orders-pattern-v1",
+                ProjectionStreamFilter::Pattern(
+                    StreamPattern::try_new("orders::south::*")
+                        .expect("fixture pattern should be valid"),
+                ),
+                &[PROJECTED_EVENT_TYPE],
+            );
+
+            let prefix_page = source
+                .read_envelopes(
+                    &prefix_selection,
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(1),
+                )
+                .await
+                .expect("prefix page should be readable");
+            let pattern_page = source
+                .read_envelopes(
+                    &pattern_selection,
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(1),
+                )
+                .await
+                .expect("pattern page should be readable");
+
+            assert_eq!(
+                prefix_page[0].event_id(),
+                PersistedEventId::new(matching_prefix_id)
+            );
+            assert_eq!(
+                pattern_page[0].event_id(),
+                PersistedEventId::new(matching_pattern_id)
+            );
+
+            Ok(())
+        })
+    })
     .await;
-    insert_event(
-        pool.pool(),
-        matching_prefix_id,
-        "orders::north::one",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"selected": "prefix"}),
-    )
-    .await;
-    insert_event(
-        pool.pool(),
-        matching_pattern_id,
-        "orders::south::two",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"selected": "pattern"}),
-    )
-    .await;
-    insert_event(
-        pool.pool(),
-        wrong_stream_id,
-        "payments::north::three",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"ignored": "stream"}),
-    )
-    .await;
-
-    let prefix_selection = selection(
-        "orders-prefix-v1",
-        ProjectionStreamFilter::Prefix(
-            StreamPrefix::try_new("orders::north::").expect("fixture prefix should be valid"),
-        ),
-        &[PROJECTED_EVENT_TYPE],
-    );
-    let pattern_selection = selection(
-        "orders-pattern-v1",
-        ProjectionStreamFilter::Pattern(
-            StreamPattern::try_new("orders::south::*").expect("fixture pattern should be valid"),
-        ),
-        &[PROJECTED_EVENT_TYPE],
-    );
-
-    let prefix_page = source
-        .read_envelopes(
-            &prefix_selection,
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(1),
-        )
-        .await
-        .expect("prefix page should be readable");
-    let pattern_page = source
-        .read_envelopes(
-            &pattern_selection,
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(1),
-        )
-        .await
-        .expect("pattern page should be readable");
-
-    assert_eq!(
-        prefix_page[0].event_id(),
-        PersistedEventId::new(matching_prefix_id)
-    );
-    assert_eq!(
-        pattern_page[0].event_id(),
-        PersistedEventId::new(matching_pattern_id)
-    );
-
-    pool.cleanup().await;
 }
 
 // Break caught: using an unescaped SQL LIKE predicate makes StreamPrefix metacharacters select
 // non-prefix streams, so unrelated events can consume a selected page before the literal match.
 #[tokio::test]
 async fn prefix_filter_treats_underscore_percent_and_backslash_as_literal_characters() {
-    let (pool, source) = migrated_source().await;
-    let underscore_wildcard_id = Uuid::now_v7();
-    let percent_wildcard_id = Uuid::now_v7();
-    let backslash_escape_id = Uuid::now_v7();
-    let literal_prefix_id = Uuid::now_v7();
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            let underscore_wildcard_id = Uuid::now_v7();
+            let percent_wildcard_id = Uuid::now_v7();
+            let backslash_escape_id = Uuid::now_v7();
+            let literal_prefix_id = Uuid::now_v7();
 
-    insert_event(
-        pool.pool(),
-        underscore_wildcard_id,
-        "invoiceX%\\underscore-wildcard",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"match": "underscore wildcard only"}),
-    )
-    .await;
-    insert_event(
-        pool.pool(),
-        percent_wildcard_id,
-        "invoice_abc\\percent-wildcard",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"match": "percent wildcard only"}),
-    )
-    .await;
-    insert_event(
-        pool.pool(),
-        backslash_escape_id,
-        "invoice_%xbackslash-escape",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"match": "backslash escape only"}),
-    )
-    .await;
-    insert_event(
-        pool.pool(),
-        literal_prefix_id,
-        "invoice_%\\literal-prefix",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"match": "literal prefix"}),
-    )
-    .await;
+            insert_event(
+                pool.pool(),
+                underscore_wildcard_id,
+                "invoiceX%\\underscore-wildcard",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"match": "underscore wildcard only"}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                percent_wildcard_id,
+                "invoice_abc\\percent-wildcard",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"match": "percent wildcard only"}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                backslash_escape_id,
+                "invoice_%xbackslash-escape",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"match": "backslash escape only"}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                literal_prefix_id,
+                "invoice_%\\literal-prefix",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"match": "literal prefix"}),
+            )
+            .await;
 
-    let literal_selection = selection(
-        "literal-prefix-v1",
-        ProjectionStreamFilter::Prefix(
-            StreamPrefix::try_new("invoice_%\\").expect("fixture prefix should be valid"),
-        ),
-        &[PROJECTED_EVENT_TYPE],
-    );
-    let page = source
-        .read_envelopes(
-            &literal_selection,
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(1),
-        )
-        .await
-        .expect("literal-prefix page should be readable");
+            let literal_selection = selection(
+                "literal-prefix-v1",
+                ProjectionStreamFilter::Prefix(
+                    StreamPrefix::try_new("invoice_%\\").expect("fixture prefix should be valid"),
+                ),
+                &[PROJECTED_EVENT_TYPE],
+            );
+            let page = source
+                .read_envelopes(
+                    &literal_selection,
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(1),
+                )
+                .await
+                .expect("literal-prefix page should be readable");
 
-    assert_eq!(page.len(), 1);
-    assert_eq!(page[0].event_id(), PersistedEventId::new(literal_prefix_id));
+            assert_eq!(page.len(), 1);
+            assert_eq!(page[0].event_id(), PersistedEventId::new(literal_prefix_id));
 
-    pool.cleanup().await;
+            Ok(())
+        })
+    })
+    .await;
 }
 
 // Break caught: translating a leading `^` in a glob character class directly into a PostgreSQL
 // regex class changes it from a literal glob member into regex negation and selects the wrong stream.
 #[tokio::test]
 async fn pattern_filter_preserves_literal_caret_character_class_semantics() {
-    let (pool, source) = migrated_source().await;
-    let regex_negation_only_id = Uuid::now_v7();
-    let literal_caret_id = Uuid::now_v7();
-    let pattern = StreamPattern::try_new("invoice::[^x]").expect("fixture pattern should be valid");
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            let regex_negation_only_id = Uuid::now_v7();
+            let literal_caret_id = Uuid::now_v7();
+            let pattern =
+                StreamPattern::try_new("invoice::[^x]").expect("fixture pattern should be valid");
 
-    assert!(pattern.matches("invoice::^"));
-    assert!(!pattern.matches("invoice::a"));
-    assert!(pattern.matches("invoice::x"));
+            assert!(pattern.matches("invoice::^"));
+            assert!(!pattern.matches("invoice::a"));
+            assert!(pattern.matches("invoice::x"));
 
-    insert_event(
-        pool.pool(),
-        regex_negation_only_id,
-        "invoice::a",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"match": "regex negation only"}),
-    )
+            insert_event(
+                pool.pool(),
+                regex_negation_only_id,
+                "invoice::a",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"match": "regex negation only"}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                literal_caret_id,
+                "invoice::^",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"match": "literal caret"}),
+            )
+            .await;
+
+            let pattern_selection = selection(
+                "literal-caret-pattern-v1",
+                ProjectionStreamFilter::Pattern(pattern),
+                &[PROJECTED_EVENT_TYPE],
+            );
+            let page = source
+                .read_envelopes(
+                    &pattern_selection,
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(1),
+                )
+                .await
+                .expect("literal-caret pattern page should be readable");
+
+            assert_eq!(page.len(), 1);
+            assert_eq!(page[0].event_id(), PersistedEventId::new(literal_caret_id));
+
+            Ok(())
+        })
+    })
     .await;
-    insert_event(
-        pool.pool(),
-        literal_caret_id,
-        "invoice::^",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"match": "literal caret"}),
-    )
-    .await;
-
-    let pattern_selection = selection(
-        "literal-caret-pattern-v1",
-        ProjectionStreamFilter::Pattern(pattern),
-        &[PROJECTED_EVENT_TYPE],
-    );
-    let page = source
-        .read_envelopes(
-            &pattern_selection,
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(1),
-        )
-        .await
-        .expect("literal-caret pattern page should be readable");
-
-    assert_eq!(page.len(), 1);
-    assert_eq!(page[0].event_id(), PersistedEventId::new(literal_caret_id));
-
-    pool.cleanup().await;
 }
 
 // Break caught: requiring a selected row at the global frontier would make a finite batch fail
 // to certify catch-up whenever its final persisted event is intentionally unselected.
 #[tokio::test]
 async fn unselected_trailing_frontier_still_allows_selected_catch_up() {
-    let (pool, source) = migrated_source().await;
-    let selected_id = Uuid::now_v7();
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            let selected_id = Uuid::now_v7();
 
-    insert_event(
-        pool.pool(),
-        selected_id,
-        "invoice::trailing::selected",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"selected": true}),
-    )
+            insert_event(
+                pool.pool(),
+                selected_id,
+                "invoice::trailing::selected",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"selected": true}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                Uuid::now_v7(),
+                "invoice::trailing::unselected",
+                UNSELECTED_EVENT_TYPE,
+                serde_json::json!({"selected": false}),
+            )
+            .await;
+
+            let high_watermark = source
+                .high_watermark()
+                .await
+                .expect("watermark should be readable")
+                .expect("inserted events should create a watermark");
+            let selected_page = source
+                .read_envelopes(
+                    &all_projected(),
+                    None,
+                    DeliveryUpperBound::Inclusive(high_watermark),
+                    BatchSize::new(4),
+                )
+                .await
+                .expect("selected page should be readable");
+            let empty_tail = source
+                .read_envelopes(
+                    &all_projected(),
+                    Some(selected_page[0].position()),
+                    DeliveryUpperBound::Inclusive(high_watermark),
+                    BatchSize::new(4),
+                )
+                .await
+                .expect("selected tail should be readable");
+
+            assert_eq!(
+                selected_page[0].event_id(),
+                PersistedEventId::new(selected_id)
+            );
+            assert!(empty_tail.is_empty());
+
+            Ok(())
+        })
+    })
     .await;
-    insert_event(
-        pool.pool(),
-        Uuid::now_v7(),
-        "invoice::trailing::unselected",
-        UNSELECTED_EVENT_TYPE,
-        serde_json::json!({"selected": false}),
-    )
-    .await;
-
-    let high_watermark = source
-        .high_watermark()
-        .await
-        .expect("watermark should be readable")
-        .expect("inserted events should create a watermark");
-    let selected_page = source
-        .read_envelopes(
-            &all_projected(),
-            None,
-            DeliveryUpperBound::Inclusive(high_watermark),
-            BatchSize::new(4),
-        )
-        .await
-        .expect("selected page should be readable");
-    let empty_tail = source
-        .read_envelopes(
-            &all_projected(),
-            Some(selected_page[0].position()),
-            DeliveryUpperBound::Inclusive(high_watermark),
-            BatchSize::new(4),
-        )
-        .await
-        .expect("selected tail should be readable");
-
-    assert_eq!(
-        selected_page[0].event_id(),
-        PersistedEventId::new(selected_id)
-    );
-    assert!(empty_tail.is_empty());
-
-    pool.cleanup().await;
 }
 
 // Break caught: treating a no-match filter as a storage failure would prevent a valid projector
 // from completing an empty bounded catch-up cycle.
 #[tokio::test]
 async fn a_selection_with_no_matching_events_returns_an_empty_page() {
-    let (pool, source) = migrated_source().await;
-    insert_event(
-        pool.pool(),
-        Uuid::now_v7(),
-        "invoice::no-match",
-        UNSELECTED_EVENT_TYPE,
-        serde_json::json!({"ignored": true}),
-    )
-    .await;
-
-    assert!(
-        source
-            .read_envelopes(
-                &all_projected(),
-                None,
-                DeliveryUpperBound::Unbounded,
-                BatchSize::new(1),
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            insert_event(
+                pool.pool(),
+                Uuid::now_v7(),
+                "invoice::no-match",
+                UNSELECTED_EVENT_TYPE,
+                serde_json::json!({"ignored": true}),
             )
-            .await
-            .expect("no-match page should be readable")
-            .is_empty()
-    );
+            .await;
 
-    pool.cleanup().await;
+            assert!(
+                source
+                    .read_envelopes(
+                        &all_projected(),
+                        None,
+                        DeliveryUpperBound::Unbounded,
+                        BatchSize::new(1),
+                    )
+                    .await
+                    .expect("no-match page should be readable")
+                    .is_empty()
+            );
+
+            Ok(())
+        })
+    })
+    .await;
 }
 
 // Break caught: decoding or filter-mapping selected payloads in the source would silently drop a
 // storage-valid envelope that a projection's application decoder must instead observe and stop on.
 #[tokio::test]
 async fn storage_valid_but_application_malformed_payload_remains_visible_as_raw_json() {
-    let (pool, source) = migrated_source().await;
-    let event_id = Uuid::now_v7();
-    insert_event(
-        pool.pool(),
-        event_id,
-        "invoice::malformed",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"missing_expected_invoice_fields": true}),
-    )
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            let event_id = Uuid::now_v7();
+            insert_event(
+                pool.pool(),
+                event_id,
+                "invoice::malformed",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"missing_expected_invoice_fields": true}),
+            )
+            .await;
+
+            let page = source
+                .read_envelopes(
+                    &all_projected(),
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(1),
+                )
+                .await
+                .expect("raw envelope should be readable");
+
+            assert_eq!(page.len(), 1);
+            assert_eq!(page[0].event_id(), PersistedEventId::new(event_id));
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(page[0].payload().get())
+                    .expect("payload should remain structurally valid JSON"),
+                serde_json::json!({"missing_expected_invoice_fields": true})
+            );
+
+            Ok(())
+        })
+    })
     .await;
-
-    let page = source
-        .read_envelopes(
-            &all_projected(),
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(1),
-        )
-        .await
-        .expect("raw envelope should be readable");
-
-    assert_eq!(page.len(), 1);
-    assert_eq!(page[0].event_id(), PersistedEventId::new(event_id));
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(page[0].payload().get())
-            .expect("payload should remain structurally valid JSON"),
-        serde_json::json!({"missing_expected_invoice_fields": true})
-    );
-
-    pool.cleanup().await;
 }
 
 // Break caught: decoding JSONB through serde_json::Value rounds values outside its default
 // integer representation before the source gives the selected envelope to application code.
 #[tokio::test]
 async fn source_preserves_precise_jsonb_numbers_in_payload_and_metadata() {
-    let (pool, source) = migrated_source().await;
-    let event_id = Uuid::now_v7();
-    insert_event_with_raw_json(
-        pool.pool(),
-        event_id,
-        "invoice::precise-json",
-        PROJECTED_EVENT_TYPE,
-        r#"{"payload_number": 18446744073709551617}"#,
-        r#"{"metadata_number": 18446744073709551617}"#,
-    )
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            let event_id = Uuid::now_v7();
+            insert_event_with_raw_json(
+                pool.pool(),
+                event_id,
+                "invoice::precise-json",
+                PROJECTED_EVENT_TYPE,
+                r#"{"payload_number": 18446744073709551617}"#,
+                r#"{"metadata_number": 18446744073709551617}"#,
+            )
+            .await;
+
+            let page = source
+                .read_envelopes(
+                    &all_projected(),
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(1),
+                )
+                .await
+                .expect("precise raw envelope should be readable");
+
+            assert_eq!(page[0].event_id(), PersistedEventId::new(event_id));
+            assert_eq!(
+                page[0].payload().get(),
+                r#"{"payload_number": 18446744073709551617}"#
+            );
+            assert_eq!(
+                page[0].metadata().get(),
+                r#"{"metadata_number": 18446744073709551617}"#
+            );
+
+            Ok(())
+        })
+    })
     .await;
-
-    let page = source
-        .read_envelopes(
-            &all_projected(),
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(1),
-        )
-        .await
-        .expect("precise raw envelope should be readable");
-
-    assert_eq!(page[0].event_id(), PersistedEventId::new(event_id));
-    assert_eq!(
-        page[0].payload().get(),
-        r#"{"payload_number": 18446744073709551617}"#
-    );
-    assert_eq!(
-        page[0].metadata().get(),
-        r#"{"metadata_number": 18446744073709551617}"#
-    );
-
-    pool.cleanup().await;
 }
 
 // Break caught: deriving a fresh or database-incidental identity on each construction would make
@@ -1032,113 +1057,123 @@ async fn source_exposes_its_configured_stable_identity() {
 // `(stream_id, stream_version, event_id)` order would make historical replay nondeterministic.
 #[tokio::test]
 async fn migration_backfills_events_committed_before_the_projection_source_existed() {
-    let pool = event_store_pool().await;
-    let account_a_version_one =
-        Uuid::parse_str("00000000-0000-7000-8000-000000000003").expect("fixture UUID should parse");
-    let account_a_version_two =
-        Uuid::parse_str("00000000-0000-7000-8000-000000000001").expect("fixture UUID should parse");
-    let account_b_version_one =
-        Uuid::parse_str("00000000-0000-7000-8000-000000000002").expect("fixture UUID should parse");
-    insert_event(
-        pool.pool(),
-        account_b_version_one,
-        "account::b",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"stream": "b", "version": 1}),
-    )
-    .await;
-    insert_event(
-        pool.pool(),
-        account_a_version_one,
-        "account::a",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"stream": "a", "version": 1}),
-    )
-    .await;
-    insert_event(
-        pool.pool(),
-        account_a_version_two,
-        "account::a",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"stream": "a", "version": 2}),
-    )
-    .await;
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            migrate_event_store(pool).await;
+            let account_a_version_one = Uuid::parse_str("00000000-0000-7000-8000-000000000003")
+                .expect("fixture UUID should parse");
+            let account_a_version_two = Uuid::parse_str("00000000-0000-7000-8000-000000000001")
+                .expect("fixture UUID should parse");
+            let account_b_version_one = Uuid::parse_str("00000000-0000-7000-8000-000000000002")
+                .expect("fixture UUID should parse");
+            insert_event(
+                pool.pool(),
+                account_b_version_one,
+                "account::b",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"stream": "b", "version": 1}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                account_a_version_one,
+                "account::a",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"stream": "a", "version": 1}),
+            )
+            .await;
+            insert_event(
+                pool.pool(),
+                account_a_version_two,
+                "account::a",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"stream": "a", "version": 2}),
+            )
+            .await;
 
-    let source = PostgresProjectionSource::from_pool(pool.clone_pool(), source_id());
-    source
-        .migrate()
-        .await
-        .expect("projection source migration should backfill history");
-    let page = source
-        .read_envelopes(
-            &all_projected(),
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(4),
-        )
-        .await
-        .expect("backfilled event should be readable");
+            let source = PostgresProjectionSource::from_pool(pool.clone_pool(), source_id());
+            source
+                .migrate()
+                .await
+                .expect("projection source migration should backfill history");
+            let page = source
+                .read_envelopes(
+                    &all_projected(),
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(4),
+                )
+                .await
+                .expect("backfilled event should be readable");
 
-    assert_eq!(
-        page.iter()
-            .map(|envelope| envelope.event_id())
-            .collect::<Vec<_>>(),
-        vec![
-            PersistedEventId::new(account_a_version_one),
-            PersistedEventId::new(account_a_version_two),
-            PersistedEventId::new(account_b_version_one),
-        ]
-    );
-    assert_eq!(
-        page.iter()
-            .map(|envelope| envelope.position())
-            .collect::<Vec<_>>(),
-        vec![
-            delivery_position(1),
-            delivery_position(2),
-            delivery_position(3),
-        ]
-    );
-    assert_eq!(
-        source
-            .high_watermark()
-            .await
-            .expect("backfilled watermark should be readable"),
-        Some(delivery_position(3))
-    );
+            assert_eq!(
+                page.iter()
+                    .map(|envelope| envelope.event_id())
+                    .collect::<Vec<_>>(),
+                vec![
+                    PersistedEventId::new(account_a_version_one),
+                    PersistedEventId::new(account_a_version_two),
+                    PersistedEventId::new(account_b_version_one),
+                ]
+            );
+            assert_eq!(
+                page.iter()
+                    .map(|envelope| envelope.position())
+                    .collect::<Vec<_>>(),
+                vec![
+                    delivery_position(1),
+                    delivery_position(2),
+                    delivery_position(3),
+                ]
+            );
+            assert_eq!(
+                source
+                    .high_watermark()
+                    .await
+                    .expect("backfilled watermark should be readable"),
+                Some(delivery_position(3))
+            );
 
-    pool.cleanup().await;
+            Ok(())
+        })
+    })
+    .await;
 }
 
 // Break caught: limiting delivery mappings to new adapter writes would omit events inserted by a
 // still-running legacy client after the projection migration has been applied.
 #[tokio::test]
 async fn direct_legacy_client_writes_are_delivered_after_source_migration() {
-    let (pool, source) = migrated_source().await;
-    let event_id = Uuid::now_v7();
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            let event_id = Uuid::now_v7();
 
-    insert_event(
-        pool.pool(),
-        event_id,
-        "invoice::legacy-client",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"legacy": true}),
-    )
+            insert_event(
+                pool.pool(),
+                event_id,
+                "invoice::legacy-client",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"legacy": true}),
+            )
+            .await;
+
+            let page = source
+                .read_envelopes(
+                    &all_projected(),
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(1),
+                )
+                .await
+                .expect("legacy client event should be readable");
+
+            assert_eq!(page[0].event_id(), PersistedEventId::new(event_id));
+
+            Ok(())
+        })
+    })
     .await;
-
-    let page = source
-        .read_envelopes(
-            &all_projected(),
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(1),
-        )
-        .await
-        .expect("legacy client event should be readable");
-
-    assert_eq!(page[0].event_id(), PersistedEventId::new(event_id));
-
-    pool.cleanup().await;
 }
 
 // Break caught: a trigger function that resolves delivery tables through the legacy writer's
@@ -1185,67 +1220,77 @@ async fn legacy_writer_with_a_different_search_path_is_delivered_after_source_mi
 // store migrator reject an otherwise compatible database due to an unknown migration version.
 #[tokio::test]
 async fn projection_migration_keeps_the_legacy_event_store_migrator_compatible() {
-    let (pool, _source) = migrated_source().await;
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let _source = migrated_source(pool).await;
 
-    PostgresEventStore::from_pool(pool.clone_pool())
-        .migrate()
-        .await;
-    pool.cleanup().await;
+            PostgresEventStore::from_pool(pool.clone_pool())
+                .migrate()
+                .await;
+            Ok(())
+        })
+    })
+    .await;
 }
 
 // Break caught: resuming with a UUID-derived cursor would skip a preselected lower UUID inserted
 // and committed after the higher UUID event has already been consumed by the projector.
 #[tokio::test]
 async fn lower_uuid_committed_after_a_consumed_higher_uuid_receives_a_later_delivery_position() {
-    let (pool, source) = migrated_source().await;
-    let one = BatchSize::new(1);
-    let lower_uuid_event_id = Uuid::parse_str("00000000-0000-7000-8000-000000000001")
-        .expect("fixture lower UUID should parse");
-    let higher_uuid_event_id = Uuid::parse_str("ffffffff-ffff-7fff-bfff-ffffffffffff")
-        .expect("fixture higher UUID should parse");
+    assert_delivery_database_contract(|pool| {
+        Box::pin(async move {
+            let source = migrated_source(pool).await;
+            let one = BatchSize::new(1);
+            let lower_uuid_event_id = Uuid::parse_str("00000000-0000-7000-8000-000000000001")
+                .expect("fixture lower UUID should parse");
+            let higher_uuid_event_id = Uuid::parse_str("ffffffff-ffff-7fff-bfff-ffffffffffff")
+                .expect("fixture higher UUID should parse");
 
-    insert_event(
-        pool.pool(),
-        higher_uuid_event_id,
-        "invoice::uuid-order::higher",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"uuid": "higher"}),
-    )
+            insert_event(
+                pool.pool(),
+                higher_uuid_event_id,
+                "invoice::uuid-order::higher",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"uuid": "higher"}),
+            )
+            .await;
+
+            let first_page = source
+                .read_envelopes(&all_projected(), None, DeliveryUpperBound::Unbounded, one)
+                .await
+                .expect("first UUID page should be readable");
+            insert_event(
+                pool.pool(),
+                lower_uuid_event_id,
+                "invoice::uuid-order::lower",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"uuid": "lower"}),
+            )
+            .await;
+            let second_page = source
+                .read_envelopes(
+                    &all_projected(),
+                    Some(first_page[0].position()),
+                    DeliveryUpperBound::Unbounded,
+                    one,
+                )
+                .await
+                .expect("second UUID page should be readable");
+
+            assert_eq!(
+                first_page[0].event_id(),
+                PersistedEventId::new(higher_uuid_event_id)
+            );
+            assert_eq!(
+                second_page[0].event_id(),
+                PersistedEventId::new(lower_uuid_event_id)
+            );
+            assert!(second_page[0].position() > first_page[0].position());
+
+            Ok(())
+        })
+    })
     .await;
-
-    let first_page = source
-        .read_envelopes(&all_projected(), None, DeliveryUpperBound::Unbounded, one)
-        .await
-        .expect("first UUID page should be readable");
-    insert_event(
-        pool.pool(),
-        lower_uuid_event_id,
-        "invoice::uuid-order::lower",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"uuid": "lower"}),
-    )
-    .await;
-    let second_page = source
-        .read_envelopes(
-            &all_projected(),
-            Some(first_page[0].position()),
-            DeliveryUpperBound::Unbounded,
-            one,
-        )
-        .await
-        .expect("second UUID page should be readable");
-
-    assert_eq!(
-        first_page[0].event_id(),
-        PersistedEventId::new(higher_uuid_event_id)
-    );
-    assert_eq!(
-        second_page[0].event_id(),
-        PersistedEventId::new(lower_uuid_event_id)
-    );
-    assert!(second_page[0].position() > first_page[0].position());
-
-    pool.cleanup().await;
 }
 
 async fn waits_on_transaction_a_frontier(
@@ -1292,9 +1337,8 @@ async fn waits_on_transaction_a_frontier(
     }
 }
 
-async fn abort_and_join_transaction_b(transaction_b: &mut tokio::task::JoinHandle<()>) {
-    transaction_b.abort();
-    let _ = timeout(Duration::from_secs(2), transaction_b).await;
+async fn abort_and_join_transaction_b(transaction_b: &mut AbortOnDrop<()>) {
+    transaction_b.abort_and_join().await;
 }
 
 // Break caught: allocating delivery positions without transactionally serializing the frontier
@@ -1302,7 +1346,8 @@ async fn abort_and_join_transaction_b(transaction_b: &mut tokio::task::JoinHandl
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_transactions_deliver_every_committed_event_without_waiting_for_blocked_insert()
 {
-    let (pool, source) = migrated_source().await;
+    assert_delivery_database_contract(|pool| Box::pin(async move {
+    let source = migrated_source(pool).await;
     let transaction_a_event_id = Uuid::now_v7();
     let transaction_b_event_id = Uuid::now_v7();
     let mut transaction_a = pool.begin().await.expect("transaction A should begin");
@@ -1323,7 +1368,7 @@ async fn concurrent_transactions_deliver_every_committed_event_without_waiting_f
 
     let (transaction_b_started, transaction_b_started_receiver) = oneshot::channel();
     let transaction_b_pool = pool.clone();
-    let mut transaction_b = tokio::spawn(async move {
+    let mut transaction_b = AbortOnDrop::new(tokio::spawn(async move {
         let mut transaction = transaction_b_pool
             .begin()
             .await
@@ -1347,7 +1392,7 @@ async fn concurrent_transactions_deliver_every_committed_event_without_waiting_f
             .commit()
             .await
             .expect("transaction B should commit once A releases the frontier");
-    });
+    }));
 
     let transaction_b_backend_pid =
         match timeout(Duration::from_secs(2), transaction_b_started_receiver).await {
@@ -1355,14 +1400,13 @@ async fn concurrent_transactions_deliver_every_committed_event_without_waiting_f
             Ok(Err(_)) | Err(_) => {
                 let _ = transaction_a.rollback().await;
                 abort_and_join_transaction_b(&mut transaction_b).await;
-                pool.cleanup().await;
                 panic!(
                     "transaction B did not expose its backend PID within the bounded start window"
                 );
             }
         };
     let b_is_waiting = match waits_on_transaction_a_frontier(
-        &pool,
+        pool,
         transaction_a_backend_pid,
         transaction_b_backend_pid,
     )
@@ -1372,14 +1416,12 @@ async fn concurrent_transactions_deliver_every_committed_event_without_waiting_f
         Err(error) => {
             let _ = transaction_a.rollback().await;
             abort_and_join_transaction_b(&mut transaction_b).await;
-            pool.cleanup().await;
             panic!("observer SQL error while proving B's frontier lock wait: {error}");
         }
     };
     if !b_is_waiting {
         let _ = transaction_a.rollback().await;
         abort_and_join_transaction_b(&mut transaction_b).await;
-        pool.cleanup().await;
         panic!(
             "transaction B never reached a PostgreSQL transaction-lock wait attributable to A's frontier"
         );
@@ -1389,15 +1431,13 @@ async fn concurrent_transactions_deliver_every_committed_event_without_waiting_f
         .commit()
         .await
         .expect("transaction A should release the delivery frontier");
-    match timeout(Duration::from_secs(2), &mut transaction_b).await {
+    match timeout(Duration::from_secs(2), transaction_b.task_mut()).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            pool.cleanup().await;
             panic!("transaction B task failed after A released the frontier: {error}");
         }
         Err(_) => {
             abort_and_join_transaction_b(&mut transaction_b).await;
-            pool.cleanup().await;
             panic!("transaction B did not finish within the bounded completion window");
         }
     }
@@ -1432,5 +1472,6 @@ async fn concurrent_transactions_deliver_every_committed_event_without_waiting_f
         vec![delivery_position(1), delivery_position(2)]
     );
 
-    pool.cleanup().await;
+    Ok(())
+    })).await;
 }

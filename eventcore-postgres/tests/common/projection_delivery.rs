@@ -179,15 +179,6 @@ impl IsolatedTestDatabase {
     }
 }
 
-pub(crate) async fn create_isolated_test_pool() -> IsolatedTestDatabase {
-    let mut database = IsolatedTestDatabase::plan();
-    database
-        .initialize()
-        .await
-        .expect("configured test postgres should initialize an isolated schema");
-    database
-}
-
 async fn pool_with_search_path(
     connection_string: &str,
     search_path: String,
