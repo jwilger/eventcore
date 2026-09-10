@@ -123,6 +123,9 @@ pub enum PostgresProjectionMode {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum ProjectionConfigurationError {
+    /// A transactional projection must read at least one envelope per source page.
+    #[error("transactional projection batch size must be positive")]
+    ZeroBatchSize,
     /// A continuous projection must wait for a positive duration between empty polls.
     #[error("continuous poll interval must be positive")]
     ZeroContinuousPollInterval,
@@ -181,11 +184,19 @@ impl PostgresProjectionConfig {
 
     /// Replaces the maximum number of source envelopes read in one page.
     ///
-    /// A batch size of zero is accepted. It makes every source page empty, so the runner reports
-    /// itself caught up to the captured frontier immediately without applying envelopes.
-    pub fn with_batch_size(mut self, batch_size: BatchSize) -> Self {
+    /// A zero batch size is rejected with [`ProjectionConfigurationError::ZeroBatchSize`], because
+    /// an empty page would otherwise make the runner report false catch-up while selected
+    /// committed envelopes remain unapplied.
+    pub fn with_batch_size(
+        mut self,
+        batch_size: BatchSize,
+    ) -> Result<Self, ProjectionConfigurationError> {
+        if usize::from(batch_size) == 0 {
+            return Err(ProjectionConfigurationError::ZeroBatchSize);
+        }
+
         self.batch_size = batch_size;
-        self
+        Ok(self)
     }
 
     /// Replaces the retry policy.

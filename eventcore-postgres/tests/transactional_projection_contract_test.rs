@@ -830,6 +830,7 @@ impl PostgresAtomicFixture {
     ) -> Result<ProjectionAttemptObservation, FixtureError> {
         let mut config = PostgresProjectionConfig::new(self.selection.clone())
             .with_batch_size(self.batch_size)
+            .expect("fixture batch size should be positive")
             .with_retry_policy(self.retry_policy.clone());
         if self.commit_acknowledgement_proxy.is_some() {
             config = config.with_retry_policy(
@@ -1011,6 +1012,7 @@ impl TransactionalProjectionFixture for PostgresAtomicFixture {
             self.run_with_timeout(
                 PostgresProjectionConfig::new(self.selection.clone())
                     .with_batch_size(self.batch_size)
+                    .expect("fixture batch size should be positive")
                     .with_retry_policy(self.retry_policy.clone()),
             )
             .await?,
@@ -1456,6 +1458,7 @@ fn transactional_projection_config_validates_and_preserves_every_builder_value()
     let cancellation = tokio_util::sync::CancellationToken::new();
     let config = PostgresProjectionConfig::new(selection())
         .with_batch_size(BatchSize::new(23))
+        .expect("positive batch size should construct")
         .with_retry_policy(retry.clone())
         .with_continuous_poll_interval(Duration::from_millis(11))
         .expect("positive poll interval should construct")
@@ -1495,6 +1498,18 @@ fn transactional_projection_config_validates_and_preserves_every_builder_value()
         ProjectionRetryPolicy::new(u32::MAX, Duration::ZERO, 1.0, Duration::ZERO),
         Err(ProjectionConfigurationError::TooManyRetries),
     );
+}
+
+// Break caught: allowing zero would make an empty source page look like successful catch-up while
+// selected committed envelopes remain unapplied.
+#[test]
+fn transactional_projection_config_rejects_zero_batch_size() {
+    let result = PostgresProjectionConfig::new(selection()).with_batch_size(BatchSize::new(0));
+
+    assert!(matches!(
+        result,
+        Err(ProjectionConfigurationError::ZeroBatchSize)
+    ));
 }
 
 // Break caught: recording at future construction, dropping the configured sleeper during config

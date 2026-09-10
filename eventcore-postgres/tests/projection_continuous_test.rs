@@ -370,6 +370,7 @@ impl PostgresContinuousFixture {
         let (started_sender, mut started_receiver) = mpsc::unbounded_channel();
         let config = PostgresProjectionConfig::new(self.selection.clone())
             .with_batch_size(BatchSize::new(2))
+            .expect("fixture batch size should be positive")
             .continuous(cancellation.clone())
             .with_continuous_poll_interval(POLL_INTERVAL)
             .expect("fixture poll interval should be positive")
