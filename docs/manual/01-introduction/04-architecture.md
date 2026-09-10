@@ -93,14 +93,17 @@ The event store provides durable, ordered storage of events:
 
 - Atomic multi-stream writes
 - Optimistic concurrency control
-- Resumable cross-stream projection cursors (UUIDv7 for SQL/memory adapters;
-  replica-local ingestion order for filesystem stores after Git merges)
-- Exactly-once semantics
+- Adapter-scoped resumable cursors. A legacy `StreamPosition` is an opaque
+  reader cursor; its UUID representation in some adapters is not a universal
+  cross-stream commit order or distributed-causality guarantee.
+- No blanket exactly-once guarantee for arbitrary read-model side effects.
+  Command writes are atomic. Projection guarantees depend on the runner and
+  destination described below.
 
 ### 4. Projections
 
-Projections build read models from events. They implement the `Projector` trait
-and are run via the `run_projection()` free function:
+EventCore has two additive projection paths. The backend-neutral legacy path
+implements `Projector` and runs through `run_projection()`:
 
 ```rust
 impl Projector for OrderSummaryProjection {
@@ -133,6 +136,32 @@ impl Projector for OrderSummaryProjection {
 // to enable continuous polling.
 run_projection(projection, &store, ProjectionConfig::default()).await?;
 ```
+
+This path preserves the EventCore 2.0.1 API. Its application effect and
+checkpoint are separate operations, so it supplies replay and checkpoint
+mechanics but does not promise atomic effect-plus-progress or exactly-once
+external effects.
+
+With the `postgres` feature, transactional PostgreSQL projections use
+`eventcore::postgres::projections`. They read through a source-scoped positive
+`DeliveryPosition` assigned in commit-safe order, then lend one transaction on
+the read-model database to `PostgresProjector::apply`. The runner advances named
+progress and commits the effect and progress together. This provides
+effect-plus-progress exactly-once behavior within that single read-model
+database commit when PostgreSQL acknowledges the commit. It is not a
+distributed transaction with the event store or an external service.
+
+The event-store source and read-model destination are explicit, separate
+arguments and may be different databases or pools. Stable source, projector,
+and selection identities prevent silently adopting incompatible progress. A
+selected payload that cannot decode stops without advancing progress.
+
+The PostgreSQL runner holds a session advisory lock on the same physical
+read-model connection that owns every effect/progress transaction. It therefore
+requires session pooling; transaction-pooling middleware such as PgBouncer in
+transaction mode cannot preserve the leadership/fencing guarantee. See
+[Working with Projections](../02-getting-started/04-projections.md) for migration,
+failure, recovery, and reset guidance.
 
 **Capabilities:**
 
@@ -172,13 +201,14 @@ Events Written
     ↓
 Event Notification
     ↓
-run_projection() ──────→ Polls event streams
+projection runner ─────→ Polls its delivery source
     ↓
 Load Event
     ↓
-Projector.apply() ��────→ Update read model state
+Projector.apply() ─────→ Update read model state
     ↓
-Save Checkpoint ───────→ Track position for resume
+Save Progress ─────────→ Separate legacy checkpoint, or same transaction as
+                         the effect in transactional PostgreSQL mode
     ↓
 Query Read Model ──────→ Optimized for specific access patterns
 ```

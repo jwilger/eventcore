@@ -11,6 +11,8 @@ use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
 
+pub(crate) mod fixture_lifecycle;
+
 /// Singleton to ensure container is started only once across all tests.
 pub(crate) static POSTGRES_CONTAINER: OnceLock<()> = OnceLock::new();
 

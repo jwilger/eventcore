@@ -24,9 +24,14 @@
 mod command;
 mod errors;
 mod projection;
+mod projection_delivery;
 mod snapshot;
 mod store;
 mod validation;
+
+#[cfg(test)]
+#[path = "projection_delivery.test.rs"]
+mod projection_delivery_tests;
 
 pub use command::{
     CommandLogic, CommandStreams, Event, NewEvents, StreamDeclarations, StreamDeclarationsError,
@@ -37,6 +42,11 @@ pub use projection::{
     AttemptNumber, BackoffMultiplier, BatchSize, CheckpointStore, DelayMilliseconds, EventFilter,
     EventPage, EventReader, FailureContext, FailureStrategy, MaxConsecutiveFailures, MaxRetries,
     MaxRetryAttempts, Projector, ProjectorCoordinator, RetryCount, StreamPosition,
+};
+pub use projection_delivery::{
+    DeliveryIdentityError, DeliveryPosition, DeliverySourceId, DeliveryUpperBound, EventTypeName,
+    PersistedEventEnvelope, PersistedEventId, ProjectionSelection, ProjectionSelectionError,
+    ProjectionSelectionId, ProjectionSource, ProjectionStreamFilter, ProjectorName,
 };
 pub use snapshot::{CommandStateReplayCheckpoint, CommandStateSnapshot, CommandStateSnapshotId};
 pub use store::{

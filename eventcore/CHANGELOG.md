@@ -7,32 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+### Documentation
+
+- _(projections)_ document the legacy and transactional PostgreSQL projection guarantees
+
+### Features
+
+- _(projections)_ expose the additive transactional PostgreSQL projection API through
+  `eventcore::postgres::projections` for the planned 2.1.0 release; existing 2.0.1
+  `Projector` and `run_projection` callers remain source-compatible
+
 ## [2.0.0](https://github.com/jwilger/eventcore/compare/eventcore-v1.1.1...eventcore-v2.0.0) - 2026-08-11
 
 ### Documentation
 
-- *(snapshots)* explain durable command state
+- _(snapshots)_ explain durable command state
 
 ### Features
 
-- *(snapshots)* persist command state projections
+- _(snapshots)_ persist command state projections
 
 ### Refactoring
 
-- *(testing)* stabilize reconstruction benchmarks
+- _(testing)_ stabilize reconstruction benchmarks
 
 ## [1.1.1](https://github.com/jwilger/eventcore/compare/eventcore-v1.1.0...eventcore-v1.1.1) - 2026-08-06
 
 ### Bug Fixes
 
-- *(model)* complete experimental checker acceptance
-- *(model)* preserve checker API compatibility
+- _(model)_ complete experimental checker acceptance
+- _(model)_ preserve checker API compatibility
 
 ## [1.1.0](https://github.com/jwilger/eventcore/compare/eventcore-v1.1.0-alpha.1...eventcore-v1.1.0) - 2026-08-06
 
 ### Documentation
 
-- *(api)* clarify experimental feature stability
+- _(api)_ clarify experimental feature stability
 
 ## [1.0.2](https://github.com/jwilger/eventcore/compare/eventcore-v1.0.1...eventcore-v1.0.2) - 2026-08-02
 

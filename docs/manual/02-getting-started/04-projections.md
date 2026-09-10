@@ -294,6 +294,296 @@ async fn setup_projections() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+This is the legacy projection API retained unchanged from EventCore 2.0.1. It
+works across EventCore backends, but `Projector::apply` and checkpoint storage
+are separate operations. Use it when that delivery model is sufficient; it does
+not make an arbitrary read-model effect atomic with its checkpoint.
+
+## Transactional PostgreSQL Projections
+
+Enable the `postgres` feature when a PostgreSQL read model needs its mutation
+and progress to commit atomically. This additive API is available through
+`eventcore::postgres::projections`; existing `Projector` and `run_projection`
+code remains source-compatible.
+
+The source event store and destination read model are intentionally separate
+arguments. They may be pools for different schemas in one database or entirely
+different PostgreSQL databases. Only the destination participates in the
+effect/progress transaction; this is not a distributed transaction with the
+event store.
+
+### End-to-end setup
+
+The following is the core of the compiled consumer example in
+`eventcore/tests/postgres_transactional_projection_api_test.rs`. Applications
+use their own SQLx pool/query APIs, while importing `Postgres` and `Transaction`
+from EventCore's facade so the projector signature always matches EventCore's
+locked SQLx version (0.8.6 in the current workspace lockfile).
+
+```rust,ignore
+use std::future::Future;
+
+use eventcore::postgres::projections::{
+    DeliveryPosition, DeliverySourceId, EventTypeName, NoopAfterCommit, Postgres,
+    PostgresProjectionConfig, PostgresProjectionSource, PostgresProjectionStore,
+    PostgresProjector, ProjectionSelection, ProjectionSelectionId,
+    ProjectionStreamFilter, ProjectorName, Transaction, run_transactional_projection,
+};
+use serde::Deserialize;
+use sqlx::{PgPool, query};
+
+#[derive(Deserialize)]
+struct AccountCredited {
+    amount: i64,
+}
+
+struct AccountTotals {
+    name: ProjectorName,
+}
+
+impl PostgresProjector for AccountTotals {
+    type Event = AccountCredited;
+    type Error = sqlx::Error;
+    type AfterCommit = NoopAfterCommit;
+
+    fn name(&self) -> &ProjectorName {
+        &self.name
+    }
+
+    fn apply<'a, 'c>(
+        &'a mut self,
+        event: &'a Self::Event,
+        _position: DeliveryPosition,
+        tx: &'a mut Transaction<'c, Postgres>,
+    ) -> impl Future<Output = Result<Self::AfterCommit, Self::Error>> + Send + 'a
+    where
+        'c: 'a,
+    {
+        async move {
+            let _ = query(
+                "INSERT INTO account_totals (singleton, total) VALUES (TRUE, $1) \
+                 ON CONFLICT (singleton) DO UPDATE \
+                 SET total = account_totals.total + EXCLUDED.total",
+            )
+            .bind(event.amount)
+            .execute(&mut **tx)
+            .await?;
+            Ok(NoopAfterCommit)
+        }
+    }
+}
+
+async fn catch_up(source_pool: PgPool, read_model_pool: PgPool)
+    -> Result<(), Box<dyn std::error::Error>>
+{
+    // Run the normal event-store migration first. Then install the separate,
+    // source-owned delivery migration on that same event-store database.
+    let source = PostgresProjectionSource::from_pool(
+        source_pool,
+        DeliverySourceId::try_new("orders-primary")?,
+    );
+    source.migrate().await?;
+
+    // The application migrates its read-model tables. EventCore separately
+    // installs named progress and coordination state on the destination.
+    let destination = PostgresProjectionStore::from_pool(read_model_pool);
+    destination.migrate().await?;
+
+    let selection = ProjectionSelection::try_new(
+        ProjectionSelectionId::try_new("account-totals-events-v1")?,
+        ProjectionStreamFilter::All,
+        vec![EventTypeName::try_new("account-credited")?],
+    )?;
+    let projector = AccountTotals {
+        name: ProjectorName::try_new("account-totals-v1")?,
+    };
+
+    let outcome = run_transactional_projection(
+        projector,
+        &source,
+        &destination,
+        PostgresProjectionConfig::new(selection), // batch mode
+    )
+    .await?;
+    println!("{outcome:?}");
+    Ok(())
+}
+```
+
+Apply migrations in this order:
+
+1. Run `PostgresEventStore::migrate()` on the event-store database.
+2. Run `PostgresProjectionSource::migrate()` on that same source database.
+3. Run the application's read-model migrations on the destination database.
+4. Run `PostgresProjectionStore::migrate()` on the destination. EventCore uses
+   a component-specific migration ledger rather than SQLx's application ledger.
+
+Plan the first source migration as a maintenance operation. It takes an
+`ACCESS EXCLUSIVE` lock on `eventcore_events` and backfills the complete event
+history, so it can block both readers and writers for a substantial period on a
+large store. Measure it on representative data and schedule an appropriate
+maintenance window. Existing rows receive deterministic historical positions
+ordered by `(stream_id, stream_version, event_id)`. That backfill order is not a
+claim about their original commit order. After migration, subsequent appends
+allocate the positive, source-scoped global frontier inside their event-store
+transaction, so newly committed events cannot be skipped because identifier
+order differs from commit order. Event UUIDs remain event identities; neither a
+UUID nor a legacy `StreamPosition` is treated as this delivery position.
+
+### Stable identity and progress
+
+Treat these strings as persisted schema decisions. EventCore binds semantics by
+comparing the caller-supplied IDs; it cannot infer whether the implementation
+behind an unchanged ID has changed:
+
+- `DeliverySourceId` identifies the source delivery sequence and its ordering
+  semantics.
+- `ProjectorName` identifies the read model and its leadership/progress row.
+- `ProjectionSelectionId` identifies the meaning of the stream filter and
+  selected persisted event-type names. Changing either requires a new selection
+  ID; changing source semantics requires a new source ID.
+
+Changing the configured source or selection ID while reusing existing progress
+returns an identity-mismatch error. To rebuild the same read model for changed
+semantics, first invoke reset with the **old source and selection IDs stored in
+progress**, so validation succeeds and the old model/progress are cleared; then
+run with the new IDs. Merely choosing a new `ProjectorName` starts with no saved
+progress; a progress row is created only by a committed effect or explicit
+skip. It does not empty an already-populated read model and can duplicate
+non-idempotent effects. A new projector name is safe only with a new or
+otherwise empty model. `PostgresProjectionStore::progress` exposes the last
+committed source/selection/position for operational inspection. Restarting the
+same identities resumes after that position.
+
+`PostgresProjector::decode` receives the complete `PersistedEventEnvelope`.
+Its default implementation deserializes `envelope.payload()` as JSON into
+`PostgresProjector::Event`, preserving the simple single-event-type case.
+Override it when one selection contains multiple persisted event types whose
+payloads need the discriminator or metadata for application-owned routing. For
+example, credited and debited events may intentionally persist the same amount
+shape but have opposite application meaning:
+
+```rust,ignore
+fn decode(
+    &self,
+    envelope: &PersistedEventEnvelope,
+) -> Result<Self::Event, BoxedProjectionError> {
+    let amount: Amount = serde_json::from_str(envelope.payload().get())
+        .map_err(|error| -> BoxedProjectionError { Box::new(error) })?;
+
+    match envelope.event_type().as_ref() {
+        "account-credited" => Ok(AccountChange::Credit(amount.value)),
+        "account-debited" => Ok(AccountChange::Debit(amount.value)),
+        other => Err(Box::new(UnsupportedAccountEvent(other.to_owned()))),
+    }
+}
+```
+
+A selected payload or discriminator error returns
+`TransactionalProjectionError::Decode` at that envelope's delivery position.
+Decode is terminal: it does not call `on_error`, consume the application retry
+budget, run `apply`, or advance progress. Unselected event types are not decoded.
+
+### Batch and continuous operation
+
+`PostgresProjectionConfig::new(selection)` runs in batch mode. It captures a
+source high-water mark, drains every page through that bound, and returns
+`ProjectionRunOutcome::CaughtUp`; a batch is not limited to one page.
+
+Continuous mode repeatedly catches up until its cancellation token is
+cancelled:
+
+```rust,ignore
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
+
+let cancellation = CancellationToken::new();
+let config = PostgresProjectionConfig::new(selection)
+    .continuous(cancellation.clone())
+    .with_continuous_poll_interval(Duration::from_millis(250))?;
+
+// Run `run_transactional_projection(...)` in an owned task, then call
+// `cancellation.cancel()` during graceful shutdown.
+```
+
+Cancellation is cooperative at cycle boundaries: the runner observes it while
+idle after completing the current bounded catch-up cycle. It does not interrupt
+an in-flight `apply`, retry delay, commit, or `AfterCommit` action. Bound those
+operations at the application/database layer when shutdown latency matters.
+
+### Failure decisions, retries, and after-commit work
+
+`PostgresProjector::on_error` makes application failure handling explicit:
+
+- `Retry` rolls back the attempt, waits according to
+  `ProjectionRetryPolicy`, and retries only up to its configured bound.
+  Exhaustion returns `TransactionalProjectionError::RetryExhausted`.
+- `Skip` rolls back the failed effect and then explicitly commits progress past
+  that event. Use it only when losing that event's effect is an accepted domain
+  decision.
+- `Stop` rolls back and returns a stopped outcome with the position still
+  pending.
+- `Fatal` rolls back and returns the application error with the position still
+  pending. This is the safe default.
+
+```rust,ignore
+let retry = ProjectionRetryPolicy::new(
+    4,
+    Duration::from_millis(100),
+    2.0,
+    Duration::from_secs(5),
+)?;
+let config = PostgresProjectionConfig::new(selection).with_retry_policy(retry);
+```
+
+`PostgresProjector::apply` returns an owned `AfterCommit` value. EventCore runs
+it only after PostgreSQL acknowledges the effect/progress commit. If it fails,
+`AfterCommitFailed` reports a position that is already committed; replay will
+not rerun that callback. For durable messages or external side effects, write
+an outbox row inside the supplied transaction and deliver the outbox
+independently. A network call in `apply` or `AfterCommit` is not covered by the
+database exactly-once guarantee.
+
+A PostgreSQL rollback restores database state, not fields mutated through the
+projector's `&mut self`. In-memory counters, caches, or attempt flags changed by
+`apply` remain changed when that attempt retries. Keep durable or retry-sensitive
+state in the supplied transaction, derive it again from the event/database, or
+make any projector-instance mutation explicitly rollback-safe.
+
+If the connection fails while acknowledging `COMMIT`, EventCore returns
+`CommitIndeterminate`: the effect and progress may both have committed or both
+have rolled back. Do not blindly compensate or skip. Reconnect, inspect named
+progress and the read model/outbox, then restart with the same identities.
+
+### Leadership and pooling
+
+Only one runner/reset for a `ProjectorName` may write at a time. The destination
+store holds a PostgreSQL session advisory lock and runs every read-model
+transaction on that same physical connection. A lost session fences the old
+runner before another leader can continue.
+
+Use direct or session-pooled PostgreSQL connections. Do not place the
+destination behind transaction-pooling middleware: transaction pooling can
+move transactions away from the session that owns the advisory lock and void
+the leadership guarantee. The source pool has no such session-lock constraint.
+
+### Reset and replay
+
+`reset_transactional_projection` invokes application-owned
+`PostgresProjectionReset` code and deletes matching progress in one destination
+transaction under the same named leadership lock.
+`reset_and_replay_transactional_projection` retains leadership from reset
+through replay so another writer cannot enter between phases.
+
+Schedule reset/replay as coordinated downtime for that read model and stop all
+legacy and transactional writers first. Existing legacy UUID checkpoints are
+not convertible to `DeliveryPosition`; reset the read model, choose stable new
+transactional identities, and replay from the source. When changing an existing
+transactional source/selection, call reset with the old IDs persisted in its
+progress row, then replay with the new IDs. Baseline reset mutates the live read
+model in place. It does not build, swap, or guarantee a shadow generation, so
+queries may observe rebuilding state until replay completes.
+
 ## Querying Projections
 
 Query your projection's state using the methods you defined on it:
@@ -324,7 +614,7 @@ fn query_tasks(projection: &UserTaskListProjection) {
 }
 ```
 
-## Real-time Updates
+## Legacy Real-time Updates
 
 For continuous projection updates, configure `ProjectionConfig` in continuous
 mode so `run_projection()` keeps polling for new events instead of returning
@@ -341,10 +631,11 @@ let config = ProjectionConfig::default()
 run_projection(projection, &store, config).await?;
 ```
 
-The default `ProjectionConfig` runs in batch mode (process the currently
-available events, then return). EventCore's projection system handles
-checkpointing and resumption automatically. See the `projection-system`
-blueprint and ADR-0036 for details on the continuous polling architecture.
+The default legacy `ProjectionConfig` runs in batch mode (process the currently
+available events, then return). The legacy runner handles checkpointing and
+resumption, but its checkpoint is not atomic with application read-model
+effects. See the `projection-system` blueprint and ADR-0036 for details on this
+continuous polling architecture.
 
 ## Filtering Which Events a Reader Sees
 
@@ -375,7 +666,7 @@ ADR-0047; literal prefix filtering remains available via `EventFilter::prefix`.
 `EventFilter` lives in `eventcore-types` because it is part of the
 reader/backend contract rather than the command-execution surface.
 
-## Rebuilding Projections
+## Rebuilding Legacy Projections
 
 One of the powerful features of event sourcing is the ability to rebuild
 projections from scratch. Simply create a fresh projector instance and run

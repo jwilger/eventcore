@@ -27,9 +27,11 @@
 //!   streams, folds them into state, calls `handle`, and atomically appends the
 //!   resulting events with optimistic concurrency control, retrying per the
 //!   supplied [`RetryPolicy`].
-//! - **Projection** — a *read model* built by replaying events. Implement
-//!   [`Projector`] and drive it with [`run_projection`]. Read models and write
-//!   models are kept on separate code paths.
+//! - **Projection** — a *read model* built by replaying events. The legacy,
+//!   backend-neutral API implements [`Projector`] and uses [`run_projection`].
+//!   With the `postgres` feature, `eventcore::postgres::projections` adds a separate
+//!   effect-plus-progress transactional runner without changing the legacy API.
+//!   Read models and write models remain on separate code paths.
 //!
 //! ## Quick start: your first command
 //!

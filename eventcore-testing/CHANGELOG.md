@@ -7,21 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+### Features
+
+- _(projections)_ add reusable public transactional-projection contract fixtures covering
+  atomicity, restart, malformed input, leadership, retry/skip/stop/fatal behavior, batching,
+  after-commit ordering, and commit acknowledgement loss
+
 ## [2.0.1](https://github.com/jwilger/eventcore/compare/eventcore-testing-v2.0.0...eventcore-testing-v2.0.1) - 2026-08-15
 
 ### Bug Fixes
 
-- *(postgres)* validate read-only stream participants
+- _(postgres)_ validate read-only stream participants
 
 ## [2.0.0](https://github.com/jwilger/eventcore/compare/eventcore-testing-v1.1.1...eventcore-testing-v2.0.0) - 2026-08-11
 
 ### Refactoring
 
-- *(testing)* stabilize reconstruction benchmarks
+- _(testing)_ stabilize reconstruction benchmarks
 
 ### Testing
 
-- *(contract)* cover command state snapshots
+- _(contract)_ cover command state snapshots
 
 ## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-testing-v1.0.0...eventcore-testing-v1.0.1) - 2026-06-15
 
