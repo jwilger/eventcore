@@ -128,10 +128,13 @@ The source contract must provide:
 - preservation of per-stream version order; and
 - explicit source/storage errors without dropping rows.
 
-The runner, not the source, decodes a selected envelope into the projector's
-application event contract. An unrelated event type excluded by the projector's
-declared filter is not an error. A selected event whose discriminator or payload
-cannot decode is a typed terminal failure and does not advance progress.
+The runner asks the projector's application-owned decode boundary to turn each
+selected envelope into its application event contract. The default decoder uses
+the payload JSON; an override can route using the persisted discriminator or
+metadata. An unrelated event type excluded by the projector's declared filter
+is not an error. A selected event whose discriminator or payload cannot decode
+is a typed terminal failure, does not enter application failure policy, and does
+not advance progress.
 
 ### PostgreSQL frontier
 

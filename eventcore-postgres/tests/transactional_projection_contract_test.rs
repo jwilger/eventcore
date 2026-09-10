@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::env;
 use std::future::Future;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::panic::{AssertUnwindSafe, resume_unwind};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,10 +11,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eventcore_postgres::{
-    AfterCommit, PostgresProjectionConfig, PostgresProjectionMode, PostgresProjectionSource,
-    PostgresProjectionSourceError, PostgresProjectionStore, PostgresProjector,
-    ProjectionConfigurationError, ProjectionFailureContext, ProjectionFailureDecision,
-    ProjectionPollSleeper, ProjectionRetryPolicy, ProjectionRetrySleeper, ProjectionRunOutcome,
+    AfterCommit, BoxedProjectionError, NoopAfterCommit, PostgresProjectionConfig,
+    PostgresProjectionMode, PostgresProjectionSource, PostgresProjectionSourceError,
+    PostgresProjectionStore, PostgresProjector, ProjectionConfigurationError,
+    ProjectionFailureContext, ProjectionFailureDecision, ProjectionPollSleeper,
+    ProjectionRetryPolicy, ProjectionRetrySleeper, ProjectionRunOutcome,
     TransactionalProjectionError, run_transactional_projection,
 };
 use eventcore_testing::{
@@ -40,9 +41,9 @@ use eventcore_testing::{
     transient_retry_success_contract,
 };
 use eventcore_types::{
-    BatchSize, DeliveryPosition, DeliverySourceId, DeliveryUpperBound, Event, EventStore,
-    EventTypeName, ProjectionSelection, ProjectionSelectionId, ProjectionSource,
-    ProjectionStreamFilter, ProjectorName, StreamId, StreamVersion, StreamWrites,
+    AttemptNumber, BatchSize, DeliveryPosition, DeliverySourceId, DeliveryUpperBound, Event,
+    EventStore, EventTypeName, PersistedEventEnvelope, ProjectionSelection, ProjectionSelectionId,
+    ProjectionSource, ProjectionStreamFilter, ProjectorName, StreamId, StreamVersion, StreamWrites,
 };
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
@@ -72,13 +73,13 @@ impl IsolatedTestDatabase {
         self.pool.clone()
     }
 
-    async fn cleanup(self) -> Result<(), sqlx::Error> {
+    async fn cleanup(&self) -> Result<(), sqlx::Error> {
         self.pool.close().await;
         let cleanup_pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&self.connection_string)
             .await?;
-        let _ = query(&format!("DROP SCHEMA {} CASCADE", self.schema))
+        let _ = query(&format!("DROP SCHEMA IF EXISTS {} CASCADE", self.schema))
             .execute(&cleanup_pool)
             .await?;
         cleanup_pool.close().await;
@@ -98,7 +99,6 @@ async fn isolated_database() -> Result<IsolatedTestDatabase, sqlx::Error> {
     let _ = query(&format!("CREATE SCHEMA {schema}"))
         .execute(&admin_pool)
         .await?;
-    admin_pool.close().await;
     let schema_for_pool = schema.clone();
     let pool = PgPoolOptions::new()
         .max_connections(10)
@@ -113,7 +113,18 @@ async fn isolated_database() -> Result<IsolatedTestDatabase, sqlx::Error> {
             })
         })
         .connect(&connection_string)
-        .await?;
+        .await;
+    let pool = match pool {
+        Ok(pool) => pool,
+        Err(error) => {
+            let _ = query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+                .execute(&admin_pool)
+                .await;
+            admin_pool.close().await;
+            return Err(error);
+        }
+    };
+    admin_pool.close().await;
     Ok(IsolatedTestDatabase {
         pool,
         schema,
@@ -1936,4 +1947,638 @@ async fn leadership_loss_of_exact_backend_fences_all_stale_writes() {
 #[tokio::test]
 async fn batch_captures_high_watermark_once_despite_concurrent_append() {
     assert_fixture_contract(|fixture| Box::pin(fixed_high_watermark_contract(fixture))).await;
+}
+
+type IsolatedDatabaseContractFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
+
+async fn assert_isolated_database_contract(
+    contract: impl for<'a> FnOnce(&'a IsolatedTestDatabase) -> IsolatedDatabaseContractFuture<'a>,
+) {
+    let database = timeout(RUN_TIMEOUT, isolated_database())
+        .await
+        .expect("isolated projection database setup should remain bounded")
+        .expect("isolated projection database should initialize");
+    let operation = timeout(
+        RUN_TIMEOUT,
+        AssertUnwindSafe(contract(&database)).catch_unwind(),
+    )
+    .await;
+    let cleanup = cleanup_isolated_database(&database).await;
+    match operation {
+        Ok(Ok(())) => cleanup.expect("test schema cleanup should succeed"),
+        Ok(Err(payload)) => {
+            let _ = cleanup;
+            resume_unwind(payload);
+        }
+        Err(_) => {
+            let _ = cleanup;
+            panic!("isolated database contract should remain bounded");
+        }
+    }
+}
+
+async fn cleanup_isolated_database(database: &IsolatedTestDatabase) -> Result<(), String> {
+    let mut last_failure = String::new();
+    for attempt in 1..=2 {
+        match timeout(RUN_TIMEOUT, database.cleanup()).await {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) => {
+                last_failure = format!("cleanup attempt {attempt} failed: {error}");
+            }
+            Err(_) => {
+                last_failure = format!("cleanup attempt {attempt} timed out");
+            }
+        }
+    }
+    Err(last_failure)
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct LedgerPayload {
+    stream_id: StreamId,
+    amount: i64,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct LedgerCredit(LedgerPayload);
+
+impl Event for LedgerCredit {
+    fn stream_id(&self) -> &StreamId {
+        &self.0.stream_id
+    }
+
+    fn event_type_name() -> &'static str {
+        "ledger-credit"
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct LedgerDebit(LedgerPayload);
+
+impl Event for LedgerDebit {
+    fn stream_id(&self) -> &StreamId {
+        &self.0.stream_id
+    }
+
+    fn event_type_name() -> &'static str {
+        "ledger-debit"
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct UnsupportedLedgerEntry(LedgerPayload);
+
+impl Event for UnsupportedLedgerEntry {
+    fn stream_id(&self) -> &StreamId {
+        &self.0.stream_id
+    }
+
+    fn event_type_name() -> &'static str {
+        "ledger-unsupported"
+    }
+}
+
+#[derive(Deserialize)]
+enum LedgerApplicationEvent {
+    Credit(i64),
+    Debit(i64),
+}
+
+#[derive(Debug, Error)]
+#[error("unsupported persisted event type {0}")]
+struct UnsupportedLedgerEventType(String);
+
+struct LedgerProjector {
+    name: ProjectorName,
+    applications: Arc<AtomicU64>,
+    policy_invocations: Arc<AtomicU64>,
+}
+
+impl PostgresProjector for LedgerProjector {
+    type Event = LedgerApplicationEvent;
+    type Error = sqlx::Error;
+    type AfterCommit = NoopAfterCommit;
+
+    fn name(&self) -> &ProjectorName {
+        &self.name
+    }
+
+    fn decode(
+        &self,
+        envelope: &PersistedEventEnvelope,
+    ) -> Result<Self::Event, BoxedProjectionError> {
+        let payload: LedgerPayload = serde_json::from_str(envelope.payload().get())
+            .map_err(|error| -> BoxedProjectionError { Box::new(error) })?;
+        match envelope.event_type().as_ref() {
+            "ledger-credit" => Ok(LedgerApplicationEvent::Credit(payload.amount)),
+            "ledger-debit" => Ok(LedgerApplicationEvent::Debit(payload.amount)),
+            other => Err(Box::new(UnsupportedLedgerEventType(other.to_owned()))),
+        }
+    }
+
+    async fn apply<'a, 'c>(
+        &'a mut self,
+        event: &'a Self::Event,
+        _position: DeliveryPosition,
+        transaction: &'a mut Transaction<'c, Postgres>,
+    ) -> Result<Self::AfterCommit, Self::Error>
+    where
+        'c: 'a,
+    {
+        let delta = match event {
+            LedgerApplicationEvent::Credit(amount) => *amount,
+            LedgerApplicationEvent::Debit(amount) => -*amount,
+        };
+        let _ = query("UPDATE ledger_projection SET total = total + $1")
+            .bind(delta)
+            .execute(&mut **transaction)
+            .await?;
+        let _ = self.applications.fetch_add(1, Ordering::SeqCst);
+        Ok(NoopAfterCommit)
+    }
+
+    fn on_error(
+        &mut self,
+        _failure: ProjectionFailureContext<'_, Self::Error>,
+    ) -> ProjectionFailureDecision {
+        let _ = self.policy_invocations.fetch_add(1, Ordering::SeqCst);
+        ProjectionFailureDecision::Retry
+    }
+}
+
+// Break caught: payload-only decoding cannot route selected persisted event types whose JSON
+// representations are intentionally identical, and hides unsupported discriminators from the
+// application's public decode boundary.
+#[tokio::test]
+async fn projector_decode_routes_by_persisted_event_type_and_rejects_unsupported_discriminator() {
+    assert_isolated_database_contract(|database| {
+        Box::pin(async move {
+            // Given: three public EventCore event types share an identical persisted JSON shape.
+            let event_store =
+                eventcore_postgres::PostgresEventStore::from_pool(database.clone_pool());
+            event_store.migrate().await;
+            let delivery_source_id = source_id();
+            let source = PostgresProjectionSource::from_pool(
+                database.clone_pool(),
+                delivery_source_id.clone(),
+            );
+            source
+                .migrate()
+                .await
+                .expect("projection source migration should succeed");
+            let store = PostgresProjectionStore::from_pool(database.clone_pool());
+            store
+                .migrate()
+                .await
+                .expect("projection destination migration should succeed");
+            let _ = query("CREATE TABLE ledger_projection (total BIGINT NOT NULL)")
+                .execute(database.pool())
+                .await
+                .expect("ledger read model should initialize");
+            let _ = query("INSERT INTO ledger_projection (total) VALUES (0)")
+                .execute(database.pool())
+                .await
+                .expect("ledger read model should have an initial row");
+
+            let stream_id = StreamId::try_new(format!("ledger::{}", Uuid::now_v7()))
+                .expect("ledger stream ID should be valid");
+            let writes = StreamWrites::new()
+                .register_stream(stream_id.clone(), StreamVersion::new(0))
+                .expect("ledger stream should register")
+                .append(LedgerCredit(LedgerPayload {
+                    stream_id: stream_id.clone(),
+                    amount: 7,
+                }))
+                .expect("credit should append")
+                .append(LedgerDebit(LedgerPayload {
+                    stream_id: stream_id.clone(),
+                    amount: 2,
+                }))
+                .expect("debit should append")
+                .append(UnsupportedLedgerEntry(LedgerPayload {
+                    stream_id,
+                    amount: 100,
+                }))
+                .expect("unsupported public event should append");
+            let _ = event_store
+                .append_events(writes)
+                .await
+                .expect("public EventCore append should succeed");
+
+            let selection = ProjectionSelection::try_new(
+                ProjectionSelectionId::try_new("ledger-routing-v1")
+                    .expect("ledger selection identity should be valid"),
+                ProjectionStreamFilter::All,
+                ["ledger-credit", "ledger-debit", "ledger-unsupported"]
+                    .into_iter()
+                    .map(|event_type| {
+                        EventTypeName::try_new(event_type)
+                            .expect("ledger event type should be valid")
+                    })
+                    .collect(),
+            )
+            .expect("ledger selection should be valid");
+            let through = source
+                .high_watermark()
+                .await
+                .expect("ledger high-water read should succeed")
+                .expect("ledger append should establish a high-water mark");
+            let envelopes = source
+                .read_envelopes(
+                    &selection,
+                    None,
+                    DeliveryUpperBound::Inclusive(through),
+                    BatchSize::new(10),
+                )
+                .await
+                .expect("ledger delivery page should load");
+            assert_eq!(envelopes.len(), 3);
+            let credit_position = envelopes[0].position();
+            let debit_position = envelopes[1].position();
+            let unsupported_position = envelopes[2].position();
+            assert!(credit_position < debit_position);
+            assert!(debit_position < unsupported_position);
+
+            let projector_name =
+                ProjectorName::try_new(format!("ledger-routing-{}", database.schema))
+                    .expect("ledger projector name should be valid");
+            let applications = Arc::new(AtomicU64::new(0));
+            let policy_invocations = Arc::new(AtomicU64::new(0));
+            let retry_sleep_requests = Arc::new(Mutex::new(Vec::new()));
+            let retry_policy = ProjectionRetryPolicy::new(
+                2,
+                Duration::from_millis(1),
+                2.0,
+                Duration::from_millis(2),
+            )
+            .expect("decode routing should have a nonzero retry allowance");
+
+            // When: the public runner reaches the selected unsupported discriminator.
+            let result = timeout(
+                RUN_TIMEOUT,
+                run_transactional_projection(
+                    LedgerProjector {
+                        name: projector_name.clone(),
+                        applications: applications.clone(),
+                        policy_invocations: policy_invocations.clone(),
+                    },
+                    &source,
+                    &store,
+                    PostgresProjectionConfig::new(selection.clone())
+                        .with_retry_policy(retry_policy)
+                        .with_retry_sleeper(RecordingRetrySleeper {
+                            requests: retry_sleep_requests.clone(),
+                        }),
+                ),
+            )
+            .await
+            .expect("ledger projection run should remain bounded");
+
+            // Then: both supported meanings committed exactly, while the unsupported envelope
+            // remains pending with its application-owned decode source intact.
+            match result {
+                Err(TransactionalProjectionError::Decode { position, source }) => {
+                    assert_eq!(position, unsupported_position);
+                    let unsupported = source
+                        .downcast_ref::<UnsupportedLedgerEventType>()
+                        .expect("decode must retain the application-owned discriminator error");
+                    assert_eq!(
+                        unsupported.to_string(),
+                        "unsupported persisted event type ledger-unsupported"
+                    );
+                }
+                other => {
+                    panic!("expected exact unsupported discriminator decode failure: {other:?}")
+                }
+            }
+            assert_eq!(
+                query_scalar::<_, i64>("SELECT total FROM ledger_projection")
+                    .fetch_one(database.pool())
+                    .await
+                    .expect("ledger read model should remain observable"),
+                5
+            );
+            assert_eq!(applications.load(Ordering::SeqCst), 2);
+            assert_eq!(policy_invocations.load(Ordering::SeqCst), 0);
+            assert!(
+                retry_sleep_requests
+                    .lock()
+                    .expect("decode retry-sleep log mutex should not be poisoned")
+                    .is_empty(),
+                "terminal decode failures must not invoke application retry sleeping"
+            );
+            let progress = store
+                .progress(&projector_name)
+                .await
+                .expect("ledger progress should remain readable")
+                .expect("the prior supported event should have committed progress");
+            assert_eq!(progress.position(), debit_position);
+            assert_eq!(progress.source_id(), &delivery_source_id);
+            assert_eq!(progress.selection_id(), selection.id());
+        })
+    })
+    .await;
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct ContextEvent {
+    stream_id: StreamId,
+    sequence: u8,
+}
+
+impl Event for ContextEvent {
+    fn stream_id(&self) -> &StreamId {
+        &self.stream_id
+    }
+
+    fn event_type_name() -> &'static str {
+        "projection-context-event"
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+enum ContextApplicationError {
+    #[error("first event transient failure")]
+    FirstTransient,
+    #[error("second event initial failure")]
+    SecondInitial,
+    #[error("second event final failure")]
+    SecondFinal,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RecordedFailureContext {
+    position: DeliveryPosition,
+    attempt: AttemptNumber,
+    error: ContextApplicationError,
+    message: String,
+}
+
+struct FailureContextProjector {
+    name: ProjectorName,
+    first_position: DeliveryPosition,
+    second_position: DeliveryPosition,
+    first_attempts: u32,
+    second_attempts: u32,
+    contexts: Arc<Mutex<Vec<RecordedFailureContext>>>,
+}
+
+impl PostgresProjector for FailureContextProjector {
+    type Event = ContextEvent;
+    type Error = ContextApplicationError;
+    type AfterCommit = NoopAfterCommit;
+
+    fn name(&self) -> &ProjectorName {
+        &self.name
+    }
+
+    async fn apply<'a, 'c>(
+        &'a mut self,
+        event: &'a Self::Event,
+        _position: DeliveryPosition,
+        transaction: &'a mut Transaction<'c, Postgres>,
+    ) -> Result<Self::AfterCommit, Self::Error>
+    where
+        'c: 'a,
+    {
+        let _ = query("UPDATE failure_context_projection SET total = total + 1")
+            .execute(&mut **transaction)
+            .await
+            .expect("failure-context mutation should execute");
+        match event.sequence {
+            1 => {
+                self.first_attempts += 1;
+                if self.first_attempts == 1 {
+                    return Err(ContextApplicationError::FirstTransient);
+                }
+                Ok(NoopAfterCommit)
+            }
+            2 => {
+                self.second_attempts += 1;
+                if self.second_attempts == 1 {
+                    Err(ContextApplicationError::SecondInitial)
+                } else {
+                    Err(ContextApplicationError::SecondFinal)
+                }
+            }
+            sequence => panic!("unexpected failure-context event sequence {sequence}"),
+        }
+    }
+
+    fn on_error(
+        &mut self,
+        failure: ProjectionFailureContext<'_, Self::Error>,
+    ) -> ProjectionFailureDecision {
+        let error = *failure.error();
+        let (expected_position, expected_attempt, expected_message) = match error {
+            ContextApplicationError::FirstTransient => (
+                self.first_position,
+                AttemptNumber::new(NonZeroU32::new(1).expect("one is nonzero")),
+                "first event transient failure",
+            ),
+            ContextApplicationError::SecondInitial => (
+                self.second_position,
+                AttemptNumber::new(NonZeroU32::new(1).expect("one is nonzero")),
+                "second event initial failure",
+            ),
+            ContextApplicationError::SecondFinal => (
+                self.second_position,
+                AttemptNumber::new(NonZeroU32::new(2).expect("two is nonzero")),
+                "second event final failure",
+            ),
+        };
+        let message = failure.error().to_string();
+        let decision = if failure.position() == expected_position
+            && failure.attempt() == expected_attempt
+            && message == expected_message
+        {
+            ProjectionFailureDecision::Retry
+        } else {
+            ProjectionFailureDecision::Fatal
+        };
+        self.contexts
+            .lock()
+            .expect("failure-context log mutex should not be poisoned")
+            .push(RecordedFailureContext {
+                position: failure.position(),
+                attempt: failure.attempt(),
+                error,
+                message,
+            });
+        decision
+    }
+}
+
+// Break caught: failure callbacks and terminal retry errors must retain the exact pending
+// position, one-based attempt, and most recent borrowed application error across fresh
+// transactions and subsequent events.
+#[tokio::test]
+async fn failure_context_and_retry_exhaustion_retain_exact_position_attempt_and_error() {
+    assert_isolated_database_contract(|database| {
+        Box::pin(async move {
+            // Given: one transient event followed by an event that exhausts its retry budget.
+            let event_store =
+                eventcore_postgres::PostgresEventStore::from_pool(database.clone_pool());
+            event_store.migrate().await;
+            let delivery_source_id = source_id();
+            let source = PostgresProjectionSource::from_pool(
+                database.clone_pool(),
+                delivery_source_id.clone(),
+            );
+            source
+                .migrate()
+                .await
+                .expect("projection source migration should succeed");
+            let store = PostgresProjectionStore::from_pool(database.clone_pool());
+            store
+                .migrate()
+                .await
+                .expect("projection destination migration should succeed");
+            let _ = query("CREATE TABLE failure_context_projection (total BIGINT NOT NULL)")
+                .execute(database.pool())
+                .await
+                .expect("failure-context read model should initialize");
+            let _ = query("INSERT INTO failure_context_projection (total) VALUES (0)")
+                .execute(database.pool())
+                .await
+                .expect("failure-context read model should have an initial row");
+
+            let stream_id = StreamId::try_new(format!("projection-context::{}", Uuid::now_v7()))
+                .expect("failure-context stream ID should be valid");
+            let writes = StreamWrites::new()
+                .register_stream(stream_id.clone(), StreamVersion::new(0))
+                .expect("failure-context stream should register")
+                .append(ContextEvent {
+                    stream_id: stream_id.clone(),
+                    sequence: 1,
+                })
+                .expect("first context event should append")
+                .append(ContextEvent {
+                    stream_id,
+                    sequence: 2,
+                })
+                .expect("second context event should append");
+            let _ = event_store
+                .append_events(writes)
+                .await
+                .expect("public EventCore append should succeed");
+
+            let selection = ProjectionSelection::try_new(
+                ProjectionSelectionId::try_new("failure-context-v1")
+                    .expect("failure-context selection identity should be valid"),
+                ProjectionStreamFilter::All,
+                vec![
+                    EventTypeName::try_new(ContextEvent::event_type_name())
+                        .expect("failure-context event type should be valid"),
+                ],
+            )
+            .expect("failure-context selection should be valid");
+            let through = source
+                .high_watermark()
+                .await
+                .expect("failure-context high-water read should succeed")
+                .expect("failure-context append should establish a high-water mark");
+            let envelopes = source
+                .read_envelopes(
+                    &selection,
+                    None,
+                    DeliveryUpperBound::Inclusive(through),
+                    BatchSize::new(10),
+                )
+                .await
+                .expect("failure-context delivery page should load");
+            assert_eq!(envelopes.len(), 2);
+            let first_position = envelopes[0].position();
+            let second_position = envelopes[1].position();
+
+            let projector_name =
+                ProjectorName::try_new(format!("failure-context-{}", database.schema))
+                    .expect("failure-context projector name should be valid");
+            let contexts = Arc::new(Mutex::new(Vec::new()));
+            let retry_policy = ProjectionRetryPolicy::new(1, Duration::ZERO, 1.0, Duration::ZERO)
+                .expect("one immediate retry should be valid");
+
+            // When: each failure crosses the public on_error boundary.
+            let result = timeout(
+                RUN_TIMEOUT,
+                run_transactional_projection(
+                    FailureContextProjector {
+                        name: projector_name.clone(),
+                        first_position,
+                        second_position,
+                        first_attempts: 0,
+                        second_attempts: 0,
+                        contexts: contexts.clone(),
+                    },
+                    &source,
+                    &store,
+                    PostgresProjectionConfig::new(selection.clone())
+                        .with_retry_policy(retry_policy),
+                ),
+            )
+            .await
+            .expect("failure-context projection run should remain bounded");
+
+            // Then: contexts are exact and ordered, and the public terminal source is the last
+            // failure rather than an earlier attempt.
+            match result {
+                Err(TransactionalProjectionError::RetryExhausted {
+                    position,
+                    attempts,
+                    source,
+                }) => {
+                    assert_eq!(position, second_position);
+                    assert_eq!(attempts, 2);
+                    assert_eq!(
+                        source.downcast_ref::<ContextApplicationError>().copied(),
+                        Some(ContextApplicationError::SecondFinal)
+                    );
+                    assert_eq!(source.to_string(), "second event final failure");
+                }
+                other => panic!("expected exact retry exhaustion failure: {other:?}"),
+            }
+            assert_eq!(
+                *contexts
+                    .lock()
+                    .expect("failure-context log mutex should not be poisoned"),
+                vec![
+                    RecordedFailureContext {
+                        position: first_position,
+                        attempt: AttemptNumber::new(NonZeroU32::new(1).expect("one is nonzero")),
+                        error: ContextApplicationError::FirstTransient,
+                        message: "first event transient failure".to_owned(),
+                    },
+                    RecordedFailureContext {
+                        position: second_position,
+                        attempt: AttemptNumber::new(NonZeroU32::new(1).expect("one is nonzero")),
+                        error: ContextApplicationError::SecondInitial,
+                        message: "second event initial failure".to_owned(),
+                    },
+                    RecordedFailureContext {
+                        position: second_position,
+                        attempt: AttemptNumber::new(NonZeroU32::new(2).expect("two is nonzero")),
+                        error: ContextApplicationError::SecondFinal,
+                        message: "second event final failure".to_owned(),
+                    },
+                ]
+            );
+            assert_eq!(
+                query_scalar::<_, i64>("SELECT total FROM failure_context_projection")
+                    .fetch_one(database.pool())
+                    .await
+                    .expect("failure-context read model should remain observable"),
+                1,
+                "all failed-attempt mutations must roll back"
+            );
+            let progress = store
+                .progress(&projector_name)
+                .await
+                .expect("failure-context progress should remain readable")
+                .expect("the first event should have committed progress");
+            assert_eq!(progress.position(), first_position);
+            assert_eq!(progress.source_id(), &delivery_source_id);
+            assert_eq!(progress.selection_id(), selection.id());
+        })
+    })
+    .await;
 }

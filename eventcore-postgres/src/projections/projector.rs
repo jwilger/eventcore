@@ -2,9 +2,11 @@ use std::convert::Infallible;
 use std::error::Error;
 use std::future::Future;
 
-use eventcore_types::{AttemptNumber, DeliveryPosition, ProjectorName};
+use eventcore_types::{AttemptNumber, DeliveryPosition, PersistedEventEnvelope, ProjectorName};
 use serde::de::DeserializeOwned;
 use sqlx::{Postgres, Transaction};
+
+use super::error::BoxedProjectionError;
 
 /// Work that is safe to perform only after the read-model transaction commits.
 pub trait AfterCommit: Send + 'static {
@@ -85,6 +87,21 @@ pub trait PostgresProjector: Send {
 
     /// Returns this projection's stable, application-supplied name.
     fn name(&self) -> &ProjectorName;
+
+    /// Decodes a persisted envelope into this projection's application event.
+    ///
+    /// Applications own this boundary and may inspect the envelope's persisted
+    /// event type, metadata, stream identity, or other fields before decoding.
+    /// The default preserves payload-only JSON decoding for existing projectors.
+    /// Any error returned here is terminal and is reported as
+    /// [`super::TransactionalProjectionError::Decode`].
+    fn decode(
+        &self,
+        envelope: &PersistedEventEnvelope,
+    ) -> Result<Self::Event, BoxedProjectionError> {
+        serde_json::from_str(envelope.payload().get())
+            .map_err(|error| -> BoxedProjectionError { Box::new(error) })
+    }
 
     /// Applies one event through the runner-owned read-model transaction.
     fn apply<'a, 'c>(

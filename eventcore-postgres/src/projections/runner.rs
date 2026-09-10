@@ -258,13 +258,10 @@ where
         transaction.rollback().await.map_err(leadership_lost)?;
         return Ok(EnvelopeResult::Suppressed);
     }
-    let event = match serde_json::from_str(envelope.payload().get()) {
+    let event = match projector.decode(&envelope) {
         Ok(event) => event,
         Err(source) => {
-            let error = TransactionalProjectionError::Decode {
-                position,
-                source: Box::new(source),
-            };
+            let error = TransactionalProjectionError::Decode { position, source };
             return Err(rollback_preserving_error(transaction, error).await);
         }
     };

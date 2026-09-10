@@ -453,10 +453,36 @@ skip. It does not empty an already-populated read model and can duplicate
 non-idempotent effects. A new projector name is safe only with a new or
 otherwise empty model. `PostgresProjectionStore::progress` exposes the last
 committed source/selection/position for operational inspection. Restarting the
-same identities resumes after that position. A selected payload that cannot
-deserialize into `PostgresProjector::Event` returns
-`TransactionalProjectionError::Decode` without advancing progress. Unknown or
-unselected event types are not decoded.
+same identities resumes after that position.
+
+`PostgresProjector::decode` receives the complete `PersistedEventEnvelope`.
+Its default implementation deserializes `envelope.payload()` as JSON into
+`PostgresProjector::Event`, preserving the simple single-event-type case.
+Override it when one selection contains multiple persisted event types whose
+payloads need the discriminator or metadata for application-owned routing. For
+example, credited and debited events may intentionally persist the same amount
+shape but have opposite application meaning:
+
+```rust,ignore
+fn decode(
+    &self,
+    envelope: &PersistedEventEnvelope,
+) -> Result<Self::Event, BoxedProjectionError> {
+    let amount: Amount = serde_json::from_str(envelope.payload().get())
+        .map_err(|error| -> BoxedProjectionError { Box::new(error) })?;
+
+    match envelope.event_type().as_ref() {
+        "account-credited" => Ok(AccountChange::Credit(amount.value)),
+        "account-debited" => Ok(AccountChange::Debit(amount.value)),
+        other => Err(Box::new(UnsupportedAccountEvent(other.to_owned()))),
+    }
+}
+```
+
+A selected payload or discriminator error returns
+`TransactionalProjectionError::Decode` at that envelope's delivery position.
+Decode is terminal: it does not call `on_error`, consume the application retry
+budget, run `apply`, or advance progress. Unselected event types are not decoded.
 
 ### Batch and continuous operation
 

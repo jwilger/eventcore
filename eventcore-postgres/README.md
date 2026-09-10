@@ -142,7 +142,12 @@ ordering for newly written events.
   set requires a new selection ID; changed source ordering semantics require a
   new source ID. Existing progress is rejected when the configured IDs differ.
 - The selection contains persisted event-type names plus an all/prefix/pattern
-  stream filter. A malformed selected payload stops with `Decode` and does not
+  stream filter. By default, `PostgresProjector::decode` deserializes the
+  envelope payload as JSON into `PostgresProjector::Event`. Override `decode`
+  when one selection contains multiple persisted event types that need the
+  envelope's `event_type` or `metadata` for application-owned routing, including
+  types with identical payload shapes. Any selected decode or discriminator
+  error stops terminally with `Decode`; it does not invoke `on_error`, retry, or
   advance progress.
 - Batch mode captures a high-water mark and drains every page through it.
   Continuous mode polls successive high-water marks until its

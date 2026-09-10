@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 - _(projections)_ add lossless source delivery, named progress, fenced leadership, atomic
   read-model effects and progress, typed failure policies, batch/continuous execution, and
   coordinated reset/replay for the planned 2.1.0 release
+- _(projections)_ add application-owned envelope-aware decoding for multi-type selections while
+  retaining payload JSON decoding by default
 
 ## [2.0.1](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v2.0.0...eventcore-postgres-v2.0.1) - 2026-08-15
 
