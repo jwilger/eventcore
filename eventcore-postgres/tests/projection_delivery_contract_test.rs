@@ -274,18 +274,28 @@ async fn failed_delivery_initialization_leaves_no_owned_schema() {
             if error == "deliberate initialization failure"
     ));
 
-    let admin = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&common::connection_string())
-        .await
-        .expect("configured postgres should accept cleanup observation connection");
-    let exists: bool =
+    let connection_string = common::connection_string();
+    let admin = timeout(
+        DATABASE_OPERATION_TIMEOUT,
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&connection_string),
+    )
+    .await
+    .expect("cleanup observation connection should remain bounded")
+    .expect("configured postgres should accept cleanup observation connection");
+    let exists: bool = timeout(
+        DATABASE_OPERATION_TIMEOUT,
         query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
             .bind(schema)
-            .fetch_one(&admin)
-            .await
-            .expect("schema cleanup should be observable");
-    admin.close().await;
+            .fetch_one(&admin),
+    )
+    .await
+    .expect("cleanup observation query should remain bounded")
+    .expect("schema cleanup should be observable");
+    timeout(DATABASE_OPERATION_TIMEOUT, admin.close())
+        .await
+        .expect("cleanup observation pool close should remain bounded");
     assert!(
         !exists,
         "failed initialization must not leave its schema behind"

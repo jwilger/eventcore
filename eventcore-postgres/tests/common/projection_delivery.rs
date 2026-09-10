@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres, query};
@@ -70,34 +71,55 @@ impl SplitSearchPathTestDatabase {
     }
 
     pub(crate) async fn cleanup(&self) {
-        if let Some(pool) = &self.source_pool {
-            pool.close().await;
-        }
-        if let Some(pool) = &self.legacy_pool {
-            pool.close().await;
-        }
+        let source_close = async {
+            if let Some(pool) = &self.source_pool {
+                pool.close().await;
+            }
+        };
+        let legacy_close = async {
+            if let Some(pool) = &self.legacy_pool {
+                pool.close().await;
+            }
+        };
+        let (source_close, legacy_close) = crate::common::fixture_lifecycle::cleanup_pair(
+            Duration::from_secs(2),
+            source_close,
+            legacy_close,
+        )
+        .await;
 
-        let cleanup_pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&self.connection_string)
-            .await
-            .expect("configured test postgres should accept split cleanup connections");
-        let projection_result = query(&format!(
-            "DROP SCHEMA IF EXISTS {} CASCADE",
-            self.projection_schema
-        ))
-        .execute(&cleanup_pool)
+        let projection_drop = tokio::time::timeout(
+            Duration::from_secs(2),
+            drop_schema(&self.connection_string, &self.projection_schema),
+        )
         .await;
-        let event_result = query(&format!(
-            "DROP SCHEMA IF EXISTS {} CASCADE",
-            self.event_schema
-        ))
-        .execute(&cleanup_pool)
+        let event_drop = tokio::time::timeout(
+            Duration::from_secs(2),
+            drop_schema(&self.connection_string, &self.event_schema),
+        )
         .await;
-        cleanup_pool.close().await;
-        let _ = projection_result.expect("projection schema cleanup should succeed");
-        let _ = event_result.expect("event schema cleanup should succeed");
+
+        source_close.expect("source pool cleanup should remain bounded");
+        legacy_close.expect("legacy pool cleanup should remain bounded");
+        projection_drop
+            .expect("projection schema cleanup should remain bounded")
+            .expect("projection schema cleanup should succeed");
+        event_drop
+            .expect("event schema cleanup should remain bounded")
+            .expect("event schema cleanup should succeed");
     }
+}
+
+async fn drop_schema(connection_string: &str, schema: &str) -> Result<(), sqlx::Error> {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(connection_string)
+        .await?;
+    let _ = query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&pool)
+        .await?;
+    pool.close().await;
+    Ok(())
 }
 
 impl Deref for IsolatedTestDatabase {

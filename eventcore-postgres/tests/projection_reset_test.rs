@@ -200,6 +200,10 @@ impl<T> AbortOnDrop<T> {
         Self { task: Some(task) }
     }
 
+    fn task_mut(&mut self) -> &mut JoinHandle<T> {
+        self.task.as_mut().expect("owned task should be present")
+    }
+
     async fn abort_and_join(&mut self) {
         let Some(task) = self.task.take() else {
             return;
@@ -590,7 +594,7 @@ enum ResetCallbackError {
     Probe(String),
 }
 
-type LockWaiterTask = JoinHandle<Result<(), sqlx::Error>>;
+type LockWaiterTask = AbortOnDrop<Result<(), sqlx::Error>>;
 
 #[derive(Clone)]
 struct LeadershipProbe {
@@ -646,7 +650,7 @@ impl LeadershipProbe {
             .map_err(|error| ResetCallbackError::Probe(error.to_string()))?;
         *self.waiter_pid.lock().await = Some(waiter_pid);
         let release = self.waiter_release.clone();
-        let task = tokio::spawn(async move {
+        let task = AbortOnDrop::new(tokio::spawn(async move {
             let _ = query("SELECT pg_advisory_lock($1)")
                 .bind(key)
                 .execute(&mut *connection)
@@ -657,7 +661,7 @@ impl LeadershipProbe {
                 .fetch_one(&mut *connection)
                 .await?;
             connection.close().await
-        });
+        }));
         *self.waiter_task.lock().await = Some(task);
 
         let queued = timeout(RUN_TIMEOUT, async {
@@ -691,9 +695,8 @@ impl LeadershipProbe {
         let Some(mut task) = self.waiter_task.lock().await.take() else {
             return;
         };
-        if timeout(RUN_TIMEOUT, &mut task).await.is_err() {
-            task.abort();
-            let _ = timeout(RUN_TIMEOUT, &mut task).await;
+        if timeout(RUN_TIMEOUT, task.task_mut()).await.is_err() {
+            task.abort_and_join().await;
         }
     }
 }
@@ -1019,13 +1022,12 @@ fn classify_runner(error: TransactionalProjectionError) -> ProjectionFailureObse
     }
 }
 
-async fn abort_and_join<T>(task: &mut JoinHandle<T>) {
-    task.abort();
-    let _ = timeout(RUN_TIMEOUT, task).await;
+async fn abort_and_join<T>(task: &mut AbortOnDrop<T>) {
+    task.abort_and_join().await;
 }
 
-async fn await_spawned<T>(task: &mut JoinHandle<T>, joined: &mut bool) -> Result<T, FixtureError> {
-    let join_result = timeout(RUN_TIMEOUT, task)
+async fn await_spawned<T>(task: &mut AbortOnDrop<T>, joined: &mut bool) -> Result<T, FixtureError> {
+    let join_result = timeout(RUN_TIMEOUT, task.task_mut())
         .await
         .map_err(|_| FixtureError::TimedOut)?;
     // `JoinHandle` was consumed by the completed poll even when its output is `Err` or it panicked.
@@ -1180,9 +1182,9 @@ impl TransactionalProjectionResetFixture for PostgresResetFixture {
         let source = self.source.clone();
         let store = self.store.clone();
         let config = self.config();
-        let mut runner = tokio::spawn(async move {
+        let mut runner = AbortOnDrop::new(tokio::spawn(async move {
             run_transactional_projection(projector, &source, &store, config).await
-        });
+        }));
         let operation = AssertUnwindSafe(async {
             timeout(RUN_TIMEOUT, entered.notified())
                 .await
@@ -1192,7 +1194,7 @@ impl TransactionalProjectionResetFixture for PostgresResetFixture {
         .catch_unwind()
         .await;
         release.notify_one();
-        let runner_cleanup = match timeout(RUN_TIMEOUT, &mut runner).await {
+        let runner_cleanup = match timeout(RUN_TIMEOUT, runner.task_mut()).await {
             Ok(result) => result
                 .map_err(FixtureError::from)
                 .and_then(|result| result.map(|_| ()).map_err(FixtureError::from)),
@@ -1247,12 +1249,12 @@ impl TransactionalProjectionResetFixture for PostgresResetFixture {
         let probe = LeadershipProbe::new(self.database.pool.clone());
         let projector = self.probed_projector(probe.clone());
         let mut reset = self.probed_resetter(probe.clone());
-        let mut orchestrator = tokio::spawn(async move {
+        let mut orchestrator = AbortOnDrop::new(tokio::spawn(async move {
             reset_and_replay_transactional_projection(
                 projector, &mut reset, &source, &store, config,
             )
             .await
-        });
+        }));
         let mut joined = false;
         let operation = AssertUnwindSafe(async {
             timeout(RUN_TIMEOUT, entered.notified())
@@ -1468,7 +1470,9 @@ async fn assert_reset_fixture(
 // would make unconditional cleanup poll that handle a second time and panic.
 #[tokio::test]
 async fn completed_error_and_panicked_handles_are_marked_joined_before_propagation() {
-    let mut error_task = tokio::spawn(async { Err::<(), &'static str>("task output failure") });
+    let mut error_task = AbortOnDrop::new(tokio::spawn(async {
+        Err::<(), &'static str>("task output failure")
+    }));
     let mut error_joined = false;
     assert_eq!(
         await_spawned(&mut error_task, &mut error_joined)
@@ -1478,7 +1482,7 @@ async fn completed_error_and_panicked_handles_are_marked_joined_before_propagati
     );
     assert!(error_joined);
 
-    let mut panic_task = tokio::spawn(async { panic!("fixture task panic") });
+    let mut panic_task = AbortOnDrop::new(tokio::spawn(async { panic!("fixture task panic") }));
     let mut panic_joined = false;
     assert!(matches!(
         await_spawned(&mut panic_task, &mut panic_joined).await,
@@ -1511,11 +1515,11 @@ async fn waiter_cleanup_wakes_and_joins_the_owned_task() {
     let completed = Arc::new(AtomicBool::new(false));
     let completed_by_task = completed.clone();
     let release = probe.waiter_release.clone();
-    *probe.waiter_task.lock().await = Some(tokio::spawn(async move {
+    *probe.waiter_task.lock().await = Some(AbortOnDrop::new(tokio::spawn(async move {
         release.notified().await;
         completed_by_task.store(true, Ordering::SeqCst);
         Ok(())
-    }));
+    })));
 
     probe.cleanup_waiter().await;
     assert!(completed.load(Ordering::SeqCst));
@@ -1557,6 +1561,69 @@ async fn dropping_startup_task_guard_cancels_owned_task() {
         .await
         .expect("startup cancellation should stop the owned task before its timeout")
         .expect("startup task cancellation should drop its future");
+}
+
+// Break caught: dropping a raw lock-waiter handle detaches the task and retains its checked-out
+// PostgreSQL connection, preventing bounded fixture cleanup from reacquiring the pool.
+#[tokio::test]
+async fn dropping_lock_waiter_owner_terminates_task_and_releases_database_connection() {
+    assert_reset_fixture(|fixture| {
+        Box::pin(async move {
+            let single_connection_pool = timeout(
+                RUN_TIMEOUT,
+                PgPoolOptions::new()
+                    .max_connections(1)
+                    .connect(&fixture.database.connection_string),
+            )
+            .await
+            .map_err(|_| FixtureError::TimedOut)??;
+            let (acquired_sender, acquired_receiver) = oneshot::channel();
+            let (terminated_sender, terminated_receiver) = oneshot::channel();
+            let task_pool = single_connection_pool.clone();
+            let waiter = LockWaiterTask::new(tokio::spawn(async move {
+                struct TerminationProbe(Option<oneshot::Sender<()>>);
+                impl Drop for TerminationProbe {
+                    fn drop(&mut self) {
+                        if let Some(sender) = self.0.take() {
+                            let _ = sender.send(());
+                        }
+                    }
+                }
+
+                let _probe = TerminationProbe(Some(terminated_sender));
+                let _connection = task_pool.acquire().await?;
+                let _ = acquired_sender.send(());
+                std::future::pending::<Result<(), sqlx::Error>>().await
+            }));
+            timeout(RUN_TIMEOUT, acquired_receiver)
+                .await
+                .expect("waiter should acquire the only connection before its timeout")
+                .expect("waiter should report its acquisition");
+            assert!(
+                timeout(Duration::from_millis(20), single_connection_pool.acquire())
+                    .await
+                    .is_err(),
+                "the live waiter must own the pool's only connection",
+            );
+
+            drop(waiter);
+
+            timeout(RUN_TIMEOUT, terminated_receiver)
+                .await
+                .expect("waiter cancellation should complete before its timeout")
+                .expect("waiter cancellation should drop its future");
+            let connection = timeout(RUN_TIMEOUT, single_connection_pool.acquire())
+                .await
+                .expect("released connection should be reacquired before its timeout")
+                .expect("cancelled waiter must release its database connection");
+            drop(connection);
+            timeout(RUN_TIMEOUT, single_connection_pool.close())
+                .await
+                .map_err(|_| FixtureError::TimedOut)?;
+            Ok(())
+        })
+    })
+    .await;
 }
 
 // Break caught: keeping the frontend child as a raw JoinHandle lets cancellation of its proxy

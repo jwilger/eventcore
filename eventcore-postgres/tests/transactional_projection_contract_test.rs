@@ -2007,10 +2007,15 @@ fn cleanup_atomic_fixture_pair(
     owners: &mut [AtomicFixtureOwner; 2],
 ) -> fixture_lifecycle::FixtureFuture<'_, Result<(), FixtureError>> {
     Box::pin(async move {
-        let left = owners[0].cleanup().await;
-        let right = owners[1].cleanup().await;
-        left?;
-        right?;
+        let [left_owner, right_owner] = owners;
+        let (left, right) = fixture_lifecycle::cleanup_pair(
+            RUN_TIMEOUT,
+            left_owner.cleanup(),
+            right_owner.cleanup(),
+        )
+        .await;
+        left.map_err(|_| FixtureError::TimedOut)??;
+        right.map_err(|_| FixtureError::TimedOut)??;
         Ok(())
     })
 }

@@ -8,6 +8,21 @@ use std::time::Duration;
 use futures::FutureExt;
 use tokio::time::timeout;
 
+pub(crate) async fn cleanup_pair<First, Second>(
+    bound: Duration,
+    first: First,
+    second: Second,
+) -> (
+    Result<First::Output, tokio::time::error::Elapsed>,
+    Result<Second::Output, tokio::time::error::Elapsed>,
+)
+where
+    First: Future,
+    Second: Future,
+{
+    tokio::join!(timeout(bound, first), timeout(bound, second))
+}
+
 pub(crate) type FixtureFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 pub(crate) struct FixtureTimeouts {
@@ -134,6 +149,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{FixtureFuture, FixtureLifecycleError, FixtureTimeouts, run_fixture};
+    use tokio::sync::{Notify, oneshot};
+    use tokio::time::timeout;
 
     #[derive(Debug, PartialEq, Eq)]
     enum TestError {
@@ -365,5 +382,41 @@ mod tests {
             *cleaned.lock().expect("mutex should not be poisoned"),
             ["event-schema", "projection-schema"]
         );
+    }
+
+    // Break caught: awaiting the first resource before starting the second means a stalled first
+    // cleanup prevents the second resource from receiving any cleanup attempt.
+    #[tokio::test]
+    async fn pending_first_cleanup_does_not_prevent_observable_second_cleanup() {
+        let first_started = Arc::new(Notify::new());
+        let first_release = Arc::new(Notify::new());
+        let (second_cleaned_sender, second_cleaned_receiver) = oneshot::channel();
+        let first_started_by_cleanup = Arc::clone(&first_started);
+        let first_release_by_test = Arc::clone(&first_release);
+        let first = async move {
+            first_started_by_cleanup.notify_one();
+            first_release.notified().await;
+        };
+        let second = async move {
+            let _ = second_cleaned_sender.send(());
+        };
+        let observe_coordination = async move {
+            first_started.notified().await;
+            let second_observation =
+                timeout(Duration::from_millis(50), second_cleaned_receiver).await;
+            first_release_by_test.notify_one();
+            second_observation
+        };
+
+        let ((first_result, second_result), second_observation) = tokio::join!(
+            super::cleanup_pair(Duration::from_millis(200), first, second),
+            observe_coordination,
+        );
+
+        assert!(first_result.is_ok(), "first cleanup should be released");
+        assert!(second_result.is_ok(), "second cleanup should complete");
+        second_observation
+            .expect("second cleanup must start while the first remains pending")
+            .expect("second cleanup observation channel should remain open");
     }
 }
