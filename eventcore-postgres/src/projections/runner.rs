@@ -463,8 +463,8 @@ fn retry_delay(config: &PostgresProjectionConfig, retry_number: u32) -> Duration
     let policy = config.retry_policy();
     let initial = policy.initial_delay();
     let maximum = policy.maximum_delay();
-    if initial.is_zero() || maximum.is_zero() || initial >= maximum {
-        return initial.min(maximum);
+    if initial.is_zero() {
+        return initial;
     }
 
     let factor = policy
@@ -495,5 +495,40 @@ fn source_error(
 ) -> TransactionalProjectionError {
     TransactionalProjectionError::Source {
         source: Box::new(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use eventcore_types::{
+        EventTypeName, ProjectionSelection, ProjectionSelectionId, ProjectionStreamFilter,
+    };
+
+    use super::{PostgresProjectionConfig, retry_delay};
+    use crate::ProjectionRetryPolicy;
+
+    // Break caught: removing the zero-delay guard lets an overflowing exponential factor turn
+    // `0 * infinity` into NaN and incorrectly sleep for the configured maximum.
+    #[test]
+    fn zero_initial_retry_delay_remains_zero_when_the_multiplier_overflows() {
+        let selection = ProjectionSelection::try_new(
+            ProjectionSelectionId::try_new("retry-delay-test")
+                .expect("test selection ID should be valid"),
+            ProjectionStreamFilter::All,
+            vec![EventTypeName::try_new("retry-event").expect("test event type should be valid")],
+        )
+        .expect("test selection should be valid");
+        let policy = ProjectionRetryPolicy::new(
+            u32::MAX - 1,
+            Duration::ZERO,
+            f64::MAX,
+            Duration::from_secs(1),
+        )
+        .expect("test retry policy should be valid");
+        let config = PostgresProjectionConfig::new(selection).with_retry_policy(policy);
+
+        assert_eq!(retry_delay(&config, u32::MAX), Duration::ZERO);
     }
 }

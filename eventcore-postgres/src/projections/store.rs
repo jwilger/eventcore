@@ -279,3 +279,20 @@ fn stable_fnv1a(value: &str) -> i64 {
     }
     hash as i64
 }
+
+#[cfg(test)]
+mod tests {
+    use eventcore_types::ProjectorName;
+
+    use super::projection_lock_key;
+
+    // Break caught: combining bytes with OR instead of XOR maps these two ordinary projector
+    // names to the same database-wide advisory lock and creates a false leadership conflict.
+    #[test]
+    fn distinct_projector_names_do_not_share_their_leadership_key() {
+        let left = ProjectorName::try_new("b").expect("left projector name should be valid");
+        let right = ProjectorName::try_new("c").expect("right projector name should be valid");
+
+        assert_ne!(projection_lock_key(&left), projection_lock_key(&right));
+    }
+}
