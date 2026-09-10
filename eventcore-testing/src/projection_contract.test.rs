@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io;
 use std::num::NonZeroU64;
 use std::time::Duration;
@@ -8,8 +9,8 @@ use serde_json::Value;
 
 use super::{
     ProjectionApplicationBehavior, ProjectionAttemptObservation, ProjectionHookLogEntry,
-    ProjectionProgressObservation, ProjectionRunMode, ProjectionRunOutcome,
-    TransactionalProjectionFixture, transactional_projection_contract,
+    ProjectionProgressObservation, ProjectionRunOutcome, TransactionalProjectionFixture,
+    transactional_projection_contract,
 };
 
 struct ContractFixture {
@@ -19,6 +20,7 @@ struct ContractFixture {
     effect_count: u64,
     runs: u64,
     duplicates_on_redelivery: bool,
+    behaviors: VecDeque<ProjectionApplicationBehavior>,
 }
 
 impl ContractFixture {
@@ -31,6 +33,7 @@ impl ContractFixture {
             effect_count: 0,
             runs: 0,
             duplicates_on_redelivery,
+            behaviors: VecDeque::new(),
         }
     }
 }
@@ -52,7 +55,13 @@ impl TransactionalProjectionFixture for ContractFixture {
         Ok(self.position)
     }
 
-    fn select_application_behavior(&mut self, _behavior: ProjectionApplicationBehavior) {}
+    fn select_application_behavior(&mut self, behavior: ProjectionApplicationBehavior) {
+        self.behaviors = VecDeque::from([behavior]);
+    }
+
+    fn select_application_script(&mut self, behaviors: &[ProjectionApplicationBehavior]) {
+        self.behaviors = behaviors.iter().copied().collect();
+    }
 
     fn configure_retry_policy(
         &mut self,
@@ -64,6 +73,11 @@ impl TransactionalProjectionFixture for ContractFixture {
     }
 
     async fn run_batch(&mut self) -> Result<ProjectionRunOutcome, Self::Error> {
+        assert_eq!(
+            self.behaviors.front().copied(),
+            Some(ProjectionApplicationBehavior::Apply),
+            "the focused contract fixture only models successful application",
+        );
         self.runs += 1;
         if self.runs == 1 || self.duplicates_on_redelivery {
             self.effect_count += 1;
@@ -81,13 +95,6 @@ impl TransactionalProjectionFixture for ContractFixture {
         ))
     }
 
-    async fn run_continuous(&mut self) -> Result<ProjectionRunOutcome, Self::Error> {
-        Ok(ProjectionRunOutcome::Cancelled {
-            processed: 0,
-            skipped: 0,
-        })
-    }
-
     async fn inject_progress_failure(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -100,10 +107,6 @@ impl TransactionalProjectionFixture for ContractFixture {
         &mut self,
     ) -> Result<ProjectionRunOutcome, Self::Error> {
         self.run_batch().await
-    }
-
-    async fn inject_connection_loss(&mut self) -> Result<(), Self::Error> {
-        Ok(())
     }
 
     async fn effect_count(&self) -> Result<u64, Self::Error> {
@@ -142,19 +145,6 @@ impl TransactionalProjectionFixture for ContractFixture {
         Ok(0)
     }
 
-    async fn start_leadership_attempt(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    async fn lose_leadership(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    async fn reset(&mut self) -> Result<(), Self::Error> {
-        self.effect_count = 0;
-        Ok(())
-    }
-
     fn source_id(&self) -> &DeliverySourceId {
         &self.source_id
     }
@@ -190,12 +180,4 @@ async fn transactional_projection_contract_rejects_duplicate_effects_on_redelive
         result.is_err(),
         "duplicate redelivery must fail the shared contract"
     );
-}
-
-// Break caught: deleting either public mode would make backend contract fixtures unable to state
-// whether they are exercising finite catch-up or cancellation-driven continuous behavior.
-#[test]
-fn projection_run_modes_remain_public_behavior_controls() {
-    assert_eq!(ProjectionRunMode::Batch, ProjectionRunMode::Batch);
-    assert_eq!(ProjectionRunMode::Continuous, ProjectionRunMode::Continuous);
 }

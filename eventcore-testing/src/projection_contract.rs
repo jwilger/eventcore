@@ -34,15 +34,6 @@ pub enum ProjectionApplicationBehavior {
     AfterCommitFail,
 }
 
-/// Execution mode selected through a fixture's public behavior boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProjectionRunMode {
-    /// Run through the source's current finite high-water mark.
-    Batch,
-    /// Run until the fixture's cancellation control is triggered.
-    Continuous,
-}
-
 /// An observable after-commit hook entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionHookLogEntry {
@@ -169,12 +160,12 @@ pub trait TransactionalProjectionFixture {
     /// Selects the behavior used when the projection receives an event.
     fn select_application_behavior(&mut self, behavior: ProjectionApplicationBehavior);
 
-    /// Selects per-invocation application behavior in order.
-    fn select_application_script(&mut self, behaviors: &[ProjectionApplicationBehavior]) {
-        for &behavior in behaviors {
-            self.select_application_behavior(behavior);
-        }
-    }
+    /// Selects per-invocation application behavior in the provided order.
+    ///
+    /// Implementations must preserve the complete sequence so each successive application
+    /// invocation consumes the corresponding behavior. Repeatedly replacing a single selected
+    /// behavior does not satisfy this contract.
+    fn select_application_script(&mut self, behaviors: &[ProjectionApplicationBehavior]);
 
     /// Configures the bounded retry policy used by subsequent finite runs.
     fn configure_retry_policy(
@@ -195,11 +186,6 @@ pub trait TransactionalProjectionFixture {
         &mut self,
     ) -> impl Future<Output = Result<ProjectionAttemptObservation, Self::Error>> + Send;
 
-    /// Runs a continuous projection until the fixture's cancellation condition is observed.
-    fn run_continuous(
-        &mut self,
-    ) -> impl Future<Output = Result<ProjectionRunOutcome, Self::Error>> + Send;
-
     /// Makes the next progress persistence attempt fail.
     fn inject_progress_failure(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
@@ -212,9 +198,6 @@ pub trait TransactionalProjectionFixture {
     fn recover_after_commit_acknowledgement_loss(
         &mut self,
     ) -> impl Future<Output = Result<ProjectionRunOutcome, Self::Error>> + Send;
-
-    /// Loses the active destination connection while a run is in progress.
-    fn inject_connection_loss(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// Reads the externally observable non-idempotent effect count.
     fn effect_count(&self) -> impl Future<Output = Result<u64, Self::Error>> + Send;
@@ -249,15 +232,6 @@ pub trait TransactionalProjectionFixture {
 
     /// Reads the number of after-commit actions invoked, including failures.
     fn hook_attempt_count(&self) -> impl Future<Output = Result<u64, Self::Error>> + Send;
-
-    /// Starts a competing leadership attempt.
-    fn start_leadership_attempt(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
-
-    /// Forces the active leader's destination session to be lost.
-    fn lose_leadership(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
-
-    /// Resets application effects and progress through the public reset behavior.
-    fn reset(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// Returns the source identity expected in successful progress observations.
     fn source_id(&self) -> &DeliverySourceId;

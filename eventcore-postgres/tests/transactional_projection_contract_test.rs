@@ -1023,17 +1023,6 @@ impl TransactionalProjectionFixture for PostgresAtomicFixture {
         self.run_batch_attempt_with_timeout().await
     }
 
-    async fn run_continuous(&mut self) -> Result<ContractRunOutcome, Self::Error> {
-        let cancellation = tokio_util::sync::CancellationToken::new();
-        cancellation.cancel();
-        Ok(convert_outcome(
-            self.run_with_timeout(
-                PostgresProjectionConfig::new(self.selection.clone()).continuous(cancellation),
-            )
-            .await?,
-        ))
-    }
-
     async fn inject_progress_failure(&mut self) -> Result<(), Self::Error> {
         let _ = query(
             "CREATE OR REPLACE FUNCTION fixture_fail_projection_progress() RETURNS trigger \
@@ -1078,13 +1067,6 @@ impl TransactionalProjectionFixture for PostgresAtomicFixture {
             proxy.shutdown().await;
         }
         self.run_batch().await
-    }
-
-    async fn inject_connection_loss(&mut self) -> Result<(), Self::Error> {
-        let _ = query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE false")
-            .execute(self.database.pool())
-            .await?;
-        Ok(())
     }
 
     async fn effect_count(&self) -> Result<u64, Self::Error> {
@@ -1140,21 +1122,6 @@ impl TransactionalProjectionFixture for PostgresAtomicFixture {
 
     async fn hook_attempt_count(&self) -> Result<u64, Self::Error> {
         Ok(self.hook_attempts.load(Ordering::SeqCst))
-    }
-
-    async fn start_leadership_attempt(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    async fn lose_leadership(&mut self) -> Result<(), Self::Error> {
-        self.inject_connection_loss().await
-    }
-
-    async fn reset(&mut self) -> Result<(), Self::Error> {
-        let _ = query("DELETE FROM invoice_projection_effect; INSERT INTO invoice_projection_effect (total) VALUES (0)")
-            .execute(self.database.pool())
-            .await?;
-        Ok(())
     }
 
     fn source_id(&self) -> &DeliverySourceId {
