@@ -6,20 +6,24 @@ mod projection_delivery;
 
 use std::collections::HashSet;
 use std::num::NonZeroU64;
+use std::panic::{AssertUnwindSafe, resume_unwind};
 use std::time::Duration;
 
 use eventcore_postgres::{PostgresEventStore, PostgresProjectionSource};
 use eventcore_types::{
     BatchSize, DeliveryPosition, DeliverySourceId, DeliveryUpperBound, EventTypeName,
     PersistedEventId, ProjectionSelection, ProjectionSelectionId, ProjectionSource,
-    ProjectionStreamFilter, StreamPattern, StreamPrefix,
+    ProjectionStreamFilter, StreamId, StreamPattern, StreamPrefix, StreamVersion,
 };
+use futures::FutureExt;
 use sqlx::{Executor, Postgres, query, query_scalar};
 use tokio::sync::oneshot;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
+const DATABASE_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const PROJECTED_EVENT_TYPE: &str = "invoice-issued";
+const SECOND_PROJECTED_EVENT_TYPE: &str = "invoice-adjusted";
 const UNSELECTED_EVENT_TYPE: &str = "invoice-voided";
 
 fn source_id() -> DeliverySourceId {
@@ -121,6 +125,155 @@ async fn insert_event_with_raw_json(
     .execute(pool)
     .await
     .expect("fixture raw JSON event insert should succeed");
+}
+
+async fn bounded_cleanup(
+    pool: &projection_delivery::IsolatedTestDatabase,
+) -> Result<(), &'static str> {
+    match timeout(
+        DATABASE_OPERATION_TIMEOUT,
+        AssertUnwindSafe(pool.cleanup()).catch_unwind(),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err("cleanup panicked"),
+        Err(_) => Err("cleanup timed out"),
+    }
+}
+
+// Break caught: defaulting, swapping, or omitting any persisted envelope field would give a
+// projector an event that no longer identifies the exact source record it must apply.
+#[tokio::test]
+async fn delivered_envelopes_preserve_every_public_persisted_field() {
+    let pool = timeout(
+        DATABASE_OPERATION_TIMEOUT,
+        projection_delivery::create_isolated_test_pool(),
+    )
+    .await
+    .expect("isolated database allocation should remain bounded");
+    let source = PostgresProjectionSource::from_pool(pool.clone_pool(), source_id());
+
+    // Given a migrated source and two persisted events in the same stream.
+    let setup = timeout(
+        DATABASE_OPERATION_TIMEOUT,
+        AssertUnwindSafe(async {
+            PostgresEventStore::from_pool(pool.clone_pool())
+                .migrate()
+                .await;
+            source
+                .migrate()
+                .await
+                .expect("projection source migration should succeed");
+        })
+        .catch_unwind(),
+    )
+    .await;
+    match setup {
+        Ok(Ok(())) => {}
+        Ok(Err(payload)) => {
+            let cleanup = bounded_cleanup(&pool).await;
+            eprintln!("cleanup after setup panic: {cleanup:?}");
+            resume_unwind(payload);
+        }
+        Err(_) => {
+            let cleanup = bounded_cleanup(&pool).await;
+            panic!("envelope contract setup timed out; cleanup: {cleanup:?}");
+        }
+    }
+
+    let first_event_id =
+        Uuid::parse_str("00000000-0000-7000-8000-000000000021").expect("fixture UUID should parse");
+    let second_event_id =
+        Uuid::parse_str("00000000-0000-7000-8000-000000000022").expect("fixture UUID should parse");
+    let operation = timeout(
+        DATABASE_OPERATION_TIMEOUT,
+        AssertUnwindSafe(async {
+            insert_event_with_raw_json(
+                pool.pool(),
+                first_event_id,
+                "invoice::envelope-contract",
+                PROJECTED_EVENT_TYPE,
+                r#"{"amount_cents": 4100}"#,
+                r#"{"trace_id": "trace-21"}"#,
+            )
+            .await;
+            insert_event_with_raw_json(
+                pool.pool(),
+                second_event_id,
+                "invoice::envelope-contract",
+                SECOND_PROJECTED_EVENT_TYPE,
+                r#"{"amount_cents": 9900}"#,
+                r#"{"trace_id": "trace-22"}"#,
+            )
+            .await;
+
+            // When the public source reads both events.
+            let selected = selection(
+                "envelope-contract-v1",
+                ProjectionStreamFilter::All,
+                &[PROJECTED_EVENT_TYPE, SECOND_PROJECTED_EVENT_TYPE],
+            );
+            let page = source
+                .read_envelopes(
+                    &selected,
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(2),
+                )
+                .await
+                .expect("persisted envelopes should be readable");
+
+            // Then every persisted field exposed by the public envelope API is exact.
+            assert_eq!(page.len(), 2);
+
+            assert_eq!(page[0].source_id(), &source_id());
+            assert_eq!(page[0].position(), delivery_position(1));
+            assert_eq!(page[0].event_id(), PersistedEventId::new(first_event_id));
+            assert_eq!(
+                page[0].stream_id(),
+                &StreamId::try_new("invoice::envelope-contract")
+                    .expect("fixture stream ID should be valid")
+            );
+            assert_eq!(page[0].stream_version(), StreamVersion::new(1));
+            assert_eq!(
+                page[0].event_type(),
+                &EventTypeName::try_new(PROJECTED_EVENT_TYPE)
+                    .expect("fixture event type should be valid")
+            );
+            assert_eq!(page[0].payload().get(), r#"{"amount_cents": 4100}"#);
+            assert_eq!(page[0].metadata().get(), r#"{"trace_id": "trace-21"}"#);
+
+            assert_eq!(page[1].source_id(), &source_id());
+            assert_eq!(page[1].position(), delivery_position(2));
+            assert_eq!(page[1].event_id(), PersistedEventId::new(second_event_id));
+            assert_eq!(
+                page[1].stream_id(),
+                &StreamId::try_new("invoice::envelope-contract")
+                    .expect("fixture stream ID should be valid")
+            );
+            assert_eq!(page[1].stream_version(), StreamVersion::new(2));
+            assert_eq!(
+                page[1].event_type(),
+                &EventTypeName::try_new(SECOND_PROJECTED_EVENT_TYPE)
+                    .expect("fixture event type should be valid")
+            );
+            assert_eq!(page[1].payload().get(), r#"{"amount_cents": 9900}"#);
+            assert_eq!(page[1].metadata().get(), r#"{"trace_id": "trace-22"}"#);
+        })
+        .catch_unwind(),
+    )
+    .await;
+
+    let cleanup = bounded_cleanup(&pool).await;
+    match operation {
+        Ok(Ok(())) => cleanup.expect("test schema cleanup should succeed"),
+        Ok(Err(payload)) => {
+            eprintln!("cleanup after envelope contract panic: {cleanup:?}");
+            resume_unwind(payload);
+        }
+        Err(_) => panic!("envelope contract body timed out; cleanup: {cleanup:?}"),
+    }
 }
 
 // Break caught: treating an empty source as having a synthetic checkpoint would make a first
