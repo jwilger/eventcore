@@ -162,10 +162,36 @@ struct ResetCommitObservation {
     projector_name: ProjectorName,
 }
 
+struct AbortOnDrop<T> {
+    task: Option<JoinHandle<T>>,
+}
+
+impl<T> AbortOnDrop<T> {
+    fn new(task: JoinHandle<T>) -> Self {
+        Self { task: Some(task) }
+    }
+
+    async fn abort_and_join(&mut self) {
+        let Some(task) = self.task.take() else {
+            return;
+        };
+        task.abort();
+        let _ = timeout(RUN_TIMEOUT, task).await;
+    }
+}
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
 struct ResetCommitAcknowledgementProxy {
     store: PostgresProjectionStore,
     confirmation: AsyncMutex<Option<oneshot::Receiver<Result<(), String>>>>,
-    task: JoinHandle<()>,
+    task: AbortOnDrop<()>,
 }
 
 impl ResetCommitAcknowledgementProxy {
@@ -184,11 +210,11 @@ impl ResetCommitAcknowledgementProxy {
             projector_name,
         };
         let (confirmation_sender, confirmation_receiver) = oneshot::channel();
-        let task = tokio::spawn(async move {
+        let mut task = AbortOnDrop::new(tokio::spawn(async move {
             let result =
                 run_reset_commit_acknowledgement_proxy(listener, target, observation).await;
             let _ = confirmation_sender.send(result);
-        });
+        }));
 
         let schema = database.schema.clone();
         let pool = PgPoolOptions::new()
@@ -210,8 +236,7 @@ impl ResetCommitAcknowledgementProxy {
         let pool = match pool {
             Ok(pool) => pool,
             Err(error) => {
-                task.abort();
-                let _ = timeout(RUN_TIMEOUT, task).await;
+                task.abort_and_join().await;
                 return Err(FixtureError::Sql(error));
             }
         };
@@ -240,9 +265,8 @@ impl ResetCommitAcknowledgementProxy {
         result.map_err(FixtureError::CommitAcknowledgementProxy)
     }
 
-    async fn shutdown(self) {
-        self.task.abort();
-        let _ = timeout(RUN_TIMEOUT, self.task).await;
+    async fn shutdown(mut self) {
+        self.task.abort_and_join().await;
     }
 }
 
@@ -261,11 +285,11 @@ async fn run_reset_commit_acknowledgement_proxy(
     let (client_reader, client_writer) = client.into_split();
     let (server_reader, server_writer) = server.into_split();
     let (commit_sender, mut commit_receiver) = oneshot::channel();
-    let frontend = tokio::spawn(forward_reset_postgres_frontend(
+    let mut frontend = AbortOnDrop::new(tokio::spawn(forward_reset_postgres_frontend(
         client_reader,
         server_writer,
         commit_sender,
-    ));
+    )));
 
     let result = forward_reset_postgres_backend(
         server_reader,
@@ -274,8 +298,7 @@ async fn run_reset_commit_acknowledgement_proxy(
         observation,
     )
     .await;
-    frontend.abort();
-    let _ = frontend.await;
+    frontend.abort_and_join().await;
     result
 }
 
@@ -1383,6 +1406,97 @@ async fn waiter_cleanup_wakes_and_joins_the_owned_task() {
         bounded_cleanup(RUN_TIMEOUT, database.cleanup()).await,
         CleanupOutcome::Complete,
     ));
+}
+
+// Break caught: keeping a raw JoinHandle across the startup connection await lets cancellation
+// detach the proxy task before the completed fixture can own and clean it up.
+#[tokio::test]
+async fn dropping_startup_task_guard_cancels_owned_task() {
+    struct DropProbe(Option<oneshot::Sender<()>>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    let started = Arc::new(Notify::new());
+    let task_started = started.clone();
+    let (dropped_sender, dropped_receiver) = oneshot::channel();
+    let guard = AbortOnDrop::new(tokio::spawn(async move {
+        let _probe = DropProbe(Some(dropped_sender));
+        task_started.notify_one();
+        std::future::pending::<()>().await;
+    }));
+
+    timeout(RUN_TIMEOUT, started.notified())
+        .await
+        .expect("owned startup task should start before its timeout");
+    drop(guard);
+    timeout(RUN_TIMEOUT, dropped_receiver)
+        .await
+        .expect("startup cancellation should stop the owned task before its timeout")
+        .expect("startup task cancellation should drop its future");
+}
+
+// Break caught: keeping the frontend child as a raw JoinHandle lets cancellation of its proxy
+// parent detach that child with its PostgreSQL-side socket still open.
+#[tokio::test]
+async fn cancelling_proxy_task_closes_frontend_connection() {
+    let proxy_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("proxy listener should bind");
+    let proxy_address = proxy_listener
+        .local_addr()
+        .expect("proxy listener should have an address");
+    let target_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("target listener should bind");
+    let target_address = target_listener
+        .local_addr()
+        .expect("target listener should have an address");
+    let mut proxy_task = AbortOnDrop::new(tokio::spawn(run_reset_commit_acknowledgement_proxy(
+        proxy_listener,
+        target_address.to_string(),
+        ResetCommitObservation {
+            connection_string: String::new(),
+            schema: String::new(),
+            projector_name: ProjectorName::try_new("cancellation-probe")
+                .expect("literal projector name should be valid"),
+        },
+    )));
+    let mut client = timeout(RUN_TIMEOUT, TcpStream::connect(proxy_address))
+        .await
+        .expect("client connection should complete before its timeout")
+        .expect("client should connect to proxy");
+    let (mut target, _) = timeout(RUN_TIMEOUT, target_listener.accept())
+        .await
+        .expect("target accept should complete before its timeout")
+        .expect("proxy should connect to target");
+
+    client
+        .write_u32(8)
+        .await
+        .expect("client should write startup length");
+    client
+        .write_all(b"test")
+        .await
+        .expect("client should write startup payload");
+    client.flush().await.expect("client should flush startup");
+    let mut startup = [0_u8; 8];
+    let _ = timeout(RUN_TIMEOUT, target.read_exact(&mut startup))
+        .await
+        .expect("frontend forwarding should complete before its timeout")
+        .expect("frontend should forward startup bytes");
+
+    proxy_task.abort_and_join().await;
+    let error = timeout(RUN_TIMEOUT, target.read_u8())
+        .await
+        .expect("target connection should close before its timeout")
+        .expect_err("cancelled proxy must close its target connection");
+    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
 }
 
 // Break caught: mapping a lost reset COMMIT acknowledgement to rollback, success, or a generic
