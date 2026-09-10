@@ -1,10 +1,13 @@
 //! Public contract tests for transactional PostgreSQL projections.
 
+#[path = "common/fixture_lifecycle.rs"]
+mod fixture_lifecycle;
+
 use std::collections::VecDeque;
 use std::env;
 use std::future::Future;
 use std::num::{NonZeroU32, NonZeroU64};
-use std::panic::{AssertUnwindSafe, resume_unwind};
+use std::panic::resume_unwind;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -45,7 +48,6 @@ use eventcore_types::{
     EventStore, EventTypeName, PersistedEventEnvelope, ProjectionSelection, ProjectionSelectionId,
     ProjectionSource, ProjectionStreamFilter, ProjectorName, StreamId, StreamVersion, StreamWrites,
 };
-use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres, Transaction, postgres::PgPoolOptions, query, query_scalar};
 use thiserror::Error;
@@ -58,23 +60,67 @@ use uuid::Uuid;
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(2);
 
+#[derive(Clone)]
 struct IsolatedTestDatabase {
-    pool: Pool<Postgres>,
+    pool: Option<Pool<Postgres>>,
     schema: String,
     connection_string: String,
 }
 
 impl IsolatedTestDatabase {
     fn pool(&self) -> &Pool<Postgres> {
-        &self.pool
+        self.pool
+            .as_ref()
+            .expect("isolated database should be initialized")
     }
 
     fn clone_pool(&self) -> Pool<Postgres> {
-        self.pool.clone()
+        self.pool().clone()
     }
 
-    async fn cleanup(&self) -> Result<(), sqlx::Error> {
-        self.pool.close().await;
+    fn plan() -> Self {
+        let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
+        let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_string());
+        Self {
+            pool: None,
+            schema: format!("eventcore_transactional_test_{}", Uuid::now_v7().simple()),
+            connection_string: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+        }
+    }
+
+    async fn initialize(&mut self) -> Result<(), sqlx::Error> {
+        let admin_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&self.connection_string)
+            .await?;
+        let _ = query(&format!("CREATE SCHEMA {}", self.schema))
+            .execute(&admin_pool)
+            .await?;
+        admin_pool.close().await;
+        let schema_for_pool = self.schema.clone();
+        self.pool = Some(
+            PgPoolOptions::new()
+                .max_connections(10)
+                .after_connect(move |connection, _metadata| {
+                    let schema = schema_for_pool.clone();
+                    Box::pin(async move {
+                        let _ = query("SELECT set_config('search_path', $1, false)")
+                            .bind(schema)
+                            .execute(connection)
+                            .await?;
+                        Ok(())
+                    })
+                })
+                .connect(&self.connection_string)
+                .await?,
+        );
+        Ok(())
+    }
+
+    async fn cleanup(&mut self) -> Result<(), sqlx::Error> {
+        if let Some(pool) = self.pool.take() {
+            pool.close().await;
+        }
         let cleanup_pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&self.connection_string)
@@ -85,51 +131,6 @@ impl IsolatedTestDatabase {
         cleanup_pool.close().await;
         Ok(())
     }
-}
-
-async fn isolated_database() -> Result<IsolatedTestDatabase, sqlx::Error> {
-    let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
-    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_string());
-    let connection_string = format!("postgres://postgres:postgres@{host}:{port}/postgres");
-    let admin_pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&connection_string)
-        .await?;
-    let schema = format!("eventcore_transactional_test_{}", Uuid::now_v7().simple());
-    let _ = query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin_pool)
-        .await?;
-    let schema_for_pool = schema.clone();
-    let pool = PgPoolOptions::new()
-        .max_connections(10)
-        .after_connect(move |connection, _metadata| {
-            let schema = schema_for_pool.clone();
-            Box::pin(async move {
-                let _ = query("SELECT set_config('search_path', $1, false)")
-                    .bind(schema)
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .connect(&connection_string)
-        .await;
-    let pool = match pool {
-        Ok(pool) => pool,
-        Err(error) => {
-            let _ = query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-                .execute(&admin_pool)
-                .await;
-            admin_pool.close().await;
-            return Err(error);
-        }
-    };
-    admin_pool.close().await;
-    Ok(IsolatedTestDatabase {
-        pool,
-        schema,
-        connection_string,
-    })
 }
 
 fn selection() -> ProjectionSelection {
@@ -181,6 +182,36 @@ enum FixtureError {
     Task(#[from] tokio::task::JoinError),
 }
 
+struct AbortOnDrop<T> {
+    task: Option<JoinHandle<T>>,
+}
+
+impl<T> AbortOnDrop<T> {
+    fn new(task: JoinHandle<T>) -> Self {
+        Self { task: Some(task) }
+    }
+
+    fn task_mut(&mut self) -> &mut JoinHandle<T> {
+        self.task.as_mut().expect("owned task should be present")
+    }
+
+    async fn abort_and_join(&mut self) {
+        let Some(task) = self.task.take() else {
+            return;
+        };
+        task.abort();
+        let _ = timeout(RUN_TIMEOUT, task).await;
+    }
+}
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
 struct CommitObservation {
     pool: Pool<Postgres>,
     projector_name: ProjectorName,
@@ -192,7 +223,7 @@ struct CommitObservation {
 struct CommitAcknowledgementProxy {
     store: PostgresProjectionStore,
     confirmation: tokio::sync::Mutex<Option<oneshot::Receiver<Result<(), String>>>>,
-    task: JoinHandle<()>,
+    task: AbortOnDrop<()>,
 }
 
 impl CommitAcknowledgementProxy {
@@ -206,10 +237,10 @@ impl CommitAcknowledgementProxy {
         let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_string());
         let target = format!("{host}:{port}");
         let (confirmation_sender, confirmation_receiver) = oneshot::channel();
-        let task = tokio::spawn(async move {
+        let task = AbortOnDrop::new(tokio::spawn(async move {
             let result = run_commit_acknowledgement_proxy(listener, target, observation).await;
             let _ = confirmation_sender.send(result);
-        });
+        }));
 
         let schema = database.schema.clone();
         let pool = PgPoolOptions::new()
@@ -253,9 +284,8 @@ impl CommitAcknowledgementProxy {
         result.map_err(FixtureError::CommitAcknowledgementProxy)
     }
 
-    async fn shutdown(self) {
-        self.task.abort();
-        let _ = timeout(RUN_TIMEOUT, self.task).await;
+    async fn shutdown(mut self) {
+        self.task.abort_and_join().await;
     }
 }
 
@@ -274,11 +304,11 @@ async fn run_commit_acknowledgement_proxy(
     let (client_reader, client_writer) = client.into_split();
     let (server_reader, server_writer) = server.into_split();
     let (commit_sender, mut commit_receiver) = oneshot::channel();
-    let frontend = tokio::spawn(forward_postgres_frontend(
+    let mut frontend = AbortOnDrop::new(tokio::spawn(forward_postgres_frontend(
         client_reader,
         server_writer,
         commit_sender,
-    ));
+    )));
 
     let result = forward_postgres_backend(
         server_reader,
@@ -287,8 +317,7 @@ async fn run_commit_acknowledgement_proxy(
         observation,
     )
     .await;
-    frontend.abort();
-    let _ = frontend.await;
+    frontend.abort_and_join().await;
     result
 }
 
@@ -701,8 +730,8 @@ struct PostgresAtomicFixture {
 }
 
 impl PostgresAtomicFixture {
-    async fn new() -> Result<Self, FixtureError> {
-        let database = isolated_database().await?;
+    async fn new(database: &IsolatedTestDatabase) -> Result<Self, FixtureError> {
+        let database = database.clone();
         let event_store = eventcore_postgres::PostgresEventStore::from_pool(database.clone_pool());
         event_store.migrate().await;
         let source_id = source_id();
@@ -763,7 +792,7 @@ impl PostgresAtomicFixture {
         drop(event_store);
         drop(source);
         drop(store);
-        database.cleanup().await?;
+        drop(database);
         Ok(())
     }
 
@@ -1188,9 +1217,9 @@ impl TransactionalProjectionExecutionFixture for PostgresAtomicFixture {
             None,
         );
         let config = PostgresProjectionConfig::new(self.selection.clone());
-        let mut leader_task = tokio::spawn(async move {
+        let mut leader_task = AbortOnDrop::new(tokio::spawn(async move {
             run_transactional_projection(projector, &source, &store, config).await
-        });
+        }));
 
         if timeout(RUN_TIMEOUT, entered.wait()).await.is_err() {
             abort_and_join(&mut leader_task).await;
@@ -1240,9 +1269,9 @@ impl TransactionalProjectionExecutionFixture for PostgresAtomicFixture {
             Some(pid_sender),
         );
         let config = PostgresProjectionConfig::new(self.selection.clone());
-        let mut leader_task = tokio::spawn(async move {
+        let mut leader_task = AbortOnDrop::new(tokio::spawn(async move {
             run_transactional_projection(projector, &source, &store, config).await
-        });
+        }));
 
         let pid = match timeout(RUN_TIMEOUT, pid_receiver).await {
             Ok(Ok(pid)) => pid,
@@ -1305,9 +1334,9 @@ impl TransactionalProjectionExecutionFixture for PostgresAtomicFixture {
             None,
         );
         let config = PostgresProjectionConfig::new(self.selection.clone());
-        let mut first_task = tokio::spawn(async move {
+        let mut first_task = AbortOnDrop::new(tokio::spawn(async move {
             run_transactional_projection(projector, &source, &store, config).await
-        });
+        }));
 
         if timeout(RUN_TIMEOUT, entered.wait()).await.is_err() {
             abort_and_join(&mut first_task).await;
@@ -1338,8 +1367,8 @@ impl TransactionalProjectionExecutionFixture for PostgresAtomicFixture {
     }
 }
 
-async fn join_with_timeout<T>(task: &mut JoinHandle<T>) -> Result<T, FixtureError> {
-    match timeout(RUN_TIMEOUT, &mut *task).await {
+async fn join_with_timeout<T>(task: &mut AbortOnDrop<T>) -> Result<T, FixtureError> {
+    match timeout(RUN_TIMEOUT, task.task_mut()).await {
         Ok(result) => Ok(result?),
         Err(_) => {
             abort_and_join(task).await;
@@ -1348,9 +1377,72 @@ async fn join_with_timeout<T>(task: &mut JoinHandle<T>) -> Result<T, FixtureErro
     }
 }
 
-async fn abort_and_join<T>(task: &mut JoinHandle<T>) {
-    task.abort();
-    let _ = timeout(RUN_TIMEOUT, &mut *task).await;
+async fn abort_and_join<T>(task: &mut AbortOnDrop<T>) {
+    task.abort_and_join().await;
+}
+
+// Break caught: keeping the frontend child as a raw JoinHandle lets cancellation of its proxy
+// parent detach that child with its PostgreSQL-side socket still open.
+#[tokio::test]
+async fn cancelling_transactional_proxy_task_closes_frontend_connection() {
+    let proxy_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("proxy listener should bind");
+    let proxy_address = proxy_listener
+        .local_addr()
+        .expect("proxy listener should have an address");
+    let target_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("target listener should bind");
+    let target_address = target_listener
+        .local_addr()
+        .expect("target listener should have an address");
+    let mut proxy_task = AbortOnDrop::new(tokio::spawn(run_commit_acknowledgement_proxy(
+        proxy_listener,
+        target_address.to_string(),
+        CommitObservation {
+            pool: PgPoolOptions::new()
+                .connect_lazy("postgres://postgres:postgres@127.0.0.1/postgres")
+                .expect("literal connection string should be valid"),
+            projector_name: ProjectorName::try_new("cancellation-probe")
+                .expect("literal projector name should be valid"),
+            source_id: source_id(),
+            selection_id: selection().id().clone(),
+            position: DeliveryPosition::new(
+                NonZeroU64::new(1).expect("fixture position should be positive"),
+            ),
+        },
+    )));
+    let mut client = timeout(RUN_TIMEOUT, TcpStream::connect(proxy_address))
+        .await
+        .expect("client connection should complete before its timeout")
+        .expect("client should connect to proxy");
+    let (mut target, _) = timeout(RUN_TIMEOUT, target_listener.accept())
+        .await
+        .expect("target accept should complete before its timeout")
+        .expect("proxy should connect to target");
+
+    client
+        .write_u32(8)
+        .await
+        .expect("client should write startup length");
+    client
+        .write_all(b"test")
+        .await
+        .expect("client should write startup payload");
+    client.flush().await.expect("client should flush startup");
+    let mut startup = [0_u8; 8];
+    let _ = timeout(RUN_TIMEOUT, target.read_exact(&mut startup))
+        .await
+        .expect("frontend forwarding should complete before its timeout")
+        .expect("frontend should forward startup bytes");
+
+    proxy_task.abort_and_join().await;
+    let error = timeout(RUN_TIMEOUT, target.read_u8())
+        .await
+        .expect("target connection should close before its timeout")
+        .expect_err("cancelled proxy must close its target connection");
+    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
 }
 
 fn convert_outcome(outcome: ProjectionRunOutcome) -> ContractRunOutcome {
@@ -1382,21 +1474,72 @@ fn convert_outcome(outcome: ProjectionRunOutcome) -> ContractRunOutcome {
 
 type FixtureContractFuture<'a> = Pin<Box<dyn Future<Output = Result<(), FixtureError>> + 'a>>;
 
+struct AtomicFixtureOwner {
+    database: IsolatedTestDatabase,
+    fixture: Option<PostgresAtomicFixture>,
+}
+
+impl AtomicFixtureOwner {
+    fn plan() -> Self {
+        Self {
+            database: IsolatedTestDatabase::plan(),
+            fixture: None,
+        }
+    }
+
+    async fn initialize(&mut self) -> Result<(), FixtureError> {
+        self.database.initialize().await?;
+        self.fixture = Some(PostgresAtomicFixture::new(&self.database).await?);
+        Ok(())
+    }
+
+    async fn cleanup(&mut self) -> Result<(), FixtureError> {
+        if let Some(fixture) = self.fixture.take() {
+            fixture.cleanup().await?;
+        }
+        self.database.cleanup().await?;
+        Ok(())
+    }
+}
+
+fn initialize_atomic_fixture(owner: &mut AtomicFixtureOwner) -> FixtureContractFuture<'_> {
+    Box::pin(async move { owner.initialize().await })
+}
+
+fn cleanup_atomic_fixture(owner: &mut AtomicFixtureOwner) -> FixtureContractFuture<'_> {
+    Box::pin(async move { owner.cleanup().await })
+}
+
 async fn assert_fixture_contract(
-    contract: impl for<'a> FnOnce(&'a mut PostgresAtomicFixture) -> FixtureContractFuture<'a>,
+    contract: impl for<'a> FnOnce(&'a mut PostgresAtomicFixture) -> FixtureContractFuture<'a> + 'static,
 ) {
-    let mut fixture = PostgresAtomicFixture::new()
-        .await
-        .expect("fixture should initialize");
-    let result = AssertUnwindSafe(contract(&mut fixture))
-        .catch_unwind()
-        .await;
-    let cleanup = fixture.cleanup().await;
-    cleanup.expect("test schema cleanup should succeed even after contract panic");
-    match result {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => panic!("contract fixture setup must not fail: {error}"),
-        Err(payload) => resume_unwind(payload),
+    let result = fixture_lifecycle::run_fixture(
+        AtomicFixtureOwner::plan(),
+        fixture_lifecycle::FixtureTimeouts::new(Duration::from_secs(15)),
+        initialize_atomic_fixture,
+        |owner| {
+            Box::pin(async move {
+                contract(
+                    owner
+                        .fixture
+                        .as_mut()
+                        .expect("atomic fixture should be initialized"),
+                )
+                .await
+            })
+        },
+        cleanup_atomic_fixture,
+    )
+    .await;
+    if let Err(error) = result {
+        match error {
+            fixture_lifecycle::FixtureLifecycleError::InitializationPanicked(payload)
+            | fixture_lifecycle::FixtureLifecycleError::BodyPanicked(payload)
+            | fixture_lifecycle::FixtureLifecycleError::CleanupPanicked(payload) => {
+                resume_unwind(payload)
+            }
+            other => panic!("transactional fixture lifecycle failed: {other:?}"),
+        }
     }
 }
 
@@ -1573,68 +1716,55 @@ fn after_commit_error_classifier_forwards_distinct_sources() {
 // collide with another projection component or cause this migration to run unexpectedly.
 #[tokio::test]
 async fn destination_migration_records_its_exact_component_ledger_row() {
-    let database = isolated_database()
-        .await
-        .expect("isolated database should be available");
-    let store = PostgresProjectionStore::from_pool(database.clone_pool());
-    store
-        .migrate()
-        .await
-        .expect("destination migration should succeed");
-    assert_eq!(
-        query_scalar::<_, i64>(
-            "SELECT version FROM eventcore_projection_schema_versions WHERE component = $1",
-        )
-        .bind("projection-destination")
-        .fetch_one(database.pool())
-        .await
-        .expect("destination ledger row should be observable"),
-        2,
-    );
-    database
-        .cleanup()
-        .await
-        .expect("test schema cleanup should succeed");
+    assert_isolated_database_contract(|database| {
+        Box::pin(async move {
+            let store = PostgresProjectionStore::from_pool(database.clone_pool());
+            store
+                .migrate()
+                .await
+                .expect("destination migration should succeed");
+            assert_eq!(
+                query_scalar::<_, i64>(
+                    "SELECT version FROM eventcore_projection_schema_versions WHERE component = $1",
+                )
+                .bind("projection-destination")
+                .fetch_one(database.pool())
+                .await
+                .expect("destination ledger row should be observable"),
+                2,
+            );
+        })
+    })
+    .await;
 }
 
 // Break caught: reporting the global frontier as stopped without checking the selected page
 // would block a projection whose source contains only unselected events.
 #[tokio::test]
 async fn batch_catches_up_when_the_frontier_contains_only_unselected_events() {
-    let mut fixture = PostgresAtomicFixture::new()
-        .await
-        .expect("fixture should initialize");
-    let stream_id = StreamId::try_new("invoice::unselected").expect("valid stream ID");
-    let writes = StreamWrites::new()
-        .register_stream(stream_id.clone(), StreamVersion::new(0))
-        .expect("stream should register")
-        .append(UnselectedEvent { stream_id })
-        .expect("event should append to writes");
-    let _ = fixture
-        .event_store
-        .append_events(writes)
-        .await
-        .expect("public append should work");
-    let through = fixture
-        .source
-        .high_watermark()
-        .await
-        .expect("source should have a frontier");
-    assert_eq!(
-        fixture
-            .run_batch()
-            .await
-            .expect("batch run should complete"),
-        ContractRunOutcome::CaughtUp {
-            processed: 0,
-            skipped: 0,
-            through,
-        },
-    );
-    fixture
-        .cleanup()
-        .await
-        .expect("test schema cleanup should succeed");
+    assert_fixture_contract(|fixture| {
+        Box::pin(async move {
+            let stream_id = StreamId::try_new("invoice::unselected").expect("valid stream ID");
+            let writes = StreamWrites::new()
+                .register_stream(stream_id.clone(), StreamVersion::new(0))?
+                .append(UnselectedEvent { stream_id })?;
+            let _ = fixture.event_store.append_events(writes).await?;
+            let through = fixture.source.high_watermark().await?;
+            assert_eq!(
+                fixture
+                    .run_batch()
+                    .await
+                    .expect("batch run should complete"),
+                ContractRunOutcome::CaughtUp {
+                    processed: 0,
+                    skipped: 0,
+                    through,
+                },
+            );
+            Ok(())
+        })
+    })
+    .await;
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1795,55 +1925,94 @@ async fn after_commit_failure_reports_committed_position_without_replay() {
 // on PostgreSQL's database-wide advisory-lock namespace under parallel nextest execution.
 #[tokio::test]
 async fn independent_schema_fixtures_acquire_distinct_leadership_and_retain_their_identity() {
-    let (left, right) = tokio::join!(PostgresAtomicFixture::new(), PostgresAtomicFixture::new());
-    let mut left = left.expect("left fixture should initialize");
-    let mut right = right.expect("right fixture should initialize");
-    let left_name = left.projector_name.clone();
-    let right_name = right.projector_name.clone();
-    assert_ne!(
-        left_name, right_name,
-        "fixture identities must be schema-specific"
-    );
+    let result = fixture_lifecycle::run_fixture(
+        [AtomicFixtureOwner::plan(), AtomicFixtureOwner::plan()],
+        fixture_lifecycle::FixtureTimeouts::new(Duration::from_secs(15)),
+        initialize_atomic_fixture_pair,
+        |owners| {
+            Box::pin(async move {
+                let [left_owner, right_owner] = owners;
+                let left = left_owner
+                    .fixture
+                    .as_mut()
+                    .expect("left fixture should initialize");
+                let right = right_owner
+                    .fixture
+                    .as_mut()
+                    .expect("right fixture should initialize");
+                let left_name = left.projector_name.clone();
+                let right_name = right.projector_name.clone();
+                assert_ne!(
+                    left_name, right_name,
+                    "fixture identities must be schema-specific"
+                );
 
-    let _ = left
-        .append_values(&[serde_json::json!({})])
-        .await
-        .expect("left fixture event should append");
-    let _ = right
-        .append_values(&[serde_json::json!({})])
-        .await
-        .expect("right fixture event should append");
-    let barrier = Arc::new(Barrier::new(2));
-    left.with_apply_barrier(barrier.clone());
-    right.with_apply_barrier(barrier);
+                let _ = left.append_values(&[serde_json::json!({})]).await?;
+                let _ = right.append_values(&[serde_json::json!({})]).await?;
+                let barrier = Arc::new(Barrier::new(2));
+                left.with_apply_barrier(barrier.clone());
+                right.with_apply_barrier(barrier);
+                let (left_run, right_run) = tokio::join!(left.run_batch(), right.run_batch());
+                assert!(matches!(
+                    left_run?,
+                    ContractRunOutcome::CaughtUp { processed: 1, .. }
+                ));
+                assert!(matches!(
+                    right_run?,
+                    ContractRunOutcome::CaughtUp { processed: 1, .. }
+                ));
 
-    let (left_run, right_run) = tokio::join!(left.run_batch(), right.run_batch());
-    assert!(matches!(
-        left_run.expect("left runner should acquire leadership"),
-        ContractRunOutcome::CaughtUp { processed: 1, .. }
-    ),);
-    assert!(matches!(
-        right_run.expect("right runner should acquire leadership"),
-        ContractRunOutcome::CaughtUp { processed: 1, .. }
-    ),);
+                left.clear_apply_barrier();
+                assert!(matches!(
+                    left.run_batch().await?,
+                    ContractRunOutcome::CaughtUp { processed: 0, .. }
+                ));
+                assert_eq!(
+                    left.projector_name, left_name,
+                    "fixture identity must persist across runs"
+                );
+                assert_eq!(
+                    right.projector_name, right_name,
+                    "fixture identity must persist across runs"
+                );
+                Ok(())
+            })
+        },
+        cleanup_atomic_fixture_pair,
+    )
+    .await;
+    if let Err(error) = result {
+        match error {
+            fixture_lifecycle::FixtureLifecycleError::InitializationPanicked(payload)
+            | fixture_lifecycle::FixtureLifecycleError::BodyPanicked(payload)
+            | fixture_lifecycle::FixtureLifecycleError::CleanupPanicked(payload) => {
+                resume_unwind(payload)
+            }
+            other => panic!("two-fixture lifecycle failed: {other:?}"),
+        }
+    }
+}
 
-    left.clear_apply_barrier();
-    assert!(matches!(
-        left.run_batch().await.expect("repeat run should succeed"),
-        ContractRunOutcome::CaughtUp { processed: 0, .. }
-    ),);
-    assert_eq!(
-        left.projector_name, left_name,
-        "fixture identity must persist across runs"
-    );
-    assert_eq!(
-        right.projector_name, right_name,
-        "fixture identity must persist across runs"
-    );
+fn initialize_atomic_fixture_pair(
+    owners: &mut [AtomicFixtureOwner; 2],
+) -> fixture_lifecycle::FixtureFuture<'_, Result<(), FixtureError>> {
+    Box::pin(async move {
+        owners[0].initialize().await?;
+        owners[1].initialize().await?;
+        Ok(())
+    })
+}
 
-    let (left_cleanup, right_cleanup) = tokio::join!(left.cleanup(), right.cleanup());
-    left_cleanup.expect("left fixture cleanup should succeed");
-    right_cleanup.expect("right fixture cleanup should succeed");
+fn cleanup_atomic_fixture_pair(
+    owners: &mut [AtomicFixtureOwner; 2],
+) -> fixture_lifecycle::FixtureFuture<'_, Result<(), FixtureError>> {
+    Box::pin(async move {
+        let left = owners[0].cleanup().await;
+        let right = owners[1].cleanup().await;
+        left?;
+        right?;
+        Ok(())
+    })
 }
 
 // Break caught: stopping after one non-empty page would strand selected events behind the page
@@ -1935,45 +2104,44 @@ async fn batch_captures_high_watermark_once_despite_concurrent_append() {
 type IsolatedDatabaseContractFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
 
 async fn assert_isolated_database_contract(
-    contract: impl for<'a> FnOnce(&'a IsolatedTestDatabase) -> IsolatedDatabaseContractFuture<'a>,
+    contract: impl for<'a> FnOnce(&'a IsolatedTestDatabase) -> IsolatedDatabaseContractFuture<'a>
+    + 'static,
 ) {
-    let database = timeout(RUN_TIMEOUT, isolated_database())
-        .await
-        .expect("isolated projection database setup should remain bounded")
-        .expect("isolated projection database should initialize");
-    let operation = timeout(
-        RUN_TIMEOUT,
-        AssertUnwindSafe(contract(&database)).catch_unwind(),
+    let result = fixture_lifecycle::run_fixture(
+        IsolatedTestDatabase::plan(),
+        fixture_lifecycle::FixtureTimeouts::new(Duration::from_secs(15)),
+        initialize_isolated_database,
+        |database| {
+            Box::pin(async move {
+                contract(database).await;
+                Ok(())
+            })
+        },
+        cleanup_isolated_database,
     )
     .await;
-    let cleanup = cleanup_isolated_database(&database).await;
-    match operation {
-        Ok(Ok(())) => cleanup.expect("test schema cleanup should succeed"),
-        Ok(Err(payload)) => {
-            let _ = cleanup;
-            resume_unwind(payload);
-        }
-        Err(_) => {
-            let _ = cleanup;
-            panic!("isolated database contract should remain bounded");
+    if let Err(error) = result {
+        match error {
+            fixture_lifecycle::FixtureLifecycleError::InitializationPanicked(payload)
+            | fixture_lifecycle::FixtureLifecycleError::BodyPanicked(payload)
+            | fixture_lifecycle::FixtureLifecycleError::CleanupPanicked(payload) => {
+                resume_unwind(payload)
+            }
+            other => panic!("isolated database fixture lifecycle failed: {other:?}"),
         }
     }
 }
 
-async fn cleanup_isolated_database(database: &IsolatedTestDatabase) -> Result<(), String> {
-    let mut last_failure = String::new();
-    for attempt in 1..=2 {
-        match timeout(RUN_TIMEOUT, database.cleanup()).await {
-            Ok(Ok(())) => return Ok(()),
-            Ok(Err(error)) => {
-                last_failure = format!("cleanup attempt {attempt} failed: {error}");
-            }
-            Err(_) => {
-                last_failure = format!("cleanup attempt {attempt} timed out");
-            }
-        }
-    }
-    Err(last_failure)
+fn initialize_isolated_database(
+    database: &mut IsolatedTestDatabase,
+) -> fixture_lifecycle::FixtureFuture<'_, Result<(), sqlx::Error>> {
+    Box::pin(async move { database.initialize().await })
+}
+
+fn cleanup_isolated_database(
+    database: &mut IsolatedTestDatabase,
+) -> fixture_lifecycle::FixtureFuture<'_, Result<(), sqlx::Error>> {
+    Box::pin(async move { database.cleanup().await })
 }
 
 #[derive(Clone, Deserialize, Serialize)]

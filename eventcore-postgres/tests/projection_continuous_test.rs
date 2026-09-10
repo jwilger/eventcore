@@ -1,10 +1,13 @@
 //! Continuous transactional PostgreSQL projection contract tests.
 
+#[path = "common/fixture_lifecycle.rs"]
+mod fixture_lifecycle;
+
 use std::convert::Infallible;
 use std::env;
 use std::future::Future;
 use std::num::NonZeroU64;
-use std::panic::{AssertUnwindSafe, resume_unwind};
+use std::panic::resume_unwind;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,12 +28,11 @@ use eventcore_types::{
     PersistedEventEnvelope, PersistedEventId, ProjectionSelection, ProjectionSelectionId,
     ProjectionSource, ProjectionStreamFilter, ProjectorName, StreamId, StreamVersion,
 };
-use futures::FutureExt;
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use sqlx::{Pool, Postgres, Transaction, postgres::PgPoolOptions, query, query_scalar};
 use thiserror::Error;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -55,57 +57,102 @@ enum FixtureError {
     IdleObservation(String),
 }
 
+struct AbortOnDrop<T> {
+    task: Option<JoinHandle<T>>,
+}
+
+impl<T> AbortOnDrop<T> {
+    fn new(task: JoinHandle<T>) -> Self {
+        Self { task: Some(task) }
+    }
+
+    fn task_mut(&mut self) -> &mut JoinHandle<T> {
+        self.task.as_mut().expect("owned task should be present")
+    }
+
+    fn is_finished(&self) -> bool {
+        self.task.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
+    async fn abort_and_join(&mut self) {
+        let Some(task) = self.task.take() else {
+            return;
+        };
+        task.abort();
+        let _ = timeout(RUN_TIMEOUT, task).await;
+    }
+}
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
 struct IsolatedTestDatabase {
-    pool: Pool<Postgres>,
+    pool: Option<Pool<Postgres>>,
     schema: String,
     connection_string: String,
 }
 
 impl IsolatedTestDatabase {
-    async fn new() -> Result<Self, sqlx::Error> {
+    fn plan() -> Self {
         let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_owned());
         let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_owned());
-        let connection_string = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        Self {
+            pool: None,
+            schema: format!("eventcore_continuous_test_{}", Uuid::now_v7().simple()),
+            connection_string: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+        }
+    }
+
+    fn pool(&self) -> &Pool<Postgres> {
+        self.pool
+            .as_ref()
+            .expect("continuous database should be initialized")
+    }
+
+    async fn initialize(&mut self) -> Result<(), sqlx::Error> {
         let admin_pool = PgPoolOptions::new()
             .max_connections(1)
-            .connect(&connection_string)
+            .connect(&self.connection_string)
             .await?;
-        let schema = format!("eventcore_continuous_test_{}", Uuid::now_v7().simple());
-        let _ = query(&format!("CREATE SCHEMA {schema}"))
+        let _ = query(&format!("CREATE SCHEMA {}", self.schema))
             .execute(&admin_pool)
             .await?;
         admin_pool.close().await;
 
-        let schema_for_pool = schema.clone();
-        let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .after_connect(move |connection, _metadata| {
-                let schema = schema_for_pool.clone();
-                Box::pin(async move {
-                    let _ = query("SELECT set_config('search_path', $1, false)")
-                        .bind(schema)
-                        .execute(connection)
-                        .await?;
-                    Ok(())
+        let schema_for_pool = self.schema.clone();
+        self.pool = Some(
+            PgPoolOptions::new()
+                .max_connections(5)
+                .after_connect(move |connection, _metadata| {
+                    let schema = schema_for_pool.clone();
+                    Box::pin(async move {
+                        let _ = query("SELECT set_config('search_path', $1, false)")
+                            .bind(schema)
+                            .execute(connection)
+                            .await?;
+                        Ok(())
+                    })
                 })
-            })
-            .connect(&connection_string)
-            .await?;
-
-        Ok(Self {
-            pool,
-            schema,
-            connection_string,
-        })
+                .connect(&self.connection_string)
+                .await?,
+        );
+        Ok(())
     }
 
-    async fn cleanup(self) -> Result<(), sqlx::Error> {
-        self.pool.close().await;
+    async fn cleanup(&mut self) -> Result<(), sqlx::Error> {
+        if let Some(pool) = self.pool.take() {
+            pool.close().await;
+        }
         let cleanup_pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&self.connection_string)
             .await?;
-        let _ = query(&format!("DROP SCHEMA {} CASCADE", self.schema))
+        let _ = query(&format!("DROP SCHEMA IF EXISTS {} CASCADE", self.schema))
             .execute(&cleanup_pool)
             .await?;
         cleanup_pool.close().await;
@@ -307,23 +354,15 @@ async fn observe_idle_boundary(
 
 struct PostgresContinuousFixture {
     database: IsolatedTestDatabase,
-    store: PostgresProjectionStore,
+    store: Option<PostgresProjectionStore>,
     source: ControlledSource,
     selection: ProjectionSelection,
     projector_name: ProjectorName,
 }
 
 impl PostgresContinuousFixture {
-    async fn new() -> Result<Self, FixtureError> {
-        let database = IsolatedTestDatabase::new().await?;
-        let store = PostgresProjectionStore::from_pool(database.pool.clone());
-        store.migrate().await?;
-        let _ = query("CREATE TABLE continuous_projection_effect (total BIGINT NOT NULL)")
-            .execute(&database.pool)
-            .await?;
-        let _ = query("INSERT INTO continuous_projection_effect (total) VALUES (0)")
-            .execute(&database.pool)
-            .await?;
+    fn plan() -> Self {
+        let database = IsolatedTestDatabase::plan();
         let selection = ProjectionSelection::try_new(
             ProjectionSelectionId::try_new("continuous-events-v1")
                 .expect("fixture selection ID should be valid"),
@@ -337,20 +376,40 @@ impl PostgresContinuousFixture {
         let projector_name =
             ProjectorName::try_new(format!("continuous-effect-{}", database.schema))
                 .expect("schema-derived projector name should be valid");
-        Ok(Self {
+        Self {
             database,
-            store,
+            store: None,
             source: ControlledSource::new(
                 DeliverySourceId::try_new("controlled-continuous-source")
                     .expect("fixture source ID should be valid"),
             ),
             selection,
             projector_name,
-        })
+        }
     }
 
-    async fn cleanup(self) -> Result<(), FixtureError> {
-        drop(self.store);
+    fn store(&self) -> &PostgresProjectionStore {
+        self.store
+            .as_ref()
+            .expect("continuous fixture should be initialized")
+    }
+
+    async fn initialize(&mut self) -> Result<(), FixtureError> {
+        self.database.initialize().await?;
+        let store = PostgresProjectionStore::from_pool(self.database.pool().clone());
+        store.migrate().await?;
+        let _ = query("CREATE TABLE continuous_projection_effect (total BIGINT NOT NULL)")
+            .execute(self.database.pool())
+            .await?;
+        let _ = query("INSERT INTO continuous_projection_effect (total) VALUES (0)")
+            .execute(self.database.pool())
+            .await?;
+        self.store = Some(store);
+        Ok(())
+    }
+
+    async fn cleanup(&mut self) -> Result<(), FixtureError> {
+        self.store = None;
         self.database.cleanup().await?;
         Ok(())
     }
@@ -378,18 +437,18 @@ impl PostgresContinuousFixture {
                 requests: requests.clone(),
                 started: started_sender,
                 permits: permits.clone(),
-                destination_pool: self.database.pool.clone(),
-                store: self.store.clone(),
+                destination_pool: self.database.pool().clone(),
+                store: self.store().clone(),
                 projector_name: self.projector_name.clone(),
             });
         let source = self.source.clone();
-        let store = self.store.clone();
+        let store = self.store().clone();
         let projector = IncrementProjector {
             name: self.projector_name.clone(),
         };
-        let mut runner = tokio::spawn(async move {
+        let mut runner = AbortOnDrop::new(tokio::spawn(async move {
             run_transactional_projection(projector, &source, &store, config).await
-        });
+        }));
 
         let mut idle_boundaries = Vec::new();
         let first = wait_for_idle_or_completion(&mut runner, &mut started_receiver).await?;
@@ -457,9 +516,9 @@ impl PostgresContinuousFixture {
         idle_boundaries: Vec<ProjectionIdleBoundaryObservation>,
     ) -> Result<ProjectionContinuousObservation, FixtureError> {
         let effect_count = query_scalar::<_, i64>("SELECT total FROM continuous_projection_effect")
-            .fetch_one(&self.database.pool)
+            .fetch_one(self.database.pool())
             .await?;
-        let progress = self.store.progress(&self.projector_name).await?;
+        let progress = self.store().progress(&self.projector_name).await?;
         Ok(ProjectionContinuousObservation {
             outcome: convert_outcome(outcome),
             initial_through,
@@ -486,13 +545,13 @@ enum RunnerState {
 }
 
 async fn wait_for_idle_or_completion(
-    runner: &mut JoinHandle<Result<ProjectionRunOutcome, TransactionalProjectionError>>,
+    runner: &mut AbortOnDrop<Result<ProjectionRunOutcome, TransactionalProjectionError>>,
     started: &mut mpsc::UnboundedReceiver<Result<ProjectionIdleBoundaryObservation, String>>,
 ) -> Result<RunnerState, FixtureError> {
     let observation = timeout(RUN_TIMEOUT, async {
         tokio::select! {
             biased;
-            outcome = &mut *runner => Ok(RunnerState::Completed(
+            outcome = runner.task_mut() => Ok(RunnerState::Completed(
                 outcome.map_err(FixtureError::from).and_then(|outcome| outcome.map_err(FixtureError::from)),
             )),
             notification = started.recv() => match notification {
@@ -517,9 +576,9 @@ async fn wait_for_idle_or_completion(
 }
 
 async fn finish_runner(
-    runner: &mut JoinHandle<Result<ProjectionRunOutcome, TransactionalProjectionError>>,
+    runner: &mut AbortOnDrop<Result<ProjectionRunOutcome, TransactionalProjectionError>>,
 ) -> Result<ProjectionRunOutcome, FixtureError> {
-    match timeout(RUN_TIMEOUT, &mut *runner).await {
+    match timeout(RUN_TIMEOUT, runner.task_mut()).await {
         Ok(outcome) => Ok(outcome??),
         Err(_) => {
             abort_and_join(runner).await;
@@ -528,9 +587,8 @@ async fn finish_runner(
     }
 }
 
-async fn abort_and_join<T>(task: &mut JoinHandle<T>) {
-    task.abort();
-    let _ = timeout(RUN_TIMEOUT, &mut *task).await;
+async fn abort_and_join<T>(task: &mut AbortOnDrop<T>) {
+    task.abort_and_join().await;
 }
 
 fn convert_outcome(outcome: ProjectionRunOutcome) -> ContractRunOutcome {
@@ -576,30 +634,74 @@ impl TransactionalProjectionContinuousFixture for PostgresContinuousFixture {
     }
 }
 
-type FixtureContractFuture<'a> = Pin<Box<dyn Future<Output = Result<(), FixtureError>> + 'a>>;
+type FixtureContractFuture<'a> = fixture_lifecycle::FixtureFuture<'a, Result<(), FixtureError>>;
+
+fn initialize_continuous_fixture(
+    fixture: &mut PostgresContinuousFixture,
+) -> FixtureContractFuture<'_> {
+    Box::pin(async move { fixture.initialize().await })
+}
+
+fn cleanup_continuous_fixture(
+    fixture: &mut PostgresContinuousFixture,
+) -> FixtureContractFuture<'_> {
+    Box::pin(async move { fixture.cleanup().await })
+}
 
 async fn assert_fixture_contract(
     contract: impl for<'a> FnOnce(&'a mut PostgresContinuousFixture) -> FixtureContractFuture<'a>,
 ) {
-    let mut fixture = PostgresContinuousFixture::new()
-        .await
-        .expect("fixture should initialize");
-    let result = AssertUnwindSafe(contract(&mut fixture))
-        .catch_unwind()
-        .await;
-    fixture
-        .cleanup()
-        .await
-        .expect("test schema cleanup should succeed even after contract panic");
-    match result {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => panic!("contract fixture must not fail: {error}"),
-        Err(payload) => resume_unwind(payload),
+    let result = fixture_lifecycle::run_fixture(
+        PostgresContinuousFixture::plan(),
+        fixture_lifecycle::FixtureTimeouts::new(Duration::from_secs(15)),
+        initialize_continuous_fixture,
+        contract,
+        cleanup_continuous_fixture,
+    )
+    .await;
+    if let Err(error) = result {
+        match error {
+            fixture_lifecycle::FixtureLifecycleError::InitializationPanicked(payload)
+            | fixture_lifecycle::FixtureLifecycleError::BodyPanicked(payload)
+            | fixture_lifecycle::FixtureLifecycleError::CleanupPanicked(payload) => {
+                resume_unwind(payload)
+            }
+            other => panic!("continuous projection fixture lifecycle failed: {other:?}"),
+        }
     }
 }
 
-fn pending_runner() -> JoinHandle<Result<ProjectionRunOutcome, TransactionalProjectionError>> {
-    tokio::spawn(std::future::pending())
+fn pending_runner() -> AbortOnDrop<Result<ProjectionRunOutcome, TransactionalProjectionError>> {
+    AbortOnDrop::new(tokio::spawn(std::future::pending()))
+}
+
+// Break caught: returning early from an observation path while the continuous runner is a raw
+// JoinHandle detaches the runner and retains its leader connection.
+#[tokio::test]
+async fn dropping_continuous_runner_owner_cancels_its_task() {
+    struct DropProbe(Option<oneshot::Sender<()>>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    let (dropped_sender, dropped_receiver) = oneshot::channel();
+    let runner = AbortOnDrop::new(tokio::spawn(async move {
+        let _probe = DropProbe(Some(dropped_sender));
+        std::future::pending::<()>().await;
+    }));
+    tokio::task::yield_now().await;
+
+    drop(runner);
+
+    timeout(RUN_TIMEOUT, dropped_receiver)
+        .await
+        .expect("runner cancellation should complete before its timeout")
+        .expect("runner cancellation should drop its future");
 }
 
 // Break caught: propagating a failed idle-boundary observation while detaching the runner leaves
