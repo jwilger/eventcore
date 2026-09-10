@@ -1,5 +1,12 @@
 //! Transactional projection delivery support for PostgreSQL.
 
+pub use eventcore_types::{
+    DeliveryIdentityError, DeliveryPosition, DeliverySourceId, DeliveryUpperBound, EventTypeName,
+    PersistedEventEnvelope, PersistedEventId, ProjectionSelection, ProjectionSelectionError,
+    ProjectionSelectionId, ProjectionSource, ProjectionStreamFilter, ProjectorName,
+};
+pub use sqlx::{Postgres, Transaction};
+
 mod config;
 mod error;
 mod migration;

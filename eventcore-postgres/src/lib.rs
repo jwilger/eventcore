@@ -11,6 +11,15 @@
 //! creates the durable command-state snapshot table used by snapshot-enabled
 //! commands.
 //!
+//! The [`projections`] module adds a transactional read-model runner. It accepts
+//! separate event-source and PostgreSQL destination pools, applies an event and
+//! advances named progress in one destination transaction, and fences one
+//! writer with a session advisory lock. Its exactly-once claim is limited to
+//! acknowledged effect-plus-progress commits in that read-model database; it
+//! does not cover the event store or external side effects. See the crate
+//! README and [`projections::run_transactional_projection`] for setup and
+//! recovery guidance. The pre-existing `eventcore::Projector` API is unchanged.
+//!
 //! # Getting Started
 //!
 //! ```no_run
@@ -775,7 +784,8 @@ pub enum PostgresCheckpointError {
 ///
 /// The store uses the `eventcore_subscription_versions` table with:
 /// - `subscription_name`: Unique identifier for each projector/subscription
-/// - `last_position`: UUID7 representing the global stream position
+/// - `last_position`: UUIDv7-shaped opaque cursor in this adapter's legacy
+///   delivery sequence; it is not a universal cross-stream commit order
 /// - `updated_at`: Timestamp of the last checkpoint update
 #[derive(Debug, Clone)]
 pub struct PostgresCheckpointStore {

@@ -7,20 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+### Features
+
+- _(projections)_ add backend-neutral delivery positions, stable projection identities,
+  selections, persisted envelopes, and the replayable source contract for the planned 2.1.0
+  release
+
 ## [2.0.0](https://github.com/jwilger/eventcore/compare/eventcore-types-v1.1.1...eventcore-types-v2.0.0) - 2026-08-11
 
 ### Documentation
 
-- *(snapshots)* explain durable command state
-- *(ordering)* clarify projection cursor semantics
+- _(snapshots)_ explain durable command state
+- _(ordering)_ clarify projection cursor semantics
 
 ### Features
 
-- *(snapshots)* persist command state projections
+- _(snapshots)_ persist command state projections
 
 ### Refactoring
 
-- *(testing)* stabilize reconstruction benchmarks
+- _(testing)_ stabilize reconstruction benchmarks
 
 ## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-types-v1.0.0...eventcore-types-v1.0.1) - 2026-06-15
 

@@ -7,25 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+### Documentation
+
+- _(projections)_ add migration, operation, recovery, and reset guidance for transactional read models
+
+### Features
+
+- _(projections)_ add lossless source delivery, named progress, fenced leadership, atomic
+  read-model effects and progress, typed failure policies, batch/continuous execution, and
+  coordinated reset/replay for the planned 2.1.0 release
+
 ## [2.0.1](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v2.0.0...eventcore-postgres-v2.0.1) - 2026-08-15
 
 ### Bug Fixes
 
-- *(postgres)* validate read-only stream participants
+- _(postgres)_ validate read-only stream participants
 
 ## [2.0.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v1.1.1...eventcore-postgres-v2.0.0) - 2026-08-11
 
 ### Documentation
 
-- *(snapshots)* explain durable command state
+- _(snapshots)_ explain durable command state
 
 ### Features
 
-- *(snapshots)* persist command state projections
+- _(snapshots)_ persist command state projections
 
 ### Refactoring
 
-- *(testing)* stabilize reconstruction benchmarks
+- _(testing)_ stabilize reconstruction benchmarks
 
 ## [1.0.1](https://git.johnwilger.com/Slipstream/eventcore/compare/eventcore-postgres-v1.0.0...eventcore-postgres-v1.0.1) - 2026-06-15
 
