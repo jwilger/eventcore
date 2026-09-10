@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [2.1.0](https://github.com/jwilger/eventcore/compare/eventcore-types-v2.0.1...eventcore-types-v2.1.0) - 2026-09-10
+
+### Features
+
+- *(projections)* add transactional PostgreSQL projections ([#40](https://github.com/jwilger/eventcore/pull/40))
+
 ### Features
 
 - _(projections)_ add backend-neutral delivery positions, stable projection identities,
