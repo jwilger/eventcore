@@ -447,10 +447,11 @@ Changing the configured source or selection ID while reusing existing progress
 returns an identity-mismatch error. To rebuild the same read model for changed
 semantics, first invoke reset with the **old source and selection IDs stored in
 progress**, so validation succeeds and the old model/progress are cleared; then
-run with the new IDs. Merely choosing a new `ProjectorName` creates an empty
-progress row but does not empty an already-populated read model, and can
-duplicate non-idempotent effects. A new projector name is safe only with a new
-or otherwise empty model. `PostgresProjectionStore::progress` exposes the last
+run with the new IDs. Merely choosing a new `ProjectorName` starts with no saved
+progress; a progress row is created only by a committed effect or explicit
+skip. It does not empty an already-populated read model and can duplicate
+non-idempotent effects. A new projector name is safe only with a new or
+otherwise empty model. `PostgresProjectionStore::progress` exposes the last
 committed source/selection/position for operational inspection. Restarting the
 same identities resumes after that position. A selected payload that cannot
 deserialize into `PostgresProjector::Event` returns
