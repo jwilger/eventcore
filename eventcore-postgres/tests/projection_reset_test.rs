@@ -34,12 +34,15 @@ use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres, Row, Transaction, postgres::PgPoolOptions, query, query_scalar};
 use thiserror::Error;
-use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{Mutex as AsyncMutex, Notify, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use uuid::Uuid;
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(3);
+const TEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 // Break caught: omitting any public reset operation, callback trait, or typed error makes the
 // coordinated recovery API unavailable to downstream applications.
@@ -147,6 +150,320 @@ enum FixtureError {
     TimedOut,
     #[error("fixture observation was unavailable: {0}")]
     Observation(&'static str),
+    #[error("fixture transport operation failed")]
+    Io(#[from] std::io::Error),
+    #[error("reset commit acknowledgement proxy failed: {0}")]
+    CommitAcknowledgementProxy(String),
+}
+
+struct ResetCommitObservation {
+    connection_string: String,
+    schema: String,
+    projector_name: ProjectorName,
+}
+
+struct ResetCommitAcknowledgementProxy {
+    store: PostgresProjectionStore,
+    confirmation: AsyncMutex<Option<oneshot::Receiver<Result<(), String>>>>,
+    task: JoinHandle<()>,
+}
+
+impl ResetCommitAcknowledgementProxy {
+    async fn start(
+        database: &IsolatedTestDatabase,
+        projector_name: ProjectorName,
+    ) -> Result<Self, FixtureError> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let proxy_address = listener.local_addr()?;
+        let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_owned());
+        let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_owned());
+        let target = format!("{host}:{port}");
+        let observation = ResetCommitObservation {
+            connection_string: database.connection_string.clone(),
+            schema: database.schema.clone(),
+            projector_name,
+        };
+        let (confirmation_sender, confirmation_receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let result =
+                run_reset_commit_acknowledgement_proxy(listener, target, observation).await;
+            let _ = confirmation_sender.send(result);
+        });
+
+        let schema = database.schema.clone();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .after_connect(move |connection, _| {
+                let schema = schema.clone();
+                Box::pin(async move {
+                    let _ = query("SELECT set_config('search_path', $1, false)")
+                        .bind(schema)
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&format!(
+                "postgres://postgres:postgres@{proxy_address}/postgres?sslmode=disable"
+            ))
+            .await;
+        let pool = match pool {
+            Ok(pool) => pool,
+            Err(error) => {
+                task.abort();
+                let _ = timeout(RUN_TIMEOUT, task).await;
+                return Err(FixtureError::Sql(error));
+            }
+        };
+
+        Ok(Self {
+            store: PostgresProjectionStore::from_pool(pool),
+            confirmation: AsyncMutex::new(Some(confirmation_receiver)),
+            task,
+        })
+    }
+
+    async fn await_committed_observation(&self) -> Result<(), FixtureError> {
+        let receiver = self.confirmation.lock().await.take().ok_or_else(|| {
+            FixtureError::CommitAcknowledgementProxy(
+                "commit acknowledgement observation was awaited more than once".to_owned(),
+            )
+        })?;
+        let result = timeout(RUN_TIMEOUT, receiver)
+            .await
+            .map_err(|_| FixtureError::TimedOut)?
+            .map_err(|_| {
+                FixtureError::CommitAcknowledgementProxy(
+                    "proxy exited without a commit acknowledgement observation".to_owned(),
+                )
+            })?;
+        result.map_err(FixtureError::CommitAcknowledgementProxy)
+    }
+
+    async fn shutdown(self) {
+        self.task.abort();
+        let _ = timeout(RUN_TIMEOUT, self.task).await;
+    }
+}
+
+async fn run_reset_commit_acknowledgement_proxy(
+    listener: TcpListener,
+    target: String,
+    observation: ResetCommitObservation,
+) -> Result<(), String> {
+    let (client, _) = listener
+        .accept()
+        .await
+        .map_err(|error| format!("proxy did not accept reset connection: {error}"))?;
+    let server = TcpStream::connect(target)
+        .await
+        .map_err(|error| format!("proxy did not connect to PostgreSQL: {error}"))?;
+    let (client_reader, client_writer) = client.into_split();
+    let (server_reader, server_writer) = server.into_split();
+    let (commit_sender, mut commit_receiver) = oneshot::channel();
+    let frontend = tokio::spawn(forward_reset_postgres_frontend(
+        client_reader,
+        server_writer,
+        commit_sender,
+    ));
+
+    let result = forward_reset_postgres_backend(
+        server_reader,
+        client_writer,
+        &mut commit_receiver,
+        observation,
+    )
+    .await;
+    frontend.abort();
+    let _ = frontend.await;
+    result
+}
+
+async fn forward_reset_postgres_frontend(
+    mut client: tokio::net::tcp::OwnedReadHalf,
+    mut server: tokio::net::tcp::OwnedWriteHalf,
+    commit_sender: oneshot::Sender<()>,
+) -> Result<(), String> {
+    let startup_length = client
+        .read_u32()
+        .await
+        .map_err(|error| format!("proxy could not read startup length: {error}"))?;
+    let mut startup = vec![0; checked_postgres_payload_length(startup_length)?];
+    let _ = client
+        .read_exact(&mut startup)
+        .await
+        .map_err(|error| format!("proxy could not read startup payload: {error}"))?;
+    server
+        .write_u32(startup_length)
+        .await
+        .map_err(|error| format!("proxy could not forward startup length: {error}"))?;
+    server
+        .write_all(&startup)
+        .await
+        .map_err(|error| format!("proxy could not forward startup payload: {error}"))?;
+    server
+        .flush()
+        .await
+        .map_err(|error| format!("proxy could not flush startup packet: {error}"))?;
+
+    let mut commit_sender = Some(commit_sender);
+    loop {
+        let tag = client
+            .read_u8()
+            .await
+            .map_err(|error| format!("proxy could not read frontend tag: {error}"))?;
+        let length = client
+            .read_u32()
+            .await
+            .map_err(|error| format!("proxy could not read frontend length: {error}"))?;
+        let mut payload = vec![0; checked_postgres_payload_length(length)?];
+        let _ = client
+            .read_exact(&mut payload)
+            .await
+            .map_err(|error| format!("proxy could not read frontend payload: {error}"))?;
+        server
+            .write_u8(tag)
+            .await
+            .map_err(|error| format!("proxy could not forward frontend tag: {error}"))?;
+        server
+            .write_u32(length)
+            .await
+            .map_err(|error| format!("proxy could not forward frontend length: {error}"))?;
+        server
+            .write_all(&payload)
+            .await
+            .map_err(|error| format!("proxy could not forward frontend payload: {error}"))?;
+        server
+            .flush()
+            .await
+            .map_err(|error| format!("proxy could not flush frontend packet: {error}"))?;
+        if tag == b'Q' && payload == b"COMMIT\0" {
+            let _ = commit_sender
+                .take()
+                .expect("commit sender should be present")
+                .send(());
+        }
+    }
+}
+
+async fn forward_reset_postgres_backend(
+    mut server: tokio::net::tcp::OwnedReadHalf,
+    mut client: tokio::net::tcp::OwnedWriteHalf,
+    commit_receiver: &mut oneshot::Receiver<()>,
+    observation: ResetCommitObservation,
+) -> Result<(), String> {
+    loop {
+        let (tag, length, payload) = read_postgres_message(&mut server).await?;
+        if tag == b'C' && payload == b"COMMIT\0" {
+            timeout(RUN_TIMEOUT, &mut *commit_receiver)
+                .await
+                .map_err(|_| {
+                    "proxy did not observe forwarded COMMIT before its completion".to_owned()
+                })?
+                .map_err(|_| "proxy frontend ended before forwarding COMMIT".to_owned())?;
+            let _ = timeout(RUN_TIMEOUT, observe_fresh_reset_state(observation))
+                .await
+                .map_err(|_| "fresh reset commit observer timed out".to_owned())??;
+            // Withhold CommandComplete and close the client connection only after a separate
+            // PostgreSQL session has proved that the reset transaction committed atomically.
+            return Ok(());
+        }
+        client
+            .write_u8(tag)
+            .await
+            .map_err(|error| format!("proxy could not forward backend tag: {error}"))?;
+        client
+            .write_u32(length)
+            .await
+            .map_err(|error| format!("proxy could not forward backend length: {error}"))?;
+        client
+            .write_all(&payload)
+            .await
+            .map_err(|error| format!("proxy could not forward backend payload: {error}"))?;
+        client
+            .flush()
+            .await
+            .map_err(|error| format!("proxy could not flush backend packet: {error}"))?;
+    }
+}
+
+async fn read_postgres_message(
+    server: &mut tokio::net::tcp::OwnedReadHalf,
+) -> Result<(u8, u32, Vec<u8>), String> {
+    let tag = server
+        .read_u8()
+        .await
+        .map_err(|error| format!("proxy could not read backend tag: {error}"))?;
+    let length = server
+        .read_u32()
+        .await
+        .map_err(|error| format!("proxy could not read backend length: {error}"))?;
+    let mut payload = vec![0; checked_postgres_payload_length(length)?];
+    let _ = server
+        .read_exact(&mut payload)
+        .await
+        .map_err(|error| format!("proxy could not read backend payload: {error}"))?;
+    Ok((tag, length, payload))
+}
+
+fn checked_postgres_payload_length(length: u32) -> Result<usize, String> {
+    let length = length
+        .checked_sub(4)
+        .ok_or_else(|| "PostgreSQL protocol frame length was shorter than its header".to_owned())?;
+    usize::try_from(length)
+        .map_err(|_| "PostgreSQL protocol frame length did not fit usize".to_owned())
+}
+
+async fn observe_fresh_reset_state(
+    observation: ResetCommitObservation,
+) -> Result<ProjectionResetStateObservation, String> {
+    let schema = observation.schema.clone();
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(move |connection, _| {
+            let schema = schema.clone();
+            Box::pin(async move {
+                let _ = query("SELECT set_config('search_path', $1, false)")
+                    .bind(schema)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&observation.connection_string)
+        .await
+        .map_err(|error| format!("fresh reset observer could not connect: {error}"))?;
+    let result = async {
+        let model_total = query_scalar::<_, i64>("SELECT total FROM reset_projection_model")
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| format!("fresh reset observer could not read model: {error}"))?;
+        let progress_exists: bool = query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM eventcore_projection_progress \
+             WHERE projector_name = $1)",
+        )
+        .bind(observation.projector_name.as_ref())
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| format!("fresh reset observer could not read progress: {error}"))?;
+        if progress_exists {
+            return Err(
+                "COMMIT acknowledgement was withheld while reset progress still existed".to_owned(),
+            );
+        }
+        if model_total != 0 {
+            return Err(format!(
+                "COMMIT acknowledgement was withheld while reset model total was {model_total}"
+            ));
+        }
+        Ok(ProjectionResetStateObservation {
+            model_total,
+            progress: None,
+        })
+    }
+    .await;
+    pool.close().await;
+    result
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -430,6 +747,7 @@ struct PostgresResetFixture {
     projector_name: ProjectorName,
     callback_attempts: Arc<AtomicU64>,
     legacy_position: StreamPosition,
+    reset_commit_acknowledgement_proxy: Option<ResetCommitAcknowledgementProxy>,
 }
 
 impl PostgresResetFixture {
@@ -473,6 +791,7 @@ impl PostgresResetFixture {
             legacy_position: StreamPosition::new(Uuid::from_u128(
                 0x0199_1111_2222_7333_8444_5555_6666_7777,
             )),
+            reset_commit_acknowledgement_proxy: None,
         })
     }
 
@@ -518,13 +837,61 @@ impl PostgresResetFixture {
             event_store,
             source,
             store,
+            reset_commit_acknowledgement_proxy,
             ..
         } = self;
+        if let Some(proxy) = reset_commit_acknowledgement_proxy {
+            proxy.shutdown().await;
+        }
         drop(event_store);
         drop(source);
         drop(store);
         database.cleanup().await?;
         Ok(())
+    }
+
+    async fn inject_reset_commit_acknowledgement_loss(&mut self) -> Result<(), FixtureError> {
+        let proxy =
+            ResetCommitAcknowledgementProxy::start(&self.database, self.projector_name.clone())
+                .await?;
+        self.reset_commit_acknowledgement_proxy = Some(proxy);
+        Ok(())
+    }
+
+    async fn reset_with_commit_acknowledgement_loss(
+        &mut self,
+    ) -> Result<Result<(), ProjectionResetError>, FixtureError> {
+        let proxy =
+            self.reset_commit_acknowledgement_proxy
+                .as_ref()
+                .ok_or(FixtureError::Observation(
+                    "reset commit acknowledgement proxy",
+                ))?;
+        let mut reset = self.resetter(ProjectionResetBehavior::Succeed);
+        let result = timeout(
+            RUN_TIMEOUT,
+            reset_transactional_projection(
+                &mut reset,
+                &self.projector_name,
+                &self.source_id,
+                self.selection.id(),
+                &proxy.store,
+            ),
+        )
+        .await
+        .map_err(|_| FixtureError::TimedOut)?;
+        proxy.await_committed_observation().await?;
+        Ok(result)
+    }
+
+    async fn fresh_reset_state(&self) -> Result<ProjectionResetStateObservation, FixtureError> {
+        observe_fresh_reset_state(ResetCommitObservation {
+            connection_string: self.database.connection_string.clone(),
+            schema: self.database.schema.clone(),
+            projector_name: self.projector_name.clone(),
+        })
+        .await
+        .map_err(FixtureError::CommitAcknowledgementProxy)
     }
 }
 
@@ -1016,6 +1383,105 @@ async fn waiter_cleanup_wakes_and_joins_the_owned_task() {
         bounded_cleanup(RUN_TIMEOUT, database.cleanup()).await,
         CleanupOutcome::Complete,
     ));
+}
+
+// Break caught: mapping a lost reset COMMIT acknowledgement to rollback, success, or a generic
+// leadership error would let recovery code misclassify an atomically committed reset.
+#[tokio::test]
+async fn committed_reset_with_lost_acknowledgement_is_indeterminate() {
+    let mut fixture = timeout(RUN_TIMEOUT, PostgresResetFixture::new())
+        .await
+        .expect("reset fixture setup should complete before its timeout")
+        .expect("reset fixture should initialize");
+    let body = AssertUnwindSafe(timeout(TEST_TIMEOUT, async {
+        let positions = fixture.append_reset_values(&[7, 11]).await?;
+        let _ = fixture.run_reset_fixture_batch().await?;
+        assert_eq!(
+            fixture.reset_state().await?,
+            ProjectionResetStateObservation {
+                model_total: 18,
+                progress: Some(ProjectionProgressObservation {
+                    source_id: fixture.source_id.clone(),
+                    selection_id: fixture.selection.id().clone(),
+                    position: positions[1],
+                }),
+            },
+            "the fault must begin from independently observed non-empty projection state",
+        );
+
+        fixture.inject_reset_commit_acknowledgement_loss().await?;
+        let result = fixture.reset_with_commit_acknowledgement_loss().await?;
+        assert!(
+            matches!(
+                result,
+                Err(ProjectionResetError::CommitIndeterminate { .. })
+            ),
+            "a lost reset COMMIT acknowledgement must be indeterminate, got {result:?}",
+        );
+        assert_eq!(
+            fixture.callback_attempts.load(Ordering::SeqCst),
+            1,
+            "an indeterminate reset commit must not retry application reset code",
+        );
+        assert_eq!(
+            timeout(RUN_TIMEOUT, fixture.fresh_reset_state())
+                .await
+                .map_err(|_| FixtureError::TimedOut)??,
+            ProjectionResetStateObservation {
+                model_total: 0,
+                progress: None,
+            },
+            "a fresh PostgreSQL connection must observe the atomically committed reset",
+        );
+        Ok::<(), FixtureError>(())
+    }))
+    .catch_unwind()
+    .await;
+    let cleanup = bounded_cleanup(RUN_TIMEOUT, fixture.cleanup()).await;
+
+    match (body, cleanup) {
+        (Ok(Ok(Ok(()))), CleanupOutcome::Complete) => {}
+        (Ok(Ok(Err(error))), CleanupOutcome::Complete) => {
+            panic!("reset acknowledgement-loss contract failed: {error}")
+        }
+        (Ok(Err(_)), CleanupOutcome::Complete) => {
+            panic!("reset acknowledgement-loss contract timed out")
+        }
+        (Ok(Ok(Ok(()))), CleanupOutcome::Failed(cleanup)) => {
+            panic!("reset acknowledgement-loss contract passed but cleanup failed: {cleanup}")
+        }
+        (Ok(Ok(Err(error))), CleanupOutcome::Failed(cleanup)) => {
+            panic!(
+                "reset acknowledgement-loss contract failed: {error}; cleanup also failed: {cleanup}"
+            )
+        }
+        (Ok(Err(_)), CleanupOutcome::Failed(cleanup)) => {
+            panic!("reset acknowledgement-loss contract timed out; cleanup also failed: {cleanup}")
+        }
+        (Ok(Ok(Ok(()))), CleanupOutcome::TimedOut) => {
+            panic!("reset acknowledgement-loss contract passed but cleanup timed out")
+        }
+        (Ok(Ok(Err(error))), CleanupOutcome::TimedOut) => {
+            panic!("reset acknowledgement-loss contract failed: {error}; cleanup also timed out")
+        }
+        (Ok(Err(_)), CleanupOutcome::TimedOut) => {
+            panic!("reset acknowledgement-loss contract and cleanup timed out")
+        }
+        (Ok(_), CleanupOutcome::Panicked(payload)) => resume_unwind(payload),
+        (Err(payload), CleanupOutcome::Complete) => resume_unwind(payload),
+        (Err(payload), CleanupOutcome::Failed(cleanup)) => {
+            eprintln!("cleanup also failed while preserving contract panic: {cleanup}");
+            resume_unwind(payload);
+        }
+        (Err(payload), CleanupOutcome::TimedOut) => {
+            eprintln!("cleanup also timed out while preserving contract panic");
+            resume_unwind(payload);
+        }
+        (Err(payload), CleanupOutcome::Panicked(_cleanup_panic)) => {
+            eprintln!("cleanup also panicked while preserving contract panic");
+            resume_unwind(payload);
+        }
+    }
 }
 
 macro_rules! reset_contract_test {
