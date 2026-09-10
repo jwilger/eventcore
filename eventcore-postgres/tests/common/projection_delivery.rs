@@ -153,6 +153,10 @@ impl IsolatedTestDatabase {
             .expect("isolated database should be initialized")
     }
 
+    pub(crate) fn schema(&self) -> &str {
+        &self.schema
+    }
+
     pub(crate) fn clone_pool(&self) -> Pool<Postgres> {
         self.pool().clone()
     }
@@ -181,15 +185,6 @@ pub(crate) async fn create_isolated_test_pool() -> IsolatedTestDatabase {
         .initialize()
         .await
         .expect("configured test postgres should initialize an isolated schema");
-    database
-}
-
-pub(crate) async fn create_split_search_path_test_database() -> SplitSearchPathTestDatabase {
-    let mut database = SplitSearchPathTestDatabase::plan();
-    database
-        .initialize()
-        .await
-        .expect("configured test postgres should initialize split schemas");
     database
 }
 

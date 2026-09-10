@@ -142,6 +142,145 @@ async fn bounded_cleanup(
     }
 }
 
+type DeliveryFixtureFuture<'a> = common::fixture_lifecycle::FixtureFuture<'a, Result<(), String>>;
+
+fn initialize_delivery_database(
+    database: &mut projection_delivery::IsolatedTestDatabase,
+) -> DeliveryFixtureFuture<'_> {
+    Box::pin(async move {
+        database
+            .initialize()
+            .await
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn cleanup_delivery_database(
+    database: &mut projection_delivery::IsolatedTestDatabase,
+) -> DeliveryFixtureFuture<'_> {
+    Box::pin(async move {
+        database.cleanup().await;
+        Ok(())
+    })
+}
+
+fn initialize_split_database(
+    database: &mut projection_delivery::SplitSearchPathTestDatabase,
+) -> DeliveryFixtureFuture<'_> {
+    Box::pin(async move {
+        database
+            .initialize()
+            .await
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn cleanup_split_database(
+    database: &mut projection_delivery::SplitSearchPathTestDatabase,
+) -> DeliveryFixtureFuture<'_> {
+    Box::pin(async move {
+        database.cleanup().await;
+        Ok(())
+    })
+}
+
+fn finish_delivery_lifecycle(
+    result: Result<(), common::fixture_lifecycle::FixtureLifecycleError<String>>,
+) {
+    if let Err(error) = result {
+        match error {
+            common::fixture_lifecycle::FixtureLifecycleError::InitializationPanicked(payload)
+            | common::fixture_lifecycle::FixtureLifecycleError::BodyPanicked(payload)
+            | common::fixture_lifecycle::FixtureLifecycleError::CleanupPanicked(payload) => {
+                resume_unwind(payload)
+            }
+            other => panic!("projection delivery fixture lifecycle failed: {other:?}"),
+        }
+    }
+}
+
+async fn assert_delivery_database_contract(
+    contract: impl for<'a> FnOnce(
+        &'a mut projection_delivery::IsolatedTestDatabase,
+    ) -> DeliveryFixtureFuture<'a>
+    + 'static,
+) {
+    finish_delivery_lifecycle(
+        common::fixture_lifecycle::run_fixture(
+            projection_delivery::IsolatedTestDatabase::plan(),
+            common::fixture_lifecycle::FixtureTimeouts::new(DATABASE_OPERATION_TIMEOUT),
+            initialize_delivery_database,
+            contract,
+            cleanup_delivery_database,
+        )
+        .await,
+    );
+}
+
+async fn assert_split_delivery_database_contract(
+    contract: impl for<'a> FnOnce(
+        &'a mut projection_delivery::SplitSearchPathTestDatabase,
+    ) -> DeliveryFixtureFuture<'a>
+    + 'static,
+) {
+    finish_delivery_lifecycle(
+        common::fixture_lifecycle::run_fixture(
+            projection_delivery::SplitSearchPathTestDatabase::plan(),
+            common::fixture_lifecycle::FixtureTimeouts::new(DATABASE_OPERATION_TIMEOUT),
+            initialize_split_database,
+            contract,
+            cleanup_split_database,
+        )
+        .await,
+    );
+}
+
+// Break caught: failing after schema creation but before fixture construction returns leaves the
+// planned schema behind for later test runs.
+#[tokio::test]
+async fn failed_delivery_initialization_leaves_no_owned_schema() {
+    let database = projection_delivery::IsolatedTestDatabase::plan();
+    let schema = database.schema().to_owned();
+    let result = common::fixture_lifecycle::run_fixture(
+        database,
+        common::fixture_lifecycle::FixtureTimeouts::new(DATABASE_OPERATION_TIMEOUT),
+        |database| {
+            Box::pin(async move {
+                database
+                    .initialize()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Err("deliberate initialization failure".to_owned())
+            })
+        },
+        |_| Box::pin(async { Ok(()) }),
+        cleanup_delivery_database,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(common::fixture_lifecycle::FixtureLifecycleError::InitializationError(error))
+            if error == "deliberate initialization failure"
+    ));
+
+    let admin = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&common::connection_string())
+        .await
+        .expect("configured postgres should accept cleanup observation connection");
+    let exists: bool =
+        query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
+            .bind(schema)
+            .fetch_one(&admin)
+            .await
+            .expect("schema cleanup should be observable");
+    admin.close().await;
+    assert!(
+        !exists,
+        "failed initialization must not leave its schema behind"
+    );
+}
+
 // Break caught: defaulting, swapping, or omitting any persisted envelope field would give a
 // projector an event that no longer identifies the exact source record it must apply.
 #[tokio::test]
@@ -875,11 +1014,18 @@ async fn source_preserves_precise_jsonb_numbers_in_payload_and_metadata() {
 // one physical source appear as distinct durable progress namespaces across restarts.
 #[tokio::test]
 async fn source_exposes_its_configured_stable_identity() {
-    let (pool, source) = migrated_source().await;
-
-    assert_eq!(source.source_id(), &source_id());
-
-    pool.cleanup().await;
+    assert_delivery_database_contract(|database| {
+        Box::pin(async move {
+            PostgresEventStore::from_pool(database.clone_pool())
+                .migrate()
+                .await;
+            let source = PostgresProjectionSource::from_pool(database.clone_pool(), source_id());
+            source.migrate().await.map_err(|error| error.to_string())?;
+            assert_eq!(source.source_id(), &source_id());
+            Ok(())
+        })
+    })
+    .await;
 }
 
 // Break caught: backfilling in insertion or UUID order rather than the documented
@@ -999,39 +1145,40 @@ async fn direct_legacy_client_writes_are_delivered_after_source_migration() {
 // search path fails after source migration owns those tables in a different schema.
 #[tokio::test]
 async fn legacy_writer_with_a_different_search_path_is_delivered_after_source_migration() {
-    let database = projection_delivery::create_split_search_path_test_database().await;
-    PostgresEventStore::from_pool(database.legacy_pool().clone())
-        .migrate()
-        .await;
-    let source = PostgresProjectionSource::from_pool(database.source_pool(), source_id());
-    source
-        .migrate()
-        .await
-        .expect("source migration should install delivery tables in the source schema");
-    let event_id = Uuid::now_v7();
+    assert_split_delivery_database_contract(|database| {
+        Box::pin(async move {
+            PostgresEventStore::from_pool(database.legacy_pool().clone())
+                .migrate()
+                .await;
+            let source = PostgresProjectionSource::from_pool(database.source_pool(), source_id());
+            source
+                .migrate()
+                .await
+                .expect("source migration should install delivery tables in the source schema");
+            let event_id = Uuid::now_v7();
 
-    insert_event(
-        database.legacy_pool(),
-        event_id,
-        "invoice::legacy-search-path",
-        PROJECTED_EVENT_TYPE,
-        serde_json::json!({"writer": "legacy search path"}),
-    )
+            insert_event(
+                database.legacy_pool(),
+                event_id,
+                "invoice::legacy-search-path",
+                PROJECTED_EVENT_TYPE,
+                serde_json::json!({"writer": "legacy search path"}),
+            )
+            .await;
+            let page = source
+                .read_envelopes(
+                    &all_projected(),
+                    None,
+                    DeliveryUpperBound::Unbounded,
+                    BatchSize::new(1),
+                )
+                .await
+                .expect("legacy writer event should be delivered through the source search path");
+            assert_eq!(page[0].event_id(), PersistedEventId::new(event_id));
+            Ok(())
+        })
+    })
     .await;
-
-    let page = source
-        .read_envelopes(
-            &all_projected(),
-            None,
-            DeliveryUpperBound::Unbounded,
-            BatchSize::new(1),
-        )
-        .await
-        .expect("legacy writer event should be delivered through the source search path");
-
-    assert_eq!(page[0].event_id(), PersistedEventId::new(event_id));
-
-    database.cleanup().await;
 }
 
 // Break caught: recording the source migration in SQLx's shared ledger would make a 2.0.1 event

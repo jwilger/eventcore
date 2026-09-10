@@ -1,5 +1,8 @@
 //! Public reset-and-replay contracts for transactional PostgreSQL projections.
 
+#[path = "common/fixture_lifecycle.rs"]
+mod fixture_lifecycle;
+
 use std::env;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, resume_unwind};
@@ -77,16 +80,42 @@ struct IsolatedTestDatabase {
     connection_string: String,
 }
 
-impl IsolatedTestDatabase {
-    async fn new() -> Result<Self, sqlx::Error> {
+struct DatabasePlan {
+    schema: String,
+    connection_string: String,
+}
+
+impl DatabasePlan {
+    fn new() -> Self {
         let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_owned());
         let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5433".to_owned());
-        let connection_string = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        Self {
+            schema: format!("eventcore_reset_test_{}", Uuid::now_v7().simple()),
+            connection_string: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+        }
+    }
+
+    async fn cleanup(&self) -> Result<(), sqlx::Error> {
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&self.connection_string)
+            .await?;
+        let _ = query(&format!("DROP SCHEMA IF EXISTS {} CASCADE", self.schema))
+            .execute(&admin)
+            .await?;
+        admin.close().await;
+        Ok(())
+    }
+}
+
+impl IsolatedTestDatabase {
+    async fn new(plan: &DatabasePlan) -> Result<Self, sqlx::Error> {
+        let connection_string = plan.connection_string.clone();
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&connection_string)
             .await?;
-        let schema = format!("eventcore_reset_test_{}", Uuid::now_v7().simple());
+        let schema = plan.schema.clone();
         let _ = query(&format!("CREATE SCHEMA {schema}"))
             .execute(&admin)
             .await?;
@@ -774,8 +803,8 @@ struct PostgresResetFixture {
 }
 
 impl PostgresResetFixture {
-    async fn new() -> Result<Self, FixtureError> {
-        let database = IsolatedTestDatabase::new().await?;
+    async fn new(plan: &DatabasePlan) -> Result<Self, FixtureError> {
+        let database = IsolatedTestDatabase::new(plan).await?;
         let event_store = eventcore_postgres::PostgresEventStore::from_pool(database.pool.clone());
         event_store.migrate().await;
         let source_id = DeliverySourceId::try_new("reset-primary-source")
@@ -1010,6 +1039,20 @@ enum CleanupOutcome {
     Failed(String),
     TimedOut,
     Panicked(Box<dyn std::any::Any + Send>),
+}
+
+impl std::fmt::Debug for CleanupOutcome {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Complete => formatter.write_str("Complete"),
+            Self::Failed(error) => formatter.debug_tuple("Failed").field(error).finish(),
+            Self::TimedOut => formatter.write_str("TimedOut"),
+            Self::Panicked(payload) => formatter
+                .debug_tuple("Panicked")
+                .field(&(**payload).type_id())
+                .finish(),
+        }
+    }
 }
 
 async fn bounded_cleanup<F, E>(duration: Duration, cleanup: F) -> CleanupOutcome
@@ -1349,6 +1392,78 @@ impl TransactionalProjectionResetFixture for PostgresResetFixture {
     }
 }
 
+type ResetFixtureFuture<'a> = fixture_lifecycle::FixtureFuture<'a, Result<(), FixtureError>>;
+
+struct ResetFixtureOwner {
+    plan: DatabasePlan,
+    fixture: Option<PostgresResetFixture>,
+}
+
+impl ResetFixtureOwner {
+    fn plan() -> Self {
+        Self {
+            plan: DatabasePlan::new(),
+            fixture: None,
+        }
+    }
+
+    async fn initialize(&mut self) -> Result<(), FixtureError> {
+        self.fixture = Some(PostgresResetFixture::new(&self.plan).await?);
+        Ok(())
+    }
+
+    async fn cleanup(&mut self) -> Result<(), FixtureError> {
+        let fixture_cleanup = match self.fixture.take() {
+            Some(fixture) => fixture.cleanup().await,
+            None => Ok(()),
+        };
+        let schema_cleanup = self.plan.cleanup().await.map_err(FixtureError::from);
+        fixture_cleanup?;
+        schema_cleanup
+    }
+}
+
+fn initialize_reset_fixture(owner: &mut ResetFixtureOwner) -> ResetFixtureFuture<'_> {
+    Box::pin(async move { owner.initialize().await })
+}
+
+fn cleanup_reset_fixture(owner: &mut ResetFixtureOwner) -> ResetFixtureFuture<'_> {
+    Box::pin(async move { owner.cleanup().await })
+}
+
+async fn assert_reset_fixture(
+    contract: impl for<'a> FnOnce(&'a mut PostgresResetFixture) -> ResetFixtureFuture<'a> + 'static,
+) {
+    let result = fixture_lifecycle::run_fixture(
+        ResetFixtureOwner::plan(),
+        fixture_lifecycle::FixtureTimeouts::new(TEST_TIMEOUT),
+        initialize_reset_fixture,
+        |owner| {
+            Box::pin(async move {
+                contract(
+                    owner
+                        .fixture
+                        .as_mut()
+                        .expect("reset fixture should be initialized"),
+                )
+                .await
+            })
+        },
+        cleanup_reset_fixture,
+    )
+    .await;
+    if let Err(error) = result {
+        match error {
+            fixture_lifecycle::FixtureLifecycleError::InitializationPanicked(payload)
+            | fixture_lifecycle::FixtureLifecycleError::BodyPanicked(payload)
+            | fixture_lifecycle::FixtureLifecycleError::CleanupPanicked(payload) => {
+                resume_unwind(payload)
+            }
+            other => panic!("reset fixture lifecycle failed: {other:?}"),
+        }
+    }
+}
+
 // Break caught: applying a nested task error before marking the completed JoinHandle consumed
 // would make unconditional cleanup poll that handle a second time and panic.
 #[tokio::test]
@@ -1388,7 +1503,8 @@ async fn cleanup_timeout_is_a_deterministic_outcome() {
 // leave a live backend that prevents pool and schema cleanup.
 #[tokio::test]
 async fn waiter_cleanup_wakes_and_joins_the_owned_task() {
-    let database = IsolatedTestDatabase::new()
+    let plan = DatabasePlan::new();
+    let database = IsolatedTestDatabase::new(&plan)
         .await
         .expect("isolated database should initialize");
     let probe = LeadershipProbe::new(database.pool.clone());
@@ -1505,99 +1621,51 @@ async fn cancelling_proxy_task_closes_frontend_connection() {
 // leadership error would let recovery code misclassify an atomically committed reset.
 #[tokio::test]
 async fn committed_reset_with_lost_acknowledgement_is_indeterminate() {
-    let mut fixture = timeout(RUN_TIMEOUT, PostgresResetFixture::new())
-        .await
-        .expect("reset fixture setup should complete before its timeout")
-        .expect("reset fixture should initialize");
-    let body = AssertUnwindSafe(timeout(TEST_TIMEOUT, async {
-        let positions = fixture.append_reset_values(&[7, 11]).await?;
-        let _ = fixture.run_reset_fixture_batch().await?;
-        assert_eq!(
-            fixture.reset_state().await?,
-            ProjectionResetStateObservation {
-                model_total: 18,
-                progress: Some(ProjectionProgressObservation {
-                    source_id: fixture.source_id.clone(),
-                    selection_id: fixture.selection.id().clone(),
-                    position: positions[1],
-                }),
-            },
-            "the fault must begin from independently observed non-empty projection state",
-        );
+    assert_reset_fixture(|fixture| {
+        Box::pin(async move {
+            let positions = fixture.append_reset_values(&[7, 11]).await?;
+            let _ = fixture.run_reset_fixture_batch().await?;
+            assert_eq!(
+                fixture.reset_state().await?,
+                ProjectionResetStateObservation {
+                    model_total: 18,
+                    progress: Some(ProjectionProgressObservation {
+                        source_id: fixture.source_id.clone(),
+                        selection_id: fixture.selection.id().clone(),
+                        position: positions[1],
+                    }),
+                },
+                "the fault must begin from independently observed non-empty projection state",
+            );
 
-        fixture.inject_reset_commit_acknowledgement_loss().await?;
-        let result = fixture.reset_with_commit_acknowledgement_loss().await?;
-        assert!(
-            matches!(
-                result,
-                Err(ProjectionResetError::CommitIndeterminate { .. })
-            ),
-            "a lost reset COMMIT acknowledgement must be indeterminate, got {result:?}",
-        );
-        assert_eq!(
-            fixture.callback_attempts.load(Ordering::SeqCst),
-            1,
-            "an indeterminate reset commit must not retry application reset code",
-        );
-        assert_eq!(
-            timeout(RUN_TIMEOUT, fixture.fresh_reset_state())
-                .await
-                .map_err(|_| FixtureError::TimedOut)??,
-            ProjectionResetStateObservation {
-                model_total: 0,
-                progress: None,
-            },
-            "a fresh PostgreSQL connection must observe the atomically committed reset",
-        );
-        Ok::<(), FixtureError>(())
-    }))
-    .catch_unwind()
+            fixture.inject_reset_commit_acknowledgement_loss().await?;
+            let result = fixture.reset_with_commit_acknowledgement_loss().await?;
+            assert!(
+                matches!(
+                    result,
+                    Err(ProjectionResetError::CommitIndeterminate { .. })
+                ),
+                "a lost reset COMMIT acknowledgement must be indeterminate, got {result:?}",
+            );
+            assert_eq!(
+                fixture.callback_attempts.load(Ordering::SeqCst),
+                1,
+                "an indeterminate reset commit must not retry application reset code",
+            );
+            assert_eq!(
+                timeout(RUN_TIMEOUT, fixture.fresh_reset_state())
+                    .await
+                    .map_err(|_| FixtureError::TimedOut)??,
+                ProjectionResetStateObservation {
+                    model_total: 0,
+                    progress: None,
+                },
+                "a fresh PostgreSQL connection must observe the atomically committed reset",
+            );
+            Ok(())
+        })
+    })
     .await;
-    let cleanup = bounded_cleanup(RUN_TIMEOUT, fixture.cleanup()).await;
-
-    match (body, cleanup) {
-        (Ok(Ok(Ok(()))), CleanupOutcome::Complete) => {}
-        (Ok(Ok(Err(error))), CleanupOutcome::Complete) => {
-            panic!("reset acknowledgement-loss contract failed: {error}")
-        }
-        (Ok(Err(_)), CleanupOutcome::Complete) => {
-            panic!("reset acknowledgement-loss contract timed out")
-        }
-        (Ok(Ok(Ok(()))), CleanupOutcome::Failed(cleanup)) => {
-            panic!("reset acknowledgement-loss contract passed but cleanup failed: {cleanup}")
-        }
-        (Ok(Ok(Err(error))), CleanupOutcome::Failed(cleanup)) => {
-            panic!(
-                "reset acknowledgement-loss contract failed: {error}; cleanup also failed: {cleanup}"
-            )
-        }
-        (Ok(Err(_)), CleanupOutcome::Failed(cleanup)) => {
-            panic!("reset acknowledgement-loss contract timed out; cleanup also failed: {cleanup}")
-        }
-        (Ok(Ok(Ok(()))), CleanupOutcome::TimedOut) => {
-            panic!("reset acknowledgement-loss contract passed but cleanup timed out")
-        }
-        (Ok(Ok(Err(error))), CleanupOutcome::TimedOut) => {
-            panic!("reset acknowledgement-loss contract failed: {error}; cleanup also timed out")
-        }
-        (Ok(Err(_)), CleanupOutcome::TimedOut) => {
-            panic!("reset acknowledgement-loss contract and cleanup timed out")
-        }
-        (Ok(_), CleanupOutcome::Panicked(payload)) => resume_unwind(payload),
-        (Err(payload), CleanupOutcome::Complete) => resume_unwind(payload),
-        (Err(payload), CleanupOutcome::Failed(cleanup)) => {
-            eprintln!("cleanup also failed while preserving contract panic: {cleanup}");
-            resume_unwind(payload);
-        }
-        (Err(payload), CleanupOutcome::TimedOut) => {
-            eprintln!("cleanup also timed out while preserving contract panic");
-            resume_unwind(payload);
-        }
-        (Err(payload), CleanupOutcome::Panicked(_cleanup_panic)) => {
-            eprintln!("cleanup also panicked while preserving contract panic");
-            resume_unwind(payload);
-        }
-    }
 }
 
 macro_rules! reset_contract_test {
@@ -1606,45 +1674,7 @@ macro_rules! reset_contract_test {
         // an assertion panics; this prevents advisory locks or schemas leaking into later tests.
         #[tokio::test]
         async fn $name() {
-            let mut fixture = PostgresResetFixture::new()
-                .await
-                .expect("reset fixture should initialize");
-            let result = AssertUnwindSafe($contract(&mut fixture))
-                .catch_unwind()
-                .await;
-            let cleanup = bounded_cleanup(RUN_TIMEOUT, fixture.cleanup()).await;
-            match (result, cleanup) {
-                (Ok(Ok(())), CleanupOutcome::Complete) => {}
-                (Ok(Err(error)), CleanupOutcome::Complete) => {
-                    panic!("reset contract should complete: {error}")
-                }
-                (Ok(Ok(())), CleanupOutcome::Failed(cleanup)) => {
-                    panic!("reset contract passed but cleanup failed: {cleanup}")
-                }
-                (Ok(Err(error)), CleanupOutcome::Failed(cleanup)) => {
-                    panic!("reset contract failed: {error}; cleanup also failed: {cleanup}")
-                }
-                (Ok(Ok(())), CleanupOutcome::TimedOut) => {
-                    panic!("reset contract passed but cleanup timed out")
-                }
-                (Ok(Err(error)), CleanupOutcome::TimedOut) => {
-                    panic!("reset contract failed: {error}; cleanup also timed out")
-                }
-                (Ok(_), CleanupOutcome::Panicked(payload)) => resume_unwind(payload),
-                (Err(payload), CleanupOutcome::Complete) => resume_unwind(payload),
-                (Err(payload), CleanupOutcome::Failed(cleanup)) => {
-                    eprintln!("cleanup also failed while preserving contract panic: {cleanup}");
-                    resume_unwind(payload);
-                }
-                (Err(payload), CleanupOutcome::TimedOut) => {
-                    eprintln!("cleanup also timed out while preserving contract panic");
-                    resume_unwind(payload);
-                }
-                (Err(payload), CleanupOutcome::Panicked(_cleanup_panic)) => {
-                    eprintln!("cleanup also panicked while preserving contract panic");
-                    resume_unwind(payload);
-                }
-            }
+            assert_reset_fixture(|fixture| Box::pin($contract(fixture))).await;
         }
     };
 }
