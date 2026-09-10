@@ -12,11 +12,13 @@ not part of that source SHA.
 The reviewed and verified commit range is
 `68c38b469b3b8b300cf4ca6400cb9abe8187bce9..c79be41a0d04aab83cae92cb22d5e4478c5f18f4`.
 
-Remote delivery is not complete. The branch has not yet been pushed for this delivery, no pull
-request URL is claimed here, actual remote pull-request checks and hosted review state are not yet
-available, and the result must not be described as remotely green. Merge and publication both
-remain unauthorized. The seven reviews recorded below are independent pre-PR reviews, not hosted
-pull-request reviews.
+The branch is pushed and [pull request #40](https://github.com/jwilger/eventcore/pull/40) is open
+against `main`. Hosted CI run
+[`34501477246`](https://github.com/jwilger/eventcore/actions/runs/34501477246) passed every job on
+signed head `7406aa25b50580186bdc4c42e67f8579dda24de9`, including the aggregate CI gate and the
+release-label mutation job. The pull request was mergeable with a clean merge state and no review
+comments after that run. Merge and publication both remain unauthorized. The seven reviews
+recorded below are independent pre-PR reviews, not hosted pull-request reviews.
 
 This report was checked against the original request, the committed source and tests, and the
 controller's staged Task 9 verification and projection-fixture-lifecycle evidence. Those two
@@ -249,9 +251,16 @@ caching, nextest, mutation artifact upload, and an explicit survivor gate.
 
 The measured local all-feature nextest suite completed in 13.411 seconds wall time and the focused
 110-test projection suite in 8.307 seconds wall time, far below the approximately ten-minute
-partitioning threshold. No CI workflow modification is warranted for this increment. These local
-measurements do not predict or substitute for actual hosted checks: remote CI results are not yet
-available and remain a delivery gate.
+partitioning threshold. No CI workflow modification was warranted for this increment.
+
+Hosted run [`34501477246`](https://github.com/jwilger/eventcore/actions/runs/34501477246) completed
+successfully on pull-request head `7406aa25b50580186bdc4c42e67f8579dda24de9`. Format took 15
+seconds, security audit 15 seconds, experimental model isolation 1 minute 6 seconds, Clippy 2
+minutes 39 seconds, the PostgreSQL all-feature test/doctest job 5 minutes 12 seconds, and the
+release mutation job 4 minutes 53 seconds. The modeled-checker and workspace mutation steps both
+passed, the survivor-failure step was not needed, and the final aggregate CI gate passed. Any
+later documentation-only evidence commit must receive its own green replacement checks before
+owner merge.
 
 ## Independent final reviews
 
@@ -269,8 +278,9 @@ Important, and zero Minor findings.
 | Test quality (`final_test_quality_review`)                | **APPROVED / PR-ready**; source/evidence inspection, including the supplied protected-CI excerpt, with no separate test rerun. |
 | Documentation accuracy (`task8_docs_review`)              | **APPROVED / PR-ready subject to this report** after evidence corrections; accepted ADR hashes confirmed.                      |
 
-These approvals are local independent review evidence only. Hosted PR review requirements still
-must be satisfied after the pull request exists.
+These approvals are local independent review evidence. Pull request #40 had no unresolved review
+comments and GitHub reported no separate required-review decision; the owner still controls merge
+authorization.
 
 ## Architecture and documentation references
 
@@ -304,13 +314,8 @@ unauthorized. The version recommendation is therefore prospective, not currently
 
 ## Remaining delivery gates
 
-1. Commit this report with the repository's signed Conventional Commit policy.
-2. Push `feat/transactional-postgres-projections` through the repository's normal SSH remote.
-3. Open the pull request against `main` and record its actual URL.
-4. Wait for every required hosted CI check at the pushed SHA, including any release-label mutation
-   requirement, and repair/rerun failures until the replacement evidence is green.
-5. Satisfy hosted pull-request review requirements and resolve all comments. The seven independent
-   approvals above do not replace this gate.
-6. Obtain explicit owner authorization before merge. Do not merge as part of release readiness.
-7. After merge, obtain separate explicit owner authorization for the lockstep 2.1.0 publication.
+1. Push the signed documentation-only commit that records pull request #40 and hosted run
+   `34501477246`, then require green replacement checks at that exact final head.
+2. Obtain explicit owner authorization before merge. Do not merge as part of release readiness.
+3. After merge, obtain separate explicit owner authorization for the lockstep 2.1.0 publication.
    Do not publish any crate before that authorization.
