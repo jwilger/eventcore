@@ -132,6 +132,7 @@ pub enum ProjectionStreamFilter {
 
 /// Error returned when a projection selection is structurally invalid.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ProjectionSelectionError {
     /// A selection must declare at least one persisted event type.
     #[error("projection selection must include at least one event type")]
@@ -274,19 +275,49 @@ impl PersistedEventEnvelope {
 }
 
 /// Backend-independent source of lossless, globally ordered persisted events.
+///
+/// A source owns a delivery sequence identified by a stable [`DeliverySourceId`]. Within that
+/// sequence, every persisted event has a unique, immutable, source-scoped [`DeliveryPosition`],
+/// and global delivery order preserves each stream's event order. Only committed events are
+/// visible. Once the source reports a committed frontier, no event may later appear at or below
+/// that frontier.
 pub trait ProjectionSource: Sync {
     /// Error returned when the source cannot read its committed delivery sequence.
     type Error: Error + Send + Sync + 'static;
 
     /// Returns this source's stable delivery identity.
+    ///
+    /// The identity must remain the same across runs that use the same delivery sequence and
+    /// position semantics. It must change when those semantics identify a different sequence.
     fn source_id(&self) -> &DeliverySourceId;
 
-    /// Returns the committed high-water mark, if the source contains events.
+    /// Returns the committed high-water mark for the entire delivery sequence.
+    ///
+    /// The result is independent of any [`ProjectionSelection`]. An empty committed source
+    /// returns `None`; otherwise the result is the greatest committed delivery position. After a
+    /// position is returned, the source must not later reveal a delivery at or below it that was
+    /// not already committed and readable.
     fn high_watermark(
         &self,
     ) -> impl Future<Output = Result<Option<DeliveryPosition>, Self::Error>> + Send;
 
-    /// Reads a bounded page strictly after `after` and through `through`.
+    /// Reads one selected page in ascending delivery order.
+    ///
+    /// `after` is exclusive. [`DeliveryUpperBound::Inclusive`] is inclusive, while
+    /// [`DeliveryUpperBound::Unbounded`] applies no upper position bound. Returned positions must
+    /// be unique and strictly ascending. The source must apply the stream and event-type
+    /// selection before applying `limit`, and it must return no more than `limit` envelopes. A
+    /// zero limit returns an empty page. With a positive limit, an empty page means the selected
+    /// committed sequence is exhausted within the requested position range. When `through` is a
+    /// previously observed high-water mark, the source's no-late-delivery guarantee makes that
+    /// exhaustion stable through the bound.
+    ///
+    /// Event types excluded by `selection` are intentionally omitted. A selected envelope with a
+    /// malformed or unrepresentable field must instead produce an explicit error; it must not be
+    /// silently skipped. Each returned [`PersistedEventEnvelope`] must preserve the source
+    /// identity, delivery position, persisted event identity, stream identity and version, event
+    /// type, raw payload, and raw metadata. Decoding that envelope into an application event is
+    /// the application's responsibility, not the source's.
     fn read_envelopes(
         &self,
         selection: &ProjectionSelection,

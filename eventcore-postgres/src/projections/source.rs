@@ -20,6 +20,7 @@ const DELIVERY_SOURCE_MIGRATION: &str =
 
 /// Errors returned by [`PostgresProjectionSource`].
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum PostgresProjectionSourceError {
     /// Connecting the source's PostgreSQL pool failed.
     #[error("failed to connect projection source")]

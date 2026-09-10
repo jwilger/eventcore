@@ -31,6 +31,7 @@ impl AfterCommit for NoopAfterCommit {
 
 /// Decision made by an application after its event effect failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProjectionFailureDecision {
     /// Roll back and retry the event, subject to the configured retry policy.
     Retry,

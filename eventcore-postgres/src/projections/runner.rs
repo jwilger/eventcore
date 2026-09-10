@@ -25,6 +25,7 @@ enum DrainCycleOutcome {
 
 /// Observable result of a transactional projection run.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProjectionRunOutcome {
     /// Batch mode reached its captured source frontier.
     CaughtUp {

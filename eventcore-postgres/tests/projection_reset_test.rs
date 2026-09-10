@@ -941,6 +941,7 @@ fn convert_outcome(outcome: ProjectionRunOutcome) -> ContractRunOutcome {
         ProjectionRunOutcome::Cancelled { processed, skipped } => {
             ContractRunOutcome::Cancelled { processed, skipped }
         }
+        unknown => panic!("unsupported projection run outcome: {unknown:?}"),
     }
 }
 
@@ -973,6 +974,7 @@ fn classify_reset(error: ProjectionResetError) -> ProjectionResetFailureObservat
         }
         ProjectionResetError::Progress { .. } => ProjectionResetFailureObservation::Progress,
         ProjectionResetError::LeadershipLost { .. } => ProjectionResetFailureObservation::Other,
+        _ => ProjectionResetFailureObservation::Other,
     }
 }
 

@@ -53,7 +53,17 @@ pub struct ProjectionRetryPolicy {
 }
 
 impl ProjectionRetryPolicy {
-    /// Creates a bounded retry policy.
+    /// Creates a capped exponential retry policy.
+    ///
+    /// `max_retries` counts retries after the initial application attempt. [`u32::MAX`] is
+    /// rejected with [`ProjectionConfigurationError::TooManyRetries`] because the runner must
+    /// represent that initial attempt as well. `multiplier` must be finite and at least `1.0`;
+    /// non-finite values and values below `1.0` produce
+    /// [`ProjectionConfigurationError::InvalidRetryMultiplier`].
+    ///
+    /// The delay before retry number *n* is `initial_delay * multiplier^(n - 1)`, capped at
+    /// `maximum_delay`. A calculation that exceeds the representable finite duration also uses
+    /// the cap. Zero is accepted for either delay, including a policy with no delay at all.
     pub fn new(
         max_retries: u32,
         initial_delay: Duration,
@@ -98,15 +108,20 @@ impl ProjectionRetryPolicy {
 
 /// Selects whether a runner stops at its initial catch-up frontier or keeps polling.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum PostgresProjectionMode {
     /// Drain the committed source frontier captured at run start, then return.
     Batch,
     /// Keep polling after each catch-up frontier until cancellation.
+    ///
+    /// Cancellation is observed only between completed catch-up cycles. It does not interrupt
+    /// application, a retry delay, commit, or after-commit work already in progress.
     Continuous(CancellationToken),
 }
 
 /// Configuration rejected before a runner is started.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum ProjectionConfigurationError {
     /// A continuous projection must wait for a positive duration between empty polls.
     #[error("continuous poll interval must be positive")]
@@ -132,7 +147,12 @@ pub struct PostgresProjectionConfig {
 }
 
 impl PostgresProjectionConfig {
-    /// Creates batch-mode configuration with the documented defaults.
+    /// Creates configuration with the default batch execution policy.
+    ///
+    /// The defaults are batch mode, a page size of 100 envelopes, no retries, a 100 millisecond
+    /// initial retry delay, a `2.0` retry multiplier, a 30 second retry-delay cap, and a 1 second
+    /// continuous idle interval. Retry and continuous polling delays both use Tokio-backed
+    /// sleepers.
     pub fn new(selection: ProjectionSelection) -> Self {
         Self {
             selection,
@@ -151,12 +171,18 @@ impl PostgresProjectionConfig {
     }
 
     /// Changes this configuration to continuously poll until the token is cancelled.
+    ///
+    /// Cancellation is observed only between completed catch-up cycles. It does not interrupt
+    /// application, a retry delay, commit, or after-commit work already in progress.
     pub fn continuous(mut self, cancellation: CancellationToken) -> Self {
         self.mode = PostgresProjectionMode::Continuous(cancellation);
         self
     }
 
     /// Replaces the maximum number of source envelopes read in one page.
+    ///
+    /// A batch size of zero is accepted. It makes every source page empty, so the runner reports
+    /// itself caught up to the captured frontier immediately without applying envelopes.
     pub fn with_batch_size(mut self, batch_size: BatchSize) -> Self {
         self.batch_size = batch_size;
         self
@@ -183,7 +209,12 @@ impl PostgresProjectionConfig {
         self
     }
 
-    /// Replaces the interval between empty continuous polls.
+    /// Replaces the continuous runner's idle interval.
+    ///
+    /// An idle interval begins after a catch-up cycle reaches its captured committed frontier and
+    /// ends when the next cycle polls for a new frontier. It is not a delay between envelopes or
+    /// pages within a catch-up cycle. A zero interval is rejected with
+    /// [`ProjectionConfigurationError::ZeroContinuousPollInterval`].
     pub fn with_continuous_poll_interval(
         mut self,
         continuous_poll_interval: Duration,

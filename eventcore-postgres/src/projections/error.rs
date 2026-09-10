@@ -10,6 +10,7 @@ pub type BoxedProjectionError = Box<dyn Error + Send + Sync>;
 
 /// Terminal failures from a transactional projection run.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TransactionalProjectionError {
     /// Another process owns this projector's read-model leadership lock.
     #[error("transactional projection leadership is busy")]
@@ -124,6 +125,7 @@ pub enum TransactionalProjectionError {
 
 /// Failures from a coordinated basic reset.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ProjectionResetError {
     /// Another invocation owns this projector's leadership grant.
     #[error("transactional projection reset leadership is busy")]
@@ -183,6 +185,7 @@ pub enum ProjectionResetError {
 
 /// Failures from the reset-and-replay convenience operation.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ProjectionResetAndReplayError {
     /// The coordinated reset phase failed.
     #[error("transactional projection reset phase failed")]
