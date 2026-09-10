@@ -124,16 +124,31 @@ application's read-model migration on the destination. Source and destination
 projection migrations are separate and use an EventCore component ledger, not
 the application's `_sqlx_migrations` history.
 
+Treat the first `PostgresProjectionSource::migrate()` as a maintenance
+operation. It takes an `ACCESS EXCLUSIVE` lock on `eventcore_events` and
+backfills the complete event history, which can block reads and writes for a
+substantial period on a large store. Measure it against representative data and
+schedule an appropriate maintenance window. Historical rows are assigned a
+deterministic backfill order of `(stream_id, stream_version, event_id)`; that is
+not their original commit order. Subsequent appends allocate the global
+delivery frontier inside the event-store transaction, providing commit-safe
+ordering for newly written events.
+
 ## Operating the runner
 
-- Keep `DeliverySourceId`, `ProjectorName`, and `ProjectionSelectionId` stable.
-  Existing progress is rejected when its source or selection identity differs.
+- EventCore binds source and selection semantics only through caller-supplied
+  IDs. Keep `DeliverySourceId`, `ProjectorName`, and `ProjectionSelectionId`
+  stable while their meanings are stable. A changed stream filter or event-type
+  set requires a new selection ID; changed source ordering semantics require a
+  new source ID. Existing progress is rejected when the configured IDs differ.
 - The selection contains persisted event-type names plus an all/prefix/pattern
   stream filter. A malformed selected payload stops with `Decode` and does not
   advance progress.
 - Batch mode captures a high-water mark and drains every page through it.
   Continuous mode polls successive high-water marks until its
-  `CancellationToken` is cancelled.
+  `CancellationToken` is cancelled. Cancellation is observed while idle after
+  the current bounded catch-up cycle; it does not interrupt `apply`, retry
+  delay, commit, or `AfterCommit` work.
 - Application failures default to `Fatal`. `on_error` may explicitly choose
   `Retry`, `Skip`, `Stop`, or `Fatal`; retry attempts are bounded by
   `ProjectionRetryPolicy`. Only `Skip` commits progress without the effect.
@@ -144,6 +159,11 @@ the application's `_sqlx_migrations` history.
 - `CommitIndeterminate` means PostgreSQL may have committed both effect and
   progress before the connection failed. Inspect durable progress/read-model or
   outbox state, then restart with the same identities.
+
+A database rollback does not rewind fields mutated through the projector's
+`&mut self`. Keep durable or retry-sensitive attempt state in the supplied
+transaction, derive it again from the event/database, or make instance-state
+changes explicitly rollback-safe.
 
 ## Leadership, reset, and replay
 
@@ -156,8 +176,12 @@ the model and deletes progress atomically;
 `reset_and_replay_transactional_projection` retains leadership through the
 subsequent replay. Stop other read-model writers and schedule downtime. Legacy
 UUID checkpoints cannot be adopted as delivery positions: reset, choose stable
-transactional identities, and replay. Reset operates on the live model and does
-not provide shadow-generation rebuilding.
+transactional identities, and replay. To change an existing transactional
+source or selection, invoke reset with the old source/selection IDs persisted
+in progress, then run with the new IDs. A new `ProjectorName` alone does not
+empty an already-populated model and can duplicate non-idempotent effects; use
+it only with a new or empty model. Reset operates on the live model and does not
+provide shadow-generation rebuilding.
 
 ## Release status
 
@@ -167,5 +191,5 @@ explicitly approved. After that approved publication, Foundry's exact
 recommendation is:
 
 ```toml
-eventcore = "=2.1.0"
+eventcore = { version = "=2.1.0", features = ["postgres"] }
 ```

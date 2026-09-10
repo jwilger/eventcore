@@ -115,8 +115,9 @@ pre-existing legacy trait/runner still compile and execute before the facade GRE
   session-lock pooling constraints, and coordinated reset/replay without shadow generations.
 - `eventcore`, `eventcore-postgres`, `eventcore-types`, and `eventcore-testing` changelogs record
   the additive 2.1.0 surface and legacy 2.0.1 source compatibility. Documentation states that no
-  crate has been published and that Foundry should use `eventcore = "=2.1.0"` only after
-  explicitly approved publication.
+  crate has been published and that Foundry should use
+  `eventcore = { version = "=2.1.0", features = ["postgres"] }` only after explicitly approved
+  publication.
 
 ## Fresh GREEN evidence
 
@@ -144,3 +145,49 @@ The repository's pre-commit `prettier` hook formatted the four staged changelogs
 pass. Those hook edits were retained and restaged for the successful commit pass.
 
 GREEN_READY
+
+## Post-GREEN documentation review fixes
+
+- Replaced the unconditional intra-doc link to the feature-gated PostgreSQL facade with a plain
+  code path; default/no-feature rustdoc now succeeds with warnings denied.
+- Documented the source migration's `ACCESS EXCLUSIVE` lock, full-history backfill, maintenance
+  impact, deterministic historical `(stream_id, stream_version, event_id)` ordering, and the
+  separate commit-safe frontier used by subsequent appends.
+- Clarified that caller-supplied IDs are the only semantic binding. Selection/source semantic
+  changes require new IDs, while reset validation must first use the old IDs persisted in
+  progress. A new projector name is unsafe for a populated non-idempotent model unless the model
+  is separately new or empty.
+- Documented that database rollback does not restore projector `&mut self` fields and that
+  retry-sensitive state belongs in the supplied transaction or must be explicitly rollback-safe.
+- Documented cooperative cancellation after a bounded catch-up cycle/during the idle select; it
+  does not interrupt apply, retry delay, commit, or after-commit work.
+- Corrected the explicitly post-publication Foundry recommendation to
+  `eventcore = { version = "=2.1.0", features = ["postgres"] }` while retaining the unpublished
+  and approval-gated warning.
+
+Fresh review-fix evidence:
+
+```text
+nix develop -c cargo fmt --all
+nix develop -c pre-commit run prettier --files docs/manual/02-getting-started/04-projections.md eventcore-postgres/README.md .superpowers/sdd/2026-09-09-transactional-postgres-projections/task-8-red-report.md
+# prettier passed
+
+nix develop -c cargo check -p eventcore --test postgres_transactional_projection_api_test
+nix develop -c env RUSTDOCFLAGS=-Dwarnings cargo doc -p eventcore --no-default-features --no-deps
+# both exit 0
+
+nix develop -c cargo nextest run -p eventcore --features postgres --test postgres_transactional_projection_api_test
+# 1 passed, 0 failed
+
+nix develop -c cargo nextest run -p eventcore --test mixed_event_type_projection_test
+# 2 passed, 0 failed
+
+nix develop -c cargo test --doc --workspace --all-features
+# all workspace doctests passed (35 passed, 18 ignored)
+
+nix develop -c env RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --all-features --no-deps
+nix develop -c cargo clippy --all-targets --all-features -- -D warnings
+# both exit 0 with no warnings
+```
+
+REVIEW_FIX_GREEN

@@ -418,25 +418,41 @@ Apply migrations in this order:
 4. Run `PostgresProjectionStore::migrate()` on the destination. EventCore uses
    a component-specific migration ledger rather than SQLx's application ledger.
 
-The source migration establishes a positive, source-scoped global delivery
-position in commit-safe order. Event UUIDs remain event identities; neither a
-UUID nor a legacy `StreamPosition` is treated as this cross-stream delivery
-position.
+Plan the first source migration as a maintenance operation. It takes an
+`ACCESS EXCLUSIVE` lock on `eventcore_events` and backfills the complete event
+history, so it can block both readers and writers for a substantial period on a
+large store. Measure it on representative data and schedule an appropriate
+maintenance window. Existing rows receive deterministic historical positions
+ordered by `(stream_id, stream_version, event_id)`. That backfill order is not a
+claim about their original commit order. After migration, subsequent appends
+allocate the positive, source-scoped global frontier inside their event-store
+transaction, so newly committed events cannot be skipped because identifier
+order differs from commit order. Event UUIDs remain event identities; neither a
+UUID nor a legacy `StreamPosition` is treated as this delivery position.
 
 ### Stable identity and progress
 
-Treat these strings as persisted schema decisions:
+Treat these strings as persisted schema decisions. EventCore binds semantics by
+comparing the caller-supplied IDs; it cannot infer whether the implementation
+behind an unchanged ID has changed:
 
-- `DeliverySourceId` identifies the source delivery sequence.
+- `DeliverySourceId` identifies the source delivery sequence and its ordering
+  semantics.
 - `ProjectorName` identifies the read model and its leadership/progress row.
 - `ProjectionSelectionId` identifies the meaning of the stream filter and
-  selected persisted event-type names.
+  selected persisted event-type names. Changing either requires a new selection
+  ID; changing source semantics requires a new source ID.
 
-Changing the source or selection while reusing existing progress returns an
-identity-mismatch error. Use a new identity or perform a coordinated reset; do
-not silently adopt the old row. `PostgresProjectionStore::progress` exposes the
-last committed source/selection/position for operational inspection. Restarting
-the same identities resumes after that position. A selected payload that cannot
+Changing the configured source or selection ID while reusing existing progress
+returns an identity-mismatch error. To rebuild the same read model for changed
+semantics, first invoke reset with the **old source and selection IDs stored in
+progress**, so validation succeeds and the old model/progress are cleared; then
+run with the new IDs. Merely choosing a new `ProjectorName` creates an empty
+progress row but does not empty an already-populated read model, and can
+duplicate non-idempotent effects. A new projector name is safe only with a new
+or otherwise empty model. `PostgresProjectionStore::progress` exposes the last
+committed source/selection/position for operational inspection. Restarting the
+same identities resumes after that position. A selected payload that cannot
 deserialize into `PostgresProjector::Event` returns
 `TransactionalProjectionError::Decode` without advancing progress. Unknown or
 unselected event types are not decoded.
@@ -462,6 +478,11 @@ let config = PostgresProjectionConfig::new(selection)
 // Run `run_transactional_projection(...)` in an owned task, then call
 // `cancellation.cancel()` during graceful shutdown.
 ```
+
+Cancellation is cooperative at cycle boundaries: the runner observes it while
+idle after completing the current bounded catch-up cycle. It does not interrupt
+an in-flight `apply`, retry delay, commit, or `AfterCommit` action. Bound those
+operations at the application/database layer when shutdown latency matters.
 
 ### Failure decisions, retries, and after-commit work
 
@@ -496,6 +517,12 @@ an outbox row inside the supplied transaction and deliver the outbox
 independently. A network call in `apply` or `AfterCommit` is not covered by the
 database exactly-once guarantee.
 
+A PostgreSQL rollback restores database state, not fields mutated through the
+projector's `&mut self`. In-memory counters, caches, or attempt flags changed by
+`apply` remain changed when that attempt retries. Keep durable or retry-sensitive
+state in the supplied transaction, derive it again from the event/database, or
+make any projector-instance mutation explicitly rollback-safe.
+
 If the connection fails while acknowledging `COMMIT`, EventCore returns
 `CommitIndeterminate`: the effect and progress may both have committed or both
 have rolled back. Do not blindly compensate or skip. Reconnect, inspect named
@@ -524,9 +551,11 @@ through replay so another writer cannot enter between phases.
 Schedule reset/replay as coordinated downtime for that read model and stop all
 legacy and transactional writers first. Existing legacy UUID checkpoints are
 not convertible to `DeliveryPosition`; reset the read model, choose stable new
-transactional identities, and replay from the source. Baseline reset mutates the
-live read model in place. It does not build, swap, or guarantee a shadow
-generation, so queries may observe rebuilding state until replay completes.
+transactional identities, and replay from the source. When changing an existing
+transactional source/selection, call reset with the old IDs persisted in its
+progress row, then replay with the new IDs. Baseline reset mutates the live read
+model in place. It does not build, swap, or guarantee a shadow generation, so
+queries may observe rebuilding state until replay completes.
 
 ## Querying Projections
 
