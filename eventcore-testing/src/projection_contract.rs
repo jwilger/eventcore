@@ -4,7 +4,9 @@ use std::error::Error;
 use std::future::Future;
 use std::time::Duration;
 
-use eventcore_types::{BatchSize, DeliveryPosition, DeliverySourceId, ProjectionSelectionId};
+use eventcore_types::{
+    BatchSize, DeliveryPosition, DeliverySourceId, ProjectionSelectionId, ProjectorName,
+};
 use serde_json::Value;
 
 /// Application behavior selected by a transactional projection fixture.
@@ -375,6 +377,174 @@ pub trait TransactionalProjectionContinuousFixture {
     fn observe_idle_cancellation(
         &mut self,
     ) -> impl Future<Output = Result<ProjectionContinuousObservation, Self::Error>> + Send;
+}
+
+/// Application behavior selected for a coordinated projection reset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectionResetBehavior {
+    /// Reinitialize the read model and allow the reset transaction to commit.
+    Succeed,
+    /// Mutate the read model and then fail so the entire reset transaction must roll back.
+    MutateThenFail,
+}
+
+/// Backend-neutral classification of a coordinated reset failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionResetFailureObservation {
+    /// A normal runner still owns the named leadership grant.
+    Busy,
+    /// Existing progress is bound to a different delivery source.
+    SourceIdentityMismatch {
+        /// Projector whose durable identity was incompatible.
+        projector: ProjectorName,
+        /// Source identity persisted with durable progress.
+        persisted: DeliverySourceId,
+        /// Source identity configured for this reset.
+        configured: DeliverySourceId,
+    },
+    /// Existing progress is bound to a different selection.
+    SelectionIdentityMismatch {
+        /// Projector whose durable identity was incompatible.
+        projector: ProjectorName,
+        /// Selection identity persisted with durable progress.
+        persisted: ProjectionSelectionId,
+        /// Selection identity configured for this reset.
+        configured: ProjectionSelectionId,
+    },
+    /// The application reset callback failed before commit.
+    Callback {
+        /// Stable public evidence forwarded from the callback error.
+        source: String,
+    },
+    /// Progress validation or deletion failed before reset commit.
+    Progress,
+    /// PostgreSQL did not acknowledge the reset commit.
+    CommitIndeterminate,
+    /// The backend returned a public failure outside this contract.
+    Other,
+}
+
+/// Public result of one coordinated reset attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionResetAttemptObservation {
+    /// The callback mutation and progress deletion committed together.
+    Completed,
+    /// The reset stopped with a classified public failure.
+    Failed(ProjectionResetFailureObservation),
+}
+
+/// Public read-model and progress state observed independently of a reset transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionResetStateObservation {
+    /// Exact non-idempotent aggregate stored in the read model.
+    pub model_total: i64,
+    /// Durable global progress for the named projector.
+    pub progress: Option<ProjectionProgressObservation>,
+}
+
+/// Result of probing leadership while reset-and-replay is between its two phases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionResetReplayLeadershipObservation {
+    /// Committed reset state observed while the replay source is still gated.
+    pub state_while_gated: ProjectionResetStateObservation,
+    /// Whether a dedicated advisory-lock waiter was DB-observably queued before reset returned.
+    pub waiter_queued_before_reset_commit: bool,
+    /// Whether that same waiter remained queued at the post-reset replay source gate.
+    pub waiter_queued_during_replay: bool,
+    /// PostgreSQL session token observed by the reset callback.
+    pub reset_session_token: String,
+    /// PostgreSQL session token observed by replay application code.
+    pub replay_session_token: String,
+    /// Failure returned by the competing invocation after reset committed but before replay read.
+    pub competing_failure: ProjectionFailureObservation,
+    /// Completed replay result after the source gate was released.
+    pub replay_outcome: ProjectionRunOutcome,
+}
+
+/// Stable source evidence emitted by the contract's deliberately failing reset callback.
+pub const RESET_CALLBACK_FAILURE_SENTINEL: &str = "fixture reset callback failed after mutation";
+
+/// Backend-neutral controls for coordinated reset and replay behavior.
+pub trait TransactionalProjectionResetFixture {
+    /// Fixture setup or operation error.
+    type Error: Error + Send + Sync + 'static;
+
+    /// Appends integer-valued selected events and returns their global positions.
+    fn append_reset_values(
+        &mut self,
+        values: &[i64],
+    ) -> impl Future<Output = Result<Vec<DeliveryPosition>, Self::Error>> + Send;
+
+    /// Runs an ordinary finite catch-up to establish read-model state and progress.
+    fn run_reset_fixture_batch(
+        &mut self,
+    ) -> impl Future<Output = Result<ProjectionRunOutcome, Self::Error>> + Send;
+
+    /// Executes the public basic reset operation with the selected callback behavior.
+    fn reset_attempt(
+        &mut self,
+        behavior: ProjectionResetBehavior,
+    ) -> impl Future<Output = Result<ProjectionResetAttemptObservation, Self::Error>> + Send;
+
+    /// Makes deletion of the matching durable progress row fail deterministically.
+    fn inject_reset_progress_deletion_failure(
+        &mut self,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Attempts reset while a normal runner demonstrably owns leadership.
+    fn observe_reset_while_runner_owns_leadership(
+        &mut self,
+    ) -> impl Future<Output = Result<ProjectionResetAttemptObservation, Self::Error>> + Send;
+
+    /// Executes the public reset-and-replay convenience operation.
+    fn reset_and_replay(
+        &mut self,
+    ) -> impl Future<Output = Result<ProjectionRunOutcome, Self::Error>> + Send;
+
+    /// Probes a competing invocation while reset-and-replay is gated between phases.
+    fn observe_reset_replay_leadership(
+        &mut self,
+    ) -> impl Future<Output = Result<ProjectionResetReplayLeadershipObservation, Self::Error>> + Send;
+
+    /// Reads the committed read model and progress through independent public boundaries.
+    fn reset_state(
+        &self,
+    ) -> impl Future<Output = Result<ProjectionResetStateObservation, Self::Error>> + Send;
+
+    /// Returns the number of application reset callback invocations.
+    fn reset_callback_attempt_count(&self)
+    -> impl Future<Output = Result<u64, Self::Error>> + Send;
+
+    /// Persists incompatible progress identity for the existing projector.
+    fn seed_reset_progress_identity(
+        &mut self,
+        source_id: DeliverySourceId,
+        selection_id: ProjectionSelectionId,
+        position: DeliveryPosition,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Saves an opaque UUID-backed legacy checkpoint through the legacy public API.
+    fn seed_legacy_checkpoint(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Seeds stale nonzero model state representing legacy projection output.
+    fn seed_stale_legacy_model(
+        &mut self,
+        total: i64,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Returns whether the seeded legacy checkpoint still contains its exact opaque value.
+    fn legacy_checkpoint_is_unchanged(
+        &self,
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
+    /// Returns the source identity expected in successfully rebuilt progress.
+    fn reset_source_id(&self) -> &DeliverySourceId;
+
+    /// Returns the selection identity expected in successfully rebuilt progress.
+    fn reset_selection_id(&self) -> &ProjectionSelectionId;
+
+    /// Returns the stable projector identity expected in reset errors.
+    fn reset_projector_name(&self) -> &ProjectorName;
 }
 
 /// Backend-neutral outcome shape asserted by transactional projection contracts.
@@ -1502,6 +1672,354 @@ where
             effect_count: 0,
             progress: None,
         }],
+    );
+    Ok(())
+}
+
+/// Verifies that reset never steals leadership from an active normal runner.
+pub async fn reset_busy_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionResetFixture,
+{
+    assert_eq!(
+        fixture.observe_reset_while_runner_owns_leadership().await?,
+        ProjectionResetAttemptObservation::Failed(ProjectionResetFailureObservation::Busy),
+        "reset must return Busy while the same named normal runner owns leadership",
+    );
+    Ok(())
+}
+
+/// Verifies that a failing reset callback rolls its mutation and progress deletion back.
+pub async fn reset_callback_failure_rolls_back_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionResetFixture,
+{
+    let positions = fixture.append_reset_values(&[2, 3]).await?;
+    let _ = fixture.run_reset_fixture_batch().await?;
+    let before = fixture.reset_state().await?;
+    let callbacks_before = fixture.reset_callback_attempt_count().await?;
+
+    assert_eq!(
+        fixture
+            .reset_attempt(ProjectionResetBehavior::MutateThenFail)
+            .await?,
+        ProjectionResetAttemptObservation::Failed(ProjectionResetFailureObservation::Callback {
+            source: RESET_CALLBACK_FAILURE_SENTINEL.to_owned(),
+        }),
+        "callback failure must remain distinct from leadership and identity failures",
+    );
+    assert_eq!(
+        fixture.reset_state().await?,
+        before,
+        "a failed callback must preserve the exact old model and progress",
+    );
+    assert_eq!(
+        fixture.reset_callback_attempt_count().await?,
+        callbacks_before + 1,
+        "the rollback must follow a real application mutation attempt",
+    );
+    assert_eq!(
+        before,
+        ProjectionResetStateObservation {
+            model_total: 5,
+            progress: Some(ProjectionProgressObservation {
+                source_id: fixture.reset_source_id().clone(),
+                selection_id: fixture.reset_selection_id().clone(),
+                position: positions[1],
+            }),
+        },
+        "the rollback assertion must start from independently derived non-empty state",
+    );
+    Ok(())
+}
+
+/// Verifies that a successful reset commits model reinitialization and progress deletion together.
+pub async fn successful_reset_is_atomic_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionResetFixture,
+{
+    let _ = fixture.append_reset_values(&[7, 11]).await?;
+    let _ = fixture.run_reset_fixture_batch().await?;
+    assert_eq!(
+        fixture
+            .reset_attempt(ProjectionResetBehavior::Succeed)
+            .await?,
+        ProjectionResetAttemptObservation::Completed,
+    );
+    assert_eq!(
+        fixture.reset_state().await?,
+        ProjectionResetStateObservation {
+            model_total: 0,
+            progress: None,
+        },
+        "the confirmed reset commit must expose the new model and no matching progress",
+    );
+    Ok(())
+}
+
+/// Verifies that progress deletion failure rolls a successful callback mutation back.
+pub async fn reset_progress_failure_rolls_back_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionResetFixture,
+{
+    let positions = fixture.append_reset_values(&[31, 37]).await?;
+    let _ = fixture.run_reset_fixture_batch().await?;
+    let before = fixture.reset_state().await?;
+    assert_eq!(
+        before,
+        ProjectionResetStateObservation {
+            model_total: 68,
+            progress: Some(ProjectionProgressObservation {
+                source_id: fixture.reset_source_id().clone(),
+                selection_id: fixture.reset_selection_id().clone(),
+                position: positions[1],
+            }),
+        },
+        "progress-failure recovery must start from exact non-empty committed state",
+    );
+    let callbacks_before = fixture.reset_callback_attempt_count().await?;
+    fixture.inject_reset_progress_deletion_failure().await?;
+
+    assert_eq!(
+        fixture
+            .reset_attempt(ProjectionResetBehavior::Succeed)
+            .await?,
+        ProjectionResetAttemptObservation::Failed(ProjectionResetFailureObservation::Progress),
+        "a deterministic progress DELETE failure must retain its typed reset classification",
+    );
+    assert_eq!(
+        fixture.reset_callback_attempt_count().await?,
+        callbacks_before + 1,
+        "the successful callback mutation must execute before progress deletion fails",
+    );
+    assert_eq!(
+        fixture.reset_state().await?,
+        before,
+        "progress deletion failure must roll the callback mutation and deletion back together",
+    );
+    Ok(())
+}
+
+/// Verifies source identity before invoking the callback or deleting progress.
+pub async fn reset_source_identity_validation_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionResetFixture,
+{
+    let positions = fixture.append_reset_values(&[13]).await?;
+    let _ = fixture.run_reset_fixture_batch().await?;
+    let incompatible = DeliverySourceId::try_new("incompatible-reset-source")
+        .expect("literal source identity should be valid");
+    fixture
+        .seed_reset_progress_identity(
+            incompatible.clone(),
+            fixture.reset_selection_id().clone(),
+            positions[0],
+        )
+        .await?;
+    let before = fixture.reset_state().await?;
+    let callbacks_before = fixture.reset_callback_attempt_count().await?;
+
+    assert_eq!(
+        fixture
+            .reset_attempt(ProjectionResetBehavior::Succeed)
+            .await?,
+        ProjectionResetAttemptObservation::Failed(
+            ProjectionResetFailureObservation::SourceIdentityMismatch {
+                projector: fixture.reset_projector_name().clone(),
+                persisted: incompatible.clone(),
+                configured: fixture.reset_source_id().clone(),
+            },
+        ),
+    );
+    assert_eq!(
+        before,
+        ProjectionResetStateObservation {
+            model_total: 13,
+            progress: Some(ProjectionProgressObservation {
+                source_id: incompatible,
+                selection_id: fixture.reset_selection_id().clone(),
+                position: positions[0],
+            }),
+        },
+    );
+    assert_eq!(fixture.reset_state().await?, before);
+    assert_eq!(
+        fixture.reset_callback_attempt_count().await?,
+        callbacks_before,
+        "source mismatch must be rejected before invoking application reset code",
+    );
+    Ok(())
+}
+
+/// Verifies selection identity before invoking the callback or deleting progress.
+pub async fn reset_selection_identity_validation_contract<F>(
+    fixture: &mut F,
+) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionResetFixture,
+{
+    let positions = fixture.append_reset_values(&[17]).await?;
+    let _ = fixture.run_reset_fixture_batch().await?;
+    let incompatible = ProjectionSelectionId::try_new("incompatible-reset-selection")
+        .expect("literal selection identity should be valid");
+    fixture
+        .seed_reset_progress_identity(
+            fixture.reset_source_id().clone(),
+            incompatible.clone(),
+            positions[0],
+        )
+        .await?;
+    let before = fixture.reset_state().await?;
+    let callbacks_before = fixture.reset_callback_attempt_count().await?;
+
+    assert_eq!(
+        fixture
+            .reset_attempt(ProjectionResetBehavior::Succeed)
+            .await?,
+        ProjectionResetAttemptObservation::Failed(
+            ProjectionResetFailureObservation::SelectionIdentityMismatch {
+                projector: fixture.reset_projector_name().clone(),
+                persisted: incompatible.clone(),
+                configured: fixture.reset_selection_id().clone(),
+            },
+        ),
+    );
+    assert_eq!(
+        before,
+        ProjectionResetStateObservation {
+            model_total: 17,
+            progress: Some(ProjectionProgressObservation {
+                source_id: fixture.reset_source_id().clone(),
+                selection_id: incompatible,
+                position: positions[0],
+            }),
+        },
+    );
+    assert_eq!(fixture.reset_state().await?, before);
+    assert_eq!(
+        fixture.reset_callback_attempt_count().await?,
+        callbacks_before,
+        "selection mismatch must be rejected before invoking application reset code",
+    );
+    Ok(())
+}
+
+/// Verifies that reset-and-replay reconstructs the exact model and global progress.
+pub async fn reset_and_replay_reconstructs_model_contract<F>(
+    fixture: &mut F,
+) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionResetFixture,
+{
+    let positions = fixture.append_reset_values(&[2, 3, 5]).await?;
+    let _ = fixture.run_reset_fixture_batch().await?;
+    assert_eq!(
+        fixture.reset_and_replay().await?,
+        ProjectionRunOutcome::CaughtUp {
+            processed: 3,
+            skipped: 0,
+            through: Some(positions[2]),
+        },
+    );
+    assert_eq!(
+        fixture.reset_state().await?,
+        ProjectionResetStateObservation {
+            model_total: 10,
+            progress: Some(ProjectionProgressObservation {
+                source_id: fixture.reset_source_id().clone(),
+                selection_id: fixture.reset_selection_id().clone(),
+                position: positions[2],
+            }),
+        },
+        "replay must reconstruct each non-idempotent contribution exactly once",
+    );
+    Ok(())
+}
+
+/// Verifies that reset-and-replay retains leadership after reset commits and until catch-up ends.
+pub async fn reset_and_replay_retains_leadership_contract<F>(
+    fixture: &mut F,
+) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionResetFixture,
+{
+    let positions = fixture.append_reset_values(&[19]).await?;
+    let _ = fixture.run_reset_fixture_batch().await?;
+    let observation = fixture.observe_reset_replay_leadership().await?;
+    assert_eq!(
+        observation.state_while_gated,
+        ProjectionResetStateObservation {
+            model_total: 0,
+            progress: None,
+        },
+        "the gate must be reached after the reset transaction has committed and before replay",
+    );
+    assert_eq!(
+        observation.competing_failure,
+        ProjectionFailureObservation::LeadershipBusy,
+        "a competitor must remain fenced while replay is gated after the reset commit",
+    );
+    assert!(
+        observation.waiter_queued_before_reset_commit,
+        "the exact-key waiter must be DB-observably queued before reset callback completion",
+    );
+    assert!(
+        observation.waiter_queued_during_replay,
+        "the exact-key waiter must remain queued at the post-reset replay gate",
+    );
+    assert!(!observation.reset_session_token.is_empty());
+    assert_eq!(
+        observation.replay_session_token, observation.reset_session_token,
+        "reset callback and replay application must use the same leader-owned PostgreSQL session",
+    );
+    assert_eq!(
+        observation.replay_outcome,
+        ProjectionRunOutcome::CaughtUp {
+            processed: 1,
+            skipped: 0,
+            through: Some(positions[0]),
+        },
+    );
+    Ok(())
+}
+
+/// Verifies that UUID-backed legacy checkpoint state is adopted by reset/replay, not translated.
+pub async fn legacy_checkpoint_reset_replay_contract<F>(fixture: &mut F) -> Result<(), F::Error>
+where
+    F: TransactionalProjectionResetFixture,
+{
+    let positions = fixture.append_reset_values(&[23, 29]).await?;
+    fixture.seed_legacy_checkpoint().await?;
+    fixture.seed_stale_legacy_model(9_999).await?;
+    assert_eq!(
+        fixture.reset_state().await?.model_total,
+        9_999,
+        "legacy adoption must begin with stale nonzero model state",
+    );
+    let outcome = fixture.reset_and_replay().await?;
+    assert_eq!(
+        outcome,
+        ProjectionRunOutcome::CaughtUp {
+            processed: 2,
+            skipped: 0,
+            through: Some(positions[1]),
+        },
+        "legacy UUID state must not be interpreted as a global delivery cursor",
+    );
+    assert!(
+        fixture.legacy_checkpoint_is_unchanged().await?,
+        "reset/replay adoption must leave the unrelated legacy checkpoint opaque and unchanged",
+    );
+    assert_eq!(
+        fixture.reset_state().await?,
+        ProjectionResetStateObservation {
+            model_total: 52,
+            progress: Some(ProjectionProgressObservation {
+                source_id: fixture.reset_source_id().clone(),
+                selection_id: fixture.reset_selection_id().clone(),
+                position: positions[1],
+            }),
+        },
     );
     Ok(())
 }

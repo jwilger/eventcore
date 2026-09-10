@@ -121,3 +121,70 @@ pub enum TransactionalProjectionError {
         source: BoxedProjectionError,
     },
 }
+
+/// Failures from a coordinated basic reset.
+#[derive(Debug, Error)]
+pub enum ProjectionResetError {
+    /// Another invocation owns this projector's leadership grant.
+    #[error("transactional projection reset leadership is busy")]
+    Busy,
+    /// The leader session was lost before reset completed.
+    #[error("transactional projection reset leadership was lost")]
+    LeadershipLost {
+        /// Underlying database error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+    /// Existing progress belongs to a different delivery source.
+    #[error("transactional projection reset source identity does not match {projector}")]
+    SourceIdentityMismatch {
+        /// Projector whose durable identity was incompatible.
+        projector: ProjectorName,
+        /// Source identity persisted with durable progress.
+        persisted: DeliverySourceId,
+        /// Source identity configured for this reset.
+        configured: DeliverySourceId,
+    },
+    /// Existing progress belongs to a different projection selection.
+    #[error("transactional projection reset selection identity does not match {projector}")]
+    SelectionIdentityMismatch {
+        /// Projector whose durable identity was incompatible.
+        projector: ProjectorName,
+        /// Selection identity persisted with durable progress.
+        persisted: ProjectionSelectionId,
+        /// Selection identity configured for this reset.
+        configured: ProjectionSelectionId,
+    },
+    /// Application reset code failed and its transaction was rolled back.
+    #[error("transactional projection reset callback failed")]
+    Callback {
+        /// Underlying application error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+    /// Progress validation or deletion failed before commit.
+    #[error("transactional projection reset progress operation failed")]
+    Progress {
+        /// Underlying database error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+    /// PostgreSQL did not acknowledge the reset commit, so durable state is indeterminate.
+    #[error("transactional projection reset commit acknowledgement is indeterminate")]
+    CommitIndeterminate {
+        /// Underlying database error.
+        #[source]
+        source: BoxedProjectionError,
+    },
+}
+
+/// Failures from the reset-and-replay convenience operation.
+#[derive(Debug, Error)]
+pub enum ProjectionResetAndReplayError {
+    /// The coordinated reset phase failed.
+    #[error("transactional projection reset phase failed")]
+    Reset(#[source] ProjectionResetError),
+    /// The replay phase failed after reset committed.
+    #[error("transactional projection replay phase failed")]
+    Replay(#[source] TransactionalProjectionError),
+}

@@ -180,6 +180,18 @@ impl ProjectionLeader {
         Ok(())
     }
 
+    pub(crate) async fn delete_progress(
+        transaction: &mut Transaction<'_, Postgres>,
+        projector: &ProjectorName,
+    ) -> Result<(), TransactionalProjectionError> {
+        let _ = query("DELETE FROM eventcore_projection_progress WHERE projector_name = $1")
+            .bind(projector.as_ref())
+            .execute(&mut **transaction)
+            .await
+            .map_err(progress_error)?;
+        Ok(())
+    }
+
     pub(crate) async fn release(mut self) -> Result<(), TransactionalProjectionError> {
         let Some(mut connection) = self.connection.take() else {
             return Ok(());

@@ -59,7 +59,7 @@ pub enum ProjectionRunOutcome {
     reason = "public future must be Send for backend-neutral fixture traits"
 )]
 pub fn run_transactional_projection<P, S>(
-    mut projector: P,
+    projector: P,
     source: &S,
     store: &PostgresProjectionStore,
     config: PostgresProjectionConfig,
@@ -70,59 +70,73 @@ where
 {
     async move {
         let projector_name = projector.name().clone();
-        let mut leader = store.acquire_leader(&projector_name).await?;
-        let mut after = load_validated_progress(
+        let leader = store.acquire_leader(&projector_name).await?;
+        run_transactional_projection_with_leader(projector, source, config, leader).await
+    }
+}
+
+pub(crate) async fn run_transactional_projection_with_leader<P, S>(
+    mut projector: P,
+    source: &S,
+    config: PostgresProjectionConfig,
+    mut leader: ProjectionLeader,
+) -> Result<ProjectionRunOutcome, TransactionalProjectionError>
+where
+    P: PostgresProjector,
+    S: ProjectionSource,
+{
+    let projector_name = projector.name().clone();
+    let mut after = load_validated_progress(
+        &mut leader,
+        &projector_name,
+        source.source_id(),
+        config.selection().id(),
+    )
+    .await?;
+    let mut processed = 0;
+    let mut skipped = 0;
+
+    loop {
+        let cycle = drain_cycle(
+            &mut projector,
             &mut leader,
             &projector_name,
-            source.source_id(),
-            config.selection().id(),
+            source,
+            &config,
+            &mut after,
+            &mut processed,
+            &mut skipped,
         )
         .await?;
-        let mut processed = 0;
-        let mut skipped = 0;
+        let through = match cycle {
+            DrainCycleOutcome::CaughtUp(through) => through,
+            DrainCycleOutcome::Stopped(position) => {
+                leader.release().await?;
+                return Ok(ProjectionRunOutcome::Stopped {
+                    position,
+                    processed,
+                    skipped,
+                });
+            }
+        };
 
-        loop {
-            let cycle = drain_cycle(
-                &mut projector,
-                &mut leader,
-                &projector_name,
-                source,
-                &config,
-                &mut after,
-                &mut processed,
-                &mut skipped,
-            )
-            .await?;
-            let through = match cycle {
-                DrainCycleOutcome::CaughtUp(through) => through,
-                DrainCycleOutcome::Stopped(position) => {
-                    leader.release().await?;
-                    return Ok(ProjectionRunOutcome::Stopped {
-                        position,
-                        processed,
-                        skipped,
-                    });
-                }
-            };
-
-            match config.mode() {
-                PostgresProjectionMode::Batch => {
-                    leader.release().await?;
-                    return Ok(ProjectionRunOutcome::CaughtUp {
-                        processed,
-                        skipped,
-                        through,
-                    });
-                }
-                PostgresProjectionMode::Continuous(cancellation) => {
-                    tokio::select! {
-                        () = config
-                            .poll_sleeper()
-                            .sleep(config.continuous_poll_interval()) => {}
-                        () = cancellation.cancelled() => {
-                            leader.release().await?;
-                            return Ok(ProjectionRunOutcome::Cancelled { processed, skipped });
-                        }
+        match config.mode() {
+            PostgresProjectionMode::Batch => {
+                leader.release().await?;
+                return Ok(ProjectionRunOutcome::CaughtUp {
+                    processed,
+                    skipped,
+                    through,
+                });
+            }
+            PostgresProjectionMode::Continuous(cancellation) => {
+                tokio::select! {
+                    () = config
+                        .poll_sleeper()
+                        .sleep(config.continuous_poll_interval()) => {}
+                    () = cancellation.cancelled() => {
+                        leader.release().await?;
+                        return Ok(ProjectionRunOutcome::Cancelled { processed, skipped });
                     }
                 }
             }

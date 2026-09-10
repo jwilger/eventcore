@@ -43,11 +43,13 @@ use uuid::Uuid;
 pub mod projections;
 pub use projections::{
     AfterCommit, BoxedProjectionError, NoopAfterCommit, PostgresProjectionConfig,
-    PostgresProjectionMode, PostgresProjectionSource, PostgresProjectionSourceError,
-    PostgresProjectionStore, PostgresProjector, ProjectionConfigurationError,
-    ProjectionFailureContext, ProjectionFailureDecision, ProjectionPollSleeper, ProjectionProgress,
+    PostgresProjectionMode, PostgresProjectionReset, PostgresProjectionSource,
+    PostgresProjectionSourceError, PostgresProjectionStore, PostgresProjector,
+    ProjectionConfigurationError, ProjectionFailureContext, ProjectionFailureDecision,
+    ProjectionPollSleeper, ProjectionProgress, ProjectionResetAndReplayError, ProjectionResetError,
     ProjectionRetryPolicy, ProjectionRetrySleeper, ProjectionRunOutcome,
     TokioProjectionPollSleeper, TokioProjectionRetrySleeper, TransactionalProjectionError,
+    reset_and_replay_transactional_projection, reset_transactional_projection,
     run_transactional_projection,
 };
 

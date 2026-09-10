@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod migration;
 mod projector;
+mod reset;
 mod runner;
 mod source;
 mod store;
@@ -13,11 +14,15 @@ pub use config::{
     ProjectionPollSleeper, ProjectionRetryPolicy, ProjectionRetrySleeper,
     TokioProjectionPollSleeper, TokioProjectionRetrySleeper,
 };
-pub use error::{BoxedProjectionError, TransactionalProjectionError};
-pub use projector::{
-    AfterCommit, NoopAfterCommit, PostgresProjector, ProjectionFailureContext,
-    ProjectionFailureDecision,
+pub use error::{
+    BoxedProjectionError, ProjectionResetAndReplayError, ProjectionResetError,
+    TransactionalProjectionError,
 };
+pub use projector::{
+    AfterCommit, NoopAfterCommit, PostgresProjectionReset, PostgresProjector,
+    ProjectionFailureContext, ProjectionFailureDecision,
+};
+pub use reset::{reset_and_replay_transactional_projection, reset_transactional_projection};
 pub use runner::{ProjectionRunOutcome, run_transactional_projection};
 pub use source::{PostgresProjectionSource, PostgresProjectionSourceError};
 pub(crate) use store::ProjectionLeader;

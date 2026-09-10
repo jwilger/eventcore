@@ -105,3 +105,17 @@ pub trait PostgresProjector: Send {
         ProjectionFailureDecision::Fatal
     }
 }
+
+/// Application-owned read-model reinitialization performed in the leader transaction.
+pub trait PostgresProjectionReset: Send {
+    /// Error returned by application reset code.
+    type Error: Error + Send + Sync + 'static;
+
+    /// Reinitializes the read model using the runner-owned transaction.
+    fn reset<'a, 'c>(
+        &'a mut self,
+        tx: &'a mut Transaction<'c, Postgres>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'a
+    where
+        'c: 'a;
+}
