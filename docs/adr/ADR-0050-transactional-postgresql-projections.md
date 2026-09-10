@@ -105,11 +105,6 @@ pub trait PostgresProjector: Send {
 
     fn name(&self) -> &ProjectorName;
 
-    fn decode(
-        &self,
-        envelope: &PersistedEventEnvelope,
-    ) -> Result<Self::Event, BoxedProjectionError>;
-
     fn apply<'a, 'c>(
         &'a mut self,
         event: &'a Self::Event,
@@ -126,15 +121,10 @@ lends the transaction to `apply` only for the application mutation. The
 application cannot replace the checkpoint executor with an independently pooled
 store.
 
-The projector receives the lossless persisted envelope at its application-owned
-decode boundary. The default decoder retains payload-only JSON deserialization;
-applications can override it to route multiple persisted event types using the
-event-type discriminator or metadata. Decode errors are terminal and do not
-enter application failure policy. The decoded event is owned and then borrowed
-by `apply`, so retries do not require `Clone`. The after-commit value is owned
-and cannot borrow the transaction. SQLx types used by the public API are
-re-exported by `eventcore-postgres` so consumers can name the compatible types
-without guessing the adapter's SQLx version.
+The event is borrowed so retries do not require `Clone`. The after-commit value
+is owned and cannot borrow the transaction. SQLx types used by the public API
+are re-exported by `eventcore-postgres` so consumers can name the compatible
+types without guessing the adapter's SQLx version.
 
 This transaction-borrow signature compiles with the workspace's locked SQLx
 0.8.6. The short mutable borrow remains distinct from the transaction's
