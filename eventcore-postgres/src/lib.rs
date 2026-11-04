@@ -164,15 +164,41 @@ impl PostgresEventStore {
 
     /// Verify connectivity by issuing a trivial `SELECT 1` query.
     ///
+    /// Success does not establish that migrations have been applied or that the
+    /// database permits writes. Pool and query failures retain their SQLx error types.
+    ///
+    /// # Errors
+    ///
+    /// Returns the SQLx error if acquiring a connection or executing the query fails.
+    pub async fn try_ping(&self) -> Result<(), sqlx::Error> {
+        let _ = query("SELECT 1").execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Verify connectivity by issuing a trivial `SELECT 1` query.
+    ///
+    /// Use [`Self::try_ping`] to handle failures without panicking.
+    ///
     /// # Panics
     ///
     /// Panics if the database is unreachable or the query fails.
     #[cfg_attr(test, mutants::skip)] // infallible: panics on failure
     pub async fn ping(&self) {
-        let _ = query("SELECT 1")
-            .execute(&self.pool)
-            .await
-            .expect("postgres ping failed");
+        self.try_ping().await.expect("postgres ping failed");
+    }
+
+    /// Apply the bundled schema migrations, preserving SQLx migration errors.
+    ///
+    /// Already-applied migrations are validated by SQLx and are not applied again.
+    /// This creates the tables EventCore requires, including the
+    /// `eventcore_subscription_versions` table used by [`PostgresCheckpointStore`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the SQLx migration error if acquiring a connection, validating the
+    /// migration history, or applying a migration fails.
+    pub async fn try_migrate(&self) -> Result<(), sqlx::migrate::MigrateError> {
+        sqlx::migrate!("./migrations").run(&self.pool).await
     }
 
     /// Apply the bundled schema migrations via `sqlx::migrate!("./migrations")`.
@@ -180,15 +206,14 @@ impl PostgresEventStore {
     /// This creates the tables EventCore requires, including the
     /// `eventcore_subscription_versions` table used by [`PostgresCheckpointStore`].
     ///
+    /// Use [`Self::try_migrate`] to handle failures without panicking.
+    ///
     /// # Panics
     ///
     /// Panics if applying the migrations fails.
     #[cfg_attr(test, mutants::skip)] // infallible: panics on failure
     pub async fn migrate(&self) {
-        sqlx::migrate!("./migrations")
-            .run(&self.pool)
-            .await
-            .expect("postgres migration failed");
+        self.try_migrate().await.expect("postgres migration failed");
     }
 }
 
