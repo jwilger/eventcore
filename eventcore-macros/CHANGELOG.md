@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [2.2.0](https://github.com/jwilger/eventcore/compare/eventcore-macros-v2.1.0...eventcore-macros-v2.2.0) - 2026-11-04
+
+### Bug Fixes
+
+- *(model)* resolve field provenance through Rust owners
+
 ## [1.1.1](https://github.com/jwilger/eventcore/compare/eventcore-macros-v1.1.0...eventcore-macros-v1.1.1) - 2026-08-06
 
 ### Bug Fixes
