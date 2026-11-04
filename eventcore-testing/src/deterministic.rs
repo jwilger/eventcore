@@ -64,18 +64,25 @@ where
         &self,
         writes: StreamWrites,
     ) -> Result<EventStreamSlice, EventStoreError> {
-        let remaining = self.remaining_conflicts.fetch_update(
-            std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst,
-            |n| if n > 0 { Some(n - 1) } else { None },
-        );
-
-        if remaining.is_ok() {
-            return Err(EventStoreError::VersionConflict {
-                stream_id: StreamId::try_new("deterministic-conflict").expect("valid"),
-                expected: StreamVersion::new(0),
-                actual: StreamVersion::new(1),
-            });
+        let mut remaining = self
+            .remaining_conflicts
+            .load(std::sync::atomic::Ordering::SeqCst);
+        while remaining > 0 {
+            match self.remaining_conflicts.compare_exchange_weak(
+                remaining,
+                remaining - 1,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    return Err(EventStoreError::VersionConflict {
+                        stream_id: StreamId::try_new("deterministic-conflict").expect("valid"),
+                        expected: StreamVersion::new(0),
+                        actual: StreamVersion::new(1),
+                    });
+                }
+                Err(actual) => remaining = actual,
+            }
         }
 
         self.inner.append_events(writes).await
