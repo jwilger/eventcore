@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [2.1.1](https://github.com/jwilger/eventcore/compare/eventcore-testing-v2.1.0...eventcore-testing-v2.1.1) - 2026-11-04
+
+### Bug Fixes
+
+- *(build)* restore compiler and security gates
+
 ## [2.1.0](https://github.com/jwilger/eventcore/compare/eventcore-testing-v2.0.1...eventcore-testing-v2.1.0) - 2026-09-10
 
 ### Features
