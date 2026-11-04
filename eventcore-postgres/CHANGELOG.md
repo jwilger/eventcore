@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v1.0.1
 
 ## [Unreleased]
 
+## [2.2.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v2.1.0...eventcore-postgres-v2.2.0) - 2026-11-04
+
+### Features
+
+- *(postgres)* expose fallible startup operations
+
 ## [2.1.0](https://github.com/jwilger/eventcore/compare/eventcore-postgres-v2.0.1...eventcore-postgres-v2.1.0) - 2026-09-10
 
 ### Features
