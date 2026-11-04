@@ -657,6 +657,7 @@ dependencies = [
  "chrono",
  "eventcore-macros",
  "eventcore-memory",
+ "eventcore-model-contract-fixture",
  "eventcore-postgres",
  "eventcore-sqlite",
  "eventcore-types",
@@ -777,6 +778,13 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "eventcore-model-contract-fixture"
+version = "2.1.0"
+dependencies = [
+ "eventcore",
 ]
 
 [[package]]

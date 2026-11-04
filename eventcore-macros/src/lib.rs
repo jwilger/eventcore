@@ -412,6 +412,11 @@ fn expand_model_component(
         .map(|field| format_ident!("__eventcore_model_value_{field}"))
         .collect();
 
+    let label_idents: Vec<_> = field_idents
+        .iter()
+        .map(|field| format_ident!("__eventcore_model_field_{field}"))
+        .collect();
+
     let field_markers = quote! {
         #[doc(hidden)]
         #visibility mod #module_ident {
@@ -427,6 +432,9 @@ fn expand_model_component(
     let accessors = quote! {
         impl #ident {
             #( #[doc(hidden)]
+            #visibility const fn #label_idents() -> &'static str { concat!(stringify!(#ident), ".", stringify!(#field_idents)) }
+
+            #[doc(hidden)]
             #visibility fn #getter_idents(&self) -> &#field_types {
                 &self.#field_idents
             }
@@ -598,6 +606,10 @@ fn expand_modeled_enum(
         .iter()
         .map(|variant| format_ident!("__eventcore_model_value_{variant}"))
         .collect();
+    let payload_label_idents: Vec<_> = payload_variants_idents
+        .iter()
+        .map(|variant| format_ident!("__eventcore_model_field_{variant}"))
+        .collect();
     let payload_constructor_fns: Vec<_> = payload_variants_idents
         .iter()
         .map(|variant| format_ident!("model_variant_{}", variant.to_string().to_lowercase()))
@@ -627,6 +639,9 @@ fn expand_modeled_enum(
 
         impl #ident {
             #( #[doc(hidden)]
+            #visibility const fn #payload_label_idents() -> &'static str { concat!(stringify!(#ident), ".", stringify!(#payload_variants_idents)) }
+
+            #[doc(hidden)]
             #visibility fn #payload_value_fns(
                 value: #payload_types,
             ) -> ::eventcore::model::FieldValue<#module_ident::#payload_markers> {
@@ -1013,7 +1028,7 @@ fn expand_mapping(definition: &MappingDefinition) -> syn::Result<TokenStream2> {
     let target_marker = model_field_marker_path(&definition.target)?;
     let target_owner = &definition.target.owner;
     let target_value = format_ident!("__eventcore_model_value_{}", definition.target.field);
-    let target_field = &definition.target.field;
+    let target_label = format_ident!("__eventcore_model_field_{}", definition.target.field);
     let source_types: Vec<_> = definition
         .sources
         .iter()
@@ -1024,8 +1039,8 @@ fn expand_mapping(definition: &MappingDefinition) -> syn::Result<TokenStream2> {
         .iter()
         .map(|source| {
             let owner = &source.owner;
-            let field = &source.field;
-            quote! { concat!(stringify!(#owner), ".", stringify!(#field)) }
+            let label = format_ident!("__eventcore_model_field_{}", source.field);
+            quote! { #owner::#label() }
         })
         .collect();
     let temporal_sources: Vec<_> = definition
@@ -1074,7 +1089,7 @@ fn expand_mapping(definition: &MappingDefinition) -> syn::Result<TokenStream2> {
                     mapping,
                     stringify!(#name),
                     &[#(#source_labels),*],
-                    concat!(stringify!(#target_owner), ".", stringify!(#target_field)),
+                    #target_owner::#target_label(),
                     &[#(#temporal_sources),*],
                 );
             });
@@ -1101,7 +1116,7 @@ fn expand_mapping(definition: &MappingDefinition) -> syn::Result<TokenStream2> {
             mapping,
             stringify!(#name),
             &[#(#source_labels),*],
-            concat!(stringify!(#target_owner), ".", stringify!(#target_field)),
+            #target_owner::#target_label(),
             &[#(#temporal_sources),*],
         );
     })

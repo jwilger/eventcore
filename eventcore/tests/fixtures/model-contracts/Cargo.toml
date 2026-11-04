@@ -1,0 +1,11 @@
+[package]
+name = "eventcore-model-contract-fixture"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+eventcore = { path = "../../../../eventcore", features = ["experimental-modeling"] }

@@ -4,6 +4,7 @@ members = [
     "eventcore-bench",
     "eventcore-demo",
     "eventcore-examples",
+    "eventcore/tests/fixtures/model-contracts",
     "eventcore-fs",
     "eventcore-macros",
     "eventcore-memory",
